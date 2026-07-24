@@ -52,6 +52,7 @@ NO_CONVERSATION = "NO_CONVERSATION"
 GENERATION_CANCELLED = "GENERATION_CANCELLED"
 STATE_UNREADABLE = "STATE_UNREADABLE"
 SEND_REJECTED = "SEND_REJECTED"
+STREAM_TIMEOUT = "STREAM_TIMEOUT"
 
 BLOCKER_CODES = {"login": LOGIN_REQUIRED, "captcha": CAPTCHA, "rate_limit": RATE_LIMIT}
 
@@ -268,6 +269,14 @@ class ChatGPTWebTransport:
             )
         await self.verify_lock()
         state = await self._state()
+        # Never type into the composer while ChatGPT is still streaming:
+        # the send button is disabled and the draft can be lost on re-render.
+        deadline = time.monotonic() + min(60.0, self.max_wait)
+        while state.get("streaming") and time.monotonic() < deadline:
+            await asyncio.sleep(self.poll_interval)
+            state = await self._state()
+        if state.get("streaming"):
+            raise TransportError(STREAM_TIMEOUT, "still streaming before send")
         self._baseline = {m["id"] for m in state.get("messages", []) if m["role"] == "assistant"}
         try:
             await self.driver.send_message(text)
@@ -275,19 +284,28 @@ class ChatGPTWebTransport:
             self.delivery_uncertain = True
             self.pause(DELIVERY_UNCERTAIN)
             raise TransportError(DELIVERY_UNCERTAIN, f"send may have failed: {exc}") from exc
-        try:
-            after = await self._state()
-        except (TransportError, DriverError) as exc:
-            self.delivery_uncertain = True
-            self.pause(DELIVERY_UNCERTAIN)
-            raise TransportError(
-                DELIVERY_UNCERTAIN, f"cannot confirm delivery: {exc}"
-            ) from exc
-        sent = [
-            m
-            for m in after.get("messages", [])
-            if m["role"] == "user" and text.split("\n", 1)[0][:80] in m.get("text", "")
-        ]
+        # The SPA takes a moment to render the sent user message — poll for it.
+        first_line = text.split("\n", 1)[0][:80]
+        sent: list[dict] = []
+        after: dict = {}
+        deadline = time.monotonic() + min(30.0, self.max_wait)
+        while time.monotonic() < deadline:
+            try:
+                after = await self._state()
+            except (TransportError, DriverError) as exc:
+                self.delivery_uncertain = True
+                self.pause(DELIVERY_UNCERTAIN)
+                raise TransportError(
+                    DELIVERY_UNCERTAIN, f"cannot confirm delivery: {exc}"
+                ) from exc
+            sent = [
+                m
+                for m in after.get("messages", [])
+                if m["role"] == "user" and first_line in m.get("text", "")
+            ]
+            if sent:
+                break
+            await asyncio.sleep(0.5)
         if not sent:
             self.delivery_uncertain = True
             self.pause(DELIVERY_UNCERTAIN)
