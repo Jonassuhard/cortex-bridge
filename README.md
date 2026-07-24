@@ -64,6 +64,10 @@ This downloads `gpt-oss:20b`, creates a 16K-context alias tuned for 16 GB RAM,
 and runs smoke tests (chat + tool calling). See
 [executor/README.md](executor/README.md) for details and alternative models.
 
+**Prefer to build it by hand, step by step?** →
+[docs/manual-setup.md](docs/manual-setup.md) explains every command and every
+config line — no scripts required.
+
 ## Contributing
 
 Ideas, issues and PRs welcome — especially on the orchestrator loop.

@@ -1,5 +1,9 @@
 # Executor — the local half of Cortex Bridge
 
+> **Want to do this manually instead of running scripts?**
+> Every step below is explained command by command, with each config line
+> broken down, in [../docs/manual-setup.md](../docs/manual-setup.md).
+
 The executor is an isolated [Codex CLI](https://github.com/openai/codex)
 profile whose model backend is a **local Ollama server** instead of a cloud
 API. It receives a task, acts on your machine (shell, files, builds, tests),
