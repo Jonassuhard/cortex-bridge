@@ -182,6 +182,7 @@ class MissionIn(BaseModel):
     approval_policy: str = WRITE_WITH_APPROVALS
     primary_executor: str = "orchestra-executor"
     fallback_executor: str = "orchestra-executor-fallback"
+    mission_id: str = ""  # optional client-supplied UUID (idempotent submission)
 
 
 class ApprovalIn(BaseModel):
@@ -243,7 +244,7 @@ async def _run_mission_task(rt: MissionRuntime, objective: str, body: MissionIn)
 
 async def _resume_mission_task(rt: MissionRuntime) -> None:
     store = get_store()
-    client = TransportOrchestratorClient(rt.transport)
+    client = TransportOrchestratorClient(rt.transport, store=store, mission_id=rt.mission_id)
     loop = MissionLoop(
         store=store,
         mission_id=rt.mission_id,
@@ -253,15 +254,30 @@ async def _resume_mission_task(rt: MissionRuntime) -> None:
         approval_callback=_make_approval_callback(rt),
         budgets=rt._budgets,  # type: ignore[attr-defined]
     )
-    # Never auto-resend after a pause/restart: if work already started, await
-    # the pending response; otherwise (contract never sent) start fresh.
-    if store.count("orchestrator_decisions", rt.mission_id) > 0:
-        loop._pending = None
-    else:
+    # Resume without ever re-sending a message ChatGPT already answered, and
+    # without awaiting a reply that will never come:
+    # - REPORT_SENT is recorded at finalize time, MESSAGE_DELIVERED only after
+    #   a proven browser send. A report recorded but not delivered must be
+    #   resent; anything else means we are waiting on ChatGPT.
+    events = store.rows("transport_events", rt.mission_id, order_by="rowid")
+    delivered = [e for e in events if e.get("event_type") == "MESSAGE_DELIVERED"]
+    reports_sent = [e for e in events if e.get("event_type") == "REPORT_SENT"]
+    decisions = [r for r in store.rows("orchestrator_decisions", rt.mission_id)
+                 if r.get("valid") == 1]
+    if decisions and len(delivered) < 1 + len(reports_sent) and reports_sent:
+        try:
+            last_report = json.loads(reports_sent[-1].get("detail_json") or "{}")["report"]
+            loop._pending = protocol.render_report_message(last_report)
+        except (KeyError, json.JSONDecodeError):
+            loop._pending = None
+    elif not delivered:
+        # Nothing provably sent (e.g. crash before the contract send).
         mission = store.get_mission(rt.mission_id)
         loop._pending = render_contract(
             mission["objective"], rt.mission_id, str(rt._tools.workspace)  # type: ignore[attr-defined]
         )
+    else:
+        loop._pending = None  # contract+reports delivered → await ChatGPT
     try:
         await loop.run()
     except Exception as exc:
@@ -353,7 +369,17 @@ async def create_mission(body: MissionIn) -> dict:
     if body.approval_policy not in _POLICY_MODES:
         raise HTTPException(status_code=422, detail=f"unknown approval policy {body.approval_policy}")
 
-    mission_id = str(uuid.uuid4())
+    mission_id = body.mission_id.strip() or str(uuid.uuid4())
+    try:
+        uuid.UUID(mission_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="mission_id must be a UUID")
+    store = get_store()
+    try:
+        store.get_mission(mission_id)
+        raise HTTPException(status_code=409, detail=f"mission {mission_id} already exists")
+    except StoreError:
+        pass  # unknown id — good
     rt = _build_runtime(
         mission_id, body.workspace, body.approval_policy,
         body.primary_executor, body.fallback_executor,

@@ -102,8 +102,10 @@ def render_contract(objective: str, mission_id: str, workspace: str) -> str:
 class TransportOrchestratorClient:
     """Adapts ChatGPTWebTransport to the MissionLoop orchestrator interface."""
 
-    def __init__(self, transport: ChatGPTWebTransport):
+    def __init__(self, transport: ChatGPTWebTransport, store=None, mission_id: str | None = None):
         self.transport = transport
+        self.store = store
+        self.mission_id = mission_id
 
     @property
     def conversation_identity(self) -> str:
@@ -113,6 +115,15 @@ class TransportOrchestratorClient:
     async def next_decision(self, message: str | None) -> MockReply:
         if message is not None:
             await self.transport.send_message(message)  # verifies lock first
+            if self.store is not None and self.mission_id is not None:
+                # Persist proven delivery (vs REPORT_SENT which is recorded at
+                # finalize time, before the browser send). Resume logic relies
+                # on this distinction to decide whether to resend or await.
+                self.store.record_transport_event(
+                    str(uuid.uuid4()), self.mission_id, "MESSAGE_DELIVERED",
+                    {"kind": "report" if "```cortex-report" in message else "contract",
+                     "bytes": len(message)},
+                )
         reply = await self.transport.await_response()
         return MockReply(text=reply["protocol_text"], message_id=reply["id"])
 
@@ -167,7 +178,7 @@ class ModeARunner:
             await self.transport.start_new_conversation(new_conversation_url)
             lock = None  # captured after the contract send creates /c/<id>
 
-        client = TransportOrchestratorClient(self.transport)
+        client = TransportOrchestratorClient(self.transport, store=self.store, mission_id=mission_id)
         loop = MissionLoop(
             store=self.store,
             mission_id=mission_id,
