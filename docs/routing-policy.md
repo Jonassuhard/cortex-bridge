@@ -3,7 +3,10 @@
 How the orchestrator routes work to the local Ollama executors, and how
 failures escalate. The local models are **execution workers** — they never
 replace the cloud orchestrator (Kimi K3 / ChatGPT), which stays in charge of
-planning, routing and final judgment.
+planning, routing and final judgment. The console (`console/executor.py`)
+implements the bridge loop directly against Ollama `/api/chat` — the model
+only requests actions, the bridge validates and executes them; there is no
+Codex CLI dependency.
 
 ## Chain
 

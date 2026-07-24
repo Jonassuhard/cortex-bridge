@@ -27,12 +27,19 @@ Then open **http://127.0.0.1:8420**.
 
 The console picks the mode automatically per task:
 
-- **LIVE** — only when the full executor stack is present:
-  `~/.codex-cortex-bridge/config.toml` exists, Ollama answers on
-  `127.0.0.1:11434`, **and** the `codex` binary is on PATH. The console runs
-  `CODEX_HOME=~/.codex-cortex-bridge codex exec "<goal + constraints>"` with
-  the task workspace as cwd, streams stdout into the live view, and marks the
-  task `done` when the exit code is 0.
+- **LIVE** — when Ollama answers on `127.0.0.1:11434`, the
+  `orchestra-executor` model is installed/loaded, and the model storage
+  volume is mounted. The console **is** the executor harness: it drives
+  Ollama `/api/chat` directly with one `shell` tool and a strict JSON status
+  schema (READY_FOR_TOOL / READY_FOR_VALIDATION / BLOCKED / FAILED), executes
+  the requested commands itself, streams everything into the live view, and
+  marks the task `done` only after the model reports READY_FOR_VALIDATION with
+  real evidence (at least one executed command; `files_changed` is the actual
+  workspace diff). No Codex CLI dependency.
+  **Safety:** every command passes a workspace jail (workdir and absolute
+  paths must resolve inside the task workspace) and a denylist (`sudo`,
+  `git push`, package installs, `ssh`, `kill`, writes to `/etc`, …); limits
+  are 8 tool executions and a 5-minute wall-clock guard per task.
 - **SIMULATION** — the default while the executor model is not installed.
   The console emits a realistic fake execution (a handful of log lines with
   small delays) and returns a complete structured report tagged
