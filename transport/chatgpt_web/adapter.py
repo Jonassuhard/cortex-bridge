@@ -205,18 +205,34 @@ class ChatGPTWebTransport:
         self._baseline = set()
 
     async def _capture_new_lock(self, original_url: str) -> None:
-        """Poll until the backend assigns a /c/<id> URL, then lock it."""
+        """Poll until the backend assigns a /c/<id> URL, then lock it.
+
+        Right after the first send, ChatGPT shows a transient
+        /c/WEB:<uuid> URL that the SPA later rewrites to the canonical
+        /c/<uuid>. Locking the transient identity breaks re-attach on
+        resume (the canonical page never matches "WEB"), so keep polling
+        for the canonical form until the deadline."""
         deadline = time.monotonic() + min(30.0, self.max_wait)
+        transient: ConversationLock | None = None
         while time.monotonic() < deadline:
             state = await self._state()
             identity = state.get("conversation_id")
             if identity:
-                self.lock = ConversationLock(
+                lock = ConversationLock(
                     state.get("url", original_url), identity, state.get("title"), time.time()
                 )
-                self._pending_new_chat = False
-                return
+                if ":" not in state.get("url", "").rsplit("/c/", 1)[-1]:
+                    self.lock = lock
+                    self._pending_new_chat = False
+                    return
+                transient = lock  # transient WEB:<uuid> — wait for canonical
             await asyncio.sleep(self.poll_interval)
+        if transient is not None:
+            # Deadline hit with only the transient URL: lock it rather than
+            # losing the conversation; re-attach may need human resolution.
+            self.lock = transient
+            self._pending_new_chat = False
+            return
         self.delivery_uncertain = True
         self.pause(DELIVERY_UNCERTAIN)
         raise TransportError(

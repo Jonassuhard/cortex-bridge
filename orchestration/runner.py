@@ -121,7 +121,7 @@ class TransportOrchestratorClient:
                 # on this distinction to decide whether to resend or await.
                 self.store.record_transport_event(
                     str(uuid.uuid4()), self.mission_id, "MESSAGE_DELIVERED",
-                    {"kind": "report" if "```cortex-report" in message else "contract",
+                    {"kind": "report" if message.lstrip().startswith("```cortex-report") else "contract",
                      "bytes": len(message)},
                 )
                 # New-chat case: the lock is only captured after the first
