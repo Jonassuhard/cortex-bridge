@@ -488,12 +488,18 @@ async def resume_mission(mission_id: str) -> dict:
     if bindings:
         b = bindings[0]
         try:
-            await rt.transport.attach(ConversationLock(
-                url=b["conversation_url"],
-                identity=b.get("browser_target_id") or b["conversation_url"],
-                title=b.get("conversation_title"),
-                selected_at=b.get("selected_at") or 0.0,
-            ))
+            if "/c/" in b["conversation_url"]:
+                await rt.transport.attach(ConversationLock(
+                    url=b["conversation_url"],
+                    identity=b.get("browser_target_id") or b["conversation_url"],
+                    title=b.get("conversation_title"),
+                    selected_at=b.get("selected_at") or 0.0,
+                ))
+            else:
+                # Pending new chat: the contract send never created a /c/<id>
+                # conversation, so there is no identity to attach to. Re-open
+                # the fresh chat surface; the lock is captured on next send.
+                await rt.transport.start_new_conversation(b["conversation_url"])
         except Exception as exc:
             raise HTTPException(status_code=503, detail=f"cannot re-attach conversation: {exc}")
     store.resume(mission_id, "WAITING_FOR_CHATGPT")

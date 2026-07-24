@@ -124,6 +124,13 @@ class TransportOrchestratorClient:
                     {"kind": "report" if "```cortex-report" in message else "contract",
                      "bytes": len(message)},
                 )
+                # New-chat case: the lock is only captured after the first
+                # send — persist it so resume can re-attach by identity.
+                lock = getattr(self.transport, "lock", None)
+                if lock is not None and "/c/" in lock.url:
+                    self.store.update_conversation_binding(
+                        self.mission_id, lock.url, lock.title, lock.identity
+                    )
         reply = await self.transport.await_response()
         return MockReply(text=reply["protocol_text"], message_id=reply["id"])
 

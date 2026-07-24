@@ -509,6 +509,26 @@ class Store:
                 ),
             )
 
+    def update_conversation_binding(
+        self,
+        mission_id: str,
+        conversation_url: str,
+        conversation_title: str | None = None,
+        browser_target_id: str | None = None,
+    ) -> None:
+        """Refresh a mission's binding once the real /c/<id> identity is known
+        (new-chat case: the binding is first stored with the bare chatgpt.com
+        URL and no identity; the lock captured after the first send replaces
+        it so a later resume can re-attach instead of re-navigating blindly)."""
+        with self._conn:
+            self._conn.execute(
+                "UPDATE conversation_bindings SET conversation_url=?,"
+                " conversation_title=COALESCE(?, conversation_title),"
+                " browser_target_id=?"
+                " WHERE mission_id=?",
+                (conversation_url, conversation_title, browser_target_id, mission_id),
+            )
+
     def record_policy_decision(
         self,
         record_id: str,
