@@ -57,11 +57,65 @@ ln -sfn /Volumes/YOUR_DRIVE/ollama/models ~/.ollama/models
 Disk speed only affects model *load* time — once weights are in RAM,
 generation speed is identical to internal storage.
 
+## The autonomous mission loop (Mode A)
+
+Since Phase 6/7 the loop runs **without any human copy-paste**. Components:
+
+```
+console/server.py + console/missions.py     FastAPI cockpit (loopback only)
+orchestration/runner.py                     ModeARunner — wires everything
+orchestration/loop.py                       MissionLoop — one decision per cycle
+orchestration/state.py                      State machine + budgets + fingerprints
+orchestration/protocol.py                   cortex.v1 fences, validation, reports
+orchestration/store.py                      SQLite audit (11 tables, WAL)
+transport/chatgpt_web/adapter.py            ChatGPTWebTransport + drivers
+transport/chatgpt_web/fixture.py            In-process fake chatgpt.com (tests)
+executor/tools.py + executor/policy.py      Sandboxed tools + approval policy
+```
+
+One cycle:
+
+```
+1. The console sends the mission contract (objective, workspace, cortex.v1
+   rules, per-tool argument schemas) into the chosen ChatGPT conversation.
+2. ChatGPT answers with exactly one ```cortex-decision fenced block:
+   EXECUTE (one tool call) | REQUEST_CONTEXT | COMPLETE | BLOCKED.
+3. The loop validates the decision (protocol, iteration, UUID actionId,
+   argument schema, path safety), evaluates it against the policy engine,
+   asks the human when the policy requires approval, and executes the tool
+   against the workspace.
+4. The validated result goes back into the same conversation as exactly one
+   ```cortex-report fenced block.
+5. Repeat until COMPLETE/BLOCKED, budget exhaustion, pause or failure.
+```
+
+Guarantees enforced by the state machine and store (§14):
+
+- one pending message at a time — the loop never overlaps sends;
+- duplicate responses and duplicate reports are detected by content
+  fingerprints and ignored, never re-executed;
+- every delivery is proven (the sent message must appear in the DOM) before
+  the next step — uncertain delivery pauses the mission for human resolution;
+- pause/resume is exact: resume re-attaches the locked conversation and
+  either re-sends the undelivered payload or waits for the reply, never both.
+
+## Conversation lock
+
+A mission locks exactly one conversation identity (`/c/<uuid>`) before the
+first send. Every state read verifies the page still shows that identity —
+a mismatch pauses with CONVERSATION_MISMATCH instead of leaking a mission
+into the wrong chat. New conversations are locked as soon as ChatGPT assigns
+their canonical `/c/<uuid>` URL (the transient `/c/WEB:<uuid>` shown right
+after the first send is waited out).
+
 ## Trust boundaries
 
-- The executor runs with `sandbox_mode = "workspace-write"` and
-  `approval_policy = "never"` inside an isolated Codex profile
-  (`~/.codex-cortex-bridge`) so it cannot touch your main Codex config.
+- The console binds to 127.0.0.1 only; there is no remote access to missions.
+- The transport talks to chatgpt.com through the user's own Chrome via the
+  local WebBridge daemon (127.0.0.1:10086) — DOM only, never `/backend-api/`.
+- Tools are confined to the mission workspace: relative paths only, no `..`,
+  no symlink escapes, an allowlist of executables for `run_process`.
+- Write tools run under a policy: automatic, per-action approval, or denied.
 - The orchestrator never receives raw credentials; it only sees task results.
 - API keys live in environment variables or `~/.codex-cortex-bridge/auth.json`,
   never in this repo (see `.gitignore`).

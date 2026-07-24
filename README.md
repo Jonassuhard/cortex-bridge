@@ -30,41 +30,56 @@ conversation so the loop continues.
 
 ## Project status
 
-🚧 **Early stage.** What works today:
+✅ **Working end-to-end.** Autonomous missions verified against the real
+chatgpt.com web UI on 2026-07-24:
 
-- ✅ Local executor stack: Ollama + OpenAI-compatible endpoint + Codex CLI
-  profile, tuned for a 16 GB Apple Silicon Mac (`executor/`)
-- ✅ Model tuning for agentic tool-calling on limited RAM
-- ✅ Local web console (FastAPI, simulation mode today, live mode once the executor model is installed) (console/)
-- 🔜 Orchestrator loop via the **official OpenAI API** (`orchestrator/api/` —
-  design stage)
-- ⚠️ Unofficial browser/desktop bridge to a ChatGPT Pro subscription
-  (`orchestrator/browser-bridge/` — design stage, **read the legal notes
-  first**: [docs/legal-notes.md](docs/legal-notes.md))
+- ✅ Local executor stack: Ollama models + policy engine + tool executor
+  (`executor/`)
+- ✅ Mission loop: contract → decision → tool execution → report → next
+  decision, all inside a single ChatGPT conversation (`orchestration/`)
+- ✅ ChatGPT Web Transport through the user's own Chrome via WebBridge
+  (`transport/chatgpt_web/`) — DOM-only, no OpenAI API key needed
+- ✅ Local web console (FastAPI) to launch, watch, approve, pause and stop
+  missions (`console/`) — loopback only
+- ✅ Verified live: read-only missions, file writes with human approval,
+  multi-iteration code repair, policy refusals, emergency stop
+- ⚠️ The web transport automates a consumer product UI and may break when
+  ChatGPT changes its frontend — read
+  [docs/legal-notes.md](docs/legal-notes.md) and
+  [docs/chatgpt-web-transport.md](docs/chatgpt-web-transport.md)
+
+See [docs/testing.md](docs/testing.md) for the full verification matrix.
 
 ## Repository layout
 
 ```
 cortex-bridge/
-├── docs/            Architecture and legal notes — read these first
-├── executor/        The local half: Ollama setup, model tuning, Codex profile
-├── orchestrator/    The cloud half: API orchestrator (official) and
-│                    browser bridge (unofficial, at your own risk)
-├── console/         Local web cockpit: run tasks, watch live, copy reports
+├── docs/            Architecture, security model, transport, testing — read these first
+├── executor/        The local half: policy engine + tool executor (paths, processes)
+├── orchestration/   The loop: state machine, cortex.v1 protocol, runner, SQLite store
+├── transport/       ChatGPT Web Transport (WebBridge driver + local fixture)
+├── console/         Local web cockpit: launch/watch/approve/stop missions
 └── examples/        What a full loop looks like
 ```
 
-## Quick start (local executor)
+## Quick start (missions)
 
-Requirements: macOS on Apple Silicon (tested on M1 Pro 16 GB), [Ollama](https://ollama.com).
+Requirements: macOS, [Ollama](https://ollama.com) with the executor models,
+Chrome with the WebBridge extension connected to your ChatGPT session.
 
 ```bash
-./executor/scripts/setup-executor.sh
+cd console && python3 server.py   # http://127.0.0.1:8420
 ```
 
-This downloads `gpt-oss:20b`, creates a 16K-context alias tuned for 16 GB RAM,
-and runs smoke tests (chat + tool calling). See
-[executor/README.md](executor/README.md) for details and alternative models.
+1. Read the experimental-transport warning and opt in (persisted once).
+2. Paste an objective, pick a workspace, choose a new or existing ChatGPT
+   conversation, launch.
+3. Watch decisions, tool executions and reports stream in; approve writes
+   when prompted; STOP EVERYTHING kills everything instantly.
+
+The executor never leaves the workspace, never installs packages, and every
+write can require your explicit approval. Details:
+[docs/security-model.md](docs/security-model.md).
 
 **Prefer to build it by hand, step by step?** →
 [docs/manual-setup.md](docs/manual-setup.md) explains every command and every
