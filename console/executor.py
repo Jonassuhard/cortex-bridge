@@ -22,6 +22,7 @@ import os
 import random
 import re
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Awaitable, Callable
@@ -230,7 +231,7 @@ DENY_RE = re.compile(
 )
 
 # Absolute-path tokens inside a command (pragmatic jail check).
-_ABS_TOKEN_RE = re.compile(r"(?:^|[\s;|&'\"(])((?:/|~/)[^\s;|&>'\")]*)")
+_ABS_TOKEN_RE = re.compile(r"(?:^|[\s;|&'\"(])((?:/[\w.\-]|~/)[^\s;|&>'\")]*)")
 
 
 def _chat_sync(messages: list[dict]) -> str:
@@ -289,6 +290,51 @@ def _snapshot(workspace: Path) -> dict[str, tuple[float, int]]:
 def _files_changed(before: dict, after: dict) -> list[str]:
     """Relative paths created or modified between two snapshots."""
     return sorted(p for p, sig in after.items() if before.get(p) != sig)
+
+
+SYNTAX_CHECK_SNIPPET = (
+    "import sys; "
+    "src = open(sys.argv[1], encoding='utf-8').read(); "
+    "compile(src, sys.argv[1], 'exec')"
+)
+
+
+async def _auto_validate(changed: list[str], workspace: Path) -> tuple[bool, str]:
+    """Bridge-side proof check on produced files.
+
+    Every changed .py file must pass a real syntax compile. Returns
+    (ok, evidence) — evidence is the compiler error output on failure.
+    Never trusts the model's own claim: this is the bridge verifying.
+    """
+    for rel in changed:
+        if not rel.endswith(".py"):
+            continue
+        path = (workspace / rel).resolve()
+        try:
+            path.relative_to(workspace)
+        except ValueError:
+            return False, f"{rel}: resolved path escapes the workspace"
+        if not path.is_file():
+            return False, f"{rel}: file listed as changed but missing on disk"
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable, "-c", SYNTAX_CHECK_SNIPPET, str(path),
+                cwd=str(workspace),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+            )
+            try:
+                out, _ = await asyncio.wait_for(proc.communicate(), 15)
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
+                return False, f"{rel}: syntax check timed out (15s)"
+        except OSError as exc:
+            return False, f"{rel}: could not run syntax check: {exc}"
+        if proc.returncode != 0:
+            evidence = out.decode("utf-8", errors="replace").strip()
+            return False, f"{rel}: Python syntax error — {evidence}"
+    return True, ""
 
 
 def _jail_check(cmd: str, workdir: str | None, workspace: Path) -> tuple[bool, Path, str]:
@@ -358,6 +404,7 @@ async def _run_live(task: dict, emit: Emit) -> dict:
     steps = 0
     invalid_replies = 0
     false_success_warnings = 0
+    validation_retries = 0
     started = time.monotonic()
 
     while True:
@@ -471,6 +518,25 @@ async def _run_live(task: dict, emit: Emit) -> dict:
                 continue
             changed = _files_changed(before, _snapshot(workspace))
             await emit(f"validation: {len(changed)} file(s) created/modified", "info")
+            ok_v, proof = await _auto_validate(changed, workspace)
+            if not ok_v:
+                validation_retries += 1
+                await emit(f"bridge auto-validation FAILED: {proof[:200]}", "error")
+                if validation_retries >= 2:
+                    return _report(
+                        "failed",
+                        "Bridge auto-validation failed twice on the produced files.",
+                        commands_run, changed,
+                        [f"auto-validation: {proof[:300]}"],
+                        "Fix the file content (see validation error) and retry the task.")
+                messages.append({"role": "assistant", "content": raw})
+                messages.append({"role": "user", "content":
+                                 f"Bridge auto-validation of your produced files FAILED:\n"
+                                 f"{proof}\n"
+                                 "Fix the file with READY_FOR_TOOL (tool 'shell'), "
+                                 "or reply FAILED if you cannot."})
+                continue
+            await emit("bridge auto-validation passed", "info")
             return _report("done", summary or "Executor finished successfully.",
                            commands_run, changed, [],
                            "Review the executor output and decide the next task.")
