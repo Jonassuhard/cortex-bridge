@@ -166,10 +166,30 @@ class ChatGPTWebTransport:
         to pick from. Sidebar DOM on real ChatGPT; registry on the fixture."""
         return await self.driver.list_conversations()
 
+    async def _await_conversation(self, want_identity: str | None, timeout: float = 25.0) -> dict:
+        """Poll until the SPA actually shows the requested conversation.
+
+        Navigation resolves before chatgpt.com finishes its client-side
+        route change — a single immediate state read can still show the
+        PREVIOUS conversation and cause a false CONVERSATION_MISMATCH."""
+        deadline = time.monotonic() + timeout
+        state: dict = {}
+        while time.monotonic() < deadline:
+            state = await self._state()
+            identity = state.get("conversation_id")
+            if want_identity is None:
+                if identity:
+                    return state
+            elif identity == want_identity:
+                return state
+            await asyncio.sleep(self.poll_interval)
+        return state
+
     async def select_conversation(self, url: str) -> ConversationLock:
         """Navigate to a user-chosen conversation and lock the mission to it."""
         await self.driver.navigate(url)
-        state = await self._state()
+        want = url.rsplit("/c/", 1)[-1] if "/c/" in url else None
+        state = await self._await_conversation(want)
         identity = state.get("conversation_id")
         if not identity:
             raise TransportError(NO_CONVERSATION, f"no conversation at {url}")
@@ -182,7 +202,7 @@ class ChatGPTWebTransport:
         browser restart). Identity must match — never falls back to whatever
         tab happens to be focused (§8)."""
         await self.driver.navigate(lock.url)
-        state = await self._state()
+        state = await self._await_conversation(lock.identity)
         if state.get("conversation_id") != lock.identity:
             self.pause(CONVERSATION_MISMATCH)
             raise ConversationMismatch(
@@ -245,7 +265,9 @@ class ChatGPTWebTransport:
             return  # identity does not exist yet; captured after first send
         if self.lock is None:
             raise TransportError(NO_CONVERSATION, "no conversation selected")
-        state = await self._state()
+        # Short grace poll: SPA re-renders can briefly report the previous
+        # route; a real mismatch (user switched chats) persists.
+        state = await self._await_conversation(self.lock.identity, timeout=8.0)
         if state.get("conversation_id") != self.lock.identity:
             self.pause(CONVERSATION_MISMATCH)
             raise ConversationMismatch(
