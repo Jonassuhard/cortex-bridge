@@ -20,6 +20,19 @@ Known causes (all fixed as of 2026-07-24, kept here for reference):
 | Send reported failed but message visible | Post-send check raced the SPA render | Poll ≤ 30 s for the message to appear |
 | Report send "not visible" though present | Markdown eats the ` ```cortex-report ` fence and its label | Delivery marker = first substantial content line, matched in message + code blocks |
 | Draft lost | Send attempted while ChatGPT was still streaming | Transport waits out the stream first |
+| `NO_DECISION_BLOCK` on replies that look perfect (thinking model, 2026-07-25) | Empty assistant placeholder extracted during the paint gap between "stop gone" and the code block render | Empty-reply grace window (45 s) + stability signature covering code blocks |
+
+## Diagnosing a broken ChatGPT UI (probe)
+
+`GET http://127.0.0.1:8420/api/transport/probe` is a read-only DOM health
+check on the live tab. It tells you **which selector currently matches each
+role** (composer, messages, send, stop), with `failures` (mission-critical:
+composer, messages) vs `warnings` (send/stop are absent by design on an
+idle page). A watchdog Automation re-checks every 30 min and notifies only
+on failure. If a `failures` entry appears, the candidate lists in
+`transport/chatgpt_web/adapter.py` (`_STATE_JS`, `_SEND_JS`, `_PROBE_JS`)
+need a new candidate — the probe's `diagnostics.buttons` dump tells you
+what the new UI actually renders.
 
 ## Mission pauses with `CONVERSATION_MISMATCH`
 

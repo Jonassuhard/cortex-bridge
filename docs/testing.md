@@ -7,7 +7,7 @@ cd cortex-bridge
 python3 -m unittest discover -s tests
 ```
 
-**89 tests, all passing** (2026-07-24). They cover:
+**104 tests, all passing** (2026-07-25). They cover:
 
 - `test_protocol_state_store.py` — cortex.v1 extraction/validation, state
   machine adjacency, budgets, fingerprints, SQLite store
@@ -19,6 +19,10 @@ python3 -m unittest discover -s tests
 - `test_missions_api.py` — the console API over HTTP (uvicorn thread +
   fixture): opt-in gate, full mission, approval flow, pause/resume/cancel,
   crash-safety (missions can always reach FAILED), stop-everything
+- `test_probe.py` — DOM probe summary semantics, transport delegation,
+  console endpoint
+- `test_empty_reply_grace.py` — thinking-model empty-shell grace window,
+  code-block stability signature, streaming resets
 
 No test touches the network, a real browser, or the real chatgpt.com.
 
@@ -41,6 +45,8 @@ Missions run against the production UI through WebBridge, workspace
 | F (organic) | Human yanked the tab to another chat mid-mission | CONVERSATION_MISMATCH pause, no leak into the wrong chat; fast detection while awaiting | ✅ PASS (happened for real, twice) |
 | I | Reuse an existing conversation (attach, no new chat) | Contract into the locked chat, self-heal after 2 context-confusion violations, COMPLETED | ✅ PASS |
 | J | Harder task: zip `cortex-bridge` via `run_process`, verify contents + size | cortex-backup.zip (551 files) created and verified, COMPLETED | ✅ PASS (4 valid decisions) |
+| K (2026-07-25) | Echo on a **thinking model** (gpt-5.6-thinking slug) | First run FAILED: empty assistant shell extracted during the paint gap → 3 false NO_DECISION_BLOCK (replies were perfect, verified by screenshot + later DOM read). After the empty-reply-grace fix: **COMPLETED, valid decision `ECHO-GRACE-OK`, terminal** | ✅ PASS after fix |
+| L (2026-07-25) | Live DOM probe `GET /api/transport/probe` | composer `#prompt-textarea` ok, messages `[data-message-author-role]` ok (8 nodes), send/stop warnings only (idle page) | ✅ PASS |
 
 Notable real-world defects found by this matrix and fixed the same day:
 
@@ -51,6 +57,9 @@ Notable real-world defects found by this matrix and fixed the same day:
 5. Transient `/c/WEB:<uuid>` URLs broke resume re-attach.
 6. `REQUEST_CONTEXT` with a null action crashed the loop.
 7. ChatGPT guessed tool argument names — the contract now embeds schemas.
+8. (2026-07-25) Thinking models paint an empty assistant shell before the
+   reply: empty == empty was read as "stable" and extracted. Fix: 45 s
+   empty-reply grace + stability signature covering code blocks.
 
 ## Reproducing the live tests
 
