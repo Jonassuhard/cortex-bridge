@@ -1,0 +1,11 @@
+# Cortex Bridge executor profile — local Ollama backend
+# Copy this file to ~/.codex-cortex-bridge/config.toml
+# (setup-executor.sh does it for you)
+
+model = "gpt-oss-16k"
+model_reasoning_effort = "high"
+approval_policy = "never"
+sandbox_mode = "workspace-write"
+
+# Direct route to Ollama's OpenAI-compatible API
+openai_base_url = "http://127.0.0.1:11434/v1"

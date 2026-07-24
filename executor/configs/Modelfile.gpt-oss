@@ -1,0 +1,7 @@
+# gpt-oss:20b tuned for 16 GB Apple Silicon
+# Creates the "gpt-oss-16k" alias with a 16K-token context window:
+# large enough for agentic task execution, small enough to leave
+# headroom for macOS + browser + the Ollama runtime.
+# Raise num_ctx if your machine has 24 GB or more.
+FROM gpt-oss:20b
+PARAMETER num_ctx 16384

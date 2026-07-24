@@ -1,0 +1,23 @@
+# Secrets — never commit these
+.env
+.env.*
+*.pem
+*_key
+auth.json
+
+# OS noise
+.DS_Store
+
+# Local model blobs (models live in your Ollama store, not in this repo)
+models/
+*.gguf
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Local Codex profile state (contains session data)
+state_*.sqlite*
+logs_*.sqlite
+sessions/
