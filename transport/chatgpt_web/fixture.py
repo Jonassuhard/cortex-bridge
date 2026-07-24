@@ -28,6 +28,7 @@ import json
 import re
 import threading
 import time
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
@@ -204,6 +205,8 @@ class FixtureServer:
         self.current: str | None = None
         self.tab_closed = False
         self.fail_state_after = 0  # fail the Nth next /__state call (0 = never)
+        self.pending_chat = False  # GET / opens a brand-new chat surface
+        self.new_chat_replies: list[str] = []
         self._lock = threading.Lock()
         self.httpd: ThreadingHTTPServer | None = None
         self.port: int | None = None
@@ -240,14 +243,59 @@ class FixtureServer:
                                 return
                         tab_closed = server_state.tab_closed
                         current = server_state.current
-                    if tab_closed or current is None:
+                        pending = server_state.pending_chat
+                    if tab_closed:
                         self._json({"tab_closed": True})
+                        return
+                    if current is None:
+                        if pending:
+                            # Brand-new chat: surface exists, identity not yet.
+                            self._json(
+                                {
+                                    "tab_closed": False,
+                                    "url": f"{server_state.base_url}/",
+                                    "conversation_id": None,
+                                    "title": "New chat",
+                                    "blocker": None,
+                                    "composer_present": True,
+                                    "send_button_present": True,
+                                    "stop_button_present": False,
+                                    "streaming": False,
+                                    "messages": [],
+                                }
+                            )
+                        else:
+                            self._json({"tab_closed": True})
                         return
                     conv = server_state.conversations[current]
                     snap = conv.snapshot()
                     snap["tab_closed"] = False
                     snap["url"] = f"{server_state.base_url}/c/{conv.id}"
                     self._json(snap)
+                    return
+                if path == "/__conversations":
+                    with server_state._lock:
+                        convs = [
+                            {
+                                "url": f"{server_state.base_url}/c/{c.id}",
+                                "identity": c.id,
+                                "title": c.title,
+                            }
+                            for c in server_state.conversations.values()
+                        ]
+                    self._json(convs)
+                    return
+                if path == "/":
+                    with server_state._lock:
+                        server_state.pending_chat = True
+                        server_state.current = None
+                        server_state.tab_closed = False
+                    body = _PAGE_HTML.encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/html; charset=utf-8")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
                     return
                 if path.startswith("/c/"):
                     cid = path[3:].strip("/") or "default"
@@ -275,8 +323,29 @@ class FixtureServer:
                 with server_state._lock:
                     tab_closed = server_state.tab_closed
                     current = server_state.current
-                if tab_closed or current is None:
+                    pending = server_state.pending_chat
+                if tab_closed:
                     self._json({"error": "tab_closed"}, status=409)
+                    return
+                if current is None:
+                    if not pending:
+                        self._json({"error": "tab_closed"}, status=409)
+                        return
+                    if path == "/__send":
+                        # First send on a brand-new chat assigns the identity.
+                        conv = server_state.conversation(f"conv-{uuid.uuid4().hex[:8]}")
+                        conv.replies.extend(server_state.new_chat_replies)
+                        server_state.new_chat_replies = []
+                        with server_state._lock:
+                            server_state.current = conv.id
+                            server_state.pending_chat = False
+                        text = str(payload.get("text", ""))
+                        user_msg = conv.add_message("user", text)
+                        if conv.replies:
+                            conv.start_stream(conv.replies.pop(0))
+                        self._json({"ok": True, "user_message_id": user_msg["id"]})
+                        return
+                    self._json({"error": "not found"}, status=404)
                     return
                 conv = server_state.conversations[current]
                 if path == "/__send":
@@ -325,6 +394,11 @@ class FixtureServer:
 
     def queue_replies(self, replies: list[str], cid: str | None = None) -> None:
         self.conversation(cid or self.current or "default").replies.extend(replies)
+
+    def queue_new_chat_replies(self, replies: list[str]) -> None:
+        """Replies used for the conversation created by the first send on a
+        brand-new chat surface (GET /)."""
+        self.new_chat_replies.extend(replies)
 
     def set_streaming(self, chunks: int, interval: float, cid: str | None = None) -> None:
         conv = self.conversation(cid or self.current or "default")

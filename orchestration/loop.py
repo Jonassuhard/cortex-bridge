@@ -187,6 +187,7 @@ class MissionLoop:
         budgets: Budgets | None = None,
         clock: Callable[[], float] = time.time,
         conversation: dict | None = None,
+        contract: str | None = None,
     ):
         self.store = store
         self.budgets = budgets or Budgets()
@@ -199,7 +200,7 @@ class MissionLoop:
         self.action_validator = action_validator
         self.final_validator = final_validator
         self.conversation = conversation
-        self._pending: str | None = contract_message(
+        self._pending: str | None = contract or contract_message(
             store.get_mission(mission_id)["objective"], mission_id, str(tools.workspace)
         )
         self._stashed: MockReply | None = None

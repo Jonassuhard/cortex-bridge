@@ -21,10 +21,10 @@ test_17_preserve_unrelated_dirty_git_changes (test_executor_tools.ToolTestCase.t
     ○ ░
     ░    gitleaks
 
-2:37PM INF 0 commits scanned.
-2:37PM INF scanned ~5 bytes (5 bytes) in 28.1ms
-2:37PM INF no leaks found
-Executing <Task pending name='Task-97' coro=<ToolTestCase.test_17_preserve_unrelated_dirty_git_changes() running at /Users/asterion/Documents/kimi/workspace/cortex-bridge/tests/test_executor_tools.py:214> wait_for=<Future pending cb=[Task.task_wakeup()] created at /Applications/Kimi.app/Contents/Resources/resources/daimon-bundle/runtime/python/cpython-3.12/lib/python3.12/asyncio/base_events.py:448> cb=[_run_until_complete_cb() at /Applications/Kimi.app/Contents/Resources/resources/daimon-bundle/runtime/python/cpython-3.12/lib/python3.12/asyncio/base_events.py:181] created at /Applications/Kimi.app/Contents/Resources/resources/daimon-bundle/runtime/python/cpython-3.12/lib/python3.12/asyncio/runners.py:100> took 0.253 seconds
+3:38PM INF 0 commits scanned.
+3:38PM INF scanned ~5 bytes (5 bytes) in 30ms
+3:38PM INF no leaks found
+Executing <Task pending name='Task-97' coro=<ToolTestCase.test_17_preserve_unrelated_dirty_git_changes() running at /Users/asterion/Documents/kimi/workspace/cortex-bridge/tests/test_executor_tools.py:214> wait_for=<Future pending cb=[Task.task_wakeup()] created at /Applications/Kimi.app/Contents/Resources/resources/daimon-bundle/runtime/python/cpython-3.12/lib/python3.12/asyncio/base_events.py:448> cb=[_run_until_complete_cb() at /Applications/Kimi.app/Contents/Resources/resources/daimon-bundle/runtime/python/cpython-3.12/lib/python3.12/asyncio/base_events.py:181] created at /Applications/Kimi.app/Contents/Resources/resources/daimon-bundle/runtime/python/cpython-3.12/lib/python3.12/asyncio/runners.py:100> took 0.264 seconds
 ok
 test_18_reject_false_success (test_executor_tools.ToolTestCase.test_18_reject_false_success) ... ok
 test_19_create_rollback_checkpoint (test_executor_tools.ToolTestCase.test_19_create_rollback_checkpoint) ... ok
@@ -63,6 +63,11 @@ test_20_restart_sets_paused (test_protocol_state_store.StateStoreTestCase.test_2
 test_eleven_tables (test_protocol_state_store.StoreSchemaTestCase.test_eleven_tables) ... ok
 test_report_builder_and_render (test_protocol_state_store.StoreSchemaTestCase.test_report_builder_and_render) ... ok
 test_13_symlink_escape_rejected (test_protocol_state_store.SymlinkEscapeTestCase.test_13_symlink_escape_rejected) ... ok
+test_contract_template (test_runner_mode_a.ModeARunnerTestCase.test_contract_template) ... ok
+test_list_conversation_candidates (test_runner_mode_a.ModeARunnerTestCase.test_list_conversation_candidates) ... ok
+test_new_chat_lock_capture (test_runner_mode_a.ModeARunnerTestCase.test_new_chat_lock_capture) ... ok
+test_opt_in_off_refuses_to_send (test_runner_mode_a.ModeARunnerTestCase.test_opt_in_off_refuses_to_send) ... ok
+test_opt_in_on_full_mission (test_runner_mode_a.ModeARunnerTestCase.test_opt_in_on_full_mission) ... ok
 test_01_conversation_selection (test_transport_fixture.FixtureTransportTestCase.test_01_conversation_selection) ... ok
 test_02_conversation_lock (test_transport_fixture.FixtureTransportTestCase.test_02_conversation_lock) ... ok
 test_03_sending_user_message (test_transport_fixture.FixtureTransportTestCase.test_03_sending_user_message) ... ok
@@ -85,6 +90,6 @@ test_19_no_resend_after_uncertain_delivery (test_transport_fixture.FixtureTransp
 test_20_manual_fallback_generation (test_transport_fixture.FixtureTransportTestCase.test_20_manual_fallback_generation) ... ok
 
 ----------------------------------------------------------------------
-Ran 74 tests in 23.037s
+Ran 79 tests in 29.161s
 
 OK

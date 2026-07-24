@@ -146,6 +146,7 @@ class ChatGPTWebTransport:
         self._extracted_ids: set[str] = set()
         self._baseline: set[str] = set()
         self._cancel_requested = False
+        self._pending_new_chat = False
 
     # -- pause/resume (§5: pause safely on any blocker) ------------------------------
 
@@ -158,6 +159,11 @@ class ChatGPTWebTransport:
         self.pause_reason = None
 
     # -- §8 conversation selection + lock ----------------------------------------------
+
+    async def list_conversations(self) -> list[dict]:
+        """Candidate conversations (title + /c/<uuid> identity) for the user
+        to pick from. Sidebar DOM on real ChatGPT; registry on the fixture."""
+        return await self.driver.list_conversations()
 
     async def select_conversation(self, url: str) -> ConversationLock:
         """Navigate to a user-chosen conversation and lock the mission to it."""
@@ -184,8 +190,42 @@ class ChatGPTWebTransport:
         self.lock = lock
         self._baseline = {m["id"] for m in state.get("messages", []) if m["role"] == "assistant"}
 
+    async def start_new_conversation(self, url: str) -> None:
+        """§8 brand-new chat case: navigate to a fresh chat surface. The
+        /c/<id> identity only exists after the first send; the lock is
+        captured by send_message → _capture_new_lock()."""
+        await self.driver.navigate(url)
+        state = await self._state()
+        if state.get("conversation_id"):
+            # The URL already is a conversation — lock it normally.
+            await self.select_conversation(url)
+            return
+        self._pending_new_chat = True
+        self._baseline = set()
+
+    async def _capture_new_lock(self, original_url: str) -> None:
+        """Poll until the backend assigns a /c/<id> URL, then lock it."""
+        deadline = time.monotonic() + min(30.0, self.max_wait)
+        while time.monotonic() < deadline:
+            state = await self._state()
+            identity = state.get("conversation_id")
+            if identity:
+                self.lock = ConversationLock(
+                    state.get("url", original_url), identity, state.get("title"), time.time()
+                )
+                self._pending_new_chat = False
+                return
+            await asyncio.sleep(self.poll_interval)
+        self.delivery_uncertain = True
+        self.pause(DELIVERY_UNCERTAIN)
+        raise TransportError(
+            DELIVERY_UNCERTAIN, "message sent but no /c/<id> URL appeared — cannot lock"
+        )
+
     async def verify_lock(self) -> None:
         """Verify before every message: current conversation == locked one."""
+        if self._pending_new_chat:
+            return  # identity does not exist yet; captured after first send
         if self.lock is None:
             raise TransportError(NO_CONVERSATION, "no conversation selected")
         state = await self._state()
@@ -252,6 +292,8 @@ class ChatGPTWebTransport:
             self.delivery_uncertain = True
             self.pause(DELIVERY_UNCERTAIN)
             raise TransportError(DELIVERY_UNCERTAIN, "user message not visible after send")
+        if self._pending_new_chat:
+            await self._capture_new_lock(after.get("url", ""))
         self._cancel_requested = False
         self.streaming_observed = False
         return sent[-1]
@@ -402,47 +444,98 @@ class LocalFixtureDriver:
     async def press_stop(self) -> None:
         await asyncio.to_thread(self._post, f"{self.base_url}/__stop", {})
 
+    async def list_conversations(self) -> list[dict]:
+        return await asyncio.to_thread(self._get, f"{self.base_url}/__conversations")
+
     async def close_tab(self) -> None:
         pass  # fixture tab closure is test-controlled via FixtureServer.close_tab()
 
 
+# §6 warning shown before the experimental transport may be enabled.
+EXPERIMENTAL_TRANSPORT_WARNING = (
+    "This mode automates the ChatGPT web interface.\n"
+    "It is experimental and may stop working when the interface changes.\n"
+    "Use it at your own discretion.\n"
+    "No CAPTCHA, authentication or anti-bot bypass is implemented."
+)
+
+# ---------------------------------------------------------------------------
+# Live-validated JS DOM contract (see docs/phase5-dom-contract.md, 2026-07-24)
+# ---------------------------------------------------------------------------
+
 _STATE_JS = r"""
 (() => {
   const q = (sel) => document.querySelector(sel);
-  const all = (sel) => Array.from(document.querySelectorAll(sel));
-  const text = document.body ? document.body.innerText : '';
+  const text = document.body ? document.body.innerText.slice(0, 8000) : '';
+  const composer = q('#prompt-textarea');
+  // Blockers (conservative; see docs/phase5-dom-contract.md §f):
   let blocker = null;
-  if (!q('#prompt-textarea') && /log in|sign up/i.test(text)) blocker = 'login';
-  if (/verify you are human|cf-chl|cloudflare/i.test(text)) blocker = 'captcha';
-  if (/rate limit|too many requests/i.test(text)) blocker = 'rate_limit';
+  if (!composer && /log in|sign up|se connecter|inscrivez-vous/i.test(text)) blocker = 'login';
+  if (/verify you are human|v\u00e9rifiez que vous \u00eates humain|cf-chl|challenge-platform/i.test(text)
+      || q('#cf-chl-widget, .cf-turnstile')) blocker = 'captcha';
+  if (/rate limit|too many requests|limite de requ\u00eates/i.test(text)) blocker = 'rate_limit';
   const convMatch = location.pathname.match(/\/c\/([A-Za-z0-9-]+)/);
-  const messages = all('[data-message-author-role]').map((el, i) => {
-    const blocks = Array.from(el.querySelectorAll('pre')).map((pre) => {
-      const header = pre.closest('[class*="code-block"]')?.querySelector('span, div');
-      const code = pre.querySelector('code');
-      const langClass = code ? (code.className.match(/language-([A-Za-z0-9_.+-]*)/) || [])[1] : '';
-      return { lang: langClass || (header ? header.textContent.trim().toLowerCase() : ''), text: pre.textContent };
+  // Code blocks are CodeMirror viewers (pre.cm-content); NO language label
+  // exists in the header on this build -> cortex-decision is content-sniffed.
+  const sniffLang = (t) => {
+    try { const j = JSON.parse(t); if (j && j.protocol === 'cortex.v1') return 'cortex-decision'; }
+    catch (e) {}
+    return '';
+  };
+  const messages = Array.from(document.querySelectorAll('[data-message-author-role]')).map((el, i) => {
+    const blocks = Array.from(el.querySelectorAll('pre.cm-content')).map((pre) => {
+      const t = pre.textContent || '';
+      return { lang: sniffLang(t), text: t };
     });
     return {
       id: el.getAttribute('data-message-id') || ('idx-' + i),
       role: el.getAttribute('data-message-author-role'),
-      text: el.textContent,
+      text: el.textContent || '',
       code_blocks: blocks,
     };
   });
-  const stop = q('button[aria-label*="Stop"], [data-testid="stop-button"]');
+  const stop = q('[data-testid="stop-button"], button[aria-label*="Stop"], button[aria-label*="Arr"]');
+  const streaming = !!stop || !!q('.result-streaming');
   return JSON.stringify({
     url: location.href,
     conversation_id: convMatch ? convMatch[1] : null,
     title: document.title,
     blocker: blocker,
-    composer_present: !!q('#prompt-textarea'),
-    send_button_present: !!q('button[data-testid="send-button"], #prompt-textarea'),
+    composer_present: !!composer,
+    send_button_present: !!composer,
     stop_button_present: !!stop,
-    streaming: !!stop || !!q('.result-streaming'),
+    streaming: streaming,
     messages: messages,
   });
 })()
+"""
+
+_CONVERSATIONS_JS = r"""
+(() => JSON.stringify(
+  Array.from(document.querySelectorAll('nav a[href^="/c/"], aside a[href^="/c/"]')).map((a) => ({
+    url: 'https://chatgpt.com' + a.getAttribute('href'),
+    identity: (a.getAttribute('href').match(/\/c\/([A-Za-z0-9-]+)/) || [])[1],
+    title: (a.textContent || '').trim(),
+  })).filter((c) => c.identity)
+))()
+"""
+
+# Phase 7 executes this; Phase 5 ships it unexecuted by design.
+_SEND_JS = r"""
+((text) => {
+  const composer = document.querySelector('#prompt-textarea');
+  if (!composer) return JSON.stringify({ ok: false, error: 'composer not found' });
+  composer.focus();
+  composer.textContent = text;
+  composer.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }));
+  const form = composer.closest('form') || document;
+  const btn = form.querySelector('button[data-testid="send-button"]')
+    || form.querySelector('button[aria-label="Envoyer le message"], button[aria-label="Send message"]')
+    || Array.from(form.querySelectorAll('button.composer-submit-button-color')).find((b) => !b.disabled);
+  if (!btn) return JSON.stringify({ ok: false, error: 'send button not found' });
+  btn.click();
+  return JSON.stringify({ ok: true });
+})
 """
 
 
@@ -487,25 +580,34 @@ class WebBridgeDriver:
             raise DriverError(f"cannot parse page state: {exc}") from exc
 
     async def send_message(self, text: str) -> None:
-        await asyncio.to_thread(
-            self._command, "fill", {"selector": "#prompt-textarea", "value": text}
-        )
-        await asyncio.to_thread(
-            self._command,
-            "evaluate",
-            {
-                "code": "document.querySelector('button[data-testid=\"send-button\"]')?.click()"
-                " ?? document.querySelector('#prompt-textarea')?.dispatchEvent("
-                "new KeyboardEvent('keydown', {key: 'Enter', bubbles: true}))"
-            },
-        )
+        code = f"{_SEND_JS}({json.dumps(text)})"
+        raw = await asyncio.to_thread(self._command, "evaluate", {"code": code})
+        if isinstance(raw, dict) and "value" in raw:
+            raw = raw["value"]
+        result = json.loads(raw) if isinstance(raw, str) else (raw or {})
+        if not result.get("ok"):
+            raise DriverError(f"send failed: {result.get('error', 'unknown')}")
 
     async def press_stop(self) -> None:
         await asyncio.to_thread(
             self._command,
             "evaluate",
-            {"code": "document.querySelector('button[aria-label*=\"Stop\"]')?.click()"},
+            {
+                "code": "(document.querySelector('[data-testid=\"stop-button\"]')"
+                " || document.querySelector('button[aria-label*=\"Stop\"]')"
+                " || document.querySelector('button[aria-label*=\"Arr\"]'))?.click()"
+            },
         )
+
+    async def list_conversations(self) -> list[dict]:
+        """§8 candidates from the sidebar DOM of an open chatgpt.com tab."""
+        raw = await asyncio.to_thread(self._command, "evaluate", {"code": _CONVERSATIONS_JS})
+        if isinstance(raw, dict) and "value" in raw:
+            raw = raw["value"]
+        try:
+            return json.loads(raw) if isinstance(raw, str) else list(raw or [])
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise DriverError(f"cannot parse conversation list: {exc}") from exc
 
     async def close_tab(self) -> None:
         await asyncio.to_thread(self._command, "close_tab", {})
