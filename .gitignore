@@ -24,3 +24,7 @@ console/data/
 state_*.sqlite*
 logs_*.sqlite
 sessions/
+
+# Frontend build artifacts
+frontend/node_modules/
+frontend/.next/

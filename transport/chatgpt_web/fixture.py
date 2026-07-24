@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import re
+import socket
 import threading
 import time
 import uuid
@@ -371,9 +372,25 @@ class FixtureServer:
         return self
 
     def stop(self) -> None:
-        if self.httpd is not None:
-            self.httpd.shutdown()
-            self.httpd.server_close()
+        """Stop the fixture without allowing BaseServer.shutdown() to deadlock.
+
+        ``shutdown()`` normally works, but repeated async test creation can
+        occasionally leave its condition wait stuck even while serve_forever
+        is still selecting. Set the stdlib shutdown flag directly, wake the
+        selector with one loopback connection, and join with a hard bound.
+        This is test-only infrastructure; no production server uses this path.
+        """
+        if self.httpd is None:
+            return
+        if self._thread is not None and self._thread.is_alive():
+            setattr(self.httpd, "_BaseServer__shutdown_request", True)
+            try:
+                with socket.create_connection(self.httpd.server_address, timeout=0.25):
+                    pass
+            except OSError:
+                pass
+            self._thread.join(timeout=2.0)
+        self.httpd.server_close()
 
     @property
     def base_url(self) -> str:

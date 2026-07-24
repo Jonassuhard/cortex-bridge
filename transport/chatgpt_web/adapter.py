@@ -28,6 +28,7 @@ not the fence markers, ``protocol_text()`` reconstructs synthetic
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import time
 import urllib.error
@@ -395,11 +396,27 @@ class ChatGPTWebTransport:
 
     # -- §13 response-completion detection (multi-signal) --------------------------------------
 
-    async def await_response(self) -> dict:
-        """Wait for the next assistant response and extract it once.
+    async def snapshot(self, *, verify_lock: bool = True) -> dict:
+        """Return the current sanitized page state for the locked conversation.
+
+        This is the read-only surface used by the localhost conversation client.
+        It deliberately goes through the same blocker detection as mission traffic.
+        """
+        if verify_lock and not self._pending_new_chat:
+            await self.verify_lock()
+        return await self._state()
+
+    async def stream_response(self, on_update=None) -> dict:
+        """Wait for the next assistant response and optionally mirror visible text.
+
+        ``on_update`` receives a dictionary whenever the latest visible assistant
+        content or streaming state changes. It may be synchronous or async. The
+        completion rules stay identical to :meth:`await_response`.
 
         Completion requires ALL of: stop button gone, no streaming indicator,
-        latest new assistant message unchanged for the stability interval.
+        latest new assistant content (text AND code blocks) unchanged for the
+        stability interval, and — outside the empty-reply grace window — a
+        non-empty message (thinking models paint an empty shell first).
         On timeout: pause safely with CHATGPT_RESPONSE_TIMEOUT; never resend
         automatically.
         """
@@ -408,9 +425,18 @@ class ChatGPTWebTransport:
                 TRANSPORT_PAUSED, f"transport paused ({self.pause_reason}); resume first"
             )
         deadline = time.monotonic() + self.max_wait
-        last_text: str | None = None
+        last_sig: str | None = None
+        last_emit: tuple | None = None
         stable_since: float | None = None
         empty_since: float | None = None
+
+        async def emit(payload: dict) -> None:
+            if on_update is None:
+                return
+            result = on_update(payload)
+            if inspect.isawaitable(result):
+                await result
+
         while time.monotonic() < deadline:
             if self._cancel_requested:
                 self._cancel_requested = False
@@ -428,7 +454,8 @@ class ChatGPTWebTransport:
                 raise ConversationMismatch(
                     f"page shows {state.get('conversation_id')!r}, locked to {self.lock.identity!r}"
                 )
-            if state.get("stop_button_present") or state.get("streaming"):
+            is_streaming = bool(state.get("stop_button_present") or state.get("streaming"))
+            if is_streaming:
                 self.streaming_observed = True
                 stable_since = None
                 empty_since = None
@@ -439,7 +466,18 @@ class ChatGPTWebTransport:
             ]
             if new_msgs:
                 latest = new_msgs[-1]
-                if not state.get("stop_button_present") and not state.get("streaming"):
+                emit_key = (latest.get("id"), latest.get("text", ""), is_streaming)
+                if emit_key != last_emit:
+                    await emit({
+                        "id": latest.get("id"),
+                        "role": "assistant",
+                        "text": latest.get("text", ""),
+                        "code_blocks": latest.get("code_blocks", []),
+                        "images": latest.get("images", []),
+                        "streaming": is_streaming,
+                    })
+                    last_emit = emit_key
+                if not is_streaming:
                     now = time.monotonic()
                     # Stability signature: visible text + code block contents
                     # (thinking models stream into the CodeMirror block after
@@ -453,7 +491,7 @@ class ChatGPTWebTransport:
                         # the renderer has not painted the code block yet.
                         empty_since = empty_since if empty_since is not None else now
                         if now - empty_since < self.empty_reply_grace:
-                            last_text = None
+                            last_sig = None
                             stable_since = None
                             await asyncio.sleep(self.poll_interval)
                             continue
@@ -461,7 +499,7 @@ class ChatGPTWebTransport:
                         # loop can record its usual protocol violation.
                     else:
                         empty_since = None
-                    if sig == last_text:
+                    if sig == last_sig:
                         stable_since = stable_since if stable_since is not None else now
                         if now - stable_since >= self.stability_interval:
                             if latest["id"] in self._extracted_ids:
@@ -470,14 +508,18 @@ class ChatGPTWebTransport:
                                     f"message {latest['id']} was already extracted",
                                 )
                             self._extracted_ids.add(latest["id"])
-                            return {
+                            final = {
                                 "id": latest["id"],
                                 "role": "assistant",
                                 "text": latest.get("text", ""),
                                 "protocol_text": protocol_text(latest),
+                                "code_blocks": latest.get("code_blocks", []),
+                                "images": latest.get("images", []),
                             }
+                            await emit({**final, "streaming": False, "stable": True})
+                            return final
                     else:
-                        last_text = sig
+                        last_sig = sig
                         stable_since = None
             await asyncio.sleep(self.poll_interval)
         self.pause(CHATGPT_RESPONSE_TIMEOUT)
@@ -485,6 +527,10 @@ class ChatGPTWebTransport:
             CHATGPT_RESPONSE_TIMEOUT,
             f"no completed response within {self.max_wait}s; mission paused",
         )
+
+    async def await_response(self) -> dict:
+        """Wait for the next stable assistant response without a streaming callback."""
+        return await self.stream_response()
 
     async def cancel_generation(self) -> None:
         """Cancel the in-flight generation (§17 cancel during generation)."""
@@ -621,16 +667,25 @@ _STATE_JS = r"""
       const t = pre.textContent || '';
       return { lang: sniffLang(t), text: t };
     });
+    const images = Array.from(el.querySelectorAll('img')).map((img) => ({
+      src: img.currentSrc || img.src || '',
+      alt: img.alt || '',
+    })).filter((img) => img.src && !img.src.startsWith('data:image/svg'));
+    const timeEl = el.querySelector('time');
     return {
       id: el.getAttribute('data-message-id') || ('idx-' + i),
       role: el.getAttribute('data-message-author-role') || null,
       text: el.textContent || '',
       code_blocks: blocks,
+      images: images,
+      created_at: timeEl ? (timeEl.getAttribute('datetime') || timeEl.textContent || '').trim() : null,
     };
   });
   const stopSel = first(STOP_CANDIDATES);
   const stop = stopSel ? q(stopSel) : null;
   const streaming = !!stop || !!q('.result-streaming');
+  const modelButton = q('[data-testid="model-switcher-dropdown-button"]')
+    || Array.from(document.querySelectorAll('button')).find((b) => /GPT|ChatGPT|mod[eè]le|model/i.test((b.textContent || '') + ' ' + (b.getAttribute('aria-label') || '')));
   return JSON.stringify({
     url: location.href,
     conversation_id: convMatch ? convMatch[1] : null,
@@ -640,6 +695,7 @@ _STATE_JS = r"""
     send_button_present: !!composer,
     stop_button_present: !!stop,
     streaming: streaming,
+    model_label: modelButton ? (modelButton.textContent || modelButton.getAttribute('aria-label') || '').trim() : null,
     messages: messages,
     selectors: { composer: composerSel, messages: messageSel, stop: stopSel },
   });
@@ -647,13 +703,106 @@ _STATE_JS = r"""
 """
 
 _CONVERSATIONS_JS = r"""
-(() => JSON.stringify(
-  Array.from(document.querySelectorAll('nav a[href^="/c/"], aside a[href^="/c/"]')).map((a) => ({
-    url: 'https://chatgpt.com' + a.getAttribute('href'),
-    identity: (a.getAttribute('href').match(/\/c\/([A-Za-z0-9-]+)/) || [])[1],
-    title: (a.textContent || '').trim(),
-  })).filter((c) => c.identity)
-))()
+(async () => {
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const normalize = (value) => (value || '').replace(/\s+/g, ' ').trim();
+  const collect = (seen) => {
+    for (const a of document.querySelectorAll('nav a[href^="/c/"], aside a[href^="/c/"]')) {
+      const href = a.getAttribute('href') || '';
+      const match = href.match(/\/c\/([A-Za-z0-9-]+)/);
+      if (!match) continue;
+      const row = a.closest('li, [data-testid*="conversation"], [class*="group"]') || a.parentElement || a;
+      const lines = (a.innerText || a.textContent || '').split(/\n+/).map(normalize).filter(Boolean);
+      const title = normalize(a.getAttribute('title')) || lines[0] || 'Conversation';
+      const timeEl = row.querySelector ? row.querySelector('time') : null;
+      const timestamp = timeEl ? normalize(timeEl.getAttribute('datetime') || timeEl.textContent) : '';
+      const preview = lines.find((line, index) => index > 0 && line !== timestamp && line !== title) || title;
+      const labels = normalize((row.getAttribute && row.getAttribute('aria-label')) || '') + ' ' + normalize(row.textContent);
+      const numericBadge = row.querySelector ? Array.from(row.querySelectorAll('[aria-label], [data-testid], span')).find((el) => {
+        const value = normalize(el.textContent);
+        return /^\d+$/.test(value) && /unread|non lu|new|nouveau/i.test((el.getAttribute('aria-label') || '') + ' ' + (el.getAttribute('data-testid') || ''));
+      }) : null;
+      const unread = numericBadge ? Number(normalize(numericBadge.textContent)) : (/unread|non lu/i.test(labels) ? 1 : 0);
+      const pinned = /pinned|épingl|epingle/i.test(labels);
+      const current = location.pathname === href || a.getAttribute('aria-current') === 'page';
+      seen.set(match[1], {
+        url: 'https://chatgpt.com' + href,
+        identity: match[1],
+        title,
+        preview,
+        timestamp,
+        unread,
+        pinned,
+        status: current ? 'idle' : undefined,
+      });
+    }
+  };
+  const seen = new Map();
+  const links = Array.from(document.querySelectorAll('nav a[href^="/c/"], aside a[href^="/c/"]'));
+  let container = links[0]?.closest('[class*="overflow"], nav, aside') || null;
+  collect(seen);
+  let unchanged = 0;
+  let previous = seen.size;
+  for (let i = 0; i < 40 && container; i++) {
+    const before = container.scrollTop;
+    container.scrollTop = Math.min(container.scrollHeight, container.scrollTop + Math.max(320, container.clientHeight * .8));
+    await sleep(160);
+    collect(seen);
+    if (seen.size === previous && container.scrollTop === before) unchanged += 1;
+    else unchanged = 0;
+    previous = seen.size;
+    if (unchanged >= 3 || container.scrollTop + container.clientHeight >= container.scrollHeight - 4) break;
+  }
+  if (container) container.scrollTop = 0;
+  return JSON.stringify(Array.from(seen.values()));
+})()
+"""
+
+_MODELS_JS = r"""
+(async () => {
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const buttons = Array.from(document.querySelectorAll('button'));
+  const switcher = document.querySelector('[data-testid="model-switcher-dropdown-button"]')
+    || buttons.find((b) => /model|modèle|GPT|ChatGPT/i.test((b.getAttribute('aria-label') || '') + ' ' + (b.textContent || '')));
+  if (!switcher) return JSON.stringify({ current: null, models: [], error: 'model switcher not found' });
+  const current = (switcher.textContent || switcher.getAttribute('aria-label') || '').trim();
+  switcher.click();
+  await sleep(350);
+  const candidates = Array.from(document.querySelectorAll('[role="menuitem"], [role="option"], [data-testid*="model"], [data-radix-collection-item]'));
+  const labels = [];
+  for (const el of candidates) {
+    const text = (el.textContent || '').replace(/\s+/g, ' ').trim();
+    if (!text || text.length > 120) continue;
+    if (/model|GPT|ChatGPT|o\d|mini|pro|thinking|instant/i.test(text)) labels.push(text);
+  }
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  return JSON.stringify({ current, models: Array.from(new Set(labels)).slice(0, 30), error: null });
+})()
+"""
+
+_SELECT_MODEL_JS = r"""
+(async (label) => {
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const buttons = Array.from(document.querySelectorAll('button'));
+  const switcher = document.querySelector('[data-testid="model-switcher-dropdown-button"]')
+    || buttons.find((b) => /model|modèle|GPT|ChatGPT/i.test((b.getAttribute('aria-label') || '') + ' ' + (b.textContent || '')));
+  if (!switcher) return JSON.stringify({ ok: false, error: 'model switcher not found' });
+  switcher.click();
+  await sleep(350);
+  const candidates = Array.from(document.querySelectorAll('[role="menuitem"], [role="option"], [data-testid*="model"], [data-radix-collection-item]'));
+  const normalized = label.replace(/\s+/g, ' ').trim().toLowerCase();
+  const target = candidates.find((el) => (el.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase() === normalized)
+    || candidates.find((el) => (el.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase().includes(normalized));
+  if (!target) {
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    return JSON.stringify({ ok: false, error: 'requested model not visible' });
+  }
+  target.click();
+  await sleep(650);
+  const visible = (switcher.textContent || switcher.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim();
+  const ok = visible.toLowerCase().includes(normalized) || normalized.includes(visible.toLowerCase());
+  return JSON.stringify({ ok, selected: visible, error: ok ? null : 'selection could not be confirmed' });
+})
 """
 
 # Phase 7 executes this; Phase 5 ships it unexecuted by design.
@@ -889,6 +1038,33 @@ class WebBridgeDriver:
             return json.loads(raw) if isinstance(raw, str) else list(raw or [])
         except (json.JSONDecodeError, TypeError) as exc:
             raise DriverError(f"cannot parse conversation list: {exc}") from exc
+
+    async def health(self) -> dict:
+        try:
+            tabs = await asyncio.to_thread(self._command, "list_tabs", {}, 5)
+            tab_list = tabs.get("tabs", []) if isinstance(tabs, dict) else []
+            return {"connected": True, "tabs": len(tab_list)}
+        except DriverError as exc:
+            return {"connected": False, "tabs": 0, "error": str(exc)}
+
+    async def list_models(self) -> dict:
+        raw = await asyncio.to_thread(self._command, "evaluate", {"code": _MODELS_JS}, 30)
+        if isinstance(raw, dict) and "value" in raw:
+            raw = raw["value"]
+        try:
+            return json.loads(raw) if isinstance(raw, str) else dict(raw or {})
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise DriverError(f"cannot parse model list: {exc}") from exc
+
+    async def select_model(self, label: str) -> str:
+        code = f"{_SELECT_MODEL_JS}({json.dumps(label)})"
+        raw = await asyncio.to_thread(self._command, "evaluate", {"code": code}, 40)
+        if isinstance(raw, dict) and "value" in raw:
+            raw = raw["value"]
+        result = json.loads(raw) if isinstance(raw, str) else dict(raw or {})
+        if not result.get("ok"):
+            raise DriverError(f"model selection failed: {result.get('error', 'unknown')}")
+        return str(result.get("selected") or label)
 
     async def close_tab(self) -> None:
         await asyncio.to_thread(self._command, "close_tab", {})

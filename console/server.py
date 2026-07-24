@@ -15,19 +15,38 @@ from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from local_executor import STORAGE_UNAVAILABLE, detect_mode, runtime_status, run_task
 from missions import router as missions_router
+from chat import router as chat_router
+from settings import router as settings_router
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 DATA_DIR = BASE_DIR / "data"
 STORE_FILE = DATA_DIR / "iterations.json"
+REPO_ROOT = BASE_DIR.parent
+FRONTEND_OUT = REPO_ROOT / "frontend" / "out"
+FRONTEND_FALLBACK = REPO_ROOT / "frontend" / "fallback"
 
 app = FastAPI(title="Cortex Bridge Console")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://127.0.0.1:3420", "http://localhost:3420"],
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Last-Event-ID"],
+)
 app.include_router(missions_router)
+app.include_router(chat_router)
+app.include_router(settings_router)
+
+if (FRONTEND_OUT / "_next").is_dir():
+    app.mount("/_next", StaticFiles(directory=FRONTEND_OUT / "_next"), name="next-assets")
 
 # ------------------------------------------------------------- persistence
 
@@ -105,6 +124,12 @@ async def _run(task: dict) -> None:
 
 @app.get("/")
 async def index() -> FileResponse:
+    modern = FRONTEND_OUT / "index.html"
+    fallback = FRONTEND_FALLBACK / "index.html"
+    if modern.is_file():
+        return FileResponse(modern)
+    if fallback.is_file():
+        return FileResponse(fallback)
     return FileResponse(STATIC_DIR / "index.html")
 
 
@@ -226,6 +251,27 @@ async def stream_task(task_id: str) -> StreamingResponse:
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.get("/{full_path:path}", include_in_schema=False)
+async def frontend_fallback(full_path: str) -> FileResponse:
+    """Serve files from the optional Next.js static export without shadowing API routes."""
+    if full_path.startswith("api/"):
+        raise HTTPException(status_code=404, detail="API route not found")
+    if FRONTEND_OUT.is_dir():
+        candidate = (FRONTEND_OUT / full_path).resolve()
+        try:
+            candidate.relative_to(FRONTEND_OUT.resolve())
+        except ValueError:
+            raise HTTPException(status_code=404, detail="asset not found")
+        if candidate.is_dir():
+            candidate = candidate / "index.html"
+        if candidate.is_file():
+            return FileResponse(candidate)
+        nested = candidate.with_suffix(".html")
+        if nested.is_file():
+            return FileResponse(nested)
+    raise HTTPException(status_code=404, detail="asset not found")
 
 
 if __name__ == "__main__":

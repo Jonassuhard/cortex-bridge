@@ -40,7 +40,7 @@ from executor.policy import (  # noqa: E402
     PolicyEngine,
 )
 from executor.tools import ToolExecutor  # noqa: E402
-from orchestration.loop import MissionLoop  # noqa: E402
+from orchestration.loop import MissionLoop, MockReply  # noqa: E402
 from orchestration.runner import (  # noqa: E402
     ModeARunner,
     OptInRequired,
@@ -267,6 +267,43 @@ async def _resume_mission_task(rt: MissionRuntime) -> None:
         approval_callback=_make_approval_callback(rt),
         budgets=rt._budgets,  # type: ignore[attr-defined]
     )
+
+    # A user may pause while ChatGPT is already producing a reply. The fresh
+    # runtime created for resume cannot see MissionLoop._stashed from the old
+    # task, so recover the latest unconsumed reply from SQLite before deciding
+    # whether to send or await anything.
+    transport_events = store.rows("transport_events", rt.mission_id, order_by="rowid")
+    consumed_stashes = {
+        str(json.loads(event.get("detail_json") or "{}").get("stash_event_id"))
+        for event in transport_events
+        if event.get("event_type") == "PAUSED_RESPONSE_CONSUMED"
+    }
+    pending_stash = None
+    for event in reversed(transport_events):
+        if event.get("event_type") != "PAUSED_RESPONSE_STASHED":
+            continue
+        if str(event.get("id")) in consumed_stashes:
+            continue
+        try:
+            detail = json.loads(event.get("detail_json") or "{}")
+        except json.JSONDecodeError:
+            continue
+        if detail.get("text") and detail.get("message_id"):
+            pending_stash = (event, detail)
+            break
+    if pending_stash is not None:
+        stash_event, stash_detail = pending_stash
+        loop._stashed = MockReply(
+            text=str(stash_detail["text"]),
+            message_id=str(stash_detail["message_id"]),
+        )
+        store.record_transport_event(
+            str(uuid.uuid4()),
+            rt.mission_id,
+            "PAUSED_RESPONSE_CONSUMED",
+            {"stash_event_id": stash_event["id"]},
+        )
+
     # Resume without ever re-sending a message ChatGPT already answered, and
     # without awaiting a reply that will never come:
     # - REPORT_SENT is recorded at finalize time, MESSAGE_DELIVERED only after

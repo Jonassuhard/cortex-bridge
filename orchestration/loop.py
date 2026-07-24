@@ -253,10 +253,17 @@ class MissionLoop:
             if mission["state"] in TERMINAL_STATES:
                 return mission
             if mission["state"] in STALLED_STATES:
-                # Paused/cancelled externally while waiting (e.g. user pause):
-                # stash the unprocessed reply so an explicit resume continues
-                # exactly where the loop stopped.
+                # Paused externally while waiting (e.g. user pause): preserve the
+                # unprocessed assistant reply both in memory and in SQLite. The
+                # HTTP resume path may rebuild the runtime after a process/task
+                # boundary, so an in-memory stash alone is not sufficient.
                 self._stashed = reply
+                self.store.record_transport_event(
+                    str(uuid.uuid4()),
+                    self.mission_id,
+                    "PAUSED_RESPONSE_STASHED",
+                    {"text": reply.text, "message_id": reply.message_id},
+                )
                 return mission
 
             self.sm.transition("PARSING_DECISION")

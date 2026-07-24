@@ -1,0 +1,224 @@
+export type HealthState =
+  | "healthy"
+  | "connected"
+  | "idle"
+  | "running"
+  | "waiting"
+  | "degraded"
+  | "blocked"
+  | "disconnected"
+  | "failed"
+  | "unknown";
+
+export type MessageRole = "user" | "assistant" | "system" | "cortex";
+
+export interface ConversationSummary {
+  url: string;
+  identity: string;
+  title: string;
+  preview?: string;
+  timestamp?: string;
+  unread?: number;
+  pinned?: boolean;
+  archived?: boolean;
+  status?: "idle" | "generating" | "mission" | "approval" | "blocked" | "error";
+}
+
+export interface CodeBlock {
+  lang?: string;
+  text: string;
+}
+
+export interface MessageImage {
+  src: string;
+  alt?: string;
+}
+
+export interface ConversationMessage {
+  id: string;
+  role: MessageRole;
+  text: string;
+  code_blocks?: CodeBlock[];
+  images?: MessageImage[];
+  created_at?: string;
+  delivery?: "queued" | "sending" | "sent" | "visible" | "received" | "failed";
+  latency_ms?: number;
+  streaming?: boolean;
+}
+
+export interface ConversationSnapshot {
+  url: string;
+  conversation_id: string | null;
+  title: string;
+  blocker: string | null;
+  composer_present: boolean;
+  send_button_present: boolean;
+  stop_button_present: boolean;
+  streaming: boolean;
+  model_label?: string | null;
+  messages: ConversationMessage[];
+}
+
+export type ChatRunState =
+  | "QUEUED"
+  | "SELECTING_CONVERSATION"
+  | "SENDING_TO_CHATGPT"
+  | "VISIBLE_IN_CHATGPT"
+  | "WAITING_FOR_CHATGPT"
+  | "CHATGPT_STREAMING"
+  | "COMPLETED"
+  | "FAILED"
+  | "CANCELLED";
+
+export interface ChatRun {
+  id: string;
+  state: ChatRunState;
+  conversation_url: string;
+  canonical_url?: string;
+  text: string;
+  response_text?: string;
+  created_at: string;
+  delivered_at?: string | null;
+  first_response_at?: string | null;
+  completed_at?: string | null;
+  error?: string | null;
+  latency?: {
+    delivery_ms?: number | null;
+    first_response_ms?: number | null;
+    total_ms?: number | null;
+  };
+}
+
+export interface ChatRunEvent {
+  seq: number;
+  ts: string;
+  type: "status" | "delivery" | "stream" | "complete" | "error" | "cancelled";
+  payload: Record<string, unknown>;
+}
+
+export interface RuntimeModel {
+  name: string;
+  state: "missing" | "installed" | "loaded";
+}
+
+export interface RuntimeStatus {
+  ollama_up: boolean;
+  ollama_status: string;
+  endpoint: string;
+  storage_path: string;
+  volume_mounted: boolean;
+  storage_status: string;
+  primary: RuntimeModel;
+  fallback: RuntimeModel;
+  mode: string;
+  model: string;
+}
+
+export interface TransportStatus {
+  experimental_warning: string;
+  opt_in_accepted: boolean;
+  global_stop: boolean;
+}
+
+export interface PipelineComponent {
+  id: string;
+  label: string;
+  state: HealthState;
+  detail: string;
+  latency_ms?: number | null;
+  heartbeat_at?: string | null;
+}
+
+export interface PipelineEvent {
+  id: string;
+  ts: string;
+  label: string;
+  detail?: string;
+  duration_ms?: number | null;
+  state?: HealthState;
+}
+
+export interface PipelineStatus {
+  overall: HealthState;
+  updated_at: string;
+  components: PipelineComponent[];
+  active_mission_id?: string | null;
+  active_mission_state?: string | null;
+  queue_pending: number;
+  events: PipelineEvent[];
+  latency?: {
+    transport_ms?: number | null;
+    local_model_ms?: number | null;
+    total_iteration_ms?: number | null;
+  };
+}
+
+export interface MissionSummary {
+  id: string;
+  objective: string;
+  workspace: string;
+  state: string;
+  created_at: number;
+  updated_at?: number;
+  max_iterations?: number;
+  max_duration_seconds?: number;
+  pause_reason?: string | null;
+}
+
+export interface TimelineRow extends Record<string, unknown> {
+  rowid?: number;
+  created_at?: number;
+  started_at?: number;
+  updated_at?: number;
+  finished_at?: number;
+  selected_at?: number;
+}
+
+export interface MissionDetail {
+  mission: MissionSummary;
+  timeline: Record<string, TimelineRow[]>;
+  awaiting_approval: boolean;
+  stopped: boolean;
+}
+
+export type ApprovalPolicy =
+  | "read-only-automatic"
+  | "workspace-write-with-approvals"
+  | "workspace-write-automatic";
+
+export type AccessProfile = "observe" | "workspace" | "extended" | "browser-research" | "lab";
+
+export interface CortexSettings {
+  language: "fr" | "en";
+  theme: "dark" | "light" | "system";
+  planner_model: string;
+  primary_executor: string;
+  fallback_executor: string;
+  approval_policy: ApprovalPolicy;
+  access_profile: AccessProfile;
+  default_workspace: string;
+  max_iterations: number;
+  max_duration_minutes: number;
+  ollama_context: number;
+  auto_continue: boolean;
+  browser_research: boolean;
+  network_access: boolean;
+  never_delete_files: boolean;
+  persist_conversation_history: boolean;
+  response_stability_seconds: number;
+  chat_timeout_seconds: number;
+}
+
+export interface OllamaModelInfo {
+  name: string;
+  size: number;
+  modified_at?: string;
+  digest?: string;
+  loaded?: boolean;
+}
+
+export interface ChatGPTModelInfo {
+  label: string;
+  selected?: boolean;
+  available?: boolean;
+}
