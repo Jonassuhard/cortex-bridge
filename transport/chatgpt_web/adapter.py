@@ -294,6 +294,7 @@ class ChatGPTWebTransport:
         if state.get("streaming"):
             raise TransportError(STREAM_TIMEOUT, "still streaming before send")
         self._baseline = {m["id"] for m in state.get("messages", []) if m["role"] == "assistant"}
+        user_ids_before = {m["id"] for m in state.get("messages", []) if m["role"] == "user"}
         try:
             await self.driver.send_message(text)
         except DriverError as exc:
@@ -301,7 +302,16 @@ class ChatGPTWebTransport:
             self.pause(DELIVERY_UNCERTAIN)
             raise TransportError(DELIVERY_UNCERTAIN, f"send may have failed: {exc}") from exc
         # The SPA takes a moment to render the sent user message — poll for it.
-        first_line = text.split("\n", 1)[0][:80]
+        # Marker: first substantial content line. ChatGPT's markdown consumes
+        # the leading ``` fence AND its language label, so neither can serve
+        # as the marker; the JSON body stays visible inside the code block.
+        marker = ""
+        for line in text.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("```") or len(stripped) < 8:
+                continue
+            marker = stripped[:60]
+            break
         sent: list[dict] = []
         after: dict = {}
         deadline = time.monotonic() + min(30.0, self.max_wait)
@@ -317,7 +327,12 @@ class ChatGPTWebTransport:
             sent = [
                 m
                 for m in after.get("messages", [])
-                if m["role"] == "user" and first_line in m.get("text", "")
+                if m["role"] == "user"
+                and m["id"] not in user_ids_before
+                and marker in (
+                    m.get("text", "")
+                    + " ".join(b.get("text", "") for b in m.get("code_blocks", []))
+                )
             ]
             if sent:
                 break
