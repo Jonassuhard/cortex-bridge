@@ -529,7 +529,12 @@ _CONVERSATIONS_JS = r"""
 _SEND_JS = r"""
 (async (text) => {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const composer = document.querySelector('#prompt-textarea');
+  // The SPA may still be rendering when we land — wait for the composer.
+  let composer = null;
+  for (let i = 0; i < 50 && !composer; i++) {
+    composer = document.querySelector('#prompt-textarea');
+    if (!composer) await sleep(200);
+  }
   if (!composer) return JSON.stringify({ ok: false, error: 'composer not found' });
   composer.focus();
   if (!document.execCommand('insertText', false, text)) {
