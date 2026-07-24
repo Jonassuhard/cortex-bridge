@@ -262,7 +262,8 @@ class StateMachine:
         if self.store.has_report_key(key):
             raise DuplicateReport("report already sent for this action/iteration")
         ok = self.store.record_report_send(
-            str(uuid.uuid4()), self.mission_id, key, detail={"status": report.get("status")}
+            str(uuid.uuid4()), self.mission_id, key,
+            detail={"status": report.get("status"), "report": report},
         )
         if not ok:
             raise DuplicateReport("report already sent for this action/iteration")

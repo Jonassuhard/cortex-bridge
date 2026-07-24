@@ -63,3 +63,13 @@ auto-validation (`_auto_validate`), denylist/jail concepts, WebBridge daemon.
 No OpenAI API / API key, no Codex CLI, no OpenCodex, no sudo, loopback only,
 no push without explicit approval, no cookie/credential access, no CAPTCHA or
 anti-bot bypass, manual mode preserved as fallback.
+
+## Post-acceptance UI polish (deferred)
+
+`docs/ui-improvements-chatgpt.md` — full export of the ChatGPT Pro design
+conversation (architecture rationale, UX narrative "Ce que l'utilisation
+donnera" lines 133-150, transport comparison table, risk framing). To be
+reused AFTER the final acceptance test to polish the localhost console:
+guided first-run flow (open Chrome → pick conversation → type mission),
+clearer transport-state storytelling, and the risk labeling wording.
+Not a Phase 6 blocker — the §17 requirements are already implemented.

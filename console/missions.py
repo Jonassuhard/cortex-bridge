@@ -409,12 +409,16 @@ async def fallback_payload(mission_id: str) -> dict:
     report = None
     if events:
         try:
-            report = json.loads(events[-1].get("detail_json") or "{}") or None
+            detail = json.loads(events[-1].get("detail_json") or "{}")
+            report = detail.get("report")  # full report persisted since Phase 6
         except json.JSONDecodeError:
             report = None
     parts = ["[Cortex Bridge — manual fallback payload]"]
     if report:
         parts.append(protocol.render_report_message(report))
+    else:
+        parts.append("No persisted report for this mission yet — "
+                     "copy the latest mission state from the console.")
     return {"payload": "\n\n".join(parts)}
 
 
