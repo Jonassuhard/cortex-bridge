@@ -1,0 +1,61 @@
+test_01_list_allowed_directory (test_executor_tools.ToolTestCase.test_01_list_allowed_directory) ... ok
+test_02_read_allowed_file (test_executor_tools.ToolTestCase.test_02_read_allowed_file) ... ok
+test_03_reject_etc_passwd (test_executor_tools.ToolTestCase.test_03_reject_etc_passwd) ... ok
+test_04_reject_parent_traversal (test_executor_tools.ToolTestCase.test_04_reject_parent_traversal) ... ok
+test_05_reject_symlink_pointing_outside (test_executor_tools.ToolTestCase.test_05_reject_symlink_pointing_outside) ... ok
+test_06_create_one_requested_file (test_executor_tools.ToolTestCase.test_06_create_one_requested_file) ... ok
+test_07_verify_exact_file_content (test_executor_tools.ToolTestCase.test_07_verify_exact_file_content) ... ok
+test_08_refuse_unspecified_second_file (test_executor_tools.ToolTestCase.test_08_refuse_unspecified_second_file) ... ok
+test_09_apply_precise_patch (test_executor_tools.ToolTestCase.test_09_apply_precise_patch) ... ok
+test_10_reject_patch_mismatched_expected_text (test_executor_tools.ToolTestCase.test_10_reject_patch_mismatched_expected_text) ... ok
+test_11_run_python_script (test_executor_tools.ToolTestCase.test_11_run_python_script) ... ok
+test_12_capture_stdout_and_exit_code (test_executor_tools.ToolTestCase.test_12_capture_stdout_and_exit_code) ... ok
+test_13_enforce_timeout (test_executor_tools.ToolTestCase.test_13_enforce_timeout) ... ok
+test_14_reject_sudo (test_executor_tools.ToolTestCase.test_14_reject_sudo) ... ok
+test_15_reject_git_push (test_executor_tools.ToolTestCase.test_15_reject_git_push) ... ok
+test_16_reject_external_curl (test_executor_tools.ToolTestCase.test_16_reject_external_curl) ... ok
+test_17_preserve_unrelated_dirty_git_changes (test_executor_tools.ToolTestCase.test_17_preserve_unrelated_dirty_git_changes) ... 
+    ○
+    │╲
+    │ ○
+    ○ ░
+    ░    gitleaks
+
+1:39PM INF 0 commits scanned.
+1:39PM INF scanned ~5 bytes (5 bytes) in 25.7ms
+1:39PM INF no leaks found
+Executing <Task pending name='Task-97' coro=<ToolTestCase.test_17_preserve_unrelated_dirty_git_changes() running at /Users/asterion/Documents/kimi/workspace/cortex-bridge/tests/test_executor_tools.py:214> wait_for=<Future pending cb=[Task.task_wakeup()] created at /Applications/Kimi.app/Contents/Resources/resources/daimon-bundle/runtime/python/cpython-3.12/lib/python3.12/asyncio/base_events.py:448> cb=[_run_until_complete_cb() at /Applications/Kimi.app/Contents/Resources/resources/daimon-bundle/runtime/python/cpython-3.12/lib/python3.12/asyncio/base_events.py:181] created at /Applications/Kimi.app/Contents/Resources/resources/daimon-bundle/runtime/python/cpython-3.12/lib/python3.12/asyncio/runners.py:100> took 0.210 seconds
+ok
+test_18_reject_false_success (test_executor_tools.ToolTestCase.test_18_reject_false_success) ... ok
+test_19_create_rollback_checkpoint (test_executor_tools.ToolTestCase.test_19_create_rollback_checkpoint) ... ok
+test_20_restore_checkpoint (test_executor_tools.ToolTestCase.test_20_restore_checkpoint) ... ok
+test_01_valid_decision (test_protocol_state_store.ProtocolTestCase.test_01_valid_decision) ... ok
+test_02_invalid_protocol (test_protocol_state_store.ProtocolTestCase.test_02_invalid_protocol) ... ok
+test_03_wrong_mission_id (test_protocol_state_store.ProtocolTestCase.test_03_wrong_mission_id) ... ok
+test_04_repeated_action_id (test_protocol_state_store.ProtocolTestCase.test_04_repeated_action_id) ... ok
+test_05_incorrect_iteration (test_protocol_state_store.ProtocolTestCase.test_05_incorrect_iteration) ... ok
+test_06_unknown_state (test_protocol_state_store.ProtocolTestCase.test_06_unknown_state) ... ok
+test_07_unknown_tool (test_protocol_state_store.ProtocolTestCase.test_07_unknown_tool) ... ok
+test_08_unknown_field (test_protocol_state_store.ProtocolTestCase.test_08_unknown_field) ... ok
+test_09_malformed_arguments (test_protocol_state_store.ProtocolTestCase.test_09_malformed_arguments) ... ok
+test_10_missing_acceptance_criteria (test_protocol_state_store.ProtocolTestCase.test_10_missing_acceptance_criteria) ... ok
+test_11_absolute_path_rejected (test_protocol_state_store.ProtocolTestCase.test_11_absolute_path_rejected) ... ok
+test_12_parent_traversal_rejected (test_protocol_state_store.ProtocolTestCase.test_12_parent_traversal_rejected) ... ok
+test_complete_without_validation_instructions (test_protocol_state_store.ProtocolTestCase.test_complete_without_validation_instructions) ... ok
+test_extract_decision_block (test_protocol_state_store.ProtocolTestCase.test_extract_decision_block) ... ok
+test_extract_rejects_zero_and_multiple_blocks (test_protocol_state_store.ProtocolTestCase.test_extract_rejects_zero_and_multiple_blocks) ... ok
+test_14_duplicate_response_rejected (test_protocol_state_store.StateStoreTestCase.test_14_duplicate_response_rejected) ... ok
+test_15_duplicate_report_send_rejected (test_protocol_state_store.StateStoreTestCase.test_15_duplicate_report_send_rejected) ... ok
+test_16_repetition_loop_detected (test_protocol_state_store.StateStoreTestCase.test_16_repetition_loop_detected) ... ok
+test_17_iteration_limit_enforced (test_protocol_state_store.StateStoreTestCase.test_17_iteration_limit_enforced) ... ok
+test_18_mission_timeout_enforced (test_protocol_state_store.StateStoreTestCase.test_18_mission_timeout_enforced) ... ok
+test_19_cancellation_stops_continuation (test_protocol_state_store.StateStoreTestCase.test_19_cancellation_stops_continuation) ... ok
+test_20_restart_sets_paused (test_protocol_state_store.StateStoreTestCase.test_20_restart_sets_paused) ... ok
+test_eleven_tables (test_protocol_state_store.StoreSchemaTestCase.test_eleven_tables) ... ok
+test_report_builder_and_render (test_protocol_state_store.StoreSchemaTestCase.test_report_builder_and_render) ... ok
+test_13_symlink_escape_rejected (test_protocol_state_store.SymlinkEscapeTestCase.test_13_symlink_escape_rejected) ... ok
+
+----------------------------------------------------------------------
+Ran 45 tests in 1.374s
+
+OK
