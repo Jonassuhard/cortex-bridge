@@ -189,6 +189,57 @@ body {
   color: var(--text-2);
 }
 
+/* ------------------------------------------------------ runtime panel */
+
+.runtime-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px 24px;
+}
+
+.runtime-row { display: flex; align-items: center; gap: 10px; min-width: 0; }
+
+.runtime-row dt {
+  flex: 0 0 130px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-2);
+}
+
+.runtime-row dd {
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.runtime-row .mono { font-family: var(--mono); font-size: 12px; }
+
+.chip-runtime { background: var(--accent-soft); color: var(--accent-hover); }
+.chip-runtime.bad { background: transparent; border: 1px solid var(--absent); color: var(--absent); }
+
+.chip-state { background: var(--accent-soft); color: var(--accent-hover); }
+.chip-state-loaded { background: var(--accent); color: #fff; }
+.chip-state-missing { background: transparent; border: 1px solid var(--absent); color: var(--absent); }
+
+.chip-ok { background: var(--present); color: #fff; }
+.chip-bad { background: transparent; border: 1px solid var(--absent); color: var(--absent); }
+
+.storage-banner {
+  border: 1px solid var(--absent);
+  color: var(--absent);
+  border-radius: 10px;
+  font-size: 13px;
+  padding: 10px 14px;
+  margin-bottom: 16px;
+}
+
 /* ------------------------------------------------------------- forms */
 
 .field-label {
@@ -390,6 +441,7 @@ textarea:focus, input[type="text"]:focus {
   .shell { grid-template-columns: 1fr; }
   .sidebar { border-right: none; border-bottom: 1px solid var(--border); }
   .report-grid { grid-template-columns: 1fr; }
+  .runtime-grid { grid-template-columns: 1fr; }
   .field-row { flex-direction: column; gap: 0; }
   .field-col-narrow { flex: 1; }
 }

@@ -1,0 +1,10 @@
+{
+  "model": "orchestra-executor-fallback",
+  "tests": 10,
+  "schema_validity": 0.0,
+  "tool_selection": 0.0,
+  "scope_compliance": 0.0,
+  "false_success_count": 10,
+  "median_latency_s": 5.41,
+  "ollama_ps": "orchestra-executor-fallback:latest    1d8a624f6a3c    8.7 GB    100% GPU     12288      4 minutes from now"
+}

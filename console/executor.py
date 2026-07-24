@@ -15,17 +15,29 @@ Two modes, selected automatically at task time:
 from __future__ import annotations
 
 import asyncio
+import os
 import random
 import re
 import shutil
 import shlex
+import subprocess
 from pathlib import Path
 from typing import Awaitable, Callable
 from urllib.request import urlopen
 
-OLLAMA_TAGS_URL = "http://127.0.0.1:11434/api/tags"
+OLLAMA_ENDPOINT = "http://127.0.0.1:11434"
+OLLAMA_TAGS_URL = f"{OLLAMA_ENDPOINT}/api/tags"
 CODEX_HOME = Path.home() / ".codex-cortex-bridge"
 CONFIG_TOML = CODEX_HOME / "config.toml"
+
+# Local model storage lives on the external DJO volume; override with
+# CORTEX_STORAGE_PATH to test the disk-missing code path.
+DEFAULT_STORAGE_PATH = "/Volumes/DJO/AI/Ollama/models"
+VOLUME_ROOT = "/Volumes/DJO"
+STORAGE_UNAVAILABLE = "LOCAL_MODEL_STORAGE_UNAVAILABLE"
+
+PRIMARY_EXECUTOR = "orchestra-executor"
+FALLBACK_EXECUTOR = "orchestra-executor-fallback"
 
 Emit = Callable[[str, str], Awaitable[None]]  # emit(text, kind)
 
@@ -58,6 +70,74 @@ def detect_mode() -> str:
     if CONFIG_TOML.is_file() and probe_ollama() and shutil.which("codex"):
         return "live"
     return "simulation"
+
+
+# ------------------------------------------------------ local runtime status
+
+def storage_path() -> str:
+    """Model storage path; CORTEX_STORAGE_PATH overrides the DJO default."""
+    return os.environ.get("CORTEX_STORAGE_PATH", DEFAULT_STORAGE_PATH)
+
+
+def volume_mounted() -> bool:
+    """True only if the DJO volume exists AND the storage path is accessible."""
+    try:
+        return Path(VOLUME_ROOT).exists() and os.access(storage_path(), os.R_OK)
+    except OSError:
+        return False
+
+
+def storage_status() -> str:
+    return "OK" if volume_mounted() else STORAGE_UNAVAILABLE
+
+
+def _ollama_names(args: list[str]) -> set[str]:
+    """Run `ollama <args>` and return the model names in the NAME column."""
+    try:
+        out = subprocess.run(
+            ["ollama", *args],
+            capture_output=True, text=True, timeout=3, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    names: set[str] = set()
+    for line in out.stdout.splitlines()[1:]:  # skip header
+        cols = line.split()
+        if cols:
+            names.add(cols[0])
+    return names
+
+
+def model_state(name: str) -> str:
+    """'loaded' (in `ollama ps`), 'installed' (in `ollama list`), or 'missing'.
+
+    Never errors: if the volume is gone or Ollama is down, the model is
+    reported as 'missing'.
+    """
+    if not volume_mounted() or not probe_ollama():
+        return "missing"
+    if any(n == name or n.startswith(name + ":") for n in _ollama_names(["ps"])):
+        return "loaded"
+    if any(n == name or n.startswith(name + ":") for n in _ollama_names(["list"])):
+        return "installed"
+    return "missing"
+
+
+def runtime_status() -> dict:
+    """Full local-runtime snapshot for GET /api/status."""
+    up = probe_ollama(timeout=1.0)
+    return {
+        "ollama_up": up,
+        "ollama_status": "healthy" if up else "unhealthy",
+        "endpoint": OLLAMA_ENDPOINT,
+        "storage_path": storage_path(),
+        "volume_mounted": volume_mounted(),
+        "storage_status": storage_status(),
+        "primary": {"name": PRIMARY_EXECUTOR, "state": model_state(PRIMARY_EXECUTOR)},
+        "fallback": {"name": FALLBACK_EXECUTOR, "state": model_state(FALLBACK_EXECUTOR)},
+        "mode": detect_mode(),
+        "model": active_model(),
+    }
 
 
 def _slugify(text: str, max_words: int = 4) -> str:

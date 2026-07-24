@@ -45,6 +45,45 @@
 
   <main class="main">
 
+    <!-- LOCAL RUNTIME -->
+    <section class="card" id="runtimeCard">
+      <div class="card-head">
+        <span class="eyebrow">Local runtime</span>
+        <span class="chip chip-runtime" id="runtimeChip">…</span>
+      </div>
+      <div class="storage-banner" id="storageBanner" hidden>
+        External drive DJO not mounted — local executors unavailable
+        (LOCAL_MODEL_STORAGE_UNAVAILABLE). Remote fallback (Kimi/OpenCodex)
+        remains available.
+      </div>
+      <dl class="runtime-grid">
+        <div class="runtime-row">
+          <dt>Endpoint</dt>
+          <dd class="mono" id="rtEndpoint">—</dd>
+        </div>
+        <div class="runtime-row">
+          <dt>Storage path</dt>
+          <dd class="mono" id="rtStorage">—</dd>
+        </div>
+        <div class="runtime-row">
+          <dt>Primary executor</dt>
+          <dd><span class="mono" id="rtPrimaryName">—</span> <span class="chip" id="rtPrimaryState">…</span></dd>
+        </div>
+        <div class="runtime-row">
+          <dt>Fallback executor</dt>
+          <dd><span class="mono" id="rtFallbackName">—</span> <span class="chip" id="rtFallbackState">…</span></dd>
+        </div>
+        <div class="runtime-row">
+          <dt>External volume</dt>
+          <dd><span class="chip" id="rtVolume">…</span></dd>
+        </div>
+        <div class="runtime-row">
+          <dt>Ollama</dt>
+          <dd><span class="chip" id="rtOllama">…</span></dd>
+        </div>
+      </dl>
+    </section>
+
     <!-- COMPOSER -->
     <section class="card" id="composerCard">
       <div class="card-head">

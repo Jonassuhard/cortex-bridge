@@ -42,6 +42,34 @@ The console picks the mode automatically per task:
 The current mode is always visible as a chip in the top-right status bar,
 next to the Ollama up/down dot and the active model name.
 
+## Local runtime panel
+
+Above the Composer, the **Local runtime** card shows the state of the local
+execution stack, refreshed every 10 seconds from `GET /api/status`:
+
+- Ollama endpoint and health (`healthy` / `unhealthy`, from the `/api/tags` probe)
+- Model storage path and whether the external **DJO volume is mounted**
+- Primary executor `orchestra-executor` and fallback
+  `orchestra-executor-fallback`, each with a state chip:
+  `installed` (in `ollama list`), `loaded` (in `ollama ps`, accent blue) or
+  `missing` (muted red)
+
+The models live on an external drive (`/Volumes/DJO/AI/Ollama/models`, symlinked
+to `~/.ollama/models`). When that volume is not mounted, the API reports
+`storage_status: "LOCAL_MODEL_STORAGE_UNAVAILABLE"`, the panel shows a warning
+banner, the *Run task* button is disabled, and `POST /api/tasks` refuses new
+tasks with **HTTP 409** and the same code in the JSON body — local executors
+cannot run without their weights. The remote fallback (Kimi/OpenCodex) remains
+available; the console surfaces this as information only and performs no
+automatic re-routing.
+
+Set `CORTEX_STORAGE_PATH` to test the disk-missing path without unplugging the
+drive; set `PORT` to run on a port other than 8420:
+
+```bash
+CORTEX_STORAGE_PATH=/Volumes/DJO/definitely-not-here PORT=8421 python server.py
+```
+
 ## The manual ChatGPT loop
 
 Until the automated orchestrator bridge lands, the loop is manual:
@@ -63,7 +91,7 @@ Until the automated orchestrator bridge lands, the loop is manual:
 
 | Method | Path                              | Purpose                                  |
 |--------|-----------------------------------|------------------------------------------|
-| GET    | `/api/status`                     | Ollama probe, active model, mode         |
+| GET    | `/api/status`                     | Local runtime status: Ollama probe, storage, executors, mode |
 | POST   | `/api/tasks`                      | Create + start an iteration              |
 | GET    | `/api/tasks`                      | List iterations                          |
 | GET    | `/api/tasks/{id}`                 | Full iteration detail incl. report       |

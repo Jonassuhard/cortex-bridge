@@ -7,6 +7,7 @@ const state = {
   currentId: null,
   eventSource: null,
   mode: "simulation",
+  storageUnavailable: false,
 };
 
 /* ------------------------------------------------------------- helpers */
@@ -35,6 +36,38 @@ async function api(path, opts) {
 
 /* ----------------------------------------------------------- status bar */
 
+function setChip(el, text, cls) {
+  el.textContent = text;
+  el.className = "chip " + cls;
+}
+
+function renderRuntime(s) {
+  $("rtEndpoint").textContent = s.endpoint || "—";
+  $("rtStorage").textContent = s.storage_path || "—";
+  $("rtPrimaryName").textContent = s.primary?.name || "—";
+  $("rtFallbackName").textContent = s.fallback?.name || "—";
+
+  for (const [id, m] of [["rtPrimaryState", s.primary], ["rtFallbackState", s.fallback]]) {
+    const st = m?.state || "missing";
+    setChip($(id), st, st === "loaded" ? "chip-state-loaded"
+      : st === "installed" ? "chip-state" : "chip-state-missing");
+  }
+
+  setChip($("rtVolume"), s.volume_mounted ? "mounted" : "missing",
+    s.volume_mounted ? "chip-ok" : "chip-bad");
+  setChip($("rtOllama"), s.ollama_status || "unhealthy",
+    s.ollama_status === "healthy" ? "chip-ok" : "chip-bad");
+
+  state.storageUnavailable = s.storage_status === "LOCAL_MODEL_STORAGE_UNAVAILABLE";
+  $("storageBanner").hidden = !state.storageUnavailable;
+  $("runBtn").disabled = state.storageUnavailable;
+
+  const bad = state.storageUnavailable || s.ollama_status !== "healthy";
+  const chip = $("runtimeChip");
+  chip.textContent = bad ? "degraded" : "OK";
+  chip.classList.toggle("bad", bad);
+}
+
 async function refreshStatus() {
   try {
     const s = await api("/api/status");
@@ -46,6 +79,7 @@ async function refreshStatus() {
     chip.textContent = s.mode;
     chip.classList.toggle("live", s.mode === "live");
     $("simNote").hidden = s.mode !== "simulation";
+    renderRuntime(s);
   } catch {
     $("ollamaDot").className = "dot dot-unknown";
     $("ollamaLabel").textContent = "Ollama ?";
@@ -189,6 +223,7 @@ async function selectTask(taskId) {
 async function runTask() {
   const goal = $("goalInput").value.trim();
   if (!goal) { $("goalInput").focus(); return; }
+  if (state.storageUnavailable) return; // backend refuses with 409 anyway
   const constraints = $("constraintsInput").value
     .split(",").map((s) => s.trim()).filter(Boolean);
   const workspace = $("workspaceInput").value.trim() || "~/";
@@ -202,7 +237,7 @@ async function runTask() {
     await refreshTasks();
     await selectTask(created.id);
   } finally {
-    $("runBtn").disabled = false;
+    $("runBtn").disabled = state.storageUnavailable;
   }
 }
 

@@ -2,7 +2,7 @@
 # Copy this file to ~/.codex-cortex-bridge/config.toml
 # (setup-executor.sh does it for you)
 
-model = "gpt-oss-16k"
+model = "orchestra-executor"
 model_reasoning_effort = "high"
 approval_policy = "never"
 sandbox_mode = "workspace-write"

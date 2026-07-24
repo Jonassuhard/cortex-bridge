@@ -25,8 +25,9 @@ and produces a report for the orchestrator.
 The script will:
 
 1. Verify Ollama is running
-2. Pull `gpt-oss:20b` (best agentic model that fits 16 GB RAM)
-3. Create the `gpt-oss-16k` alias (context capped at 16K tokens — see below)
+2. Pull `granite4.1:8b` and `qwen3.5:9b` (primary + fallback bases)
+3. Create the `orchestra-executor` and `orchestra-executor-fallback` profiles
+   (see below)
 4. Smoke-test chat **and tool calling** (the critical capability)
 5. Create an isolated Codex profile at `~/.codex-cortex-bridge`
 
@@ -39,12 +40,21 @@ CODEX_HOME=~/.codex-cortex-bridge codex exec "list the files in my Downloads fol
 If Codex asks for an API key: `export OPENAI_API_KEY=ollama` (Ollama ignores
 the value, but the client requires one to be set).
 
-## Why the 16K context alias?
+## Executor profiles
 
-`gpt-oss:20b` advertises 128K context, but on 16 GB of unified memory a large
-context window starves macOS, your browser and the Ollama runtime itself.
-16K tokens is the sweet spot for agentic task execution on this hardware.
-Adjust in `configs/Modelfile.gpt-oss` if you have more RAM.
+The default executor is **`orchestra-executor`** (based on `granite4.1:8b`) —
+the deterministic primary for atomic, low-ambiguity tasks. When it returns
+BLOCKED or FAILED, the run escalates once to **`orchestra-executor-fallback`**
+(based on `qwen3.5:9b`), the adaptive recovery executor. The full routing
+policy is in [../docs/routing-policy.md](../docs/routing-policy.md).
+
+Both profiles are built from `configs/Modelfile.orchestra-executor` and
+`configs/Modelfile.orchestra-executor-fallback`:
+
+```bash
+ollama create orchestra-executor -f configs/Modelfile.orchestra-executor
+ollama create orchestra-executor-fallback -f configs/Modelfile.orchestra-executor-fallback
+```
 
 ## Alternative models (16 GB RAM)
 
@@ -55,6 +65,8 @@ Adjust in `configs/Modelfile.gpt-oss` if you have more RAM.
 | `devstral:24b` | `ollama pull devstral:24b` | Benchmarked agentic (46.8% SWE-Bench), very tight on RAM |
 
 On 24–32 GB machines, prefer `qwen3-coder:30b` (the best local coder today).
+Alternatives are drop-in base models — rebuild the Modelfiles with a different
+`FROM` line to experiment; the routing policy stays the same.
 
 ## Optional: store models on an external drive
 

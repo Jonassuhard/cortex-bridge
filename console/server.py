@@ -8,16 +8,17 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
-from executor import active_model, detect_mode, probe_ollama, run_task
+from executor import STORAGE_UNAVAILABLE, detect_mode, runtime_status, run_task
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
@@ -117,17 +118,24 @@ async def script() -> FileResponse:
 
 @app.get("/api/status")
 async def status() -> dict:
-    return {
-        "ollama_up": probe_ollama(timeout=1.0),
-        "model": active_model(),
-        "mode": detect_mode(),
-    }
+    return runtime_status()
 
 
 @app.post("/api/tasks", status_code=201)
 async def create_task(body: TaskIn) -> dict:
     if not body.goal.strip():
         raise HTTPException(status_code=422, detail="goal must not be empty")
+    if runtime_status()["storage_status"] == STORAGE_UNAVAILABLE:
+        return JSONResponse(
+            status_code=409,
+            content={
+                "error": STORAGE_UNAVAILABLE,
+                "message": (
+                    "Local model storage unavailable; the remote Kimi/OpenCodex "
+                    "fallback remains available."
+                ),
+            },
+        )
     task = {
         "id": uuid.uuid4().hex[:12],
         "goal": body.goal.strip(),
@@ -209,4 +217,4 @@ async def stream_task(task_id: str) -> StreamingResponse:
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="127.0.0.1", port=8420, log_level="info")
+    uvicorn.run(app, host="127.0.0.1", port=int(os.environ.get("PORT", 8420)), log_level="info")
