@@ -565,7 +565,10 @@ class WebBridgeDriver:
             raise DriverError(f"webbridge {action} failed: {exc}") from exc
         if isinstance(data, dict) and data.get("ok") is False:
             raise DriverError(f"webbridge {action} rejected: {data.get('error')}")
-        return data.get("result", data)
+        # Daemon envelope is {"ok": true, "data": <payload>}.
+        if isinstance(data, dict):
+            return data.get("data", data.get("result", data))
+        return data
 
     async def navigate(self, url: str) -> None:
         await asyncio.to_thread(self._command, "navigate", {"url": url, "newTab": False})
@@ -601,6 +604,19 @@ class WebBridgeDriver:
 
     async def list_conversations(self) -> list[dict]:
         """§8 candidates from the sidebar DOM of an open chatgpt.com tab."""
+        # The session may have no tab yet — open chatgpt.com first.
+        try:
+            tabs = await asyncio.to_thread(self._command, "list_tabs", {})
+            tab_list = tabs.get("tabs", []) if isinstance(tabs, dict) else []
+        except DriverError:
+            tab_list = []
+        if not tab_list:
+            await asyncio.to_thread(
+                self._command, "navigate",
+                {"url": "https://chatgpt.com/", "newTab": True,
+                 "group_title": "Cortex Bridge"},
+            )
+            await asyncio.sleep(3)  # let the app shell render the sidebar
         raw = await asyncio.to_thread(self._command, "evaluate", {"code": _CONVERSATIONS_JS})
         if isinstance(raw, dict) and "value" in raw:
             raw = raw["value"]
