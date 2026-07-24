@@ -56,6 +56,7 @@
   justify-content: space-between;
   gap: 12px;
 }
+.stop-state[hidden] { display: none; }
 
 .conversation-row { display: flex; gap: 8px; align-items: center; }
 .conversation-row select { flex: 1; }
