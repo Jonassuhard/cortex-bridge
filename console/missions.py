@@ -352,6 +352,18 @@ async def stop_reset() -> dict:
     return {"global_stop": False}
 
 
+@router.get("/transport/probe")
+async def transport_probe() -> dict:
+    """Read-only DOM health check on the live ChatGPT tab: reports which
+    adaptive selector currently matches each role (composer, messages, send,
+    stop), with failures/warnings and raw diagnostics for UI regressions."""
+    transport = transport_factory()
+    try:
+        return await transport.probe()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"probe failed: {exc}")
+
+
 @router.get("/conversations")
 async def list_conversations() -> list[dict]:
     transport = transport_factory()

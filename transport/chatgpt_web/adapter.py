@@ -166,6 +166,16 @@ class ChatGPTWebTransport:
         to pick from. Sidebar DOM on real ChatGPT; registry on the fixture."""
         return await self.driver.list_conversations()
 
+    async def probe(self) -> dict:
+        """Read-only DOM health check: which adaptive selector currently
+        matches each role, plus diagnostics. Fixture drivers have no DOM,
+        so probing is only available on the live WebBridge driver."""
+        probe = getattr(self.driver, "probe", None)
+        if probe is None:
+            return {"ok": False, "error": "driver does not support probing",
+                    "failures": ["unsupported-driver"], "warnings": []}
+        return await probe()
+
     async def _await_conversation(self, want_identity: str | None, timeout: float = 25.0) -> dict:
         """Poll until the SPA actually shows the requested conversation.
 
@@ -546,11 +556,21 @@ EXPERIMENTAL_TRANSPORT_WARNING = (
 # Live-validated JS DOM contract (see docs/phase5-dom-contract.md, 2026-07-24)
 # ---------------------------------------------------------------------------
 
+# Adaptive selector candidates, tried in order; the first match wins and is
+# reported back (state["selectors"]) so the console/probe can show which
+# selector the live UI currently honors. Fallbacks exist so a ChatGPT UI
+# refresh degrades gracefully instead of breaking silently.
 _STATE_JS = r"""
 (() => {
-  const q = (sel) => document.querySelector(sel);
+  const q = (sel) => { try { return document.querySelector(sel); } catch (e) { return null; } };
+  const qAll = (sel) => { try { return Array.from(document.querySelectorAll(sel)); } catch (e) { return []; } };
+  const COMPOSER_CANDIDATES = ['#prompt-textarea', 'div[contenteditable="true"][role="textbox"]', 'div[contenteditable="true"]', 'form textarea'];
+  const MESSAGE_CANDIDATES = ['[data-message-author-role]', 'article[data-testid^="conversation-turn"]', 'main article'];
+  const STOP_CANDIDATES = ['[data-testid="stop-button"]', 'button[aria-label*="Stop"]', 'button[aria-label*="Arr"]'];
+  const first = (cands) => { for (const c of cands) { if (q(c)) return c; } return null; };
   const text = document.body ? document.body.innerText.slice(0, 8000) : '';
-  const composer = q('#prompt-textarea');
+  const composerSel = first(COMPOSER_CANDIDATES);
+  const composer = composerSel ? q(composerSel) : null;
   // Blockers (conservative; see docs/phase5-dom-contract.md §f):
   let blocker = null;
   if (!composer && /log in|sign up|se connecter|inscrivez-vous/i.test(text)) blocker = 'login';
@@ -565,19 +585,21 @@ _STATE_JS = r"""
     catch (e) {}
     return '';
   };
-  const messages = Array.from(document.querySelectorAll('[data-message-author-role]')).map((el, i) => {
+  const messageSel = first(MESSAGE_CANDIDATES);
+  const messages = (messageSel ? qAll(messageSel) : []).map((el, i) => {
     const blocks = Array.from(el.querySelectorAll('pre.cm-content')).map((pre) => {
       const t = pre.textContent || '';
       return { lang: sniffLang(t), text: t };
     });
     return {
       id: el.getAttribute('data-message-id') || ('idx-' + i),
-      role: el.getAttribute('data-message-author-role'),
+      role: el.getAttribute('data-message-author-role') || null,
       text: el.textContent || '',
       code_blocks: blocks,
     };
   });
-  const stop = q('[data-testid="stop-button"], button[aria-label*="Stop"], button[aria-label*="Arr"]');
+  const stopSel = first(STOP_CANDIDATES);
+  const stop = stopSel ? q(stopSel) : null;
   const streaming = !!stop || !!q('.result-streaming');
   return JSON.stringify({
     url: location.href,
@@ -589,6 +611,7 @@ _STATE_JS = r"""
     stop_button_present: !!stop,
     streaming: streaming,
     messages: messages,
+    selectors: { composer: composerSel, messages: messageSel, stop: stopSel },
   });
 })()
 """
@@ -615,29 +638,43 @@ _CONVERSATIONS_JS = r"""
 _SEND_JS = r"""
 (async (text) => {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  // Adaptive composer candidates (same list as _STATE_JS): first match wins.
+  const COMPOSER_CANDIDATES = ['#prompt-textarea', 'div[contenteditable="true"][role="textbox"]', 'div[contenteditable="true"]', 'form textarea'];
+  const findComposer = () => {
+    for (const c of COMPOSER_CANDIDATES) {
+      try { const el = document.querySelector(c); if (el) return el; } catch (e) {}
+    }
+    return null;
+  };
   // The SPA may still be rendering when we land — wait for the composer.
   let composer = null;
   for (let i = 0; i < 50 && !composer; i++) {
-    composer = document.querySelector('#prompt-textarea');
+    composer = findComposer();
     if (!composer) await sleep(200);
   }
   if (!composer) return JSON.stringify({ ok: false, error: 'composer not found' });
-  const current = (composer.innerText || '').replace(/\s+/g, ' ').trim();
+  const isTextarea = composer.tagName === 'TEXTAREA' || composer.tagName === 'INPUT';
+  const readComposer = () => (isTextarea ? composer.value : composer.innerText) || '';
+  const current = readComposer().replace(/\s+/g, ' ').trim();
   const wanted = text.replace(/\s+/g, ' ').trim();
   if (!current.startsWith(wanted.slice(0, 200))) {
     composer.focus();
-    if (!document.execCommand('insertText', false, text)) {
+    if (isTextarea) {
+      composer.value = text;
+      composer.dispatchEvent(new Event('input', { bubbles: true }));
+    } else if (!document.execCommand('insertText', false, text)) {
       return JSON.stringify({ ok: false, error: 'insertText rejected' });
     }
   }
   const form = composer.closest('form') || document;
-  // Only the real send control: testid send-button or a send aria-label.
-  // NB: .composer-submit-button-color also matches the VOICE-mode button
-  // ("Démarrer le mode vocal") while React has not armed the send button
-  // yet — never fall back to it.
+  // Only real send controls: testid send-button, a send aria-label, or the
+  // form's submit button. NB: .composer-submit-button-color also matches the
+  // VOICE-mode button ("Démarrer le mode vocal") while React has not armed
+  // the send button yet — never fall back to it.
   const findSend = () => form.querySelector('button[data-testid="send-button"]:not([disabled])')
     || Array.from(form.querySelectorAll('button[aria-label]')).find((b) =>
-        !b.disabled && /envoyer le (prompt|message)|send (prompt|message)/i.test(b.getAttribute('aria-label') || ''));
+        !b.disabled && /envoyer le (prompt|message)|send (prompt|message)/i.test(b.getAttribute('aria-label') || ''))
+    || form.querySelector('button[type="submit"]:not([disabled])');
   let btn = null;
   for (let i = 0; i < 50 && !btn; i++) { btn = findSend(); if (!btn) await sleep(200); }
   if (!btn) return JSON.stringify({ ok: false, error: 'send button not found' });
@@ -645,11 +682,73 @@ _SEND_JS = r"""
   // Proof of send: the composer empties once the message is accepted.
   for (let i = 0; i < 25; i++) {
     await sleep(200);
-    if (!(composer.innerText || '').trim()) return JSON.stringify({ ok: true });
+    if (!readComposer().trim()) return JSON.stringify({ ok: true });
   }
   return JSON.stringify({ ok: false, error: 'composer not cleared after click' });
 })
 """
+
+# Read-only DOM health probe: tests every selector role and reports which
+# candidate currently matches, plus diagnostics for debugging UI changes.
+# No clicks, no typing — safe to run anytime (used by /api/transport/probe
+# and the daily health-check automation).
+_PROBE_JS = r"""
+(() => {
+  const q = (sel) => { try { return document.querySelector(sel); } catch (e) { return null; } };
+  const qCount = (sel) => { try { return document.querySelectorAll(sel).length; } catch (e) { return 0; } };
+  const CANDIDATES = {
+    composer: ['#prompt-textarea', 'div[contenteditable="true"][role="textbox"]', 'div[contenteditable="true"]', 'form textarea'],
+    messages: ['[data-message-author-role]', 'article[data-testid^="conversation-turn"]', 'main article'],
+    send: ['button[data-testid="send-button"]', 'form button[type="submit"]'],
+    stop: ['[data-testid="stop-button"]', 'button[aria-label*="Stop"]', 'button[aria-label*="Arr"]'],
+  };
+  const probeRole = (cands) => {
+    for (const c of cands) { if (q(c)) return { ok: true, selector: c, count: qCount(c) }; }
+    return { ok: false, selector: null, count: 0 };
+  };
+  const roles = {};
+  for (const [name, cands] of Object.entries(CANDIDATES)) roles[name] = probeRole(cands);
+  // The send button only exists while the composer holds text, so also check
+  // for a send aria-label anywhere (voice-mode button excluded by the regex).
+  const sendAria = Array.from(document.querySelectorAll('button[aria-label]')).find((b) =>
+    /envoyer le (prompt|message)|send (prompt|message)/i.test(b.getAttribute('aria-label') || ''));
+  if (!roles.send.ok && sendAria) roles.send = { ok: true, selector: 'aria:' + (sendAria.getAttribute('aria-label') || ''), count: 1 };
+  const buttons = Array.from(document.querySelectorAll('form button, main button')).slice(0, 30).map((b) => ({
+    testid: b.getAttribute('data-testid'),
+    aria: b.getAttribute('aria-label'),
+    type: b.getAttribute('type'),
+    disabled: !!b.disabled,
+  }));
+  return JSON.stringify({
+    url: location.href,
+    title: document.title,
+    roles: roles,
+    diagnostics: {
+      buttons: buttons,
+      contenteditables: qCount('[contenteditable="true"]'),
+      textareas: qCount('textarea'),
+      message_nodes: qCount('[data-message-author-role]'),
+    },
+  });
+})()
+"""
+
+
+def _summarize_probe(result: dict) -> dict:
+    """Add the top-level ok/failures/warnings summary to a raw probe payload.
+
+    The transport is considered healthy when the composer and message list
+    resolve. Send/stop buttons are contextual — the send button only exists
+    once the composer holds text (a read-only probe cannot type), and stop
+    only while streaming — so they are reported as warnings, never failures.
+    """
+    roles = result.get("roles") or {}
+    failures = [name for name in ("composer", "messages") if not (roles.get(name) or {}).get("ok")]
+    warnings = [name for name in ("send", "stop") if not (roles.get(name) or {}).get("ok")]
+    result["failures"] = failures
+    result["warnings"] = warnings
+    result["ok"] = not failures
+    return result
 
 
 class WebBridgeDriver:
@@ -720,11 +819,23 @@ class WebBridgeDriver:
             self._command,
             "evaluate",
             {
-                "code": "(document.querySelector('[data-testid=\"stop-button\"]')"
-                " || document.querySelector('button[aria-label*=\"Stop\"]')"
-                " || document.querySelector('button[aria-label*=\"Arr\"]'))?.click()"
+                "code": "(() => { for (const c of ['[data-testid=\"stop-button\"]',"
+                " 'button[aria-label*=\"Stop\"]', 'button[aria-label*=\"Arr\"]']) {"
+                " try { const el = document.querySelector(c); if (el) { el.click(); return; } }"
+                " catch (e) {} } })()"
             },
         )
+
+    async def probe(self) -> dict:
+        """Read-only DOM health check on the current tab (see _PROBE_JS)."""
+        raw = await asyncio.to_thread(self._command, "evaluate", {"code": _PROBE_JS})
+        if isinstance(raw, dict) and "value" in raw:
+            raw = raw["value"]
+        try:
+            result = json.loads(raw) if isinstance(raw, str) else dict(raw or {})
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise DriverError(f"cannot parse probe result: {exc}") from exc
+        return _summarize_probe(result)
 
     async def list_conversations(self) -> list[dict]:
         """§8 candidates from the sidebar DOM of an open chatgpt.com tab."""
