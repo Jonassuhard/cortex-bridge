@@ -339,9 +339,20 @@ class ChatSettingsApiTestCase(unittest.TestCase):
         req = urllib.request.Request(self.base + "/", method="GET")
         with urllib.request.urlopen(req, timeout=10) as response:
             html = response.read().decode("utf-8")
-        self.assertIn('<span class="word">Cortex<b>Bridge</b></span>', html)
-        self.assertIn("Mission autonome", html)
-        self.assertIn("gridfx", html)
+        modern = REPO_ROOT / "frontend" / "out" / "index.html"
+        if modern.is_file():
+            # Built Next.js export takes priority (it ships in the repo).
+            self.assertIn("Cortex Bridge — Local orchestration client", html)
+        else:
+            self.assertIn('<span class="word">Cortex<b>Bridge</b></span>', html)
+            self.assertIn("Mission autonome", html)
+            self.assertIn("gridfx", html)
+        # The standalone safety net must always ship, whatever is served.
+        fallback = REPO_ROOT / "frontend" / "fallback" / "index.html"
+        self.assertTrue(fallback.is_file())
+        fallback_html = fallback.read_text(encoding="utf-8")
+        self.assertIn('<span class="word">Cortex<b>Bridge</b></span>', fallback_html)
+        self.assertIn("Mission autonome", fallback_html)
 
 
 

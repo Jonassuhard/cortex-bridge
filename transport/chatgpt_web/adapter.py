@@ -61,11 +61,13 @@ DEFAULT_STABILITY_INTERVAL = 2.0  # §13: message stable for 2 seconds
 DEFAULT_MAX_WAIT = 300.0  # §13: 5 minutes per ChatGPT response
 DEFAULT_POLL_INTERVAL = 0.5
 # Thinking models render an EMPTY assistant shell while reasoning, with a
-# render gap between "stop button gone" and the code block being painted.
+# paint gap between "stop button gone" and the code block being painted.
 # An empty assistant message is never final within this grace window; only
 # after this many seconds of continuous emptiness is it accepted as a
 # genuinely empty reply (which the loop then handles as a violation).
-DEFAULT_EMPTY_REPLY_GRACE = 45.0
+# 120 s: measured live 2026-07-25 — a thinking model painted a trivial
+# answer ~50 s after the stop button vanished; 45 s was too short.
+DEFAULT_EMPTY_REPLY_GRACE = 120.0
 
 
 class TransportError(Exception):
