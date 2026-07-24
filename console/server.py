@@ -18,7 +18,8 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
-from executor import STORAGE_UNAVAILABLE, detect_mode, runtime_status, run_task
+from local_executor import STORAGE_UNAVAILABLE, detect_mode, runtime_status, run_task
+from missions import router as missions_router
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
@@ -26,6 +27,7 @@ DATA_DIR = BASE_DIR / "data"
 STORE_FILE = DATA_DIR / "iterations.json"
 
 app = FastAPI(title="Cortex Bridge Console")
+app.include_router(missions_router)
 
 # ------------------------------------------------------------- persistence
 
