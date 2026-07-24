@@ -25,6 +25,7 @@ from executor.policy import PolicyEngine
 from executor.tools import ToolExecutor
 
 from .loop import MAX_CYCLES, MissionLoop, MockReply
+from .protocol import TOOL_ARGUMENTS
 from .state import Budgets
 from .store import Store, StoreError, TERMINAL_STATES
 from transport.chatgpt_web.adapter import (
@@ -86,6 +87,9 @@ Rules:
   ```cortex-report fenced block with the validated tool result
   (status SUCCEEDED | FAILED | BLOCKED | DENIED | CANCELLED). Adapt your
   next decision to it. Never emit more than one decision block per reply.
+
+Tool argument schemas (unknown argument names are rejected):
+{tool_schemas}
 """
 
 
@@ -95,8 +99,33 @@ class OptInRequired(Exception):
 
 def render_contract(objective: str, mission_id: str, workspace: str) -> str:
     return ORCHESTRATOR_CONTRACT_TEMPLATE.format(
-        mission_id=mission_id, workspace=workspace, objective=objective, tools=ALLOWED_TOOLS_CSV
+        mission_id=mission_id,
+        workspace=workspace,
+        objective=objective,
+        tools=ALLOWED_TOOLS_CSV,
+        tool_schemas=_tool_schema_summary(),
     )
+
+
+def _tool_schema_summary() -> str:
+    """Human-readable argument schemas generated from TOOL_ARGUMENTS so the
+    contract and the validator can never drift apart."""
+    type_names = {str: "string", int: "int", float: "float", bool: "bool", list: "list", dict: "object"}
+
+    def name_of(expected: Any) -> str:
+        if isinstance(expected, tuple):
+            return "|".join(type_names.get(t, str(t)) for t in expected)
+        return type_names.get(expected, str(expected))
+
+    lines = []
+    for tool, schema in TOOL_ARGUMENTS.items():
+        required = set(schema["required"])
+        args = ", ".join(
+            f"{key}: {name_of(expected)}{'' if key in required else ' (optional)'}"
+            for key, expected in schema["types"].items()
+        )
+        lines.append(f"- {tool}({args})")
+    return "\n".join(lines)
 
 
 class TransportOrchestratorClient:

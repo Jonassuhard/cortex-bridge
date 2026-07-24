@@ -388,8 +388,24 @@ class MissionLoop:
     # -- EXECUTE / REQUEST_CONTEXT ----------------------------------------------------
 
     async def _handle_action(self, decision: dict) -> str:
-        tool = decision["action"]["tool"]
-        arguments = decision["action"].get("arguments", {})
+        action = decision.get("action")
+        if action is None:
+            # REQUEST_CONTEXT with a null action (allowed by the contract):
+            # nothing to execute — answer with an empty report so the
+            # orchestrator re-decides with a concrete tool.
+            report = protocol.build_report(
+                mission_id=self.mission_id,
+                action_id=decision["actionId"],
+                iteration=decision["iteration"],
+                status="BLOCKED",
+                summary="no tool requested; name a concrete read-only tool or proceed",
+                tool=None,
+                tool_result=None,
+                validation=None,
+            )
+            return self._finalize_cycle(decision, report, success=False)
+        tool = action["tool"]
+        arguments = action.get("arguments", {})
         action_id = decision["actionId"]
 
         policy_decision = self.policy.evaluate(tool, arguments)
