@@ -38,6 +38,9 @@ Missions run against the production UI through WebBridge, workspace
 | G | Browser refresh after a report | No duplicate execution (fingerprints) | ✅ Covered: duplicate-response tests + REPORT_RESEND_IGNORED paths |
 | H | STOP EVERYTHING mid-mission | Mission CANCELLED (`STOP_EVERYTHING`), writes stop immediately | ✅ PASS (h3.txt never written) |
 | **Final acceptance** | scan.py mission, zero copy-paste | scan.py created, run, rapport.txt non-empty, COMPLETED | ✅ PASS (4 valid decisions) |
+| F (organic) | Human yanked the tab to another chat mid-mission | CONVERSATION_MISMATCH pause, no leak into the wrong chat; fast detection while awaiting | ✅ PASS (happened for real, twice) |
+| I | Reuse an existing conversation (attach, no new chat) | Contract into the locked chat, self-heal after 2 context-confusion violations, COMPLETED | ✅ PASS |
+| J | Harder task: zip `cortex-bridge` via `run_process`, verify contents + size | cortex-backup.zip (551 files) created and verified, COMPLETED | ✅ PASS (4 valid decisions) |
 
 Notable real-world defects found by this matrix and fixed the same day:
 
