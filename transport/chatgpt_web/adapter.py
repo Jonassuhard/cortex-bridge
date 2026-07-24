@@ -582,10 +582,13 @@ _SEND_JS = r"""
     }
   }
   const form = composer.closest('form') || document;
+  // Only the real send control: testid send-button or a send aria-label.
+  // NB: .composer-submit-button-color also matches the VOICE-mode button
+  // ("Démarrer le mode vocal") while React has not armed the send button
+  // yet — never fall back to it.
   const findSend = () => form.querySelector('button[data-testid="send-button"]:not([disabled])')
     || Array.from(form.querySelectorAll('button[aria-label]')).find((b) =>
-        !b.disabled && /envoyer le (prompt|message)|send (prompt|message)/i.test(b.getAttribute('aria-label') || ''))
-    || Array.from(form.querySelectorAll('button.composer-submit-button-color')).find((b) => !b.disabled);
+        !b.disabled && /envoyer le (prompt|message)|send (prompt|message)/i.test(b.getAttribute('aria-label') || ''));
   let btn = null;
   for (let i = 0; i < 50 && !btn; i++) { btn = findSend(); if (!btn) await sleep(200); }
   if (!btn) return JSON.stringify({ ok: false, error: 'send button not found' });
