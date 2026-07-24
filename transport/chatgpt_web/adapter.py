@@ -397,6 +397,18 @@ class ChatGPTWebTransport:
                 self._cancel_requested = False
                 raise TransportError(GENERATION_CANCELLED, "generation cancelled by user")
             state = await self._state()
+            # Fast mismatch detection: a human (or another tab action) may
+            # yank the page away while we wait — fail in seconds, not after
+            # the full response timeout.
+            if (
+                self.lock is not None
+                and not self._pending_new_chat
+                and state.get("conversation_id") != self.lock.identity
+            ):
+                self.pause(CONVERSATION_MISMATCH)
+                raise ConversationMismatch(
+                    f"page shows {state.get('conversation_id')!r}, locked to {self.lock.identity!r}"
+                )
             if state.get("stop_button_present") or state.get("streaming"):
                 self.streaming_observed = True
                 stable_since = None
