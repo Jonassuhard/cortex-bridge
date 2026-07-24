@@ -118,6 +118,16 @@ async def script() -> FileResponse:
     return FileResponse(STATIC_DIR / "app.js")
 
 
+@app.get("/missions.css")
+async def missions_style() -> FileResponse:
+    return FileResponse(STATIC_DIR / "missions.css")
+
+
+@app.get("/missions.js")
+async def missions_script() -> FileResponse:
+    return FileResponse(STATIC_DIR / "missions.js")
+
+
 @app.get("/api/status")
 async def status() -> dict:
     return runtime_status()

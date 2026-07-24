@@ -8,6 +8,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="/style.css" />
+<link rel="stylesheet" href="/missions.css" />
 </head>
 <body>
 
@@ -23,6 +24,7 @@
     <span class="wordmark-sub">console</span>
   </div>
   <div class="status-strip" id="statusStrip">
+    <button class="stop-btn" id="stopEverythingBtn" title="Emergency stop: no more browser messages, no more local actions">STOP EVERYTHING</button>
     <span class="status-item" id="ollamaItem" title="Local Ollama daemon">
       <span class="dot dot-unknown" id="ollamaDot"></span>
       <span id="ollamaLabel">Ollama …</span>
@@ -82,6 +84,115 @@
           <dd><span class="chip" id="rtOllama">…</span></dd>
         </div>
       </dl>
+    </section>
+
+    <!-- AUTONOMOUS MISSION — experimental transport (§6) -->
+    <section class="card" id="transportCard">
+      <div class="card-head">
+        <span class="eyebrow">Experimental ChatGPT Web Transport</span>
+        <span class="chip" id="transportChip">…</span>
+      </div>
+      <div class="warn-banner" id="transportWarning" hidden>
+        <pre class="warn-text" id="transportWarningText"></pre>
+        <label class="optin-row">
+          <input type="checkbox" id="optinCheckbox" />
+          <span>I have read the warning and explicitly enable the experimental transport</span>
+        </label>
+      </div>
+      <div class="stop-state" id="globalStopBanner" hidden>
+        STOP EVERYTHING is active — no browser message or local action can start.
+        <button class="ghost-btn" id="stopResetBtn">Re-arm transport</button>
+      </div>
+    </section>
+
+    <!-- MISSION COMPOSER -->
+    <section class="card" id="missionComposerCard">
+      <div class="card-head">
+        <span class="eyebrow">Autonomous mission</span>
+        <span class="field-hint">ChatGPT orchestrates · Granite executes · zero copy-paste</span>
+      </div>
+      <label class="field-label" for="missionInput">Mission</label>
+      <textarea id="missionInput" rows="4"
+        placeholder="Describe the high-level objective…"></textarea>
+      <div class="field-row">
+        <div class="field-col">
+          <label class="field-label" for="missionConstraints">Constraints <span class="field-hint">(comma-separated)</span></label>
+          <input id="missionConstraints" type="text" placeholder="e.g. stay in workspace, no network" />
+        </div>
+        <div class="field-col field-col-narrow">
+          <label class="field-label" for="missionWorkspace">Workspace</label>
+          <input id="missionWorkspace" type="text" value="/Users/asterion/Documents/kimi/workspace/e2e-sandbox" />
+        </div>
+      </div>
+      <div class="field-row">
+        <div class="field-col">
+          <label class="field-label" for="conversationSelect">ChatGPT conversation</label>
+          <div class="conversation-row">
+            <select id="conversationSelect"><option value="">— load conversations —</option></select>
+            <button class="ghost-btn" id="refreshConversationsBtn" title="Read open ChatGPT tabs via WebBridge">Refresh</button>
+          </div>
+          <span class="field-hint" id="conversationHint"></span>
+        </div>
+        <div class="field-col field-col-narrow">
+          <label class="field-label" for="approvalPolicySelect">Approval policy</label>
+          <select id="approvalPolicySelect">
+            <option value="read-only-automatic">Read-only automatic</option>
+            <option value="workspace-write-with-approvals" selected>Workspace-write with approvals</option>
+            <option value="workspace-write-automatic">Workspace-write automatic</option>
+          </select>
+        </div>
+      </div>
+      <div class="field-row">
+        <div class="field-col field-col-narrow">
+          <label class="field-label" for="maxIterationsInput">Max iterations</label>
+          <input id="maxIterationsInput" type="number" value="25" min="1" max="100" />
+        </div>
+        <div class="field-col field-col-narrow">
+          <label class="field-label" for="maxDurationInput">Max duration (min)</label>
+          <input id="maxDurationInput" type="number" value="60" min="1" max="240" />
+        </div>
+      </div>
+      <div class="composer-actions">
+        <button class="btn-primary" id="runMissionBtn">Run autonomous mission</button>
+        <span class="sim-note" id="missionOptinNote">Enable the experimental transport above first.</span>
+      </div>
+    </section>
+
+    <!-- MISSIONS LIST -->
+    <section class="card" id="missionsCard">
+      <div class="card-head">
+        <span class="eyebrow">Missions</span>
+        <button class="ghost-btn" id="refreshMissionsBtn">Refresh</button>
+      </div>
+      <ul class="mission-list" id="missionList"></ul>
+      <p class="sidebar-empty" id="missionListEmpty">No missions yet.</p>
+    </section>
+
+    <!-- MISSION DETAIL / TIMELINE -->
+    <section class="card" id="missionDetailCard" hidden>
+      <div class="card-head">
+        <span class="eyebrow">Mission <span class="mono" id="missionDetailId"></span></span>
+        <span class="pill" id="missionStatePill">—</span>
+      </div>
+      <p class="mission-objective" id="missionObjective"></p>
+      <div class="mission-controls">
+        <button class="btn-secondary btn-small" id="pauseMissionBtn">Pause</button>
+        <button class="btn-secondary btn-small" id="resumeMissionBtn" hidden>Resume</button>
+        <button class="btn-secondary btn-small" id="cancelMissionBtn">Cancel</button>
+        <button class="ghost-btn" id="downloadReportBtn">Download report</button>
+        <button class="ghost-btn" id="fallbackPayloadBtn">Copy manual fallback payload</button>
+      </div>
+      <div class="approval-panel" id="approvalPanel" hidden>
+        <span class="eyebrow">Approval required</span>
+        <p id="approvalDetail"></p>
+        <div class="approval-actions">
+          <button class="btn-primary btn-small" data-scope="once">Approve once</button>
+          <button class="btn-primary btn-small" data-scope="tool">Approve tool for mission</button>
+          <button class="btn-primary btn-small" data-scope="all-writes">Approve all writes</button>
+          <button class="btn-secondary btn-small" id="rejectApprovalBtn">Reject</button>
+        </div>
+      </div>
+      <div class="timeline" id="missionTimeline"></div>
     </section>
 
     <!-- COMPOSER -->
@@ -175,5 +286,6 @@
 </div>
 
 <script src="/app.js"></script>
+<script src="/missions.js"></script>
 </body>
 </html>
