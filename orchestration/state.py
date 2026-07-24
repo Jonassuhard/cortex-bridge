@@ -180,14 +180,20 @@ class StateMachine:
         conversation_identity: str,
         message_identity: str,
         content: str,
+        iteration: int | None = None,
     ) -> str:
-        """Fingerprint + record an assistant response. Rejects duplicates."""
+        """Fingerprint + record an assistant response. Rejects duplicates.
+
+        ``iteration`` defaults to the current expected iteration; callers that
+        already parsed the decision should pass its embedded iteration so a
+        re-delivered response is caught even after the mission advanced.
+        """
         fingerprint = response_fingerprint(
             conversation_identity=conversation_identity,
             message_identity=message_identity,
             content=content,
             mission_id=self.mission_id,
-            iteration=self.expected_iteration,
+            iteration=iteration if iteration is not None else self.expected_iteration,
         )
         if self.store.has_fingerprint(fingerprint):
             raise DuplicateResponse("response already processed (fingerprint seen)")

@@ -21,14 +21,23 @@ test_17_preserve_unrelated_dirty_git_changes (test_executor_tools.ToolTestCase.t
     ○ ░
     ░    gitleaks
 
-1:39PM INF 0 commits scanned.
-1:39PM INF scanned ~5 bytes (5 bytes) in 25.7ms
-1:39PM INF no leaks found
-Executing <Task pending name='Task-97' coro=<ToolTestCase.test_17_preserve_unrelated_dirty_git_changes() running at /Users/asterion/Documents/kimi/workspace/cortex-bridge/tests/test_executor_tools.py:214> wait_for=<Future pending cb=[Task.task_wakeup()] created at /Applications/Kimi.app/Contents/Resources/resources/daimon-bundle/runtime/python/cpython-3.12/lib/python3.12/asyncio/base_events.py:448> cb=[_run_until_complete_cb() at /Applications/Kimi.app/Contents/Resources/resources/daimon-bundle/runtime/python/cpython-3.12/lib/python3.12/asyncio/base_events.py:181] created at /Applications/Kimi.app/Contents/Resources/resources/daimon-bundle/runtime/python/cpython-3.12/lib/python3.12/asyncio/runners.py:100> took 0.210 seconds
+1:54PM INF 0 commits scanned.
+1:54PM INF scanned ~5 bytes (5 bytes) in 25.2ms
+1:54PM INF no leaks found
+Executing <Task pending name='Task-97' coro=<ToolTestCase.test_17_preserve_unrelated_dirty_git_changes() running at /Users/asterion/Documents/kimi/workspace/cortex-bridge/tests/test_executor_tools.py:214> wait_for=<Future pending cb=[Task.task_wakeup()] created at /Applications/Kimi.app/Contents/Resources/resources/daimon-bundle/runtime/python/cpython-3.12/lib/python3.12/asyncio/base_events.py:448> cb=[_run_until_complete_cb() at /Applications/Kimi.app/Contents/Resources/resources/daimon-bundle/runtime/python/cpython-3.12/lib/python3.12/asyncio/base_events.py:181] created at /Applications/Kimi.app/Contents/Resources/resources/daimon-bundle/runtime/python/cpython-3.12/lib/python3.12/asyncio/runners.py:100> took 0.206 seconds
 ok
 test_18_reject_false_success (test_executor_tools.ToolTestCase.test_18_reject_false_success) ... ok
 test_19_create_rollback_checkpoint (test_executor_tools.ToolTestCase.test_19_create_rollback_checkpoint) ... ok
 test_20_restore_checkpoint (test_executor_tools.ToolTestCase.test_20_restore_checkpoint) ... ok
+test_01_multi_iteration_repair_completes (test_loop_mock.LoopTestCase.test_01_multi_iteration_repair_completes) ... ok
+test_02_final_validation_failure_continues (test_loop_mock.LoopTestCase.test_02_final_validation_failure_continues) ... ok
+test_03_blocked_decision (test_loop_mock.LoopTestCase.test_03_blocked_decision) ... ok
+test_04_pause_resume_then_cancel (test_loop_mock.LoopTestCase.test_04_pause_resume_then_cancel) ... ok
+test_05_duplicate_response_rejected (test_loop_mock.LoopTestCase.test_05_duplicate_response_rejected) ... ok
+test_06_repetition_loop_pause (test_loop_mock.LoopTestCase.test_06_repetition_loop_pause) ... ok
+test_07_iteration_budget_exhaustion (test_loop_mock.LoopTestCase.test_07_iteration_budget_exhaustion) ... ok
+test_08_restart_recovery_requires_explicit_resume (test_loop_mock.LoopTestCase.test_08_restart_recovery_requires_explicit_resume) ... ok
+test_09_protocol_violations_rejected (test_loop_mock.LoopTestCase.test_09_protocol_violations_rejected) ... ok
 test_01_valid_decision (test_protocol_state_store.ProtocolTestCase.test_01_valid_decision) ... ok
 test_02_invalid_protocol (test_protocol_state_store.ProtocolTestCase.test_02_invalid_protocol) ... ok
 test_03_wrong_mission_id (test_protocol_state_store.ProtocolTestCase.test_03_wrong_mission_id) ... ok
@@ -56,6 +65,6 @@ test_report_builder_and_render (test_protocol_state_store.StoreSchemaTestCase.te
 test_13_symlink_escape_rejected (test_protocol_state_store.SymlinkEscapeTestCase.test_13_symlink_escape_rejected) ... ok
 
 ----------------------------------------------------------------------
-Ran 45 tests in 1.374s
+Ran 54 tests in 1.592s
 
 OK

@@ -76,6 +76,7 @@ TRANSITIONS: dict[str, frozenset[str]] = {
             "EXECUTING_LOCAL_ACTION",
             "FINAL_VALIDATION",
             "SENDING_REPORT",
+            "REPLANNING",
             "BLOCKED",
             "FAILED",
             "PAUSED",
@@ -635,6 +636,16 @@ class Store:
             )
 
     # -- introspection (tests / UI) ----------------------------------------------
+
+    def rows(self, table: str, mission_id: str | None = None, order_by: str | None = None) -> list[dict]:
+        sql = f"SELECT * FROM {table}"
+        params: tuple = ()
+        if mission_id is not None:
+            sql += " WHERE mission_id = ?"
+            params = (mission_id,)
+        if order_by is not None:
+            sql += f" ORDER BY {order_by}"
+        return [dict(r) for r in self._conn.execute(sql, params).fetchall()]
 
     def table_names(self) -> list[str]:
         rows = self._conn.execute(
