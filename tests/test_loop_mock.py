@@ -120,7 +120,7 @@ class LoopTestCase(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(mission["state"], "COMPLETED")
         # tool executions: read_file + apply_patch + run_process
-        executions = self.store.rows("tool_executions", self.mission_id)
+        executions = self.store.rows("tool_executions", self.mission_id, order_by="rowid")
         self.assertEqual(len(executions), 3)
         self.assertEqual(
             [json.loads(e["arguments_json"]).get("path", e["tool"]) for e in executions],
@@ -131,7 +131,7 @@ class LoopTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(run_result["exitCode"], 0)
         self.assertIn("CORTEX_REPAIR_OK", run_result["stdout"])
         # all 4 decisions recorded as valid
-        decisions = self.store.rows("orchestrator_decisions", self.mission_id)
+        decisions = self.store.rows("orchestrator_decisions", self.mission_id, order_by="rowid")
         self.assertEqual(len(decisions), 4)
         self.assertTrue(all(d["valid"] == 1 for d in decisions))
         # reports fed back to the orchestrator: 3 (COMPLETE sends none)
@@ -175,7 +175,7 @@ class LoopTestCase(unittest.IsolatedAsyncioTestCase):
         mission = await loop.run()
 
         self.assertEqual(mission["state"], "COMPLETED")
-        validations = self.store.rows("validation_results", self.mission_id, order_by="created_at")
+        validations = self.store.rows("validation_results", self.mission_id, order_by="rowid")
         self.assertEqual(len(validations), 2)
         self.assertEqual(validations[0]["passed"], 0)
         self.assertEqual(validations[1]["passed"], 1)
@@ -192,7 +192,7 @@ class LoopTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(mission["state"], "BLOCKED")
         self.assertEqual(self.store.count("tool_executions", self.mission_id), 0)
         self.assertEqual(len(mock.received), 1)  # contract only; no report sent
-        decisions = self.store.rows("orchestrator_decisions", self.mission_id)
+        decisions = self.store.rows("orchestrator_decisions", self.mission_id, order_by="rowid")
         self.assertEqual(len(decisions), 1)
         self.assertEqual(decisions[0]["valid"], 1)
 
@@ -288,7 +288,7 @@ class LoopTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(mission["state"], "PAUSED")
         self.assertEqual(mission["pause_reason"], REPETITION_LOOP)
         self.assertEqual(self.store.count("tool_executions", self.mission_id), 2)
-        decisions = self.store.rows("orchestrator_decisions", self.mission_id)
+        decisions = self.store.rows("orchestrator_decisions", self.mission_id, order_by="rowid")
         self.assertEqual(len(decisions), 3)
 
     # 7. Iteration budget exhaustion → FAILED with the right reason
@@ -366,7 +366,7 @@ class LoopTestCase(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(mission["state"], "BLOCKED")
         self.assertEqual(self.store.count("tool_executions", self.mission_id), 0)
-        decisions = self.store.rows("orchestrator_decisions", self.mission_id)
+        decisions = self.store.rows("orchestrator_decisions", self.mission_id, order_by="rowid")
         invalid = [d for d in decisions if d["valid"] == 0]
         self.assertEqual(len(invalid), 2)
         self.assertIn("NO_DECISION_BLOCK", invalid[0]["error"])

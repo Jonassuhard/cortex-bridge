@@ -21,10 +21,10 @@ test_17_preserve_unrelated_dirty_git_changes (test_executor_tools.ToolTestCase.t
     ○ ░
     ░    gitleaks
 
-1:54PM INF 0 commits scanned.
-1:54PM INF scanned ~5 bytes (5 bytes) in 25.2ms
-1:54PM INF no leaks found
-Executing <Task pending name='Task-97' coro=<ToolTestCase.test_17_preserve_unrelated_dirty_git_changes() running at /Users/asterion/Documents/kimi/workspace/cortex-bridge/tests/test_executor_tools.py:214> wait_for=<Future pending cb=[Task.task_wakeup()] created at /Applications/Kimi.app/Contents/Resources/resources/daimon-bundle/runtime/python/cpython-3.12/lib/python3.12/asyncio/base_events.py:448> cb=[_run_until_complete_cb() at /Applications/Kimi.app/Contents/Resources/resources/daimon-bundle/runtime/python/cpython-3.12/lib/python3.12/asyncio/base_events.py:181] created at /Applications/Kimi.app/Contents/Resources/resources/daimon-bundle/runtime/python/cpython-3.12/lib/python3.12/asyncio/runners.py:100> took 0.206 seconds
+2:37PM INF 0 commits scanned.
+2:37PM INF scanned ~5 bytes (5 bytes) in 28.1ms
+2:37PM INF no leaks found
+Executing <Task pending name='Task-97' coro=<ToolTestCase.test_17_preserve_unrelated_dirty_git_changes() running at /Users/asterion/Documents/kimi/workspace/cortex-bridge/tests/test_executor_tools.py:214> wait_for=<Future pending cb=[Task.task_wakeup()] created at /Applications/Kimi.app/Contents/Resources/resources/daimon-bundle/runtime/python/cpython-3.12/lib/python3.12/asyncio/base_events.py:448> cb=[_run_until_complete_cb() at /Applications/Kimi.app/Contents/Resources/resources/daimon-bundle/runtime/python/cpython-3.12/lib/python3.12/asyncio/base_events.py:181] created at /Applications/Kimi.app/Contents/Resources/resources/daimon-bundle/runtime/python/cpython-3.12/lib/python3.12/asyncio/runners.py:100> took 0.253 seconds
 ok
 test_18_reject_false_success (test_executor_tools.ToolTestCase.test_18_reject_false_success) ... ok
 test_19_create_rollback_checkpoint (test_executor_tools.ToolTestCase.test_19_create_rollback_checkpoint) ... ok
@@ -63,8 +63,28 @@ test_20_restart_sets_paused (test_protocol_state_store.StateStoreTestCase.test_2
 test_eleven_tables (test_protocol_state_store.StoreSchemaTestCase.test_eleven_tables) ... ok
 test_report_builder_and_render (test_protocol_state_store.StoreSchemaTestCase.test_report_builder_and_render) ... ok
 test_13_symlink_escape_rejected (test_protocol_state_store.SymlinkEscapeTestCase.test_13_symlink_escape_rejected) ... ok
+test_01_conversation_selection (test_transport_fixture.FixtureTransportTestCase.test_01_conversation_selection) ... ok
+test_02_conversation_lock (test_transport_fixture.FixtureTransportTestCase.test_02_conversation_lock) ... ok
+test_03_sending_user_message (test_transport_fixture.FixtureTransportTestCase.test_03_sending_user_message) ... ok
+test_04_detect_streaming_start (test_transport_fixture.FixtureTransportTestCase.test_04_detect_streaming_start) ... ok
+test_05_detect_stable_completion (test_transport_fixture.FixtureTransportTestCase.test_05_detect_stable_completion) ... ok
+test_06_extract_latest_response (test_transport_fixture.FixtureTransportTestCase.test_06_extract_latest_response) ... ok
+test_07_ignoring_older_messages (test_transport_fixture.FixtureTransportTestCase.test_07_ignoring_older_messages) ... ok
+test_08_refusing_different_conversation (test_transport_fixture.FixtureTransportTestCase.test_08_refusing_different_conversation) ... ok
+test_09_avoiding_duplicate_extraction (test_transport_fixture.FixtureTransportTestCase.test_09_avoiding_duplicate_extraction) ... ok
+test_10_handling_dom_mutation (test_transport_fixture.FixtureTransportTestCase.test_10_handling_dom_mutation) ... ok
+test_11_response_timeout (test_transport_fixture.FixtureTransportTestCase.test_11_response_timeout) ... ok
+test_12_login_state_detection (test_transport_fixture.FixtureTransportTestCase.test_12_login_state_detection) ... ok
+test_13_captcha_state_detection (test_transport_fixture.FixtureTransportTestCase.test_13_captcha_state_detection) ... ok
+test_14_rate_limit_detection (test_transport_fixture.FixtureTransportTestCase.test_14_rate_limit_detection) ... ok
+test_15_browser_tab_closure (test_transport_fixture.FixtureTransportTestCase.test_15_browser_tab_closure) ... ok
+test_16_browser_restart_reattach (test_transport_fixture.FixtureTransportTestCase.test_16_browser_restart_reattach) ... ok
+test_17_pause_before_sending (test_transport_fixture.FixtureTransportTestCase.test_17_pause_before_sending) ... ok
+test_18_cancel_during_generation (test_transport_fixture.FixtureTransportTestCase.test_18_cancel_during_generation) ... ok
+test_19_no_resend_after_uncertain_delivery (test_transport_fixture.FixtureTransportTestCase.test_19_no_resend_after_uncertain_delivery) ... ok
+test_20_manual_fallback_generation (test_transport_fixture.FixtureTransportTestCase.test_20_manual_fallback_generation) ... ok
 
 ----------------------------------------------------------------------
-Ran 54 tests in 1.592s
+Ran 74 tests in 23.037s
 
 OK
