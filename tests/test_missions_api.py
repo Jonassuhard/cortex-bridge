@@ -361,5 +361,17 @@ class MissionsApiTestCase(unittest.TestCase):
         self.assertIn("```cortex-report", body["payload"])
 
 
+    def test_10_fail_mission_from_idle(self):
+        # A runner crash before the loop starts must still surface as FAILED,
+        # never leave the mission stuck in IDLE.
+        store = missions_api.get_store()
+        mission_id = str(uuid.uuid4())
+        store.create_mission(mission_id, "crash before start", str(self.ws))
+        missions_api._fail_mission(store, mission_id, "simulated crash")
+        _, d = self.get(f"/api/missions/{mission_id}")
+        self.assertEqual(d["mission"]["state"], "FAILED")
+        self.assertEqual(d["mission"]["pause_reason"], "simulated crash")
+
+
 if __name__ == "__main__":
     unittest.main()

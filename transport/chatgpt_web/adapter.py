@@ -521,20 +521,35 @@ _CONVERSATIONS_JS = r"""
 """
 
 # Phase 7 executes this; Phase 5 ships it unexecuted by design.
+# Verified against real chatgpt.com (2026-07-24, FR UI):
+#  - ProseMirror ignores `textContent =`; `document.execCommand('insertText')`
+#    is the only injection that updates React state and arms the send button.
+#  - The send button only exists once text is present: poll for it.
+#  - Its aria-label is "Envoyer le prompt" / "Send prompt" (testid send-button).
 _SEND_JS = r"""
-((text) => {
+(async (text) => {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const composer = document.querySelector('#prompt-textarea');
   if (!composer) return JSON.stringify({ ok: false, error: 'composer not found' });
   composer.focus();
-  composer.textContent = text;
-  composer.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }));
+  if (!document.execCommand('insertText', false, text)) {
+    return JSON.stringify({ ok: false, error: 'insertText rejected' });
+  }
   const form = composer.closest('form') || document;
-  const btn = form.querySelector('button[data-testid="send-button"]')
-    || form.querySelector('button[aria-label="Envoyer le message"], button[aria-label="Send message"]')
+  const findSend = () => form.querySelector('button[data-testid="send-button"]:not([disabled])')
+    || Array.from(form.querySelectorAll('button[aria-label]')).find((b) =>
+        !b.disabled && /envoyer le (prompt|message)|send (prompt|message)/i.test(b.getAttribute('aria-label') || ''))
     || Array.from(form.querySelectorAll('button.composer-submit-button-color')).find((b) => !b.disabled);
+  let btn = null;
+  for (let i = 0; i < 20 && !btn; i++) { btn = findSend(); if (!btn) await sleep(100); }
   if (!btn) return JSON.stringify({ ok: false, error: 'send button not found' });
   btn.click();
-  return JSON.stringify({ ok: true });
+  // Proof of send: the composer empties once the message is accepted.
+  for (let i = 0; i < 20; i++) {
+    await sleep(100);
+    if (!(composer.innerText || '').trim()) return JSON.stringify({ ok: true });
+  }
+  return JSON.stringify({ ok: false, error: 'composer not cleared after click' });
 })
 """
 
@@ -550,7 +565,7 @@ class WebBridgeDriver:
         self.daemon = daemon.rstrip("/")
         self.session = session
 
-    def _command(self, action: str, args: dict | None = None) -> Any:
+    def _command(self, action: str, args: dict | None = None, timeout: float = 30) -> Any:
         payload = {"action": action, "args": args or {}, "session": self.session}
         req = urllib.request.Request(
             f"{self.daemon}/command",
@@ -559,7 +574,7 @@ class WebBridgeDriver:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
         except (urllib.error.URLError, OSError, json.JSONDecodeError) as exc:
             raise DriverError(f"webbridge {action} failed: {exc}") from exc
@@ -571,7 +586,18 @@ class WebBridgeDriver:
         return data
 
     async def navigate(self, url: str) -> None:
-        await asyncio.to_thread(self._command, "navigate", {"url": url, "newTab": False})
+        # chatgpt.com can be slow to load; allow a long timeout and retry once.
+        last: DriverError | None = None
+        for _ in range(2):
+            try:
+                await asyncio.to_thread(
+                    self._command, "navigate", {"url": url, "newTab": False}, 90
+                )
+                return
+            except DriverError as exc:
+                last = exc
+                await asyncio.sleep(1.5)
+        raise last  # type: ignore[misc]
 
     async def get_state(self) -> dict:
         raw = await asyncio.to_thread(self._command, "evaluate", {"code": _STATE_JS})

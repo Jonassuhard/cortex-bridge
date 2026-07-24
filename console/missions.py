@@ -212,6 +212,22 @@ def _objective_with_constraints(body: MissionIn) -> str:
     return objective
 
 
+def _fail_mission(store: Store, mission_id: str, reason: str) -> None:
+    """Mark a mission FAILED from any non-terminal state (adjacency-safe)."""
+    try:
+        store.transition(mission_id, "FAILED", pause_reason=reason)
+        return
+    except StoreError:
+        pass
+    for path in (("INITIALIZING_MISSION", "FAILED"), ("CANCELLED",)):
+        try:
+            for step in path:
+                store.transition(mission_id, step, pause_reason=reason)
+            return
+        except StoreError:
+            continue
+
+
 async def _run_mission_task(rt: MissionRuntime, objective: str, body: MissionIn) -> None:
     runner = ModeARunner(
         store=get_store(),
@@ -233,10 +249,7 @@ async def _run_mission_task(rt: MissionRuntime, objective: str, body: MissionIn)
         pass
     except Exception as exc:  # never leave a mission stuck running
         store = get_store()
-        try:
-            store.transition(rt.mission_id, "FAILED", pause_reason=f"runner crashed: {exc}")
-        except StoreError:
-            pass
+        _fail_mission(store, rt.mission_id, f"runner crashed: {exc}")
         store.record_transport_event(
             str(uuid.uuid4()), rt.mission_id, "RUNNER_CRASHED", {"error": str(exc)}
         )
@@ -281,10 +294,7 @@ async def _resume_mission_task(rt: MissionRuntime) -> None:
     try:
         await loop.run()
     except Exception as exc:
-        try:
-            store.transition(rt.mission_id, "FAILED", pause_reason=f"resume crashed: {exc}")
-        except StoreError:
-            pass
+        _fail_mission(store, rt.mission_id, f"resume crashed: {exc}")
         store.record_transport_event(
             str(uuid.uuid4()), rt.mission_id, "RUNNER_CRASHED", {"error": str(exc)}
         )
