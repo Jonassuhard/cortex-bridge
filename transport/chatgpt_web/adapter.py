@@ -59,6 +59,12 @@ BLOCKER_CODES = {"login": LOGIN_REQUIRED, "captcha": CAPTCHA, "rate_limit": RATE
 DEFAULT_STABILITY_INTERVAL = 2.0  # §13: message stable for 2 seconds
 DEFAULT_MAX_WAIT = 300.0  # §13: 5 minutes per ChatGPT response
 DEFAULT_POLL_INTERVAL = 0.5
+# Thinking models render an EMPTY assistant shell while reasoning, with a
+# render gap between "stop button gone" and the code block being painted.
+# An empty assistant message is never final within this grace window; only
+# after this many seconds of continuous emptiness is it accepted as a
+# genuinely empty reply (which the loop then handles as a violation).
+DEFAULT_EMPTY_REPLY_GRACE = 45.0
 
 
 class TransportError(Exception):
@@ -134,11 +140,13 @@ class ChatGPTWebTransport:
         stability_interval: float = DEFAULT_STABILITY_INTERVAL,
         max_wait: float = DEFAULT_MAX_WAIT,
         poll_interval: float = DEFAULT_POLL_INTERVAL,
+        empty_reply_grace: float = DEFAULT_EMPTY_REPLY_GRACE,
     ):
         self.driver = driver
         self.stability_interval = stability_interval
         self.max_wait = max_wait
         self.poll_interval = poll_interval
+        self.empty_reply_grace = empty_reply_grace
         self.lock: ConversationLock | None = None
         self.paused = False
         self.pause_reason: str | None = None
@@ -402,6 +410,7 @@ class ChatGPTWebTransport:
         deadline = time.monotonic() + self.max_wait
         last_text: str | None = None
         stable_since: float | None = None
+        empty_since: float | None = None
         while time.monotonic() < deadline:
             if self._cancel_requested:
                 self._cancel_requested = False
@@ -422,6 +431,7 @@ class ChatGPTWebTransport:
             if state.get("stop_button_present") or state.get("streaming"):
                 self.streaming_observed = True
                 stable_since = None
+                empty_since = None
             new_msgs = [
                 m
                 for m in state.get("messages", [])
@@ -431,7 +441,27 @@ class ChatGPTWebTransport:
                 latest = new_msgs[-1]
                 if not state.get("stop_button_present") and not state.get("streaming"):
                     now = time.monotonic()
-                    if latest.get("text") == last_text:
+                    # Stability signature: visible text + code block contents
+                    # (thinking models stream into the CodeMirror block after
+                    # the prose, and the prose can be empty throughout).
+                    sig = (latest.get("text") or "") + "\x00" + "\x00".join(
+                        (b.get("text") or "") for b in (latest.get("code_blocks") or [])
+                    )
+                    if not sig.strip("\x00"):
+                        # Empty assistant shell: never final within the grace
+                        # window — the model is very likely still reasoning or
+                        # the renderer has not painted the code block yet.
+                        empty_since = empty_since if empty_since is not None else now
+                        if now - empty_since < self.empty_reply_grace:
+                            last_text = None
+                            stable_since = None
+                            await asyncio.sleep(self.poll_interval)
+                            continue
+                        # else: genuinely empty reply — fall through so the
+                        # loop can record its usual protocol violation.
+                    else:
+                        empty_since = None
+                    if sig == last_text:
                         stable_since = stable_since if stable_since is not None else now
                         if now - stable_since >= self.stability_interval:
                             if latest["id"] in self._extracted_ids:
@@ -447,7 +477,7 @@ class ChatGPTWebTransport:
                                 "protocol_text": protocol_text(latest),
                             }
                     else:
-                        last_text = latest.get("text")
+                        last_text = sig
                         stable_since = None
             await asyncio.sleep(self.poll_interval)
         self.pause(CHATGPT_RESPONSE_TIMEOUT)
