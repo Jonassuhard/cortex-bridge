@@ -542,8 +542,11 @@ _CONVERSATIONS_JS = r"""
 # Verified against real chatgpt.com (2026-07-24, FR UI):
 #  - ProseMirror ignores `textContent =`; `document.execCommand('insertText')`
 #    is the only injection that updates React state and arms the send button.
-#  - The send button only exists once text is present: poll for it.
+#  - The send button only exists once text is present: poll for it (long
+#    contracts take several seconds to arm it — allow 10s).
 #  - Its aria-label is "Envoyer le prompt" / "Send prompt" (testid send-button).
+#  - Idempotent: if the composer already holds this exact text (recovery after
+#    a failed send), skip the insert and just click send.
 _SEND_JS = r"""
 (async (text) => {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -554,9 +557,13 @@ _SEND_JS = r"""
     if (!composer) await sleep(200);
   }
   if (!composer) return JSON.stringify({ ok: false, error: 'composer not found' });
-  composer.focus();
-  if (!document.execCommand('insertText', false, text)) {
-    return JSON.stringify({ ok: false, error: 'insertText rejected' });
+  const current = (composer.innerText || '').replace(/\s+/g, ' ').trim();
+  const wanted = text.replace(/\s+/g, ' ').trim();
+  if (!current.startsWith(wanted.slice(0, 200))) {
+    composer.focus();
+    if (!document.execCommand('insertText', false, text)) {
+      return JSON.stringify({ ok: false, error: 'insertText rejected' });
+    }
   }
   const form = composer.closest('form') || document;
   const findSend = () => form.querySelector('button[data-testid="send-button"]:not([disabled])')
@@ -564,12 +571,12 @@ _SEND_JS = r"""
         !b.disabled && /envoyer le (prompt|message)|send (prompt|message)/i.test(b.getAttribute('aria-label') || ''))
     || Array.from(form.querySelectorAll('button.composer-submit-button-color')).find((b) => !b.disabled);
   let btn = null;
-  for (let i = 0; i < 20 && !btn; i++) { btn = findSend(); if (!btn) await sleep(100); }
+  for (let i = 0; i < 50 && !btn; i++) { btn = findSend(); if (!btn) await sleep(200); }
   if (!btn) return JSON.stringify({ ok: false, error: 'send button not found' });
   btn.click();
   // Proof of send: the composer empties once the message is accepted.
-  for (let i = 0; i < 20; i++) {
-    await sleep(100);
+  for (let i = 0; i < 25; i++) {
+    await sleep(200);
     if (!(composer.innerText || '').trim()) return JSON.stringify({ ok: true });
   }
   return JSON.stringify({ ok: false, error: 'composer not cleared after click' });
@@ -633,7 +640,7 @@ class WebBridgeDriver:
 
     async def send_message(self, text: str) -> None:
         code = f"{_SEND_JS}({json.dumps(text)})"
-        raw = await asyncio.to_thread(self._command, "evaluate", {"code": code})
+        raw = await asyncio.to_thread(self._command, "evaluate", {"code": code}, 60)
         if isinstance(raw, dict) and "value" in raw:
             raw = raw["value"]
         result = json.loads(raw) if isinstance(raw, str) else (raw or {})
