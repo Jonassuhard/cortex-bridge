@@ -35,6 +35,7 @@ conversation so the loop continues.
 - ✅ Local executor stack: Ollama + OpenAI-compatible endpoint + Codex CLI
   profile, tuned for a 16 GB Apple Silicon Mac (`executor/`)
 - ✅ Model tuning for agentic tool-calling on limited RAM
+- ✅ Local web console (FastAPI, simulation mode today, live mode once the executor model is installed) (console/)
 - 🔜 Orchestrator loop via the **official OpenAI API** (`orchestrator/api/` —
   design stage)
 - ⚠️ Unofficial browser/desktop bridge to a ChatGPT Pro subscription
@@ -49,6 +50,7 @@ cortex-bridge/
 ├── executor/        The local half: Ollama setup, model tuning, Codex profile
 ├── orchestrator/    The cloud half: API orchestrator (official) and
 │                    browser bridge (unofficial, at your own risk)
+├── console/         Local web cockpit: run tasks, watch live, copy reports
 └── examples/        What a full loop looks like
 ```
 

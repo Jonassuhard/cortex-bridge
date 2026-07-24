@@ -17,6 +17,9 @@ __pycache__/
 *.pyc
 .venv/
 
+# Console runtime data (iteration store)
+console/data/
+
 # Local Codex profile state (contains session data)
 state_*.sqlite*
 logs_*.sqlite

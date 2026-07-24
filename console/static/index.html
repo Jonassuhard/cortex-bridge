@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Cortex Bridge — Console</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <svg width="28" height="28" viewBox="0 0 32 32" aria-hidden="true">
+      <rect x="0"  y="0"  width="12" height="12" rx="2.5" fill="#f8fafc"/>
+      <rect x="20" y="0"  width="12" height="12" rx="2.5" fill="#f8fafc"/>
+      <rect x="0"  y="20" width="12" height="12" rx="2.5" fill="#f8fafc"/>
+      <rect x="20" y="20" width="12" height="12" rx="2.5" fill="#1d4ed8"/>
+    </svg>
+    <span class="wordmark">Cortex Bridge</span>
+    <span class="wordmark-sub">console</span>
+  </div>
+  <div class="status-strip" id="statusStrip">
+    <span class="status-item" id="ollamaItem" title="Local Ollama daemon">
+      <span class="dot dot-unknown" id="ollamaDot"></span>
+      <span id="ollamaLabel">Ollama …</span>
+    </span>
+    <span class="status-item model" id="modelLabel" title="Active executor model">—</span>
+    <span class="chip chip-mode" id="modeChip">…</span>
+  </div>
+</header>
+
+<div class="shell">
+
+  <aside class="sidebar">
+    <div class="sidebar-head">
+      <span class="eyebrow">Iterations</span>
+      <button class="ghost-btn" id="newTaskBtn" title="New task">+ New</button>
+    </div>
+    <ul class="task-list" id="taskList"></ul>
+    <p class="sidebar-empty" id="taskListEmpty">No iterations yet.<br/>Run your first task.</p>
+  </aside>
+
+  <main class="main">
+
+    <!-- COMPOSER -->
+    <section class="card" id="composerCard">
+      <div class="card-head">
+        <span class="eyebrow">Composer</span>
+      </div>
+      <label class="field-label" for="goalInput">Goal</label>
+      <textarea id="goalInput" rows="4"
+        placeholder="Describe the task for the local executor…"></textarea>
+      <div class="field-row">
+        <div class="field-col">
+          <label class="field-label" for="constraintsInput">Constraints <span class="field-hint">(comma-separated)</span></label>
+          <input id="constraintsInput" type="text"
+            placeholder="e.g. no network access, keep files under 200 lines" />
+        </div>
+        <div class="field-col field-col-narrow">
+          <label class="field-label" for="workspaceInput">Workspace</label>
+          <input id="workspaceInput" type="text" value="~/" />
+        </div>
+      </div>
+      <div class="composer-actions">
+        <button class="btn-primary" id="runBtn">Run task</button>
+        <span class="sim-note" id="simNote" hidden>Simulation mode — no real commands will run.</span>
+      </div>
+    </section>
+
+    <!-- LIVE VIEW -->
+    <section class="card" id="liveCard" hidden>
+      <div class="card-head">
+        <span class="eyebrow">Live execution</span>
+        <span class="pill pill-running" id="livePill">RUNNING</span>
+      </div>
+      <div class="log-view" id="logView"></div>
+    </section>
+
+    <!-- REPORT -->
+    <section class="card" id="reportCard" hidden>
+      <div class="card-head">
+        <span class="eyebrow">Report</span>
+        <span class="pill" id="reportPill">—</span>
+      </div>
+      <div class="sim-banner" id="simBanner" hidden>
+        This report was produced in <strong>simulation mode</strong> — no real
+        commands were executed on your machine.
+      </div>
+      <h3 class="report-goal" id="reportGoal"></h3>
+
+      <div class="report-section">
+        <span class="eyebrow">Summary</span>
+        <p class="report-summary" id="reportSummary"></p>
+      </div>
+
+      <div class="report-grid">
+        <div class="report-section">
+          <span class="eyebrow">Files changed</span>
+          <ul class="report-list mono" id="reportFiles"></ul>
+        </div>
+        <div class="report-section">
+          <span class="eyebrow">Blockers</span>
+          <ul class="report-list" id="reportBlockers"></ul>
+        </div>
+      </div>
+
+      <div class="report-section">
+        <span class="eyebrow">Suggested next step</span>
+        <p class="report-next" id="reportNext"></p>
+      </div>
+
+      <div class="report-section" id="repliesSection" hidden>
+        <span class="eyebrow">Orchestrator replies</span>
+        <ul class="report-list" id="repliesList"></ul>
+      </div>
+
+      <div class="report-actions">
+        <button class="btn-primary" id="copyBtn">Copy report for orchestrator</button>
+        <button class="btn-secondary" id="pasteBtn">Paste orchestrator reply</button>
+        <span class="copied-hint" id="copiedHint" hidden>Copied to clipboard</span>
+      </div>
+      <div class="reply-form" id="replyForm" hidden>
+        <textarea id="replyInput" rows="4"
+          placeholder="Paste the orchestrator's reply here…"></textarea>
+        <div class="reply-actions">
+          <button class="btn-primary btn-small" id="replySubmit">Attach reply</button>
+          <button class="ghost-btn" id="replyCancel">Cancel</button>
+        </div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>
