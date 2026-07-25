@@ -154,7 +154,7 @@ def check_command_allowed(argv: list[str], workspace: Path) -> None:
         if not args or args[0] not in SAFE_GIT_SUBCOMMANDS:
             raise ToolDenied("DENIED_COMMAND", "git subcommand is not approved")
         subcommand, options = args[0], args[1:]
-        if subcommand == "status" and any(option not in {"--porcelain", "--short", "--branch"} for option in options):
+        if subcommand == "status" and any(option != "--porcelain" for option in options):
             raise ToolDenied("DENIED_COMMAND", "git status option is not approved")
         if subcommand == "diff":
             try:
@@ -162,16 +162,12 @@ def check_command_allowed(argv: list[str], workspace: Path) -> None:
                 flags, paths = options[:separator], options[separator + 1:]
             except ValueError:
                 flags, paths = options, []
-            if any(flag not in {"--stat", "--name-only", "--name-status", "--no-ext-diff"} for flag in flags):
+            if flags:
                 raise ToolDenied("DENIED_COMMAND", "git diff option is not approved")
             for path in paths:
                 resolve_in_workspace(workspace, path)
-        if subcommand == "branch" and options not in ([], ["--show-current"]):
-            raise ToolDenied("DENIED_COMMAND", "git branch mutation is denied")
-        if subcommand in {"log", "show", "rev-parse", "ls-files"} and any(
-            option.startswith(("--output", "-o")) for option in options
-        ):
-            raise ToolDenied("DENIED_COMMAND", "git output redirection is denied")
+        if subcommand in {"log", "show", "rev-parse", "branch", "ls-files"} and options:
+            raise ToolDenied("DENIED_COMMAND", f"git {subcommand} option is not approved")
         return
     if program in {"python", "python3"}:
         if args[:1] == ["-m"] and args[1:2] == ["unittest"]:

@@ -77,13 +77,25 @@ class ProcessPolicyTestCase(unittest.IsolatedAsyncioTestCase):
     def test_05_read_only_git_and_loopback_curl_options_are_allowlisted(self):
         allowed = [
             ["git", "status", "--porcelain"],
-            ["git", "diff", "--stat"],
+            ["git", "diff"],
+            ["git", "log"],
+            ["git", "show"],
+            ["git", "rev-parse"],
+            ["git", "branch"],
+            ["git", "ls-files"],
             ["curl", "--fail", "--silent", "http://127.0.0.1:8080/health"],
         ]
         denied = [
             ["git", "branch", "-D", "main"],
             ["git", "diff", "--output", "leak.txt"],
             ["git", "config", "user.name", "escape"],
+            ["git", "status", "--unknown"],
+            ["git", "diff", "--ext-diff"],
+            ["git", "log", "--unknown"],
+            ["git", "show", "--ext-diff"],
+            ["git", "rev-parse", "--unknown"],
+            ["git", "branch", "--unknown"],
+            ["git", "ls-files", "--unknown"],
             ["curl", "--output", "outside.txt", "http://127.0.0.1:8080/health"],
             ["curl", "--config", "curlrc", "http://127.0.0.1:8080/health"],
         ]
