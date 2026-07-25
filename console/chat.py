@@ -26,6 +26,7 @@ from pydantic import BaseModel
 
 import missions as missions_api
 import write_slots
+import attachments
 from transport.chatgpt_web.adapter import (
     GENERATION_CANCELLED,
     ChatGPTWebTransport,
@@ -64,6 +65,9 @@ class ChatRunRuntime:
     state: str = "QUEUED"
     canonical_url: str | None = None
     response_text: str = ""
+    attachment_path: str | None = None
+    attachment_image: bool = False
+    attachment_name: str | None = None
     created_at: str = field(default_factory=_now)
     delivered_at: str | None = None
     first_response_at: str | None = None
@@ -88,6 +92,7 @@ class ChatRunRuntime:
             "canonical_url": self.canonical_url,
             "text": self.text,
             "response_text": self.response_text,
+            "attachment_name": self.attachment_name,
             "created_at": self.created_at,
             "delivered_at": self.delivered_at,
             "first_response_at": self.first_response_at,
@@ -100,6 +105,27 @@ class ChatRunRuntime:
 class ChatSendIn(BaseModel):
     conversation_url: str
     text: str
+    new_conversation: bool = False
+
+
+class AttachmentUploadIn(BaseModel):
+    name: str | None = None
+    data_b64: str | None = None
+    path: str | None = None
+
+
+class ChatSendAttachmentIn(BaseModel):
+    conversation_url: str
+    text: str = ""
+    path: str
+    image: bool = False
+    name: str | None = None
+    new_conversation: bool = False
+
+
+class ChatScreenshotIn(BaseModel):
+    conversation_url: str
+    text: str = ""
     new_conversation: bool = False
 
 
@@ -178,7 +204,17 @@ async def _run_chat(run: ChatRunRuntime) -> None:
         if run.cancelled:
             raise TransportError(GENERATION_CANCELLED, "cancelled before delivery")
         _set_state(run, "SENDING_TO_CHATGPT")
-        await transport.send_message(run.text)
+        if run.attachment_path:
+            import os
+            from urllib.parse import quote
+
+            port = os.environ.get("PORT", "8420")
+            raw_url = f"http://127.0.0.1:{port}/api/chat/attachments/raw?path={quote(run.attachment_path)}"
+            await transport.send_with_attachment(
+                run.text, run.attachment_path, image=run.attachment_image, raw_url=raw_url
+            )
+        else:
+            await transport.send_message(run.text)
         run.delivered_at = _now()
         run.latency["delivery_ms"] = _monotonic_ms(started)
         run.canonical_url = transport.lock.url if transport.lock else run.conversation_url
@@ -324,6 +360,122 @@ async def send_chat(body: ChatSendIn) -> dict[str, Any]:
 def list_active_runs() -> list[ChatRunRuntime]:
     """Non-terminal chat runs — used by the two-write-conversation guard."""
     return [run for run in _runs.values() if run.state not in {"COMPLETED", "FAILED", "CANCELLED"}]
+
+
+def _start_attachment_run(
+    *, url: str, text: str, path: str, image: bool, name: str | None, new_conversation: bool
+) -> dict[str, Any]:
+    allowed, _active = write_slots.write_slot_available(url)
+    if not allowed:
+        raise HTTPException(status_code=409, detail=write_slots.REFUSAL_MESSAGE)
+    run = ChatRunRuntime(
+        id=uuid.uuid4().hex,
+        conversation_url=url,
+        text=text,
+        new_conversation=new_conversation,
+        attachment_path=path,
+        attachment_image=image,
+        attachment_name=name,
+    )
+    _runs[run.id] = run
+    _emit(run, "status", {"state": run.state})
+    run.task = asyncio.create_task(_run_chat(run))
+    return run.public()
+
+
+@router.post("/chat/attachments", status_code=201)
+async def upload_attachment(body: AttachmentUploadIn) -> dict[str, Any]:
+    """Validate + store an attachment (P3). Two modes: base64 from the
+    browser picker, or a direct local path. Official ChatGPT limits are
+    pre-checked; the error is precise and in French."""
+    try:
+        if body.path:
+            return attachments.describe_path(body.path)
+        if body.name and body.data_b64:
+            return attachments.store_upload(body.name, body.data_b64)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    raise HTTPException(status_code=422, detail="fournis soit path, soit name + data_b64")
+
+
+@router.get("/chat/attachments/raw")
+async def attachment_raw(path: str = Query(..., min_length=1)) -> Any:
+    """Serve registered attachment bytes for the fetch-injection fallback.
+
+    Only paths that passed validate_size this session are served (registry),
+    with permissive CORS so the chatgpt.com page can fetch from loopback."""
+    from fastapi.responses import FileResponse
+
+    name = attachments.allowed_name(path)
+    if name is None:
+        raise HTTPException(status_code=404, detail="attachment not registered")
+    return FileResponse(
+        path,
+        filename=name,
+        headers={"Access-Control-Allow-Origin": "*", "Cache-Control": "no-store"},
+    )
+
+
+@router.post("/chat/send-with-attachment", status_code=202)
+async def send_with_attachment(body: ChatSendAttachmentIn) -> dict[str, Any]:
+    if missions_api._global_stop:
+        raise HTTPException(status_code=409, detail="STOP EVERYTHING is active; reset it first")
+    if not missions_api.optin_accepted():
+        raise HTTPException(status_code=403, detail="Experimental ChatGPT Web Transport is not enabled")
+    url = _validate_chatgpt_url(body.conversation_url)
+    try:
+        descriptor = attachments.describe_path(body.path)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return _start_attachment_run(
+        url=url,
+        text=body.text,
+        path=descriptor["path"],
+        image=body.image or descriptor["kind"] == "image",
+        name=body.name or descriptor["name"],
+        new_conversation=body.new_conversation,
+    )
+
+
+@router.post("/chat/send-screenshot", status_code=202)
+async def send_screenshot(body: ChatScreenshotIn) -> dict[str, Any]:
+    """Capture the current ChatGPT tab and send it as an image (P3)."""
+    if missions_api._global_stop:
+        raise HTTPException(status_code=409, detail="STOP EVERYTHING is active; reset it first")
+    if not missions_api.optin_accepted():
+        raise HTTPException(status_code=403, detail="Experimental ChatGPT Web Transport is not enabled")
+    url = _validate_chatgpt_url(body.conversation_url)
+    transport = ui_transport_factory()
+    shooter = getattr(transport.driver, "take_screenshot", None)
+    if shooter is None:
+        raise HTTPException(status_code=422, detail="ce transport ne sait pas capturer d'écran")
+    attachments.ATTACHMENTS_DIR.mkdir(parents=True, exist_ok=True)
+    target = attachments.ATTACHMENTS_DIR / f"screenshot-{uuid.uuid4().hex[:8]}.png"
+    try:
+        await shooter(str(target))
+        descriptor = attachments.describe_path(str(target))
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"capture impossible: {exc}")
+    return _start_attachment_run(
+        url=url,
+        text=body.text,
+        path=descriptor["path"],
+        image=True,
+        name=descriptor["name"],
+        new_conversation=body.new_conversation,
+    )
+
+
+@router.get("/transport/capabilities")
+async def transport_capabilities() -> dict[str, Any]:
+    """What the active transport can do (P3) — the UI adapts from this."""
+    from transport.chatgpt_web import adapter as adapter_mod
+
+    transport = ui_transport_factory()
+    caps_fn = getattr(transport.driver, "capabilities", None)
+    caps = caps_fn() if caps_fn else {"send_text": True, "upload_file": False, "upload_image": False, "take_screenshot": False}
+    caps.setdefault("limits", {"file_bytes": adapter_mod.MAX_FILE_BYTES, "image_bytes": adapter_mod.MAX_IMAGE_BYTES})
+    return caps
 
 
 @router.get("/chat/runs")

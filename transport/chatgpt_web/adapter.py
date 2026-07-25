@@ -70,6 +70,113 @@ DEFAULT_POLL_INTERVAL = 0.5
 # answer ~50 s after the stop button vanished; 45 s was too short.
 DEFAULT_EMPTY_REPLY_GRACE = 120.0
 
+# -- attachments (P3) -------------------------------------------------------------
+# Official ChatGPT limits (help.openai.com file-uploads FAQ, 2026-07):
+# 512 MB per file, 20 MB per image. Local pre-check; ChatGPT has final say.
+MAX_FILE_BYTES = 512 * 1024 * 1024
+MAX_IMAGE_BYTES = 20 * 1024 * 1024
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"}
+
+# Wait for an attachment chip to appear in/above the composer after an
+# upload, and for its progress indicator to disappear. Heuristic by design —
+# ChatGPT does not expose a stable testid for this yet.
+_ATTACHMENT_WAIT_JS = r"""
+(async () => {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const chipSelectors = [
+    '[data-testid*="attachment"]', '[data-testid*="file-chip"]',
+    'form img', 'form [role="img"]', '[class*="attachment"]', '[class*="file-chip"]',
+  ];
+  const progressSelectors = ['[role="progressbar"]', '[class*="progress"]', '[class*="uploading"]'];
+  const findChip = () => {
+    for (const sel of chipSelectors) {
+      const el = document.querySelector(sel);
+      if (el) return el;
+    }
+    return null;
+  };
+  for (let i = 0; i < 120; i++) {
+    const chip = findChip();
+    const uploading = progressSelectors.some((sel) => !!document.querySelector(sel));
+    if (chip && !uploading) {
+      return JSON.stringify({ ok: true, label: (chip.getAttribute('alt') || chip.getAttribute('aria-label') || chip.textContent || '').trim().slice(0, 80) });
+    }
+    await sleep(500);
+  }
+  return JSON.stringify({ ok: false, error: 'attachment chip never appeared (60s)' });
+})()
+"""
+
+# Attach via base64 injection (P3 primary path): the adapter reads the local
+# file itself and the page rebuilds a File via DataTransfer — no CDP (the
+# extension rejects setFileInputFiles with "Not allowed") and no fetch
+# (Chrome Private Network Access blocks HTTPS→loopback fetches). Capped at
+# INJECT_MAX_BYTES; larger files need the fetch path.
+_ATTACH_B64_JS = r"""
+(async (b64, name, mime) => {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  try {
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const file = new File([bytes], name, { type: mime || 'application/octet-stream' });
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    const input = document.querySelector('form input[type="file"]') || document.querySelector('input[type="file"]');
+    if (!input) return JSON.stringify({ ok: false, error: 'file input not found' });
+    input.files = dt.files;
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    await sleep(400);
+    return JSON.stringify({ ok: true });
+  } catch (e) {
+    return JSON.stringify({ ok: false, error: String(e) });
+  }
+})
+"""
+INJECT_MAX_BYTES = 10 * 1024 * 1024  # keep evaluate payloads sane (~13 MB b64)
+
+# Attach via fetch + DataTransfer (P3 fallback): Chrome's CDP setFileInputFiles
+# is rejected by the WebBridge extension ("Not allowed"), so the page itself
+# fetches the bytes from the loopback console and assigns input.files — the
+# classic DataTransfer trick, no CDP involved.
+_ATTACH_FETCH_JS = r"""
+(async (rawUrl, name, mime) => {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  try {
+    const resp = await fetch(rawUrl);
+    if (!resp.ok) return JSON.stringify({ ok: false, error: 'fetch failed: ' + resp.status });
+    const buf = await resp.arrayBuffer();
+    const file = new File([buf], name, { type: mime || 'application/octet-stream' });
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    const input = document.querySelector('form input[type="file"]') || document.querySelector('input[type="file"]');
+    if (!input) return JSON.stringify({ ok: false, error: 'file input not found' });
+    input.files = dt.files;
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    await sleep(400);
+    return JSON.stringify({ ok: true });
+  } catch (e) {
+    return JSON.stringify({ ok: false, error: String(e) });
+  }
+})
+"""
+
+# Send with NO text: attachment-only message — click the armed send button.
+_SEND_BARE_JS = r"""
+(async () => {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const findSend = () => document.querySelector('[data-testid="send-button"]')
+    || Array.from(document.querySelectorAll('button')).find((b) => /envoyer|send/i.test(b.getAttribute('aria-label') || ''));
+  let btn = null;
+  for (let i = 0; i < 20 && !btn; i++) { btn = findSend(); if (!btn) await sleep(250); }
+  if (!btn) return JSON.stringify({ ok: false, error: 'send button not found' });
+  if (btn.disabled) return JSON.stringify({ ok: false, error: 'send button disabled' });
+  btn.click();
+  await sleep(300);
+  return JSON.stringify({ ok: true });
+})()
+"""
+
 # -- performance instrumentation (P0) -------------------------------------------
 # Every WebBridge daemon call is timed into a ring buffer so the console can
 # show where latency actually goes (navigate vs evaluate vs send) instead of
@@ -417,6 +524,72 @@ class ChatGPTWebTransport:
         }
 
     # -- sending (§7.1) ----------------------------------------------------------------------
+
+    async def send_with_attachment(self, text: str | None, path: str, *, image: bool, raw_url: str | None = None) -> dict:
+        """Attach a local file/image to the composer, then send (P3).
+
+        Flow: verify lock → attach (CDP upload first, fetch+DataTransfer
+        fallback through raw_url) → wait for the attachment chip → send with
+        text, or bare-send for an attachment-only message."""
+        if self.delivery_uncertain:
+            raise TransportError(
+                DELIVERY_UNCERTAIN,
+                "previous delivery is uncertain; refusing to resend — resolve first",
+            )
+        if self.paused:
+            raise TransportError(
+                TRANSPORT_PAUSED, f"transport paused ({self.pause_reason}); resume first"
+            )
+        uploader = getattr(self.driver, "upload_files", None)
+        if uploader is None:
+            raise TransportError("ATTACHMENTS_UNSUPPORTED", "this driver cannot upload files")
+        await self.verify_lock()
+        # The composer form input accepts everything (images included). The
+        # standalone image/* inputs belong to other features and CDP rejects
+        # them with "Not allowed" (verified live 2026-07-25).
+        selector = 'form input[type="file"]'
+        attached = False
+        try:
+            await uploader(selector, [path])
+            attached = True
+        except DriverError as cdp_exc:
+            # Primary fallback: base64 injection — no CDP, no network.
+            import base64
+            import mimetypes
+            import os
+            mime = mimetypes.guess_type(path)[0] or "application/octet-stream"
+            size = os.path.getsize(path)
+            if size <= INJECT_MAX_BYTES:
+                with open(path, "rb") as fh:
+                    b64 = base64.b64encode(fh.read()).decode("ascii")
+                code = f"{_ATTACH_B64_JS}({json.dumps(b64)}, {json.dumps(os.path.basename(path))}, {json.dumps(mime)})"
+            elif raw_url:
+                code = f"{_ATTACH_FETCH_JS}({json.dumps(raw_url)}, {json.dumps(os.path.basename(path))}, {json.dumps(mime)})"
+            else:
+                raise TransportError("ATTACHMENT_FAILED", f"upload rejected: {cdp_exc}") from cdp_exc
+            raw = await asyncio.to_thread(self.driver._command, "evaluate", {"code": code}, 90)
+            if isinstance(raw, dict) and "value" in raw:
+                raw = raw["value"]
+            result = json.loads(raw) if isinstance(raw, str) else (raw or {})
+            if not result.get("ok"):
+                raise TransportError(
+                    "ATTACHMENT_FAILED",
+                    f"CDP rejected ({cdp_exc}); injection failed: {result.get('error')}",
+                )
+            attached = True
+        if not attached:  # pragma: no cover - defensive
+            raise TransportError("ATTACHMENT_FAILED", "attachment could not be staged")
+        chip = await self.driver.await_attachment()
+        if not chip.get("ok"):
+            raise TransportError("ATTACHMENT_FAILED", chip.get("error", "attachment never appeared"))
+        if text and text.strip():
+            return await self.send_message(text)
+        result = await self.driver.send_bare()
+        if not result.get("ok"):
+            self.delivery_uncertain = True
+            self.pause(DELIVERY_UNCERTAIN)
+            raise TransportError(DELIVERY_UNCERTAIN, f"bare send failed: {result.get('error')}")
+        return {"sent": True, "attachment": chip.get("label")}
 
     async def send_message(self, text: str) -> dict:
         """Send one user message into the locked conversation.
@@ -1261,6 +1434,44 @@ class WebBridgeDriver:
                 " catch (e) {} } })()"
             },
         )
+
+    def capabilities(self) -> dict:
+        """What this driver can do (P3) — the UI adapts from this, never hardcodes."""
+        return {
+            "send_text": True,
+            "upload_file": True,
+            "upload_image": True,
+            "take_screenshot": True,
+            "limits": {"file_bytes": MAX_FILE_BYTES, "image_bytes": MAX_IMAGE_BYTES},
+        }
+
+    async def upload_files(self, selector: str, paths: list[str]) -> None:
+        """Attach local files to the composer via the daemon upload action."""
+        await asyncio.to_thread(
+            self._command, "upload", {"selector": selector, "files": paths}, 60
+        )
+
+    async def await_attachment(self) -> dict:
+        raw = await asyncio.to_thread(self._command, "evaluate", {"code": _ATTACHMENT_WAIT_JS}, 70)
+        if isinstance(raw, dict) and "value" in raw:
+            raw = raw["value"]
+        try:
+            return json.loads(raw) if isinstance(raw, str) else dict(raw or {})
+        except json.JSONDecodeError as exc:
+            raise DriverError(f"cannot parse attachment state: {exc}") from exc
+
+    async def send_bare(self) -> dict:
+        raw = await asyncio.to_thread(self._command, "evaluate", {"code": _SEND_BARE_JS}, 30)
+        if isinstance(raw, dict) and "value" in raw:
+            raw = raw["value"]
+        try:
+            return json.loads(raw) if isinstance(raw, str) else dict(raw or {})
+        except json.JSONDecodeError as exc:
+            raise DriverError(f"cannot parse bare-send result: {exc}") from exc
+
+    async def take_screenshot(self, path: str) -> dict:
+        """Capture the current tab (P3) — returns the daemon screenshot payload."""
+        return await asyncio.to_thread(self._command, "screenshot", {"path": path}, 30)
 
     async def probe(self) -> dict:
         """Read-only DOM health check on the current tab (see _PROBE_JS)."""

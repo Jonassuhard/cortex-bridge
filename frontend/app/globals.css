@@ -700,3 +700,28 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
   .app-signal-sweep, .app-grid-background { animation: none !important; }
 }
+
+.staged-file-pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 8px 4px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  font-size: 11px;
+  color: var(--text);
+}
+
+.staged-file-pill button {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0 2px;
+}
+
+.staged-file-pill button:hover {
+  color: var(--text);
+}

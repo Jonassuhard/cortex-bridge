@@ -72,6 +72,7 @@ export function CortexApp() {
   const [ollamaModels, setOllamaModels] = useState<OllamaModelInfo[]>([]);
   const [chatgptModels, setChatGPTModels] = useState<ChatGPTModelInfo[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [capabilities, setCapabilities] = useState<{ upload_file: boolean; take_screenshot: boolean }>({ upload_file: false, take_screenshot: false });
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
@@ -253,6 +254,9 @@ export function CortexApp() {
       refreshSettings(),
       refreshPipeline(),
     ]);
+    api<{ upload_file?: boolean; take_screenshot?: boolean }>("/api/transport/capabilities")
+      .then((caps) => setCapabilities({ upload_file: !!caps.upload_file, take_screenshot: !!caps.take_screenshot }))
+      .catch(() => undefined);
     return () => chatEventSource.current?.close();
   }, [refreshConversations, refreshMissions, refreshPipeline, refreshRuntime, refreshSettings]);
 
@@ -269,6 +273,37 @@ export function CortexApp() {
   useInterval(() => void refreshMissions(), 3500);
   useInterval(() => void refreshMissionDetail(), selectedMissionId ? 1600 : null);
   useInterval(() => void refreshSelectedConversation(), selectedConversation ? 2200 : null);
+
+  function subscribeRun(run: ChatRun) {
+    setChatRun(run);
+    chatEventSource.current?.close();
+    const events = new EventSource(apiUrl(`/api/chat/runs/${run.id}/events`));
+    chatEventSource.current = events;
+    events.onmessage = (event) => {
+      const payload = JSON.parse(event.data) as ChatRunEvent;
+      setChatRun((current) => {
+        if (!current || current.id !== run.id) return current;
+        if (payload.type === "status") return { ...current, state: String(payload.payload.state) as ChatRun["state"] };
+        if (payload.type === "delivery") return { ...current, state: "VISIBLE_IN_CHATGPT", delivered_at: String(payload.payload.delivered_at || new Date().toISOString()), canonical_url: String(payload.payload.canonical_url || current.canonical_url || current.conversation_url) };
+        if (payload.type === "stream") return { ...current, state: "CHATGPT_STREAMING", response_text: String(payload.payload.text || ""), first_response_at: current.first_response_at || String(payload.payload.first_response_at || new Date().toISOString()) };
+        if (payload.type === "complete") return { ...current, state: "COMPLETED", response_text: String(payload.payload.text || current.response_text || ""), completed_at: String(payload.payload.completed_at || new Date().toISOString()), latency: payload.payload.latency as ChatRun["latency"] };
+        if (payload.type === "error") return { ...current, state: "FAILED", error: String(payload.payload.error || "Erreur transport") };
+        if (payload.type === "cancelled") return { ...current, state: "CANCELLED" };
+        return current;
+      });
+      if (payload.type === "complete" || payload.type === "error" || payload.type === "cancelled") {
+        events.close();
+        window.setTimeout(() => {
+          void refreshConversations();
+          void refreshSelectedConversation();
+        }, 900);
+      }
+    };
+    events.onerror = () => {
+      events.close();
+      void api<ChatRun>(`/api/chat/runs/${run.id}`).then(setChatRun).catch(() => undefined);
+    };
+  }
 
   async function sendChat(text: string): Promise<boolean> {
     const conversation = selectedConversation || {
@@ -287,37 +322,70 @@ export function CortexApp() {
         text,
         new_conversation: conversation.identity === "__new__" || conversation.url === "https://chatgpt.com/",
       });
-      setChatRun(run);
-      chatEventSource.current?.close();
-      const events = new EventSource(apiUrl(`/api/chat/runs/${run.id}/events`));
-      chatEventSource.current = events;
-      events.onmessage = (event) => {
-        const payload = JSON.parse(event.data) as ChatRunEvent;
-        setChatRun((current) => {
-          if (!current || current.id !== run.id) return current;
-          if (payload.type === "status") return { ...current, state: String(payload.payload.state) as ChatRun["state"] };
-          if (payload.type === "delivery") return { ...current, state: "VISIBLE_IN_CHATGPT", delivered_at: String(payload.payload.delivered_at || new Date().toISOString()), canonical_url: String(payload.payload.canonical_url || current.canonical_url || current.conversation_url) };
-          if (payload.type === "stream") return { ...current, state: "CHATGPT_STREAMING", response_text: String(payload.payload.text || ""), first_response_at: current.first_response_at || String(payload.payload.first_response_at || new Date().toISOString()) };
-          if (payload.type === "complete") return { ...current, state: "COMPLETED", response_text: String(payload.payload.text || current.response_text || ""), completed_at: String(payload.payload.completed_at || new Date().toISOString()), latency: payload.payload.latency as ChatRun["latency"] };
-          if (payload.type === "error") return { ...current, state: "FAILED", error: String(payload.payload.error || "Erreur transport") };
-          if (payload.type === "cancelled") return { ...current, state: "CANCELLED" };
-          return current;
-        });
-        if (payload.type === "complete" || payload.type === "error" || payload.type === "cancelled") {
-          events.close();
-          window.setTimeout(() => {
-            void refreshConversations();
-            void refreshSelectedConversation();
-          }, 900);
-        }
-      };
-      events.onerror = () => {
-        events.close();
-        void api<ChatRun>(`/api/chat/runs/${run.id}`).then(setChatRun).catch(() => undefined);
-      };
+      subscribeRun(run);
       return true;
     } catch (error) {
       notify(error instanceof Error ? error.message : "Impossible d'envoyer le message.");
+      return false;
+    }
+  }
+
+  async function sendAttachment(text: string, file: File): Promise<boolean> {
+    const conversation = selectedConversation || {
+      url: "https://chatgpt.com/",
+      identity: "__new__",
+      title: "Nouvelle conversation",
+    };
+    if (!transport.opt_in_accepted && !demoMode) {
+      notify("Active d'abord le transport expérimental dans les paramètres.");
+      setSettingsOpen(true);
+      return false;
+    }
+    try {
+      const dataB64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result).split(",", 2)[1] || "");
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(file);
+      });
+      const descriptor = await postJson<{ path: string; name: string; kind: string }>("/api/chat/attachments", {
+        name: file.name,
+        data_b64: dataB64,
+      });
+      const run = await postJson<ChatRun>("/api/chat/send-with-attachment", {
+        conversation_url: conversation.url,
+        text,
+        path: descriptor.path,
+        name: descriptor.name,
+        image: descriptor.kind === "image",
+        new_conversation: conversation.identity === "__new__" || conversation.url === "https://chatgpt.com/",
+      });
+      subscribeRun(run);
+      notify(`Pièce jointe envoyée : ${descriptor.name}`);
+      return true;
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Impossible d'envoyer la pièce jointe.");
+      return false;
+    }
+  }
+
+  async function sendScreenshot(text: string): Promise<boolean> {
+    const conversation = selectedConversation || {
+      url: "https://chatgpt.com/",
+      identity: "__new__",
+      title: "Nouvelle conversation",
+    };
+    try {
+      const run = await postJson<ChatRun>("/api/chat/send-screenshot", {
+        conversation_url: conversation.url,
+        text,
+        new_conversation: conversation.identity === "__new__" || conversation.url === "https://chatgpt.com/",
+      });
+      subscribeRun(run);
+      notify("Capture d'écran envoyée dans ChatGPT.");
+      return true;
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Capture impossible.");
       return false;
     }
   }
@@ -489,9 +557,12 @@ export function CortexApp() {
         settings={settings}
         inspectorOpen={inspectorOpen}
         sidebarCollapsed={sidebarCollapsed}
+        capabilities={capabilities}
         onToggleSidebar={() => setSidebarCollapsed((value) => !value)}
         onToggleInspector={() => setInspectorOpen((value) => !value)}
         onSendChat={sendChat}
+        onSendAttachment={sendAttachment}
+        onSendScreenshot={sendScreenshot}
         onStartMission={startMission}
         onCancelChat={() => void cancelChat()}
         onPauseMission={() => void missionAction("pause")}

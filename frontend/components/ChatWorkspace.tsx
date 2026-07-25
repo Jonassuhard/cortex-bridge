@@ -43,9 +43,12 @@ interface ChatWorkspaceProps {
   settings: CortexSettings;
   inspectorOpen: boolean;
   sidebarCollapsed: boolean;
+  capabilities: { upload_file: boolean; take_screenshot: boolean };
   onToggleSidebar: () => void;
   onToggleInspector: () => void;
   onSendChat: (text: string) => Promise<boolean>;
+  onSendAttachment: (text: string, file: File) => Promise<boolean>;
+  onSendScreenshot: (text: string) => Promise<boolean>;
   onStartMission: (text: string) => Promise<boolean>;
   onCancelChat: () => void;
   onPauseMission: () => void;
@@ -193,9 +196,12 @@ export function ChatWorkspace({
   settings,
   inspectorOpen,
   sidebarCollapsed,
+  capabilities,
   onToggleSidebar,
   onToggleInspector,
   onSendChat,
+  onSendAttachment,
+  onSendScreenshot,
   onStartMission,
   onCancelChat,
   onPauseMission,
@@ -207,8 +213,10 @@ export function ChatWorkspace({
   const [draft, setDraft] = useState("");
   const [mode, setMode] = useState<"chat" | "mission">("mission");
   const [sending, setSending] = useState(false);
+  const [stagedFile, setStagedFile] = useState<File | null>(null);
   const [executionExpanded, setExecutionExpanded] = useState(true);
   const viewportRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const nearBottomRef = useRef(true);
 
   const activeMissionState = mission?.mission.state;
@@ -259,12 +267,30 @@ export function ChatWorkspace({
 
   async function submit() {
     const text = draft.trim();
-    if (!text || sending) return;
+    if ((!text && !stagedFile) || sending) return;
     setSending(true);
     try {
       // P2b: the draft is only cleared on success — a refused send (e.g.
       // third write conversation) must never lose what the user typed.
-      const ok = mode === "mission" ? await onStartMission(text) : await onSendChat(text);
+      const ok = stagedFile
+        ? await onSendAttachment(text, stagedFile)
+        : mode === "mission"
+          ? await onStartMission(text)
+          : await onSendChat(text);
+      if (ok) {
+        setDraft("");
+        setStagedFile(null);
+      }
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function submitScreenshot() {
+    if (sending) return;
+    setSending(true);
+    try {
+      const ok = await onSendScreenshot(draft.trim());
       if (ok) setDraft("");
     } finally {
       setSending(false);
@@ -393,7 +419,34 @@ export function ChatWorkspace({
           />
           <div className="composer-controls">
             <div className="composer-left-actions">
-              <button title="Pièces jointes (non disponible tant que le transport ne les confirme pas)" disabled><PaperclipIcon size={18} /></button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                style={{ display: "none" }}
+                onChange={(event) => {
+                  const file = event.target.files?.[0] || null;
+                  setStagedFile(file);
+                  event.target.value = "";
+                }}
+              />
+              <button
+                title={capabilities.upload_file ? "Joindre un fichier ou une image (512 Mo / 20 Mo max)" : "Pièces jointes non confirmées par ce transport"}
+                disabled={!capabilities.upload_file}
+                onClick={() => fileInputRef.current?.click()}
+              >
+                <PaperclipIcon size={18} />
+              </button>
+              {capabilities.take_screenshot && (
+                <button title="Capturer l'onglet ChatGPT et l'envoyer" onClick={() => void submitScreenshot()} disabled={sending}>
+                  <BrowserIcon size={17} />
+                </button>
+              )}
+              {stagedFile && (
+                <span className="staged-file-pill">
+                  <PaperclipIcon size={12} /> {stagedFile.name}
+                  <button onClick={() => setStagedFile(null)} aria-label="Retirer la pièce jointe">×</button>
+                </span>
+              )}
               <span className="workspace-pill"><FolderIcon size={13} /> {settings.default_workspace.split("/").filter(Boolean).at(-1) || "workspace"}</span>
             </div>
             <div className="composer-right-actions">
