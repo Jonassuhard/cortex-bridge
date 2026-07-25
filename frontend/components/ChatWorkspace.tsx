@@ -45,8 +45,8 @@ interface ChatWorkspaceProps {
   sidebarCollapsed: boolean;
   onToggleSidebar: () => void;
   onToggleInspector: () => void;
-  onSendChat: (text: string) => Promise<void>;
-  onStartMission: (text: string) => Promise<void>;
+  onSendChat: (text: string) => Promise<boolean>;
+  onStartMission: (text: string) => Promise<boolean>;
   onCancelChat: () => void;
   onPauseMission: () => void;
   onResumeMission: () => void;
@@ -262,9 +262,10 @@ export function ChatWorkspace({
     if (!text || sending) return;
     setSending(true);
     try {
-      setDraft("");
-      if (mode === "mission") await onStartMission(text);
-      else await onSendChat(text);
+      // P2b: the draft is only cleared on success — a refused send (e.g.
+      // third write conversation) must never lose what the user typed.
+      const ok = mode === "mission" ? await onStartMission(text) : await onSendChat(text);
+      if (ok) setDraft("");
     } finally {
       setSending(false);
     }

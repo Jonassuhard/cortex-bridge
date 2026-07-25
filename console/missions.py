@@ -436,6 +436,13 @@ async def create_mission(body: MissionIn) -> dict:
     if body.approval_policy not in _POLICY_MODES:
         raise HTTPException(status_code=422, detail=f"unknown approval policy {body.approval_policy}")
 
+    # P2b: at most two WRITE conversations at once (reading is unlimited).
+    import write_slots
+
+    allowed, _active = write_slots.write_slot_available(body.conversation_url)
+    if not allowed:
+        raise HTTPException(status_code=409, detail=write_slots.REFUSAL_MESSAGE)
+
     mission_id = body.mission_id.strip() or str(uuid.uuid4())
     try:
         uuid.UUID(mission_id)
@@ -452,10 +459,32 @@ async def create_mission(body: MissionIn) -> dict:
         body.primary_executor, body.fallback_executor,
         body.max_iterations, body.max_duration_minutes * 60,
     )
+    _mission_write_urls[mission_id] = body.conversation_url
     rt.task = asyncio.create_task(
         _run_mission_task(rt, _objective_with_constraints(body), body)
     )
     return {"id": mission_id, "state": "INITIALIZING_MISSION"}
+
+
+# P2b: mission_id -> ChatGPT conversation URL the mission writes into.
+_mission_write_urls: dict[str, str] = {}
+
+
+def active_mission_conversations() -> list[str]:
+    """ChatGPT URLs of non-terminal missions (two-write-conversation guard)."""
+    urls: list[str] = []
+    try:
+        rows = get_store().rows("missions", order_by="updated_at DESC")
+    except Exception:
+        return urls
+    terminal = {"COMPLETED", "BLOCKED", "FAILED", "CANCELLED"}
+    for row in rows:
+        if row.get("state") in terminal:
+            continue
+        url = _mission_write_urls.get(row.get("id", ""))
+        if url:
+            urls.append(url)
+    return urls
 
 
 @router.get("/missions")

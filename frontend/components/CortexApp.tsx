@@ -270,7 +270,7 @@ export function CortexApp() {
   useInterval(() => void refreshMissionDetail(), selectedMissionId ? 1600 : null);
   useInterval(() => void refreshSelectedConversation(), selectedConversation ? 2200 : null);
 
-  async function sendChat(text: string) {
+  async function sendChat(text: string): Promise<boolean> {
     const conversation = selectedConversation || {
       url: "https://chatgpt.com/",
       identity: "__new__",
@@ -279,7 +279,7 @@ export function CortexApp() {
     if (!transport.opt_in_accepted && !demoMode) {
       notify("Active d'abord le transport expérimental dans les paramètres.");
       setSettingsOpen(true);
-      return;
+      return false;
     }
     try {
       const run = await postJson<ChatRun>("/api/chat/send", {
@@ -315,12 +315,14 @@ export function CortexApp() {
         events.close();
         void api<ChatRun>(`/api/chat/runs/${run.id}`).then(setChatRun).catch(() => undefined);
       };
+      return true;
     } catch (error) {
       notify(error instanceof Error ? error.message : "Impossible d'envoyer le message.");
+      return false;
     }
   }
 
-  async function startMission(text: string) {
+  async function startMission(text: string): Promise<boolean> {
     const conversation = selectedConversation || {
       url: "https://chatgpt.com/",
       identity: "__new__",
@@ -343,13 +345,16 @@ export function CortexApp() {
       setMissionDetail(null);
       notify("Mission autonome lancée.");
       void refreshMissions();
+      return true;
     } catch (error) {
       if (demoMode) {
         setSelectedMissionId(demoMissionDetail.mission.id);
         setMissionDetail(demoMissionDetail);
         notify("Aperçu local : mission simulée.");
+        return true;
       } else {
         notify(error instanceof Error ? error.message : "Impossible de lancer la mission.");
+        return false;
       }
     }
   }

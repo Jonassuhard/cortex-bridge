@@ -25,6 +25,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 import missions as missions_api
+import write_slots
 from transport.chatgpt_web.adapter import (
     GENERATION_CANCELLED,
     ChatGPTWebTransport,
@@ -304,6 +305,10 @@ async def send_chat(body: ChatSendIn) -> dict[str, Any]:
     if not text:
         raise HTTPException(status_code=422, detail="message text must not be empty")
     url = _validate_chatgpt_url(body.conversation_url)
+    # P2b: at most two WRITE conversations at once (reading is unlimited).
+    allowed, _active = write_slots.write_slot_available(url)
+    if not allowed:
+        raise HTTPException(status_code=409, detail=write_slots.REFUSAL_MESSAGE)
     run = ChatRunRuntime(
         id=uuid.uuid4().hex,
         conversation_url=url,
@@ -314,6 +319,11 @@ async def send_chat(body: ChatSendIn) -> dict[str, Any]:
     _emit(run, "status", {"state": run.state})
     run.task = asyncio.create_task(_run_chat(run))
     return run.public()
+
+
+def list_active_runs() -> list[ChatRunRuntime]:
+    """Non-terminal chat runs — used by the two-write-conversation guard."""
+    return [run for run in _runs.values() if run.state not in {"COMPLETED", "FAILED", "CANCELLED"}]
 
 
 @router.get("/chat/runs")
