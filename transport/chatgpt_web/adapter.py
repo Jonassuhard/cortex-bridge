@@ -760,22 +760,47 @@ _CONVERSATIONS_JS = r"""
 })()
 """
 
+# Verified against real chatgpt.com (2026-07-25, FR UI, Radix composer pill):
+#  - The switcher is a `button.__composer-pill` whose text is the current model
+#    ("Pro", "Instantanée") — no data-testid, no "GPT" in the label.
+#  - Radix menus ignore plain `.click()`: a pointerdown/mousedown/pointerup/
+#    mouseup/click sequence is required to open them.
+#  - Open menu items carry role menuitem / menuitemradio / option.
+#  - After a fresh navigate the pill renders late: poll for it (like _SEND_JS
+#    polls for the composer) instead of failing immediately.
 _MODELS_JS = r"""
 (async () => {
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-  const buttons = Array.from(document.querySelectorAll('button'));
-  const switcher = document.querySelector('[data-testid="model-switcher-dropdown-button"]')
-    || buttons.find((b) => /model|modèle|GPT|ChatGPT/i.test((b.getAttribute('aria-label') || '') + ' ' + (b.textContent || '')));
+  const realClick = (el) => {
+    const r = el.getBoundingClientRect();
+    const opts = { bubbles: true, cancelable: true, clientX: r.x + r.width / 2, clientY: r.y + r.height / 2, button: 0, pointerType: 'mouse' };
+    el.dispatchEvent(new PointerEvent('pointerdown', opts));
+    el.dispatchEvent(new MouseEvent('mousedown', opts));
+    el.dispatchEvent(new PointerEvent('pointerup', opts));
+    el.dispatchEvent(new MouseEvent('mouseup', opts));
+    el.dispatchEvent(new MouseEvent('click', opts));
+  };
+  const findSwitcher = () => {
+    const buttons = Array.from(document.querySelectorAll('button'));
+    return document.querySelector('[data-testid="model-switcher-dropdown-button"]')
+      || buttons.find((b) => (b.className || '').includes('__composer-pill') && (b.textContent || '').trim())
+      || buttons.find((b) => /model|modèle|GPT|ChatGPT/i.test((b.getAttribute('aria-label') || '') + ' ' + (b.textContent || '')));
+  };
+  let switcher = null;
+  for (let i = 0; i < 50 && !switcher; i++) {
+    switcher = findSwitcher();
+    if (!switcher) await sleep(200);
+  }
   if (!switcher) return JSON.stringify({ current: null, models: [], error: 'model switcher not found' });
   const current = (switcher.textContent || switcher.getAttribute('aria-label') || '').trim();
-  switcher.click();
-  await sleep(350);
-  const candidates = Array.from(document.querySelectorAll('[role="menuitem"], [role="option"], [data-testid*="model"], [data-radix-collection-item]'));
+  realClick(switcher);
+  await sleep(450);
+  const candidates = Array.from(document.querySelectorAll('[role="menuitem"], [role="menuitemradio"], [role="option"], [data-testid*="model"], [data-radix-collection-item]'));
   const labels = [];
   for (const el of candidates) {
     const text = (el.textContent || '').replace(/\s+/g, ' ').trim();
     if (!text || text.length > 120) continue;
-    if (/model|GPT|ChatGPT|o\d|mini|pro|thinking|instant/i.test(text)) labels.push(text);
+    if (/model|GPT|ChatGPT|o\d|mini|pro|thinking|instant|sol|moyenne|élev/i.test(text)) labels.push(text);
   }
   document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
   return JSON.stringify({ current, models: Array.from(new Set(labels)).slice(0, 30), error: null });
@@ -785,13 +810,30 @@ _MODELS_JS = r"""
 _SELECT_MODEL_JS = r"""
 (async (label) => {
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-  const buttons = Array.from(document.querySelectorAll('button'));
-  const switcher = document.querySelector('[data-testid="model-switcher-dropdown-button"]')
-    || buttons.find((b) => /model|modèle|GPT|ChatGPT/i.test((b.getAttribute('aria-label') || '') + ' ' + (b.textContent || '')));
+  const realClick = (el) => {
+    const r = el.getBoundingClientRect();
+    const opts = { bubbles: true, cancelable: true, clientX: r.x + r.width / 2, clientY: r.y + r.height / 2, button: 0, pointerType: 'mouse' };
+    el.dispatchEvent(new PointerEvent('pointerdown', opts));
+    el.dispatchEvent(new MouseEvent('mousedown', opts));
+    el.dispatchEvent(new PointerEvent('pointerup', opts));
+    el.dispatchEvent(new MouseEvent('mouseup', opts));
+    el.dispatchEvent(new MouseEvent('click', opts));
+  };
+  const findSwitcher = () => {
+    const buttons = Array.from(document.querySelectorAll('button'));
+    return document.querySelector('[data-testid="model-switcher-dropdown-button"]')
+      || buttons.find((b) => (b.className || '').includes('__composer-pill') && (b.textContent || '').trim())
+      || buttons.find((b) => /model|modèle|GPT|ChatGPT/i.test((b.getAttribute('aria-label') || '') + ' ' + (b.textContent || '')));
+  };
+  let switcher = null;
+  for (let i = 0; i < 50 && !switcher; i++) {
+    switcher = findSwitcher();
+    if (!switcher) await sleep(200);
+  }
   if (!switcher) return JSON.stringify({ ok: false, error: 'model switcher not found' });
-  switcher.click();
-  await sleep(350);
-  const candidates = Array.from(document.querySelectorAll('[role="menuitem"], [role="option"], [data-testid*="model"], [data-radix-collection-item]'));
+  realClick(switcher);
+  await sleep(450);
+  const candidates = Array.from(document.querySelectorAll('[role="menuitem"], [role="menuitemradio"], [role="option"], [data-testid*="model"], [data-radix-collection-item]'));
   const normalized = label.replace(/\s+/g, ' ').trim().toLowerCase();
   const target = candidates.find((el) => (el.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase() === normalized)
     || candidates.find((el) => (el.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase().includes(normalized));
@@ -799,9 +841,12 @@ _SELECT_MODEL_JS = r"""
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     return JSON.stringify({ ok: false, error: 'requested model not visible' });
   }
-  target.click();
-  await sleep(650);
-  const visible = (switcher.textContent || switcher.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim();
+  realClick(target);
+  await sleep(800);
+  // React re-renders the pill after selection: the old `switcher` reference is
+  // detached and still shows the previous label. Re-query the live switcher.
+  const after = findSwitcher();
+  const visible = ((after && (after.textContent || after.getAttribute('aria-label'))) || '').replace(/\s+/g, ' ').trim();
   const ok = visible.toLowerCase().includes(normalized) || normalized.includes(visible.toLowerCase());
   return JSON.stringify({ ok, selected: visible, error: ok ? null : 'selection could not be confirmed' });
 })
