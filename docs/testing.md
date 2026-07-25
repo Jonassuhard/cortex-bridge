@@ -7,7 +7,7 @@ cd cortex-bridge
 python3 -m unittest discover -s tests
 ```
 
-**104 tests, all passing** (2026-07-25). They cover:
+**114 tests, all passing** (2026-07-25). They cover:
 
 - `test_protocol_state_store.py` — cortex.v1 extraction/validation, state
   machine adjacency, budgets, fingerprints, SQLite store
@@ -47,6 +47,9 @@ Missions run against the production UI through WebBridge, workspace
 | J | Harder task: zip `cortex-bridge` via `run_process`, verify contents + size | cortex-backup.zip (551 files) created and verified, COMPLETED | ✅ PASS (4 valid decisions) |
 | K (2026-07-25) | Echo on a **thinking model** (gpt-5.6-thinking slug) | First run FAILED: empty assistant shell extracted during the paint gap → 3 false NO_DECISION_BLOCK (replies were perfect, verified by screenshot + later DOM read). After the empty-reply-grace fix: **COMPLETED, valid decision `ECHO-GRACE-OK`, terminal** | ✅ PASS after fix |
 | L (2026-07-25) | Live DOM probe `GET /api/transport/probe` | composer `#prompt-textarea` ok, messages `[data-message-author-role]` ok (8 nodes), send/stop warnings only (idle page) | ✅ PASS |
+| M (2026-07-25) | v0.2.0 console UI: sidebar conversations + UI-driven simple chat | 31 conversations listed (pinned/unread/preview); message sent by driving the real Next.js UI via WebBridge, run COMPLETED (`UI-DRIVE-OK`), latency tracked | ✅ PASS |
+| N (2026-07-25) | Full autonomous mission launched from the real UI ("Nouvelle mission") | WAITING_FOR_CHATGPT → WAITING_FOR_APPROVAL → approve → COMPLETED, `ui-acceptance.txt` (`ACCEPTANCE-OK`) created in 2 iterations | ✅ PASS ([screenshots](screenshots/)) |
+| O (2026-07-25) | ChatGPT model switch via `GET/PUT /api/models/chatgpt` | 6 models detected (FR Radix pill), round-trip Pro → Instantanée → Pro confirmed against the live switcher | ✅ PASS (after switcher fix) |
 
 Notable real-world defects found by this matrix and fixed the same day:
 
@@ -60,6 +63,11 @@ Notable real-world defects found by this matrix and fixed the same day:
 8. (2026-07-25) Thinking models paint an empty assistant shell before the
    reply: empty == empty was read as "stable" and extracted. Fix: 45 s
    empty-reply grace + stability signature covering code blocks.
+9. (2026-07-25) The FR Radix model switcher (`button.__composer-pill`, label
+   "Pro"/"Instantanée", no testid) was invisible to the old selector; plain
+   `.click()` does not open Radix menus; React detaches the pill node after
+   selection (stale-ref confirmation). Fix: pill selector + full pointer
+   sequence + post-navigation polling + re-query after selection.
 
 ## Reproducing the live tests
 

@@ -68,14 +68,22 @@ Requirements: macOS, [Ollama](https://ollama.com) with the executor models,
 Chrome with the WebBridge extension connected to your ChatGPT session.
 
 ```bash
-cd console && python3 server.py   # http://127.0.0.1:8420
+./scripts/start-local.sh   # serves the console at http://127.0.0.1:8420
 ```
 
+The console is a local web cockpit (Next.js UI + FastAPI, loopback only):
+
 1. Read the experimental-transport warning and opt in (persisted once).
-2. Paste an objective, pick a workspace, choose a new or existing ChatGPT
-   conversation, launch.
+2. Pick a mode: **Message simple** (one-shot chat through ChatGPT) or
+   **Mission autonome** (the full plan → execute → report loop). Paste an
+   objective, pick a workspace, choose a new or existing ChatGPT conversation
+   from the sidebar, launch.
 3. Watch decisions, tool executions and reports stream in; approve writes
-   when prompted; STOP EVERYTHING kills everything instantly.
+   when prompted; STOP EVERYTHING kills everything instantly. Settings also
+   expose the ChatGPT model switcher (experimental).
+
+To hack on the UI: `scripts/dev-ui.sh` (Next.js dev server) and
+`scripts/build-ui.sh` (static export served by the console).
 
 The executor never leaves the workspace, never installs packages, and every
 write can require your explicit approval. Details:
