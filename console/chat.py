@@ -255,11 +255,27 @@ async def _run_chat(run: ChatRunRuntime) -> None:
 
 
 @router.get("/conversations/snapshot")
-async def conversation_snapshot(url: str = Query(..., min_length=1)) -> dict[str, Any]:
-    """Read one selected conversation through a dedicated read-only UI session."""
+async def conversation_snapshot(url: str = Query(..., min_length=1), light: int = 0) -> dict[str, Any]:
+    """Read one selected conversation through a dedicated read-only UI session.
+
+    light=1 returns identity/count/streaming only (P0c) — the UI polls this
+    cheaply and fetches the full snapshot only when the signature changes."""
     clean_url = _validate_chatgpt_url(url)
     try:
         transport = await _ensure_view_transport(clean_url)
+        if light:
+            light_state = await transport._light_state()
+            return {
+                "url": light_state.get("url", clean_url),
+                "conversation_id": light_state.get("conversation_id"),
+                "title": light_state.get("title") or "ChatGPT",
+                "streaming": bool(light_state.get("streaming")),
+                "composer_present": bool(light_state.get("composer_present")),
+                "message_count": light_state.get("message_count", 0),
+                "first_id": light_state.get("first_id"),
+                "last_id": light_state.get("last_id"),
+                "light": True,
+            }
         state = await transport.snapshot(verify_lock=clean_url.rstrip("/") != "https://chatgpt.com")
         # Do not expose protocol reconstruction or any browser-level secret.
         return {

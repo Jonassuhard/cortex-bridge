@@ -401,6 +401,14 @@ async def transport_probe() -> dict:
         raise HTTPException(status_code=503, detail=f"probe failed: {exc}")
 
 
+@router.get("/transport/perf")
+async def transport_perf() -> dict:
+    """WebBridge call timings (avg/p95/max per action) — where latency goes."""
+    from transport.chatgpt_web import adapter
+
+    return adapter.perf_stats()
+
+
 @router.get("/conversations")
 async def list_conversations() -> list[dict]:
     transport = transport_factory()

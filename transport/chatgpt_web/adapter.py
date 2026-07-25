@@ -28,6 +28,7 @@ not the fence markers, ``protocol_text()`` reconstructs synthetic
 from __future__ import annotations
 
 import asyncio
+import collections
 import inspect
 import json
 import time
@@ -68,6 +69,43 @@ DEFAULT_POLL_INTERVAL = 0.5
 # 120 s: measured live 2026-07-25 — a thinking model painted a trivial
 # answer ~50 s after the stop button vanished; 45 s was too short.
 DEFAULT_EMPTY_REPLY_GRACE = 120.0
+
+# -- performance instrumentation (P0) -------------------------------------------
+# Every WebBridge daemon call is timed into a ring buffer so the console can
+# show where latency actually goes (navigate vs evaluate vs send) instead of
+# guessing. Loopback-only data; nothing leaves the machine.
+_PERF_LOG: "collections.deque[dict]" = collections.deque(maxlen=500)
+
+
+def _record_perf(session: str, action: str, started: float, ok: bool) -> None:
+    _PERF_LOG.append(
+        {
+            "ts": time.time(),
+            "session": session,
+            "action": action,
+            "ms": round((time.monotonic() - started) * 1000, 1),
+            "ok": ok,
+        }
+    )
+
+
+def perf_stats(limit: int = 200) -> dict:
+    """Recent WebBridge call timings + per-action aggregates (avg / p95 / max)."""
+    entries = list(_PERF_LOG)[-limit:]
+    by_action: dict[str, list[float]] = {}
+    for e in entries:
+        by_action.setdefault(e["action"], []).append(e["ms"])
+    aggregates = {}
+    for action, samples in sorted(by_action.items()):
+        samples.sort()
+        p95 = samples[min(len(samples) - 1, int(len(samples) * 0.95))]
+        aggregates[action] = {
+            "count": len(samples),
+            "avg_ms": round(sum(samples) / len(samples), 1),
+            "p95_ms": round(p95, 1),
+            "max_ms": round(samples[-1], 1),
+        }
+    return {"recent": entries[-50:], "by_action": aggregates}
 
 
 class TransportError(Exception):
@@ -207,10 +245,56 @@ class ChatGPTWebTransport:
         return state
 
     async def select_conversation(self, url: str) -> ConversationLock:
-        """Navigate to a user-chosen conversation and lock the mission to it."""
-        await self.driver.navigate(url)
+        """Navigate to a user-chosen conversation and lock the mission to it.
+
+        P0: prefer an in-app SPA switch (sidebar link click, no page reload)
+        when the driver supports it; fall back to full navigation."""
         want = url.rsplit("/c/", 1)[-1] if "/c/" in url else None
+        spa_nav = getattr(self.driver, "spa_navigate", None)
+        spa_done = False
+        if want and spa_nav is not None:
+            try:
+                spa_done = bool(await spa_nav(url))
+            except Exception:
+                spa_done = False  # any SPA failure → full navigation below
+        if not spa_done:
+            await self.driver.navigate(url)
         state = await self._await_conversation(want)
+        # SPA route change updates the URL BEFORE the message DOM is replaced:
+        # identity already matches while the old conversation's messages are
+        # still painted, and a stable empty skeleton appears while the new one
+        # loads (both observed live 2026-07-25). An existing /c/ conversation
+        # always has >= 1 message, so require: identity match AND messages
+        # present AND two identical consecutive LIGHT reads — before locking.
+        if want and state.get("conversation_id") == want:
+            def _sig(s: dict) -> tuple:
+                return (
+                    s.get("conversation_id"),
+                    s.get("title"),
+                    s.get("message_count"),
+                    s.get("first_id"),
+                )
+
+            stable_deadline = time.monotonic() + 3.0
+            loaded_since: float | None = None
+            previous = _sig(await self._light_state())
+            while time.monotonic() < stable_deadline:
+                await asyncio.sleep(0.4)
+                light = await self._light_state()
+                current = _sig(light)
+                loaded = (
+                    current[0] == want
+                    and (current[2] or 0) > 0
+                    and current[1] not in (None, "", "ChatGPT")
+                )
+                if loaded and current == previous:
+                    break  # two identical light reads — content settled
+                if loaded and loaded_since is None:
+                    loaded_since = time.monotonic()
+                if loaded_since is not None and time.monotonic() - loaded_since > 1.2:
+                    break  # clearly loaded; virtualized threads never fully stabilize
+                previous = current
+            state = await self._state()  # full read once stable, for the lock baseline
         identity = state.get("conversation_id")
         if not identity:
             raise TransportError(NO_CONVERSATION, f"no conversation at {url}")
@@ -308,6 +392,29 @@ class ChatGPTWebTransport:
             self.pause(BLOCKER_CODES.get(blocker, blocker.upper()))
             raise BlockerDetected(blocker)
         return state
+
+    async def _light_state(self) -> dict:
+        """Cheap poll read when the driver supports it (P0c); fixture drivers
+        fall back to a full state mapped onto the light shape."""
+        getter = getattr(self.driver, "get_light_state", None)
+        if getter is not None:
+            try:
+                return await getter()
+            except TabClosedError as exc:
+                self.pause(TAB_CLOSED)
+                raise TransportError(TAB_CLOSED, "browser tab was closed") from exc
+        s = await self._state()
+        msgs = s.get("messages") or []
+        return {
+            "url": s.get("url"),
+            "conversation_id": s.get("conversation_id"),
+            "title": s.get("title"),
+            "message_count": len(msgs),
+            "first_id": msgs[0].get("id") if msgs else None,
+            "last_id": msgs[-1].get("id") if msgs else None,
+            "streaming": bool(s.get("streaming")),
+            "composer_present": bool(s.get("composer_present")),
+        }
 
     # -- sending (§7.1) ----------------------------------------------------------------------
 
@@ -760,6 +867,68 @@ _CONVERSATIONS_JS = r"""
 })()
 """
 
+# Light state (P0c): identity + counts + edge ids WITHOUT serializing message
+# text. ~10x cheaper than _STATE_JS on long conversations; used for polling,
+# lock verification and switch stability. Full reads stay for extraction.
+_LIGHT_STATE_JS = r"""
+(() => {
+  const msgs = document.querySelectorAll('[data-message-author-role]');
+  const first = msgs[0] || null;
+  const last = msgs[msgs.length - 1] || null;
+  const stopBtn = document.querySelector('[data-testid="stop-button"]')
+    || Array.from(document.querySelectorAll('button')).find((b) => /stop|arrêter|arreter/i.test(b.getAttribute('aria-label') || ''));
+  return JSON.stringify({
+    url: location.href,
+    conversation_id: (location.pathname.match(/\/c\/([^/?#]+)/) || [null, null])[1],
+    title: document.title,
+    message_count: msgs.length,
+    first_id: first ? first.getAttribute('data-message-id') : null,
+    last_id: last ? last.getAttribute('data-message-id') : null,
+    streaming: !!stopBtn,
+    composer_present: !!document.querySelector('#prompt-textarea, [contenteditable="true"]'),
+  });
+})()
+"""
+
+# In-app conversation switch (P0): clicking the sidebar link triggers the
+# chatgpt.com SPA router — NO full page reload (2-10x faster than navigate).
+# Falls back to a real navigation when the link is not rendered.
+_SPA_NAV_JS = r"""
+(async (targetUrl) => {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const realClick = (el) => {
+    const r = el.getBoundingClientRect();
+    const opts = { bubbles: true, cancelable: true, clientX: r.x + r.width / 2, clientY: r.y + r.height / 2, button: 0, pointerType: 'mouse' };
+    el.dispatchEvent(new PointerEvent('pointerdown', opts));
+    el.dispatchEvent(new MouseEvent('mousedown', opts));
+    el.dispatchEvent(new PointerEvent('pointerup', opts));
+    el.dispatchEvent(new MouseEvent('mouseup', opts));
+    el.dispatchEvent(new MouseEvent('click', opts));
+  };
+  const want = (targetUrl.split('/c/')[1] || '').split(/[?#]/)[0];
+  if (!want || !/chatgpt\.com$/.test(location.hostname)) {
+    return JSON.stringify({ ok: false, reason: 'no_app' });
+  }
+  const findLink = () => {
+    const links = Array.from(document.querySelectorAll('nav a[href^="/c/"], aside a[href^="/c/"]'));
+    return links.find((a) => (a.getAttribute('href') || '').includes('/c/' + want));
+  };
+  let link = findLink();
+  // The sidebar renders lazily — scroll to load older entries before giving up.
+  const first = document.querySelector('nav a[href^="/c/"], aside a[href^="/c/"]');
+  const container = first ? (first.closest('[class*="overflow"]') || first.closest('nav') || first.closest('aside')) : null;
+  for (let i = 0; i < 12 && !link && container; i++) {
+    container.scrollTop = Math.min(container.scrollHeight, container.scrollTop + Math.max(320, container.clientHeight * .8));
+    await sleep(150);
+    link = findLink();
+  }
+  if (!link) return JSON.stringify({ ok: false, reason: 'not_in_sidebar' });
+  realClick(link);
+  await sleep(250);
+  return JSON.stringify({ ok: true, clicked: true });
+})
+"""
+
 # Verified against real chatgpt.com (2026-07-25, FR UI, Radix composer pill):
 #  - The switcher is a `button.__composer-pill` whose text is the current model
 #    ("Pro", "Instantanée") — no data-testid, no "GPT" in the label.
@@ -996,13 +1165,19 @@ class WebBridgeDriver:
             headers={"Content-Type": "application/json"},
             method="POST",
         )
+        started = time.monotonic()
+        ok = False
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
         except (urllib.error.URLError, OSError, json.JSONDecodeError) as exc:
+            _record_perf(self.session, action, started, False)
             raise DriverError(f"webbridge {action} failed: {exc}") from exc
         if isinstance(data, dict) and data.get("ok") is False:
+            _record_perf(self.session, action, started, False)
             raise DriverError(f"webbridge {action} rejected: {data.get('error')}")
+        ok = True
+        _record_perf(self.session, action, started, ok)
         # Daemon envelope is {"ok": true, "data": <payload>}.
         if isinstance(data, dict):
             return data.get("data", data.get("result", data))
@@ -1022,6 +1197,24 @@ class WebBridgeDriver:
                 await asyncio.sleep(1.5)
         raise last  # type: ignore[misc]
 
+    async def spa_navigate(self, url: str) -> bool:
+        """Client-side conversation switch via the sidebar link (no reload).
+
+        Returns True when the SPA router handled the switch; False means the
+        caller must fall back to a full `navigate`."""
+        code = f"{_SPA_NAV_JS}({json.dumps(url)})"
+        try:
+            raw = await asyncio.to_thread(self._command, "evaluate", {"code": code}, 30)
+        except DriverError:
+            return False
+        if isinstance(raw, dict) and "value" in raw:
+            raw = raw["value"]
+        try:
+            result = json.loads(raw) if isinstance(raw, str) else (raw or {})
+        except json.JSONDecodeError:
+            return False
+        return bool(result.get("ok"))
+
     async def get_state(self) -> dict:
         raw = await asyncio.to_thread(self._command, "evaluate", {"code": _STATE_JS})
         if isinstance(raw, dict) and "value" in raw:
@@ -1030,6 +1223,16 @@ class WebBridgeDriver:
             return json.loads(raw) if isinstance(raw, str) else dict(raw)
         except (json.JSONDecodeError, TypeError) as exc:
             raise DriverError(f"cannot parse page state: {exc}") from exc
+
+    async def get_light_state(self) -> dict:
+        """Cheap identity/count read (P0c) — no message text serialized."""
+        raw = await asyncio.to_thread(self._command, "evaluate", {"code": _LIGHT_STATE_JS})
+        if isinstance(raw, dict) and "value" in raw:
+            raw = raw["value"]
+        try:
+            return json.loads(raw) if isinstance(raw, str) else dict(raw)
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise DriverError(f"cannot parse light page state: {exc}") from exc
 
     async def send_message(self, text: str) -> None:
         code = f"{_SEND_JS}({json.dumps(text)})"
