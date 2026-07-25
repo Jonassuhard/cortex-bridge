@@ -22,6 +22,7 @@ from orchestration.loop import (  # noqa: E402
     MissionLoop,
     MockOrchestrator,
     MockReply,
+    default_trace_validator,
 )
 from orchestration.state import (  # noqa: E402
     Budgets,
@@ -217,6 +218,129 @@ class LoopTestCase(unittest.IsolatedAsyncioTestCase):
         checks = json.loads(validations[0]["checks_json"])
         self.assertEqual(checks[0]["evidence"], "validated locally")
         self.assertEqual(checks[-1]["validator"], "evidence_validator")
+
+    async def test_final_validator_empty_checks_fails_terminally(self):
+        def empty_checks_validator(decision, tools):
+            return {"passed": True, "checks": []}
+
+        loop, _ = self.make_loop([complete()], final_validator=empty_checks_validator)
+
+        mission = await loop.run()
+
+        self.assertEqual(mission["state"], "FAILED")
+        validations = self.store.rows("validation_results", self.mission_id, order_by="rowid")
+        self.assertEqual(validations[0]["passed"], 0)
+
+    async def test_final_validator_empty_evidence_fails_terminally(self):
+        def empty_evidence_validator(decision, tools):
+            return {
+                "passed": True,
+                "checks": [{"name": "proof", "passed": True, "evidence": ""}],
+            }
+
+        loop, _ = self.make_loop([complete()], final_validator=empty_evidence_validator)
+
+        mission = await loop.run()
+
+        self.assertEqual(mission["state"], "FAILED")
+        validations = self.store.rows("validation_results", self.mission_id, order_by="rowid")
+        self.assertEqual(validations[0]["passed"], 0)
+
+    async def test_final_validator_failed_check_cannot_claim_success(self):
+        def contradictory_validator(decision, tools):
+            return {
+                "passed": True,
+                "checks": [{"name": "proof", "passed": False, "evidence": "missing"}],
+            }
+
+        loop, _ = self.make_loop([complete()], final_validator=contradictory_validator)
+
+        mission = await loop.run()
+
+        self.assertEqual(mission["state"], "FAILED")
+        validations = self.store.rows("validation_results", self.mission_id, order_by="rowid")
+        self.assertEqual(validations[0]["passed"], 0)
+
+    async def test_default_trace_rejects_approval_denied_action(self):
+        loop, _ = self.make_loop(
+            [
+                execute("write_file", {"path": "denied.txt", "content": "no"}),
+                execute("list_directory", {"path": "."}),
+                complete(),
+                blocked("approval denial remains unresolved"),
+            ],
+            approval_callback=lambda decision, policy: None,
+        )
+
+        mission = await loop.run()
+
+        self.assertEqual(mission["state"], "BLOCKED")
+        validations = self.store.rows("validation_results", self.mission_id, order_by="rowid")
+        self.assertEqual(validations[-1]["passed"], 0)
+
+    async def test_default_trace_rejects_nonzero_process_before_complete(self):
+        (self.ws / "fail.py").write_text("import sys\nsys.exit(3)\n", encoding="utf-8")
+        loop, _ = self.make_loop(
+            [
+                execute("run_process", {"argv": ["python3", "fail.py"]}),
+                complete(),
+                blocked("failed process remains unresolved"),
+            ]
+        )
+
+        mission = await loop.run()
+
+        self.assertEqual(mission["state"], "BLOCKED")
+        validations = self.store.rows("validation_results", self.mission_id, order_by="rowid")
+        self.assertEqual(validations[-1]["passed"], 0)
+
+    async def test_default_trace_rejects_timed_out_process_before_complete(self):
+        loop, _ = self.make_loop(
+            [
+                execute(
+                    "run_process",
+                    {
+                        "argv": ["python3", "-c", "import time\ntime.sleep(2)"],
+                        "timeoutSeconds": 1,
+                    },
+                ),
+                complete(),
+                blocked("timed out process remains unresolved"),
+            ]
+        )
+
+        mission = await loop.run()
+
+        self.assertEqual(mission["state"], "BLOCKED")
+        validations = self.store.rows("validation_results", self.mission_id, order_by="rowid")
+        self.assertEqual(validations[-1]["passed"], 0)
+
+    def test_default_trace_rejects_missing_or_outside_changed_file(self):
+        for changed_path in ("missing.txt", "../outside.txt"):
+            trace_mission_id = str(uuid.uuid4())
+            self.store.create_mission(trace_mission_id, "trace check", str(self.ws))
+            action_id = str(uuid.uuid4())
+            self.store.record_tool_execution(
+                str(uuid.uuid4()),
+                trace_mission_id,
+                action_id,
+                "write_file",
+                {"path": changed_path},
+                {"filesChanged": [changed_path]},
+                0,
+                0,
+                0,
+            )
+            self.store.record_validation(
+                str(uuid.uuid4()), trace_mission_id, action_id, True, []
+            )
+
+            validation = default_trace_validator({}, self.tools, self.store, trace_mission_id)
+
+            self.assertFalse(validation["passed"])
+            self.assertFalse(
+                next(check["passed"] for check in validation["checks"] if check["name"] == "changed_files_present")
+            )
 
     # 1. Multi-iteration repair mission end-to-end → COMPLETED, evidence persisted
     async def test_01_multi_iteration_repair_completes(self):

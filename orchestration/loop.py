@@ -179,8 +179,8 @@ def normalize_validation_result(value: object, *, validator_name: str) -> dict:
     if type(value.get("passed")) is not bool:
         raise ValueError("validator result passed must be a boolean")
     checks = value.get("checks")
-    if not isinstance(checks, list):
-        raise ValueError("validator result checks must be a list")
+    if not isinstance(checks, list) or not checks:
+        raise ValueError("validator result checks must be a non-empty list")
     for check in checks:
         if not isinstance(check, dict):
             raise ValueError("validator result checks must contain objects")
@@ -188,8 +188,10 @@ def normalize_validation_result(value: object, *, validator_name: str) -> dict:
             raise ValueError("validator check name must be a non-empty string")
         if type(check.get("passed")) is not bool:
             raise ValueError("validator check passed must be a boolean")
-        if not isinstance(check.get("evidence"), str):
-            raise ValueError("validator check evidence must be a string")
+        if not isinstance(check.get("evidence"), str) or not check["evidence"].strip():
+            raise ValueError("validator check evidence must be a non-empty string")
+    if value["passed"] and any(not check["passed"] for check in checks):
+        raise ValueError("validator result cannot pass with a failed check")
     return {"passed": value["passed"], "validator": validator_name, "checks": checks}
 
 
@@ -211,6 +213,17 @@ def default_trace_validator(
     unresolved_actions = [
         row for row in executions if row.get("action_id") not in passed_action_ids
     ]
+    denied_action_ids = {
+        row["action_id"]
+        for row in store.rows("policy_decisions", mission_id, order_by="rowid")
+        if row.get("action_id") and row["allowed"] == 0
+    }
+    denied_action_ids.update(
+        row["action_id"]
+        for row in store.rows("approvals", mission_id, order_by="rowid")
+        if row.get("action_id") and row["approved"] == 0
+    )
+    unresolved_action_count = len(unresolved_actions) + len(denied_action_ids)
 
     process_ok = True
     changed_files_ok = True
@@ -251,11 +264,11 @@ def default_trace_validator(
         },
         {
             "name": "unresolved_failed_action",
-            "passed": not unresolved_actions,
+            "passed": unresolved_action_count == 0,
             "evidence": (
-                "no unresolved failed local actions"
-                if not unresolved_actions
-                else f"{len(unresolved_actions)} local action(s) failed validation"
+                "no unresolved failed or denied local actions"
+                if unresolved_action_count == 0
+                else f"{unresolved_action_count} local action(s) failed validation or were denied"
             ),
         },
         {
@@ -270,7 +283,12 @@ def default_trace_validator(
         },
     ]
     return {
-        "passed": has_execution_evidence and not unresolved_actions and process_ok and changed_files_ok,
+        "passed": (
+            has_execution_evidence
+            and unresolved_action_count == 0
+            and process_ok
+            and changed_files_ok
+        ),
         "validator": "execution-trace-v1",
         "checks": checks,
     }

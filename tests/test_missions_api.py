@@ -132,11 +132,12 @@ class MissionsApiTestCase(unittest.TestCase):
             with urllib.request.urlopen(req, timeout=10) as r:
                 return r.status, json.loads(r.read().decode())
         except urllib.error.HTTPError as e:
-            body = e.read().decode()
-            try:
-                return e.code, json.loads(body)
-            except json.JSONDecodeError:
-                return e.code, {"detail": body}
+            with e:
+                body = e.read().decode()
+                try:
+                    return e.code, json.loads(body)
+                except json.JSONDecodeError:
+                    return e.code, {"detail": body}
 
     def wait_state(self, mission_id, want, timeout=30, extra=None):
         deadline = time.time() + timeout
@@ -247,10 +248,7 @@ class MissionsApiTestCase(unittest.TestCase):
             decision_reply(self.mission_id, 1, "EXECUTE", tool="write_file",
                            arguments={"path": "b.txt", "content": "B"},
                            criteria=["b.txt written"]),
-            decision_reply(self.mission_id, 2, "EXECUTE", tool="list_directory",
-                           arguments={"path": "."}, criteria=["workspace listed"]),
-            decision_reply(self.mission_id, 3, "COMPLETE", criteria=["decision recorded"],
-                           terminal=True),
+            decision_reply(self.mission_id, 2, "BLOCKED", criteria=[], terminal=True),
         ], "Create b.txt.", approval_policy="workspace-write-with-approvals")
         self.assertEqual(status, 201, body)
         self.wait_state(self.mission_id, "WAITING_FOR_APPROVAL",
@@ -259,7 +257,7 @@ class MissionsApiTestCase(unittest.TestCase):
                               {"scope": "once", "approve": False})
         self.assertEqual(status, 200)
         d = self.wait_terminal(self.mission_id)
-        self.assertEqual(d["mission"]["state"], "COMPLETED")
+        self.assertEqual(d["mission"]["state"], "BLOCKED")
         self.assertFalse((self.ws / "b.txt").exists())  # rejected → never written
         approvals = missions_api.get_store().rows("approvals", self.mission_id)
         self.assertEqual(approvals[0]["approved"], 0)
