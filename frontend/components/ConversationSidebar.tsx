@@ -8,6 +8,7 @@ import {
   MenuIcon,
   MessageIcon,
   MoreIcon,
+  GlobeIcon,
   PinIcon,
   PlusIcon,
   ProjectIcon,
@@ -129,10 +130,17 @@ export function ConversationSidebar({
             {Array.from({ length: 7 }).map((_, index) => <div className="conversation-skeleton" key={index} />)}
           </div>
         )}
-        {!loading && filtered.length === 0 && (
+        {!loading && filtered.length === 0 && query && (
           <div className="sidebar-empty-state">
             <SearchIcon size={19} />
             <p>Aucune conversation trouvée.</p>
+          </div>
+        )}
+        {!loading && filtered.length === 0 && !query && (
+          <div className="sidebar-empty-state sidebar-empty-guidance">
+            <GlobeIcon size={19} />
+            <p><strong>Aucune conversation synchronisée.</strong></p>
+            <p>Ouvre <b>chatgpt.com</b> dans Chrome, connecte-toi à ton compte, puis actualise la liste.</p>
           </div>
         )}
         {filtered.map((conversation) => {

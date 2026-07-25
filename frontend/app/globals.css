@@ -878,3 +878,20 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   line-height: 1.5;
   color: var(--muted);
 }
+
+.diagnostic-result {
+  margin: 8px 22px 0;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.diagnostic-result.failed { color: #f87171; }
+
+.sidebar-empty-guidance p {
+  margin: 2px 0;
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.sidebar-empty-guidance b { color: var(--text); }

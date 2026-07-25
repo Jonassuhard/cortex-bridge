@@ -74,6 +74,26 @@ export function SettingsPanel({
   const [tab, setTab] = useState<TabId>("general");
   const [draft, setDraft] = useState<CortexSettings>(settings);
   const [labConfirmation, setLabConfirmation] = useState("");
+  const [diagTesting, setDiagTesting] = useState<string | null>(null);
+  const [diagResult, setDiagResult] = useState<{ label: string; state: string; detail: string } | null>(null);
+
+  const runDiagnostic = async (componentId: string, label: string) => {
+    setDiagTesting(componentId);
+    setDiagResult(null);
+    try {
+      const response = await fetch("/api/pipeline/status");
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const payload = await response.json();
+      const component = (payload.components || []).find((row: { id: string }) => row.id === componentId);
+      if (!component) throw new Error("composant introuvable");
+      const ok = ["connected", "healthy", "idle"].includes(String(component.state));
+      setDiagResult({ label, state: ok ? "ok" : "failed", detail: String(component.detail || component.state) });
+    } catch {
+      setDiagResult({ label, state: "failed", detail: "Test impossible — la console est-elle démarrée ?" });
+    } finally {
+      setDiagTesting(null);
+    }
+  };
 
   const primaryOptions = useMemo(() => {
     const names = new Set(ollamaModels.map((model) => model.name));
@@ -223,7 +243,17 @@ export function SettingsPanel({
             {tab === "diagnostics" && (
               <div className="settings-section-stack">
                 <div className="settings-section-title"><h3>Diagnostics</h3><p>Les détails bruts restent séparés de l'interface de conversation.</p></div>
-                <div className="diagnostic-actions"><button>Tester WebBridge</button><button>Tester Ollama</button><button>Vérifier SQLite</button><button onClick={() => void exportDiagnostics()}>Exporter le rapport</button></div>
+                <div className="diagnostic-actions">
+                  <button disabled={diagTesting !== null} onClick={() => void runDiagnostic("transport", "WebBridge")}>{diagTesting === "transport" ? "Test…" : "Tester WebBridge"}</button>
+                  <button disabled={diagTesting !== null} onClick={() => void runDiagnostic("ollama", "Ollama")}>{diagTesting === "ollama" ? "Test…" : "Tester Ollama"}</button>
+                  <button disabled={diagTesting !== null} onClick={() => void runDiagnostic("database", "SQLite")}>{diagTesting === "database" ? "Test…" : "Vérifier SQLite"}</button>
+                  <button onClick={() => void exportDiagnostics()}>Exporter le rapport</button>
+                </div>
+                {diagResult && (
+                  <p className={`diagnostic-result ${diagResult.state}`}>
+                    {diagResult.state === "ok" ? "✅" : "❌"} {diagResult.label} — {diagResult.detail}
+                  </p>
+                )}
                 <p className="diagnostic-note">Le rapport est anonymisé : chemins personnels remplacés par ~, identifiants de conversation hachés, aucun contenu de message. Tu peux le coller tel quel dans une issue GitHub.</p>
                 <pre className="diagnostic-console">{`Cortex Bridge UI\n- frontend: Next.js static export\n- backend: FastAPI\n- transport: WebBridge experimental\n- executor: Ollama structured tools\n- deletion: blocked / archive only`}</pre>
               </div>
