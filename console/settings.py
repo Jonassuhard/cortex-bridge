@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import hashlib
 import sqlite3
 import time
 import uuid
@@ -387,3 +389,69 @@ async def pipeline_status() -> dict[str, Any]:
             "total_iteration_ms": total_ms,
         },
     }
+
+
+# ------------------------------------------------------------- diagnostics
+
+
+def _anonymize(value: Any) -> Any:
+    """Scrub personal data from a structure before it leaves the machine.
+
+    - home directory paths become ~/…
+    - ChatGPT conversation ids become a short non-reversible token
+    - conversation titles, message contents and cookies are never included
+      by construction (the export simply never reads them)
+    """
+    home = str(Path.home())
+    if isinstance(value, str):
+        scrubbed = value.replace(home, "~")
+        # /c/<conversation-id> → /c/conv-xxxxxxxx (first 8 chars of sha1)
+        def _mask(match: "re.Match[str]") -> str:
+            digest = hashlib.sha1(match.group(1).encode("utf-8")).hexdigest()[:8]
+            return f"/c/conv-{digest}"
+        return re.sub(r"/c/([0-9a-fA-F-]{8,})", _mask, scrubbed)
+    if isinstance(value, dict):
+        return {k: _anonymize(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_anonymize(item) for item in value]
+    return value
+
+
+@router.get("/diagnostics/export")
+async def diagnostics_export() -> dict[str, Any]:
+    """Anonymized diagnostic bundle, safe to paste into a GitHub issue."""
+    import onboarding as onboarding_api
+
+    rt = runtime_status()
+    try:
+        bridge_health = await WebBridgeDriver(session="cortex-bridge-ui").health()
+    except Exception as exc:
+        bridge_health = {"connected": False, "error": type(exc).__name__}
+    settings = load_settings()
+    sensitive_keys = {"default_workspace"}
+    safe_settings = {k: v for k, v in settings.items() if k not in sensitive_keys}
+    checks = await onboarding_api.run_checks()
+    payload = {
+        "generated_at": _now(),
+        "cortex_bridge": {
+            "component": "console",
+            "api": "fastapi",
+            "ui": "next.js static export",
+        },
+        "runtime": {
+            "ollama_up": bool(rt.get("ollama_up")),
+            "ollama_primary": (rt.get("primary") or {}).get("name"),
+            "ollama_primary_state": (rt.get("primary") or {}).get("state"),
+        },
+        "webbridge": {
+            "connected": bool(bridge_health.get("connected")),
+            "tabs": bridge_health.get("tabs", 0),
+            "extension_version": bridge_health.get("extension_version"),
+        },
+        "onboarding_checks": [
+            {"id": c["id"], "state": c["state"]} for c in checks
+        ],
+        "settings": safe_settings,
+        "anonymization": "home paths → ~, conversation ids → hashed tokens, no message content",
+    }
+    return _anonymize(payload)

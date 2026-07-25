@@ -88,8 +88,14 @@ Requirements: macOS, [Ollama](https://ollama.com) with the executor models,
 Chrome with the WebBridge extension connected to your ChatGPT session.
 
 ```bash
-./scripts/start-local.sh   # serves the console at http://127.0.0.1:8420
+./scripts/cortex.sh start    # console at http://127.0.0.1:8420
+./scripts/cortex.sh status   # console + Ollama + WebBridge health at a glance
+./scripts/cortex.sh stop     # stop the console
 ```
+
+On first launch the console greets you with an onboarding assistant that
+checks Ollama, the executor model, WebBridge and your ChatGPT tab, with
+actionable hints for anything missing.
 
 The console is a local web cockpit (Next.js UI + FastAPI, loopback only):
 

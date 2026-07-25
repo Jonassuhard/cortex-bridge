@@ -24,6 +24,7 @@ from local_executor import STORAGE_UNAVAILABLE, detect_mode, runtime_status, run
 from missions import router as missions_router
 from chat import router as chat_router
 from settings import router as settings_router
+from onboarding import router as onboarding_router
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
@@ -44,6 +45,7 @@ app.add_middleware(
 app.include_router(missions_router)
 app.include_router(chat_router)
 app.include_router(settings_router)
+app.include_router(onboarding_router)
 
 if (FRONTEND_OUT / "_next").is_dir():
     app.mount("/_next", StaticFiles(directory=FRONTEND_OUT / "_next"), name="next-assets")

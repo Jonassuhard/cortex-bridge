@@ -88,6 +88,23 @@ export function SettingsPanel({
     setDraft((current) => ({ ...current, [key]: value }));
   };
 
+  const exportDiagnostics = async () => {
+    try {
+      const response = await fetch("/api/diagnostics/export");
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const payload = await response.json();
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `cortex-diagnostic-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.json`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      window.alert("Impossible de générer le rapport de diagnostic. La console est-elle démarrée ?");
+    }
+  };
+
   return (
     <div className="settings-overlay" role="dialog" aria-modal="true" aria-label="Paramètres Cortex Bridge">
       <button className="settings-backdrop" onClick={onClose} aria-label="Fermer les paramètres" />
@@ -206,7 +223,8 @@ export function SettingsPanel({
             {tab === "diagnostics" && (
               <div className="settings-section-stack">
                 <div className="settings-section-title"><h3>Diagnostics</h3><p>Les détails bruts restent séparés de l'interface de conversation.</p></div>
-                <div className="diagnostic-actions"><button>Tester WebBridge</button><button>Tester Ollama</button><button>Vérifier SQLite</button><button>Exporter le rapport</button></div>
+                <div className="diagnostic-actions"><button>Tester WebBridge</button><button>Tester Ollama</button><button>Vérifier SQLite</button><button onClick={() => void exportDiagnostics()}>Exporter le rapport</button></div>
+                <p className="diagnostic-note">Le rapport est anonymisé : chemins personnels remplacés par ~, identifiants de conversation hachés, aucun contenu de message. Tu peux le coller tel quel dans une issue GitHub.</p>
                 <pre className="diagnostic-console">{`Cortex Bridge UI\n- frontend: Next.js static export\n- backend: FastAPI\n- transport: WebBridge experimental\n- executor: Ollama structured tools\n- deletion: blocked / archive only`}</pre>
               </div>
             )}

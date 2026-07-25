@@ -33,6 +33,7 @@ import { ConversationSidebar } from "./ConversationSidebar";
 import { ChatWorkspace } from "./ChatWorkspace";
 import { PipelineInspector } from "./PipelineInspector";
 import { SettingsPanel } from "./SettingsPanel";
+import { OnboardingPanel } from "./OnboardingPanel";
 
 function normalizeConversation(raw: Partial<ConversationSummary> & { url: string }): ConversationSummary {
   const identity = raw.identity || raw.url.match(/\/c\/([^/?#]+)/)?.[1] || raw.url;
@@ -596,6 +597,8 @@ export function CortexApp() {
         onSave={saveSettings}
         onSelectChatGPTModel={selectChatGPTModel}
       />
+
+      {!settingsOpen && <OnboardingPanel onOpenSettings={() => setSettingsOpen(true)} />}
 
       {demoMode && <div className="demo-mode-badge">Aperçu hors ligne · connecte FastAPI pour les données réelles</div>}
       {toast && <div className="app-toast" role="status">{toast}</div>}
