@@ -81,7 +81,8 @@ Rules:
 - REQUEST_CONTEXT: a read-only tool (or null) when you need more context.
 - COMPLETE: only when every acceptance criterion of the objective is met;
   set "terminal": true and put the final validation instructions in
-  acceptanceCriteria.
+  acceptanceCriteria. Recorded local execution evidence, not this text, is
+  required for completion.
 - BLOCKED: when you cannot proceed; set "terminal": true.
 - After each EXECUTE or REQUEST_CONTEXT you receive exactly one
   ```cortex-report fenced block with the validated tool result

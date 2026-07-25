@@ -92,6 +92,132 @@ class LoopTestCase(unittest.IsolatedAsyncioTestCase):
         )
         return loop, mock
 
+    async def test_process_exit_nonzero_is_failed(self):
+        (self.ws / "fail.py").write_text(
+            "import sys\nsys.exit(3)\n", encoding="utf-8"
+        )
+        loop, mock = self.make_loop(
+            [
+                execute("run_process", {"argv": ["python3", "fail.py"]}),
+                blocked("stop after the failed command"),
+            ]
+        )
+
+        await loop.run()
+
+        report = reports_received(mock)[0]
+        self.assertEqual(report["status"], "FAILED")
+        self.assertFalse(report["validation"]["passed"])
+        self.assertEqual(report["toolResult"]["exitCode"], 3)
+        self.assertTrue(
+            any(check["name"] == "process_exit_code" for check in report["validation"]["checks"])
+        )
+
+    async def test_process_timeout_is_failed(self):
+        loop, mock = self.make_loop(
+            [
+                execute(
+                    "run_process",
+                    {
+                        "argv": ["python3", "-c", "import time\ntime.sleep(2)"],
+                        "timeoutSeconds": 1,
+                    },
+                ),
+                blocked("stop after the timed out command"),
+            ]
+        )
+
+        await loop.run()
+
+        report = reports_received(mock)[0]
+        self.assertEqual(report["status"], "FAILED")
+        self.assertFalse(report["validation"]["passed"])
+        self.assertTrue(
+            any(check["name"] == "process_timeout" for check in report["validation"]["checks"])
+        )
+
+    async def test_truncated_process_output_is_failed(self):
+        loop, mock = self.make_loop(
+            [
+                execute(
+                    "run_process",
+                    {"argv": ["python3", "-c", "print('x' * 20000)"]},
+                ),
+                blocked("stop after the truncated command"),
+            ]
+        )
+
+        await loop.run()
+
+        report = reports_received(mock)[0]
+        self.assertEqual(report["status"], "FAILED")
+        self.assertFalse(report["validation"]["passed"])
+        self.assertTrue(
+            any(
+                check["name"] == "process_output_complete"
+                and check["passed"] is False
+                for check in report["validation"]["checks"]
+            )
+        )
+
+    async def test_default_trace_rejects_empty_complete(self):
+        loop, mock = self.make_loop([complete(), blocked("no execution evidence")])
+
+        mission = await loop.run()
+
+        self.assertEqual(mission["state"], "BLOCKED")
+        validations = self.store.rows("validation_results", self.mission_id, order_by="rowid")
+        self.assertEqual(validations[0]["passed"], 0)
+        checks = json.loads(validations[0]["checks_json"])
+        self.assertEqual(checks[-1]["validator"], "execution-trace-v1")
+
+    async def test_final_validator_exception_fails_terminally(self):
+        def exploding_validator(decision, tools):
+            raise RuntimeError("validator crash")
+
+        loop, _ = self.make_loop([complete()], final_validator=exploding_validator)
+
+        mission = await loop.run()
+
+        self.assertEqual(mission["state"], "FAILED")
+        validations = self.store.rows("validation_results", self.mission_id, order_by="rowid")
+        self.assertEqual(validations[0]["passed"], 0)
+
+    async def test_malformed_final_validator_output_fails_terminally(self):
+        def malformed_validator(decision, tools):
+            return {"passed": True, "checks": "not a list"}
+
+        loop, _ = self.make_loop([complete()], final_validator=malformed_validator)
+
+        mission = await loop.run()
+
+        self.assertEqual(mission["state"], "FAILED")
+        validations = self.store.rows("validation_results", self.mission_id, order_by="rowid")
+        self.assertEqual(validations[0]["passed"], 0)
+
+    async def test_named_final_validator_records_identity_and_evidence(self):
+        def evidence_validator(decision, tools):
+            return {
+                "passed": True,
+                "checks": [
+                    {
+                        "name": "workspace_evidence",
+                        "passed": True,
+                        "evidence": "validated locally",
+                    }
+                ],
+            }
+
+        loop, _ = self.make_loop([complete()], final_validator=evidence_validator)
+
+        mission = await loop.run()
+
+        self.assertEqual(mission["state"], "COMPLETED")
+        validations = self.store.rows("validation_results", self.mission_id, order_by="rowid")
+        checks = json.loads(validations[0]["checks_json"])
+        self.assertEqual(checks[0]["evidence"], "validated locally")
+        self.assertEqual(checks[-1]["validator"], "evidence_validator")
+
     # 1. Multi-iteration repair mission end-to-end → COMPLETED, evidence persisted
     async def test_01_multi_iteration_repair_completes(self):
         (self.ws / "broken.py").write_text("print('BROKEN')\n", encoding="utf-8")

@@ -50,6 +50,8 @@ from .state import (
 )
 from .store import Store, StoreError, TERMINAL_STATES
 
+AuditStore = Store
+
 DUPLICATE_RESPONSE_IGNORED = "DUPLICATE_RESPONSE_IGNORED"
 PROTOCOL_VIOLATION = "PROTOCOL_VIOLATION"
 PROTOCOL_VIOLATIONS_EXCEEDED = "PROTOCOL_VIOLATIONS_EXCEEDED"
@@ -168,6 +170,110 @@ async def _maybe_await(value):
     if inspect.isawaitable(value):
         return await value
     return value
+
+
+def normalize_validation_result(value: object, *, validator_name: str) -> dict:
+    """Validate trusted validator output before it can complete a mission."""
+    if not isinstance(value, dict):
+        raise ValueError("validator result must be an object")
+    if type(value.get("passed")) is not bool:
+        raise ValueError("validator result passed must be a boolean")
+    checks = value.get("checks")
+    if not isinstance(checks, list):
+        raise ValueError("validator result checks must be a list")
+    for check in checks:
+        if not isinstance(check, dict):
+            raise ValueError("validator result checks must contain objects")
+        if not isinstance(check.get("name"), str) or not check["name"]:
+            raise ValueError("validator check name must be a non-empty string")
+        if type(check.get("passed")) is not bool:
+            raise ValueError("validator check passed must be a boolean")
+        if not isinstance(check.get("evidence"), str):
+            raise ValueError("validator check evidence must be a string")
+    return {"passed": value["passed"], "validator": validator_name, "checks": checks}
+
+
+def default_trace_validator(
+    decision: dict, tools: ToolExecutor, store: AuditStore, mission_id: str
+) -> dict:
+    """Validate completion from persisted execution evidence only."""
+    del decision  # Completion claims are not evidence.
+    executions = store.rows("tool_executions", mission_id, order_by="rowid")
+    validations = store.rows("validation_results", mission_id, order_by="rowid")
+    passed_action_ids = {
+        row["action_id"]
+        for row in validations
+        if row.get("action_id") and row["passed"] == 1
+    }
+    validated_executions = [
+        row for row in executions if row.get("action_id") in passed_action_ids
+    ]
+    unresolved_actions = [
+        row for row in executions if row.get("action_id") not in passed_action_ids
+    ]
+
+    process_ok = True
+    changed_files_ok = True
+    workspace = tools.workspace.resolve()
+    for row in executions:
+        try:
+            result = json.loads(row["result_json"] or "{}")
+        except (TypeError, json.JSONDecodeError):
+            result = None
+        if not isinstance(result, dict):
+            process_ok = False
+            changed_files_ok = False
+            continue
+        if row["tool"] in {"run_process", "run_tests"}:
+            process_ok = process_ok and (
+                result.get("exitCode", row.get("exit_code")) == 0
+                and result.get("timedOut") is not True
+                and result.get("truncated") is not True
+            )
+        changed = result.get("filesChanged", [])
+        if not isinstance(changed, list) or not all(isinstance(path, str) for path in changed):
+            changed_files_ok = False
+            continue
+        for changed_path in changed:
+            candidate = (workspace / changed_path).resolve()
+            if (
+                candidate != workspace
+                and workspace not in candidate.parents
+            ) or not candidate.exists():
+                changed_files_ok = False
+
+    has_execution_evidence = bool(validated_executions)
+    checks = [
+        {
+            "name": "validated_action_evidence",
+            "passed": has_execution_evidence,
+            "evidence": f"{len(validated_executions)} validated local action(s)",
+        },
+        {
+            "name": "unresolved_failed_action",
+            "passed": not unresolved_actions,
+            "evidence": (
+                "no unresolved failed local actions"
+                if not unresolved_actions
+                else f"{len(unresolved_actions)} local action(s) failed validation"
+            ),
+        },
+        {
+            "name": "process_results",
+            "passed": process_ok,
+            "evidence": "all process results exited cleanly without timeout or truncation",
+        },
+        {
+            "name": "changed_files_present",
+            "passed": changed_files_ok,
+            "evidence": "all reported changed files remain inside the workspace",
+        },
+    ]
+    return {
+        "passed": has_execution_evidence and not unresolved_actions and process_ok and changed_files_ok,
+        "validator": "execution-trace-v1",
+        "checks": checks,
+    }
 
 
 class MissionLoop:
@@ -554,26 +660,58 @@ class MissionLoop:
     async def _validate_action(
         self, decision: dict, result: dict | None, tool_error: ToolError | None
     ) -> dict:
+        exit_code_ok = result is None or result.get("exitCode", 0) == 0
+        not_timed_out = result is None or result.get("timedOut") is not True
+        output_complete = result is None or result.get("truncated") is not True
+        passed = tool_error is None and exit_code_ok and not_timed_out and output_complete
+        checks = [
+            {
+                "name": "tool_execution",
+                "passed": tool_error is None,
+                "evidence": (
+                    f"{decision['action']['tool']} completed without tool error"
+                    if tool_error is None
+                    else f"{tool_error.code}: {tool_error.message}"
+                ),
+            },
+            {
+                "name": "process_exit_code",
+                "passed": exit_code_ok,
+                "evidence": (
+                    "process exited with code 0"
+                    if exit_code_ok
+                    else f"process exited with code {result.get('exitCode')}"
+                ),
+            },
+            {
+                "name": "process_timeout",
+                "passed": not_timed_out,
+                "evidence": (
+                    "process did not time out"
+                    if not_timed_out
+                    else "process timed out"
+                ),
+            },
+            {
+                "name": "process_output_complete",
+                "passed": output_complete,
+                "evidence": (
+                    "process output was complete"
+                    if output_complete
+                    else "process output was truncated"
+                ),
+            },
+        ]
         if self.action_validator is not None:
             outcome = await _maybe_await(
                 self.action_validator(decision, result, tool_error)
             )
             if outcome is not None:
-                return outcome
-        ok = tool_error is None
+                passed = passed and outcome["passed"]
+                checks.extend(outcome.get("checks", []))
         return {
-            "passed": ok,
-            "checks": [
-                {
-                    "name": "tool_execution",
-                    "passed": ok,
-                    "evidence": (
-                        f"{decision['action']['tool']} completed without tool error"
-                        if ok
-                        else f"{tool_error.code}: {tool_error.message}"
-                    ),
-                }
-            ],
+            "passed": passed,
+            "checks": checks,
         }
 
     @staticmethod
@@ -584,6 +722,8 @@ class MissionLoop:
                 "exitCode": result.get("exitCode", 0),
                 "stdout": result.get("stdout", ""),
                 "stderr": result.get("stderr", ""),
+                "timedOut": result.get("timedOut", False),
+                "truncated": result.get("truncated", False),
             }
         return {
             "exitCode": 0,
@@ -604,25 +744,49 @@ class MissionLoop:
 
     async def _handle_complete(self, decision: dict) -> str:
         self.sm.transition("FINAL_VALIDATION")
-        if self.final_validator is not None:
-            validation = await _maybe_await(self.final_validator(decision, self.tools))
-        else:
+        validator_name = "execution-trace-v1"
+        try:
+            if self.final_validator is None:
+                raw_validation = default_trace_validator(
+                    decision, self.tools, self.store, self.mission_id
+                )
+            else:
+                validator_name = getattr(
+                    self.final_validator, "__name__", self.final_validator.__class__.__name__
+                )
+                raw_validation = await _maybe_await(
+                    self.final_validator(decision, self.tools)
+                )
+            validation = normalize_validation_result(
+                raw_validation, validator_name=validator_name
+            )
+        except Exception as exc:
             validation = {
-                "passed": True,
+                "passed": False,
+                "validator": validator_name,
                 "checks": [
                     {
-                        "name": "final_validation",
-                        "passed": True,
-                        "evidence": "no deterministic final validator configured",
+                        "name": "final_validator",
+                        "passed": False,
+                        "evidence": f"validator failed closed: {type(exc).__name__}: {exc}",
                     }
                 ],
             }
+            self.store.record_validation(
+                str(uuid.uuid4()),
+                self.mission_id,
+                decision["actionId"],
+                False,
+                self._stored_validation_checks(validation),
+            )
+            self.sm.transition("FAILED", pause_reason="FINAL_VALIDATOR_FAILED")
+            return "stop"
         self.store.record_validation(
             str(uuid.uuid4()),
             self.mission_id,
             decision["actionId"],
             validation["passed"],
-            validation["checks"],
+            self._stored_validation_checks(validation),
         )
         if validation["passed"]:
             self.sm.transition("COMPLETED")
@@ -638,6 +802,19 @@ class MissionLoop:
             validation=validation,
         )
         return self._finalize_cycle(decision, report, success=False)
+
+    @staticmethod
+    def _stored_validation_checks(validation: dict) -> list[dict]:
+        """Persist validator identity alongside its checks in the audit record."""
+        return [
+            *validation["checks"],
+            {
+                "name": "validator_identity",
+                "passed": True,
+                "validator": validation["validator"],
+                "evidence": f"validator: {validation['validator']}",
+            },
+        ]
 
     # -- report + replan ------------------------------------------------------------------
 

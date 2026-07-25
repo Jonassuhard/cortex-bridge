@@ -177,6 +177,7 @@ class ModeARunnerTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertIn("objective text", contract)
         self.assertIn("/some/workspace", contract)
         self.assertIn("run_process", contract)  # allowed tools enumerated
+        self.assertIn("Recorded local execution evidence", contract)
 
 
 if __name__ == "__main__":

@@ -247,7 +247,9 @@ class MissionsApiTestCase(unittest.TestCase):
             decision_reply(self.mission_id, 1, "EXECUTE", tool="write_file",
                            arguments={"path": "b.txt", "content": "B"},
                            criteria=["b.txt written"]),
-            decision_reply(self.mission_id, 2, "COMPLETE", criteria=["decision recorded"],
+            decision_reply(self.mission_id, 2, "EXECUTE", tool="list_directory",
+                           arguments={"path": "."}, criteria=["workspace listed"]),
+            decision_reply(self.mission_id, 3, "COMPLETE", criteria=["decision recorded"],
                            terminal=True),
         ], "Create b.txt.", approval_policy="workspace-write-with-approvals")
         self.assertEqual(status, 201, body)
@@ -261,6 +263,20 @@ class MissionsApiTestCase(unittest.TestCase):
         self.assertFalse((self.ws / "b.txt").exists())  # rejected → never written
         approvals = missions_api.get_store().rows("approvals", self.mission_id)
         self.assertEqual(approvals[0]["approved"], 0)
+
+    def test_04b_empty_complete_fails_closed(self):
+        self.optin()
+        status, body = self.start_mission([
+            decision_reply(self.mission_id, 1, "COMPLETE", criteria=["done"], terminal=True),
+            decision_reply(self.mission_id, 2, "BLOCKED", criteria=[], terminal=True),
+        ], "Do not complete without local evidence.")
+        self.assertEqual(status, 201, body)
+
+        d = self.wait_terminal(self.mission_id)
+
+        self.assertEqual(d["mission"]["state"], "BLOCKED")
+        validations = missions_api.get_store().rows("validation_results", self.mission_id)
+        self.assertEqual(validations[0]["passed"], 0)
 
     def test_05_pause_resume(self):
         self.optin()
