@@ -278,6 +278,10 @@ class ChatSettingsApiTestCase(unittest.TestCase):
     def test_06_settings_persist_and_never_delete_is_forced(self):
         status, defaults = self.get("/api/settings")
         self.assertEqual(status, 200)
+        self.assertEqual(
+            defaults.get("process_capabilities"),
+            {"allowed": False, "allow_network": False, "allow_deletions": False},
+        )
         payload = {
             **defaults,
             "theme": "light",

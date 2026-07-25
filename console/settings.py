@@ -9,6 +9,7 @@ import hashlib
 import sqlite3
 import time
 import uuid
+from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,7 @@ from pydantic import BaseModel, Field
 
 import chat as chat_api
 import missions as missions_api
+from executor.tools import ProcessCapabilities
 from local_executor import OLLAMA_ENDPOINT, runtime_status
 from transport.chatgpt_web.adapter import WebBridgeDriver
 
@@ -49,6 +51,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "browser_research": False,
     "network_access": False,
     "never_delete_files": True,
+    "process_capabilities": asdict(ProcessCapabilities()),
     "persist_conversation_history": False,
     "response_stability_seconds": 2.0,
     "chat_timeout_seconds": 300,
@@ -94,7 +97,7 @@ def load_settings() -> dict[str, Any]:
 
 def save_settings(settings: dict[str, Any]) -> dict[str, Any]:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    clean = {**settings, "never_delete_files": True}
+    clean = {**DEFAULT_SETTINGS, **settings, "never_delete_files": True}
     tmp = SETTINGS_FILE.with_suffix(".tmp")
     tmp.write_text(json.dumps(clean, ensure_ascii=False, indent=2), encoding="utf-8")
     tmp.replace(SETTINGS_FILE)

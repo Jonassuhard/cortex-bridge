@@ -147,7 +147,7 @@ def _make_approval_callback(rt: MissionRuntime):
 
 def _build_runtime(mission_id: str, workspace: str, approval_mode: str,
                    primary: str, fallback: str, max_iterations: int,
-                   max_duration_seconds: int) -> MissionRuntime:
+                   max_duration_seconds: int, allow_processes: bool = False) -> MissionRuntime:
     ws = Path(workspace).expanduser().resolve()
     if not ws.is_dir():
         raise HTTPException(status_code=422, detail=f"workspace is not a directory: {ws}")
@@ -155,6 +155,7 @@ def _build_runtime(mission_id: str, workspace: str, approval_mode: str,
     policy = PolicyEngine(
         ws,
         mode=approval_mode,
+        allow_processes=allow_processes,
         primary_model=primary or "orchestra-executor",
         fallback_model=fallback or "orchestra-executor-fallback",
     )
@@ -182,6 +183,7 @@ class MissionIn(BaseModel):
     approval_policy: str = WRITE_WITH_APPROVALS
     primary_executor: str = "orchestra-executor"
     fallback_executor: str = "orchestra-executor-fallback"
+    allow_processes: bool = False
     mission_id: str = ""  # optional client-supplied UUID (idempotent submission)
 
 
@@ -457,7 +459,7 @@ async def create_mission(body: MissionIn) -> dict:
     rt = _build_runtime(
         mission_id, body.workspace, body.approval_policy,
         body.primary_executor, body.fallback_executor,
-        body.max_iterations, body.max_duration_minutes * 60,
+        body.max_iterations, body.max_duration_minutes * 60, body.allow_processes,
     )
     _mission_write_urls[mission_id] = body.conversation_url
     rt.task = asyncio.create_task(

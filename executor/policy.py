@@ -16,7 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .tools import ToolDenied, check_command_allowed, detect_test_command
+from .tools import ProcessCapabilities, ToolDenied, check_command_allowed, detect_test_command
 
 # §16 approval modes.
 READ_ONLY_AUTOMATIC = "read-only-automatic"
@@ -74,6 +74,7 @@ class PolicyEngine:
     allowed_workspaces: list[Path | str] | None = None
     mode: str = WRITE_WITH_APPROVALS
     test_commands: list[list[str]] | None = None
+    allow_processes: bool = False
     primary_model: str = DEFAULT_PRIMARY_MODEL
     fallback_model: str = DEFAULT_FALLBACK_MODEL
     _approvals: set[tuple[str, str | None]] = field(default_factory=set)
@@ -96,6 +97,11 @@ class PolicyEngine:
             for w in self.allowed_workspaces
         )
 
+    @property
+    def process_capabilities(self) -> ProcessCapabilities:
+        """The exact process privileges granted to this mission."""
+        return ProcessCapabilities(allowed=self.allow_processes)
+
     # -- action evaluation ------------------------------------------------------------
 
     def evaluate(self, tool: str, arguments: dict | None = None) -> PolicyDecision:
@@ -114,6 +120,14 @@ class PolicyEngine:
                 tool,
                 f"{tool} is a write/process tool and the mission is read-only",
                 "READ_ONLY_MODE",
+            )
+        if tool in {"run_process", "run_tests"} and not self.process_capabilities.allowed:
+            return PolicyDecision(
+                False,
+                False,
+                tool,
+                "process execution was not enabled for this mission",
+                "PROCESS_CAPABILITY_DENIED",
             )
         # Deterministic command restrictions for process tools (§15).
         if tool == "run_process":
@@ -151,6 +165,8 @@ class PolicyEngine:
                     return PolicyDecision(
                         False, False, tool, "unparseable test command", "MALFORMED_ARGUMENTS"
                     )
+        if tool in {"run_process", "run_tests"}:
+            return PolicyDecision(True, True, tool, "allowed pending per-command approval")
         requires_approval = tool in WRITE_TOOLS and self.mode == WRITE_WITH_APPROVALS
         if requires_approval and self._approval_satisfied(tool):
             requires_approval = False
