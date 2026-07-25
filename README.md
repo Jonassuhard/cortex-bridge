@@ -8,16 +8,27 @@ Ollama. The orchestrator thinks and plans; the local model executes code,
 touches your filesystem, runs commands — then reports back into the
 conversation so the loop continues.
 
-```
-┌─────────────────────┐         ┌──────────────────────────────┐
-│  Cloud orchestrator │  task   │  Your machine (e.g. a Mac)   │
-│  (ChatGPT / API)    ├────────►│  ┌────────────────────────┐  │
-│                     │         │  │ Cortex Bridge executor │  │
-│  "plan, review,     │         │  │  → Ollama (gpt-oss,    │  │
-│   decide next step" │◄────────┤  │     qwen3, glm...)     │  │
-└─────────────────────┘  report │  │  → runs code locally   │  │
-                                │  └────────────────────────┘  │
-                                └──────────────────────────────┘
+```mermaid
+flowchart LR
+    subgraph Cloud["☁️ Cloud"]
+        GPT["ChatGPT (web UI)<br/>orchestrator — plans & decides"]
+    end
+
+    subgraph YourMac["💻 Your machine"]
+        UI["Local console<br/>127.0.0.1:8420<br/>(Next.js + FastAPI)"]
+        BR["Cortex Bridge<br/>mission loop + policy engine"]
+        OL["Ollama<br/>local executor model<br/>(gpt-oss, qwen3, granite…)"]
+        FS["Workspace<br/>files & commands"]
+
+        UI --> BR
+        BR --> OL
+        OL --> FS
+    end
+
+    GPT <-->|"task / report — via your own<br/>Chrome session (WebBridge)"| BR
+
+    style Cloud fill:#1e293b,stroke:#475569,color:#e2e8f0
+    style YourMac fill:#0f172a,stroke:#475569,color:#e2e8f0
 ```
 
 ## Why?
@@ -40,9 +51,18 @@ chatgpt.com web UI on 2026-07-24:
 - ✅ ChatGPT Web Transport through the user's own Chrome via WebBridge
   (`transport/chatgpt_web/`) — DOM-only, no OpenAI API key needed
 - ✅ Local web console (FastAPI) to launch, watch, approve, pause and stop
-  missions (`console/`) — loopback only
+  missions (`console/`) — loopback only, French UI
+- ✅ Live ChatGPT chat from the console: per-conversation statuses
+  (ChatGPT + Agent), pinned/project conversation types with counters
+  (50 max), explicit send states, SPA conversation switching in
+  ~0.9–3.2 s without page reload
+- ✅ Attachments: send files and images to ChatGPT, or a screenshot of the
+  conversation tab — with explicit limits (512 MB per file, 20 MB per
+  image) and French error messages; a two-conversation write guard keeps
+  drafts safe (409 with a clear message)
 - ✅ Verified live: read-only missions, file writes with human approval,
-  multi-iteration code repair, policy refusals, emergency stop
+  multi-iteration code repair, policy refusals, emergency stop,
+  screenshot round-trip (ChatGPT acknowledged receipt)
 - ⚠️ The web transport automates a consumer product UI and may break when
   ChatGPT changes its frontend — read
   [docs/legal-notes.md](docs/legal-notes.md) and
@@ -95,7 +115,19 @@ config line — no scripts required.
 
 ## Contributing
 
-Ideas, issues and PRs welcome — especially on the orchestrator loop.
+Cortex Bridge is community-driven — ideas, issues and PRs are all welcome.
+
+- 💡 **Suggest an improvement** → open a
+  [feature request](https://github.com/Jonassuhard/cortex-bridge/issues/new?template=feature_request.md)
+  (labelled `enhancement`, browsable
+  [here](https://github.com/Jonassuhard/cortex-bridge/labels/enhancement) —
+  vote with 👍 to prioritize)
+- 🐛 **Report a bug** → use the
+  [bug report template](https://github.com/Jonassuhard/cortex-bridge/issues/new?template=bug_report.md)
+- 💬 **Discuss** → [GitHub Discussions](https://github.com/Jonassuhard/cortex-bridge/discussions)
+  for questions, ideas and show-and-tell
+- 🔧 **Submit code** → read [CONTRIBUTING.md](CONTRIBUTING.md) first; the
+  test suite (`python3 -m unittest discover -s tests`) must stay green
 
 ## License
 

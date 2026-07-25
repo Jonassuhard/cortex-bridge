@@ -134,3 +134,6 @@ export function DownloadIcon(props: IconProps) {
 export function CopyIcon(props: IconProps) {
   return <svg {...iconProps(props)}><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M15 9V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h4"/></svg>;
 }
+export function InfoIcon(props: IconProps) {
+  return <svg {...iconProps(props)}><circle cx="12" cy="12" r="9"/><path d="M12 8h.01M12 11v5"/></svg>;
+}

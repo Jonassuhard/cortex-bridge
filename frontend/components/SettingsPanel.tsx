@@ -12,11 +12,13 @@ import {
   DatabaseIcon,
   FolderIcon,
   GlobeIcon,
+  InfoIcon,
   SettingsIcon,
   ShieldIcon,
   TrashBlockedIcon,
   XIcon,
 } from "./Icons";
+import { BridgeDiagram } from "./BridgeDiagram";
 
 interface SettingsPanelProps {
   open: boolean;
@@ -29,7 +31,7 @@ interface SettingsPanelProps {
   onSelectChatGPTModel: (label: string) => Promise<void>;
 }
 
-type TabId = "general" | "models" | "permissions" | "transport" | "runtime" | "storage" | "diagnostics";
+type TabId = "general" | "models" | "permissions" | "transport" | "runtime" | "storage" | "diagnostics" | "info";
 
 const tabs: { id: TabId; label: string; icon: React.ReactNode }[] = [
   { id: "general", label: "Général", icon: <SettingsIcon /> },
@@ -39,6 +41,7 @@ const tabs: { id: TabId; label: string; icon: React.ReactNode }[] = [
   { id: "runtime", label: "Runtime", icon: <BrowserIcon /> },
   { id: "storage", label: "Stockage", icon: <DatabaseIcon /> },
   { id: "diagnostics", label: "Diagnostics", icon: <AlertIcon /> },
+  { id: "info", label: "Info", icon: <InfoIcon /> },
 ];
 
 function Toggle({ checked, onChange, label, description, danger = false, disabled = false }: {
@@ -205,6 +208,20 @@ export function SettingsPanel({
                 <div className="settings-section-title"><h3>Diagnostics</h3><p>Les détails bruts restent séparés de l'interface de conversation.</p></div>
                 <div className="diagnostic-actions"><button>Tester WebBridge</button><button>Tester Ollama</button><button>Vérifier SQLite</button><button>Exporter le rapport</button></div>
                 <pre className="diagnostic-console">{`Cortex Bridge UI\n- frontend: Next.js static export\n- backend: FastAPI\n- transport: WebBridge experimental\n- executor: Ollama structured tools\n- deletion: blocked / archive only`}</pre>
+              </div>
+            )}
+
+            {tab === "info" && (
+              <div className="settings-section-stack">
+                <div className="settings-section-title"><h3>Comment ça marche</h3><p>Un cerveau dans le cloud, des mains sur ta machine, une seule boucle de conversation.</p></div>
+                <BridgeDiagram />
+                <ul className="settings-check-list">
+                  <li><CheckIcon /> ChatGPT planifie et découpe — il ne touche à rien directement</li>
+                  <li><CheckIcon /> Ollama exécute les actions dans ton workspace, avec tes approbations</li>
+                  <li><CheckIcon /> Le rapport repart dans la conversation et la boucle continue</li>
+                  <li><CheckIcon /> Loopback uniquement : rien ne sort de ta machine sauf via ChatGPT</li>
+                </ul>
+                <div className="settings-notice"><GlobeIcon /><span><strong>Projet open source (MIT)</strong><small>github.com/Jonassuhard/cortex-bridge — idées et contributions bienvenues via Issues et Discussions.</small></span></div>
               </div>
             )}
           </div>

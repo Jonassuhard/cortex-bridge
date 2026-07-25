@@ -725,3 +725,104 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .staged-file-pill button:hover {
   color: var(--text);
 }
+
+/* ── BridgeDiagram (Settings › Info) ─────────────────────────────── */
+.bridge-diagram {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  padding: 14px;
+}
+
+.bridge-diagram .bd-zone {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.bridge-diagram .bd-zone-label {
+  fill: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  text-anchor: middle;
+}
+
+.bridge-diagram .bd-node rect {
+  fill: var(--bg);
+  stroke: var(--border);
+  stroke-width: 1.2;
+}
+
+.bridge-diagram .bd-node-bridge rect {
+  stroke: #34d399;
+}
+
+.bridge-diagram .bd-node-console rect {
+  stroke: var(--muted);
+  stroke-dasharray: 4 3;
+}
+
+.bridge-diagram .bd-node-title {
+  fill: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+  text-anchor: middle;
+}
+
+.bridge-diagram .bd-node-sub {
+  fill: var(--muted);
+  font-size: 10.5px;
+  text-anchor: middle;
+}
+
+.bridge-diagram .bd-edge {
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 1.4;
+  opacity: 0.55;
+}
+
+.bridge-diagram .bd-edge-label {
+  fill: var(--muted);
+  font-size: 10px;
+  text-anchor: middle;
+}
+
+.bridge-diagram .bd-pulse {
+  fill: none;
+  stroke: #38bdf8;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-dasharray: 6 120;
+  animation: bd-flow 2.6s linear infinite;
+}
+
+.bridge-diagram .bd-pulse-rev {
+  stroke: #818cf8;
+  animation-direction: reverse;
+}
+
+.bridge-diagram .bd-pulse-fast {
+  stroke: #34d399;
+  animation-duration: 1.6s;
+}
+
+.bridge-diagram .bd-pulse-slow {
+  stroke: #fbbf24;
+  animation-duration: 3.8s;
+}
+
+@keyframes bd-flow {
+  from { stroke-dashoffset: 126; }
+  to { stroke-dashoffset: 0; }
+}
+
+.bridge-diagram-caption {
+  margin: 10px 4px 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bridge-diagram .bd-pulse { animation: none; opacity: 0.5; }
+}
