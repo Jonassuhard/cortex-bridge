@@ -44,7 +44,9 @@ function normalizeConversation(raw: Partial<ConversationSummary> & { url: string
     timestamp: raw.timestamp || "",
     unread: raw.unread || 0,
     pinned: !!raw.pinned,
+    project: !!raw.project,
     archived: !!raw.archived,
+    message_count: typeof raw.message_count === "number" ? raw.message_count : null,
     status: raw.status || "idle",
   };
 }
@@ -72,7 +74,8 @@ export function CortexApp() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [inspectorOpen, setInspectorOpen] = useState(true);
+  const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [lastLightSig, setLastLightSig] = useState<string | null>(null);
   const [demoMode, setDemoMode] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const chatEventSource = useRef<EventSource | null>(null);
@@ -124,11 +127,21 @@ export function CortexApp() {
     setLoadingConversations(true);
     try {
       const data = await api<ConversationSummary[]>("/api/conversations");
-      const normalized = data.map(normalizeConversation);
+      // 50 most recent max (Jonas spec P1d); the backend already caps, this
+      // is a second belt for demo/fallback data.
+      const normalized = data.map(normalizeConversation).slice(0, 50);
       setConversations(normalized);
       setDemoMode(false);
       setSelectedConversation((current) => {
-        if (current) return normalized.find((item) => item.url === current.url) || current;
+        if (current) {
+          const stillThere = normalized.find((item) => item.url === current.url);
+          if (stillThere) return stillThere;
+          // Deletion sync: the conversation vanished from ChatGPT — drop it
+          // from Cortex too, unless a chat run is actively writing into it.
+          const runActive = chatRun && !["COMPLETED", "FAILED", "CANCELLED"].includes(chatRun.state);
+          if (current.identity === "__new__" || runActive) return current;
+          return normalized[0] || null;
+        }
         return normalized[0] || null;
       });
     } catch {
@@ -138,7 +151,7 @@ export function CortexApp() {
     } finally {
       setLoadingConversations(false);
     }
-  }, []);
+  }, [chatRun]);
 
   const refreshMissions = useCallback(async () => {
     try {
@@ -189,10 +202,16 @@ export function CortexApp() {
     setSelectedConversation(conversation);
     setLoadingMessages(true);
     setMessages([]);
+    setLastLightSig(null);
     try {
       if (conversation.identity.startsWith("demo-")) throw new Error("demo");
       const snapshot = await api<ConversationSnapshot>(`/api/conversations/snapshot?url=${encodeURIComponent(conversation.url)}`);
       setMessages(snapshot.messages || []);
+      // P1d: remember the synced message count for the sidebar sub-line.
+      const count = (snapshot.messages || []).length;
+      setConversations((current) =>
+        current.map((item) => (item.url === conversation.url ? { ...item, message_count: count } : item)),
+      );
       if (snapshot.model_label) {
         setSettings((current) => ({ ...current, planner_model: snapshot.model_label || current.planner_model }));
       }
@@ -206,14 +225,25 @@ export function CortexApp() {
   const refreshSelectedConversation = useCallback(async () => {
     if (!selectedConversation || selectedConversation.identity === "__new__" || selectedConversation.identity.startsWith("demo-")) return;
     try {
-      const snapshot = await api<ConversationSnapshot>(`/api/conversations/snapshot?url=${encodeURIComponent(selectedConversation.url)}`);
+      // P0c: cheap light poll first; only fetch the full snapshot (which
+      // serializes every message) when the conversation actually changed.
+      const light = await api<{ message_count: number; last_id: string | null; streaming: boolean }>(
+        `/api/conversations/snapshot?url=${encodeURIComponent(selectedConversation.url)}&light=1`,
+      );
+      const sig = `${light.message_count}|${light.last_id}|${light.streaming}`;
+      setConversations((current) =>
+        current.map((item) => (item.url === selectedConversation.url ? { ...item, message_count: light.message_count } : item)),
+      );
+      if (sig === lastLightSig) return;
+      setLastLightSig(sig);
       if (!chatRun || ["COMPLETED", "FAILED", "CANCELLED"].includes(chatRun.state)) {
+        const snapshot = await api<ConversationSnapshot>(`/api/conversations/snapshot?url=${encodeURIComponent(selectedConversation.url)}`);
         setMessages(snapshot.messages || []);
       }
     } catch {
       // Keep the last readable snapshot. Transport errors surface in pipeline status.
     }
-  }, [chatRun, selectedConversation]);
+  }, [chatRun, lastLightSig, selectedConversation]);
 
   useEffect(() => {
     void Promise.all([

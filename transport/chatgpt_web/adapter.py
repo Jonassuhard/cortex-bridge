@@ -833,6 +833,11 @@ _CONVERSATIONS_JS = r"""
       }) : null;
       const unread = numericBadge ? Number(normalize(numericBadge.textContent)) : (/unread|non lu/i.test(labels) ? 1 : 0);
       const pinned = /pinned|épingl|epingle/i.test(labels);
+      // Best-effort project detection: a chat nested inside a folder row
+      // (li > ul > chat link) belongs to a ChatGPT project; top-level links
+      // (Recents/Pinned sections) are plain chats.
+      const parentUl = a.closest('ul');
+      const project = !!(parentUl && parentUl.closest('li'));
       const current = location.pathname === href || a.getAttribute('aria-current') === 'page';
       seen.set(match[1], {
         url: 'https://chatgpt.com' + href,
@@ -842,6 +847,7 @@ _CONVERSATIONS_JS = r"""
         timestamp,
         unread,
         pinned,
+        project,
         status: current ? 'idle' : undefined,
       });
     }
@@ -863,7 +869,8 @@ _CONVERSATIONS_JS = r"""
     if (unchanged >= 3 || container.scrollTop + container.clientHeight >= container.scrollHeight - 4) break;
   }
   if (container) container.scrollTop = 0;
-  return JSON.stringify(Array.from(seen.values()));
+  // Sidebar order is recency order: keep the 50 most recent (Jonas spec P1d).
+  return JSON.stringify(Array.from(seen.values()).slice(0, 50));
 })()
 """
 

@@ -110,7 +110,15 @@ function UserMessage({ message }: { message: ConversationMessage }) {
       <div className="user-bubble">
         <p>{cleanMessageText(message.text)}</p>
         <div className="user-message-meta">
-          <span>{message.delivery === "failed" ? "Échec" : message.delivery === "queued" ? "En attente" : message.delivery === "sending" ? "Envoi…" : "Envoyé"}</span>
+          <span>
+            {message.delivery === "failed"
+              ? "Échec de l'envoi"
+              : message.delivery === "queued"
+                ? "Envoi en cours…"
+                : message.delivery === "sending"
+                  ? "Envoi en cours…"
+                  : "Envoyé ✓"}
+          </span>
           <time>{shortTime(message.created_at)}</time>
           {message.delivery === "received" || message.delivery === "visible" ? <DoubleCheckIcon size={14} /> : <CheckIcon size={14} />}
         </div>
@@ -266,12 +274,22 @@ export function ChatWorkspace({
   const online = pipeline.overall !== "failed" && pipeline.overall !== "disconnected";
   const latency = pipeline.latency?.transport_ms;
   const activeLabel = chatRun?.state === "CHATGPT_STREAMING"
-    ? "Réponse ChatGPT en cours"
-    : missionRunning
-      ? "Mission autonome active"
+    ? "Réponse en cours"
+    : chatActive
+      ? "Message en cours"
       : online
-        ? "En ligne"
+        ? "Connecté"
         : "Connexion dégradée";
+  // P1a: the agent executor status sits next to the ChatGPT status.
+  const ollamaComponent = pipeline.components?.find((component) => component.id === "ollama");
+  const agentUp = ollamaComponent ? ollamaComponent.state === "healthy" : online;
+  const agentLabel = missionRunning
+    ? "en cours"
+    : activeMissionState === "PAUSED" || activeMissionState === "PAUSED_RECOVERY_REQUIRED"
+      ? "en pause"
+      : agentUp
+        ? "prêt"
+        : "hors ligne";
 
   return (
     <section className="chat-workspace">
@@ -291,12 +309,20 @@ export function ChatWorkspace({
           </div>
         </div>
         <div className="toolbar-center-status">
-          <span className={`presence-dot ${online ? "is-online" : "is-offline"}`} />
-          <strong>{activeLabel}</strong>
+          <span className={`status-pill ${online ? "is-online" : "is-offline"}`} title="Statut de la connexion ChatGPT">
+            <span className={`presence-dot ${online ? "is-online" : "is-offline"}`} />
+            <span>ChatGPT</span>
+            <strong>{activeLabel}</strong>
+          </span>
+          <span className={`status-pill ${agentUp ? "is-online" : "is-offline"}`} title="Statut de l'agent exécutif local">
+            <span className={`presence-dot ${agentUp ? "is-online" : "is-offline"}`} />
+            <span>Agent {settings.primary_executor}</span>
+            <strong>{agentLabel}</strong>
+          </span>
         </div>
         <div className="toolbar-right">
           <span className="latency-badge"><ActivityIcon size={14} /><span>Latence</span><strong>{latency == null ? "—" : formatDuration(latency)}</strong></span>
-          <button className={`toolbar-icon-button ${inspectorOpen ? "is-active" : ""}`} onClick={onToggleInspector} title="Afficher la pipeline"><PanelIcon /></button>
+          <button className={`toolbar-icon-button ${inspectorOpen ? "is-active" : ""}`} onClick={onToggleInspector} title="Détails du bridge (pipeline, logs, transport)"><PanelIcon /></button>
         </div>
       </div>
 
@@ -312,7 +338,7 @@ export function ChatWorkspace({
         <div className="chat-blue-signal" aria-hidden="true" />
         <div className="message-column">
           {loadingMessages && mergedMessages.length === 0 && (
-            <div className="message-loading-state"><span className="thinking-spinner" /><p>Synchronisation de la conversation ChatGPT…</p></div>
+            <div className="message-loading-state"><span className="thinking-spinner" /><p>Synchronisation de « {title} »…</p></div>
           )}
           {!loadingMessages && mergedMessages.length === 0 && <EmptyConversation onExample={setDraft} />}
           {mergedMessages.map((message) => {

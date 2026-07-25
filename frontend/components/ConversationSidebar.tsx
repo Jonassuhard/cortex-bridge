@@ -5,6 +5,7 @@ import type { ConversationSummary } from "@/lib/types";
 import {
   ArchiveIcon,
   ChevronDownIcon,
+  MenuIcon,
   MessageIcon,
   MoreIcon,
   PinIcon,
@@ -62,13 +63,18 @@ export function ConversationSidebar({
   }, [conversations, query, showAll]);
 
   if (collapsed) {
+    // Collapsed rail (P1c): conversations only. No mission creation here —
+    // missions are not part of plain ChatGPT browsing. The unfold control is
+    // an explicit burger button so it can't be confused with "+".
     return (
       <aside className="conversation-sidebar is-collapsed" aria-label="Navigation conversations">
-        <button className="sidebar-logo-button" onClick={onCollapse} title="Déplier la barre latérale">
+        <button className="sidebar-icon-button unfold-button" onClick={onCollapse} title="Déplier le panneau des conversations">
+          <MenuIcon />
+        </button>
+        <button className="sidebar-logo-button" onClick={onCollapse} title="Déplier le panneau des conversations">
           <CortexLogo compact />
         </button>
         <button className="sidebar-icon-button" onClick={onNewConversation} title="Nouvelle conversation"><PlusIcon /></button>
-        <button className="sidebar-icon-button" onClick={onNewMission} title="Nouvelle mission"><ProjectIcon /></button>
         <div className="collapsed-spacer" />
         <button className="sidebar-icon-button" onClick={onOpenSettings} title="Paramètres"><SettingsIcon /></button>
       </aside>
@@ -146,6 +152,15 @@ export function ConversationSidebar({
                   <time>{conversation.timestamp || ""}</time>
                 </span>
                 <span className="conversation-preview">{conversation.preview || "Ouvrir la conversation"}</span>
+                <span className="conversation-subline">
+                  {conversation.pinned && <span className="conv-type" title="Conversation épinglée"><PinIcon size={11} /> Épinglée</span>}
+                  {conversation.project && <span className="conv-type" title="Conversation projet"><ProjectIcon size={11} /> Projet</span>}
+                  <span className="conv-count">
+                    {typeof conversation.message_count === "number"
+                      ? `${conversation.message_count} message${conversation.message_count > 1 ? "s" : ""}`
+                      : "Non synchronisé"}
+                  </span>
+                </span>
               </span>
               <span className="conversation-meta">
                 {conversation.pinned && <PinIcon size={13} />}

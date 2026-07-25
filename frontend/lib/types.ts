@@ -20,7 +20,10 @@ export interface ConversationSummary {
   timestamp?: string;
   unread?: number;
   pinned?: boolean;
+  project?: boolean;
   archived?: boolean;
+  /** Known only after the conversation has been synced once (P1d). */
+  message_count?: number | null;
   status?: "idle" | "generating" | "mission" | "approval" | "blocked" | "error";
 }
 
