@@ -17,6 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from executor.tools import ToolExecutor  # noqa: E402
+from executor.policy import PolicyEngine  # noqa: E402
 from orchestration.loop import (  # noqa: E402
     DUPLICATE_RESPONSE_IGNORED,
     MissionLoop,
@@ -101,7 +102,7 @@ class LoopTestCase(unittest.IsolatedAsyncioTestCase):
             [
                 execute("run_process", {"argv": ["python3", "fail.py"]}),
                 blocked("stop after the failed command"),
-            ]
+            ], policy=PolicyEngine(self.ws, allow_processes=True)
         )
 
         await loop.run()
@@ -115,17 +116,18 @@ class LoopTestCase(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_process_timeout_is_failed(self):
+        (self.ws / "slow.py").write_text("import time\ntime.sleep(2)\n", encoding="utf-8")
         loop, mock = self.make_loop(
             [
                 execute(
                     "run_process",
                     {
-                        "argv": ["python3", "-c", "import time\ntime.sleep(2)"],
+                        "argv": ["python3", "slow.py"],
                         "timeoutSeconds": 1,
                     },
                 ),
                 blocked("stop after the timed out command"),
-            ]
+            ], policy=PolicyEngine(self.ws, allow_processes=True)
         )
 
         await loop.run()
@@ -138,14 +140,15 @@ class LoopTestCase(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_truncated_process_output_is_failed(self):
+        (self.ws / "large_output.py").write_text("print('x' * 20000)\n", encoding="utf-8")
         loop, mock = self.make_loop(
             [
                 execute(
                     "run_process",
-                    {"argv": ["python3", "-c", "print('x' * 20000)"]},
+                    {"argv": ["python3", "large_output.py"]},
                 ),
                 blocked("stop after the truncated command"),
-            ]
+            ], policy=PolicyEngine(self.ws, allow_processes=True)
         )
 
         await loop.run()
@@ -285,7 +288,7 @@ class LoopTestCase(unittest.IsolatedAsyncioTestCase):
                 execute("run_process", {"argv": ["python3", "fail.py"]}),
                 complete(),
                 blocked("failed process remains unresolved"),
-            ]
+            ], policy=PolicyEngine(self.ws, allow_processes=True)
         )
 
         mission = await loop.run()
@@ -295,18 +298,19 @@ class LoopTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(validations[-1]["passed"], 0)
 
     async def test_default_trace_rejects_timed_out_process_before_complete(self):
+        (self.ws / "slow.py").write_text("import time\ntime.sleep(2)\n", encoding="utf-8")
         loop, _ = self.make_loop(
             [
                 execute(
                     "run_process",
                     {
-                        "argv": ["python3", "-c", "import time\ntime.sleep(2)"],
+                        "argv": ["python3", "slow.py"],
                         "timeoutSeconds": 1,
                     },
                 ),
                 complete(),
                 blocked("timed out process remains unresolved"),
-            ]
+            ], policy=PolicyEngine(self.ws, allow_processes=True)
         )
 
         mission = await loop.run()
@@ -365,7 +369,11 @@ class LoopTestCase(unittest.IsolatedAsyncioTestCase):
                 "checks": [{"name": "script_fixed", "passed": ok, "evidence": "content check"}],
             }
 
-        loop, mock = self.make_loop(script, final_validator=final_validator)
+        loop, mock = self.make_loop(
+            script,
+            final_validator=final_validator,
+            policy=PolicyEngine(self.ws, allow_processes=True),
+        )
         mission = await loop.run()
 
         self.assertEqual(mission["state"], "COMPLETED")

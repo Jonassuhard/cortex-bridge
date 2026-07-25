@@ -129,7 +129,10 @@ def check_command_allowed(argv: list[str], workspace: Path) -> None:
     """Allow only reviewed executable and subcommand vectors."""
     if not argv or not all(isinstance(a, str) and a for a in argv):
         raise ToolDenied("MALFORMED_COMMAND", "argv must be a non-empty list of strings")
-    program = Path(argv[0]).name
+    executable = argv[0]
+    if os.path.isabs(executable) or "/" in executable or "\\" in executable:
+        raise ToolDenied("DENIED_COMMAND", "executable must be resolved through the fixed PATH")
+    program = executable
     args = argv[1:]
 
     if program in SHELL_INTERPRETERS:
@@ -150,6 +153,25 @@ def check_command_allowed(argv: list[str], workspace: Path) -> None:
     if program == "git":
         if not args or args[0] not in SAFE_GIT_SUBCOMMANDS:
             raise ToolDenied("DENIED_COMMAND", "git subcommand is not approved")
+        subcommand, options = args[0], args[1:]
+        if subcommand == "status" and any(option not in {"--porcelain", "--short", "--branch"} for option in options):
+            raise ToolDenied("DENIED_COMMAND", "git status option is not approved")
+        if subcommand == "diff":
+            try:
+                separator = options.index("--")
+                flags, paths = options[:separator], options[separator + 1:]
+            except ValueError:
+                flags, paths = options, []
+            if any(flag not in {"--stat", "--name-only", "--name-status", "--no-ext-diff"} for flag in flags):
+                raise ToolDenied("DENIED_COMMAND", "git diff option is not approved")
+            for path in paths:
+                resolve_in_workspace(workspace, path)
+        if subcommand == "branch" and options not in ([], ["--show-current"]):
+            raise ToolDenied("DENIED_COMMAND", "git branch mutation is denied")
+        if subcommand in {"log", "show", "rev-parse", "ls-files"} and any(
+            option.startswith(("--output", "-o")) for option in options
+        ):
+            raise ToolDenied("DENIED_COMMAND", "git output redirection is denied")
         return
     if program in {"python", "python3"}:
         if args[:1] == ["-m"] and args[1:2] == ["unittest"]:
@@ -170,9 +192,25 @@ def check_command_allowed(argv: list[str], workspace: Path) -> None:
     if program == "pytest":
         return
     if program in NETWORK_CLIENTS:
-        if any(a in {"-X", "--request", "--data", "-d", "--form", "-F"} for a in args):
-            raise ToolDenied("EXTERNAL_SIDE_EFFECT", "only loopback health-check GET requests are approved")
-        urls = [a for a in args if a.startswith(("http://", "https://"))]
+        safe_flags = {"--fail", "--silent", "--show-error", "-f", "-s", "-S"}
+        value_flags = {"--max-time", "--connect-timeout"}
+        urls = []
+        index = 0
+        while index < len(args):
+            argument = args[index]
+            if argument in safe_flags:
+                index += 1
+                continue
+            if argument in value_flags:
+                if index + 1 >= len(args) or not args[index + 1].isdigit():
+                    raise ToolDenied("EXTERNAL_SIDE_EFFECT", "curl timeout option requires an integer")
+                index += 2
+                continue
+            if argument.startswith(("http://", "https://")):
+                urls.append(argument)
+                index += 1
+                continue
+            raise ToolDenied("EXTERNAL_SIDE_EFFECT", "curl option is not approved for health checks")
         if len(urls) != 1:
             raise ToolDenied("EXTERNAL_SIDE_EFFECT", "a single loopback health-check URL is required")
         host = (urlparse(urls[0]).hostname or "").lower()
@@ -604,7 +642,7 @@ class ToolExecutor:
             "truncated": out_trunc or err_trunc,
         }
 
-    async def run_tests(self, command: str | None = None, cwd: str = ".", timeoutSeconds: float = 120) -> dict:
+    async def run_tests(self, argv: list[str] | None = None, cwd: str = ".", timeoutSeconds: float = 120) -> dict:
         """Run only a user-configured or manifest-detected test command."""
         allowed = list(self.test_commands)
         detected = detect_test_command(self.workspace)
@@ -615,22 +653,18 @@ class ToolExecutor:
                 "NO_TEST_COMMAND",
                 "no configured test command and none detectable from manifests",
             )
-        if command is None:
-            argv = allowed[0]
+        if argv is None:
+            selected = allowed[0]
         else:
-            import shlex
-
-            try:
-                requested = shlex.split(command)
-            except ValueError as exc:
-                raise ToolError("MALFORMED_ARGUMENTS", f"cannot parse command: {exc}") from exc
-            if requested not in allowed:
+            if not isinstance(argv, list) or not argv or not all(isinstance(arg, str) and arg for arg in argv):
+                raise ToolError("MALFORMED_ARGUMENTS", "argv must be a non-empty list of strings")
+            if argv not in allowed:
                 raise ToolDenied(
                     "UNCONFIGURED_TEST_COMMAND",
-                    f"test command is not configured or manifest-detected: {command!r}",
+                    f"test command is not configured or manifest-detected: {argv!r}",
                 )
-            argv = requested
-        return await self.run_process(argv, cwd=cwd, timeoutSeconds=timeoutSeconds)
+            selected = argv
+        return await self.run_process(selected, cwd=cwd, timeoutSeconds=timeoutSeconds)
 
 
 # ---------------------------------------------------------------------------

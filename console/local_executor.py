@@ -16,6 +16,7 @@ Two modes, selected automatically at task time:
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import os
 import re
@@ -28,6 +29,7 @@ from typing import Awaitable, Callable
 from urllib.request import Request, urlopen
 
 from executor.tools import ToolDenied, ToolError, ToolExecutor
+from executor.policy import PolicyEngine
 
 OLLAMA_ENDPOINT = "http://127.0.0.1:11434"
 OLLAMA_TAGS_URL = f"{OLLAMA_ENDPOINT}/api/tags"
@@ -72,14 +74,14 @@ def active_model() -> str:
 
 def detect_mode() -> str:
     """'live' when Ollama is up, storage is mounted and the primary executor
-    model is installed or loaded; else 'simulation'."""
+    model is installed or loaded; else 'unavailable'."""
     if (
         volume_mounted()
         and probe_ollama()
         and model_state(PRIMARY_EXECUTOR) in ("installed", "loaded")
     ):
         return "live"
-    return "simulation"
+    return "unavailable"
 
 
 # ------------------------------------------------------ local runtime status
@@ -159,7 +161,7 @@ async def run_task(task: dict, emit: Emit) -> dict:
     return _report(
         "failed",
         "Local executor is unavailable; no command was simulated or executed.",
-        [], [], ["EXECUTOR_UNAVAILABLE"], "Start the reviewed local executor and retry.",
+        [], [], ["EXECUTOR_UNAVAILABLE"], "Start the reviewed local executor and retry.", mode="unavailable",
     )
 
 
@@ -319,7 +321,8 @@ async def _auto_validate(changed: list[str], workspace: Path) -> tuple[bool, str
 
 
 def _report(status: str, summary: str, commands_run: list[str],
-            files_changed: list[str], blockers: list[str], next_step: str) -> dict:
+            files_changed: list[str], blockers: list[str], next_step: str,
+            mode: str = "live") -> dict:
     return {
         "status": status,
         "summary": summary,
@@ -327,11 +330,11 @@ def _report(status: str, summary: str, commands_run: list[str],
         "files_changed": files_changed,
         "blockers": blockers,
         "suggested_next_step": next_step,
-        "mode": "live",
+        "mode": mode,
     }
 
 
-async def _run_live(task: dict, emit: Emit) -> dict:
+async def _run_live(task: dict, emit: Emit, process_approval=None) -> dict:
     goal: str = task["goal"]
     constraints: list[str] = task.get("constraints") or []
     workspace = Path(task.get("workspace") or "~").expanduser().resolve()
@@ -340,6 +343,7 @@ async def _run_live(task: dict, emit: Emit) -> dict:
     await emit(f"workspace jail: {workspace}", "info")
 
     before = _snapshot(workspace)
+    policy = PolicyEngine(workspace, allow_processes=bool(task.get("allow_processes", False)))
 
     first = (
         f"Goal: {goal}\n\n"
@@ -359,6 +363,7 @@ async def _run_live(task: dict, emit: Emit) -> dict:
     invalid_replies = 0
     false_success_warnings = 0
     validation_retries = 0
+    process_failures: list[str] = []
     started = time.monotonic()
 
     while True:
@@ -410,6 +415,32 @@ async def _run_live(task: dict, emit: Emit) -> dict:
                                  "or reply BLOCKED."})
                 continue
             messages.append({"role": "assistant", "content": raw})
+            policy_decision = policy.evaluate("run_process", {"argv": argv})
+            if not policy_decision.allowed:
+                await emit(f"bridge refused command: {policy_decision.reason}", "error")
+                return _report(
+                    "failed", "Process capability denied for this task.", commands_run, [],
+                    [policy_decision.denial_code or "PROCESS_CAPABILITY_DENIED"],
+                    "Enable the mission process capability and submit the command for review.",
+                )
+            if policy_decision.requires_approval:
+                if process_approval is None:
+                    await emit("process command requires human approval", "error")
+                    return _report(
+                        "blocked", "Process command requires explicit human approval.", commands_run, [],
+                        ["PROCESS_APPROVAL_REQUIRED"],
+                        "Approve this exact command in a reviewed mission flow.",
+                    )
+                approved = process_approval(argv, policy_decision)
+                if inspect.isawaitable(approved):
+                    approved = await approved
+                if not approved:
+                    await emit("process command approval denied", "error")
+                    return _report(
+                        "blocked", "Process command approval was denied.", commands_run, [],
+                        ["PROCESS_APPROVAL_DENIED"],
+                        "Approve this exact command or revise the task.",
+                    )
             steps += 1
             rendered = shlex.join(argv)
             commands_run.append(rendered)
@@ -422,13 +453,20 @@ async def _run_live(task: dict, emit: Emit) -> dict:
                 )
                 rc = result["exitCode"]
                 output = (result["stdout"] + result["stderr"]).strip()[:OUTPUT_TAIL]
+                if result["timedOut"]:
+                    process_failures.append("PROCESS_TIMEOUT")
+                if result["truncated"]:
+                    process_failures.append("PROCESS_OUTPUT_TRUNCATED")
             except (ToolDenied, ToolError, ValueError) as exc:
                 rc = 1
                 output = f"[bridge] command refused: {exc}"
+                process_failures.append("PROCESS_EXECUTION_DENIED")
             if output:
                 await emit(output[-OUTPUT_TAIL:], "info" if rc == 0 else "error")
             if rc != 0:
                 await emit(f"exit code {rc}", "error")
+                if "PROCESS_TIMEOUT" not in process_failures:
+                    process_failures.append("PROCESS_EXIT_NONZERO")
             messages.append({"role": "user", "content":
                              f"Tool result (exit {rc}):\n{output or '(no output)'}"})
             continue
@@ -457,6 +495,13 @@ async def _run_live(task: dict, emit: Emit) -> dict:
                 messages.append({"role": "user", "content":
                                  "No tool was executed; return READY_FOR_TOOL or BLOCKED."})
                 continue
+            if process_failures:
+                await emit("process failure blocks completion", "error")
+                return _report(
+                    "failed", "One or more process commands did not complete cleanly.",
+                    commands_run, [], sorted(set(process_failures)),
+                    "Resolve every process failure before requesting validation.",
+                )
             changed = _files_changed(before, _snapshot(workspace))
             await emit(f"validation: {len(changed)} file(s) created/modified", "info")
             ok_v, proof = await _auto_validate(changed, workspace)

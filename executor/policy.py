@@ -136,7 +136,7 @@ class PolicyEngine:
             except ToolDenied as exc:
                 return PolicyDecision(False, False, tool, exc.message, exc.code)
         if tool == "run_tests":
-            command = arguments.get("command")
+            requested = arguments.get("argv")
             allowed = list(self.test_commands or [])
             detected = detect_test_command(self.workspace)
             if detected is not None:
@@ -149,21 +149,22 @@ class PolicyEngine:
                     "no configured or manifest-detected test command",
                     "NO_TEST_COMMAND",
                 )
-            if command is not None:
-                import shlex
-
-                try:
-                    if shlex.split(command) not in allowed:
-                        return PolicyDecision(
-                            False,
-                            False,
-                            tool,
-                            f"unconfigured test command: {command!r}",
-                            "UNCONFIGURED_TEST_COMMAND",
-                        )
-                except ValueError:
+            if requested is not None:
+                if (
+                    not isinstance(requested, list)
+                    or not requested
+                    or not all(isinstance(arg, str) and arg for arg in requested)
+                ):
                     return PolicyDecision(
-                        False, False, tool, "unparseable test command", "MALFORMED_ARGUMENTS"
+                        False, False, tool, "test argv must be a non-empty list of strings", "MALFORMED_ARGUMENTS"
+                    )
+                if requested not in allowed:
+                    return PolicyDecision(
+                        False,
+                        False,
+                        tool,
+                        f"unconfigured test command: {requested!r}",
+                        "UNCONFIGURED_TEST_COMMAND",
                     )
         if tool in {"run_process", "run_tests"}:
             return PolicyDecision(True, True, tool, "allowed pending per-command approval")

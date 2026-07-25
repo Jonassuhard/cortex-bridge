@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import json
 import sys
 import tempfile
 import time
@@ -17,6 +18,7 @@ from executor.policy import (  # noqa: E402
     WRITE_AUTOMATIC,
 )
 from executor.tools import ToolDenied, ToolExecutor, check_command_allowed  # noqa: E402
+from console import local_executor  # noqa: E402
 
 
 class ProcessPolicyTestCase(unittest.IsolatedAsyncioTestCase):
@@ -65,7 +67,116 @@ class ProcessPolicyTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(first.requires_approval)
         self.assertTrue(second.requires_approval)
 
-    async def test_04_process_environment_excludes_parent_secrets(self):
+    def test_04_rejects_executable_path_spoofing(self):
+        for argv in (["./python3", "script.py"], ["/tmp/python3", "script.py"]):
+            with self.subTest(argv=argv):
+                with self.assertRaises(ToolDenied) as cm:
+                    check_command_allowed(argv, self.workspace)
+                self.assertEqual(cm.exception.code, "DENIED_COMMAND")
+
+    def test_05_read_only_git_and_loopback_curl_options_are_allowlisted(self):
+        allowed = [
+            ["git", "status", "--porcelain"],
+            ["git", "diff", "--stat"],
+            ["curl", "--fail", "--silent", "http://127.0.0.1:8080/health"],
+        ]
+        denied = [
+            ["git", "branch", "-D", "main"],
+            ["git", "diff", "--output", "leak.txt"],
+            ["git", "config", "user.name", "escape"],
+            ["curl", "--output", "outside.txt", "http://127.0.0.1:8080/health"],
+            ["curl", "--config", "curlrc", "http://127.0.0.1:8080/health"],
+        ]
+        for argv in allowed:
+            with self.subTest(allowed=argv):
+                check_command_allowed(argv, self.workspace)
+        for argv in denied:
+            with self.subTest(denied=argv):
+                with self.assertRaises(ToolDenied):
+                    check_command_allowed(argv, self.workspace)
+
+    async def test_06_live_executor_denies_model_process_without_capability(self):
+        (self.workspace / "marker.py").write_text(
+            "from pathlib import Path\nPath('executed').write_text('no')\n", encoding="utf-8"
+        )
+        replies = iter([
+            json.dumps({
+                "status": "READY_FOR_TOOL", "tool": "run_process",
+                "arguments": {"argv": ["python3", "marker.py"]}, "summary": "run it",
+            }),
+            json.dumps({"status": "BLOCKED", "tool": None, "arguments": {}, "summary": "stop"}),
+        ])
+        original = local_executor._chat_sync
+        local_executor._chat_sync = lambda _messages: next(replies)
+        events = []
+
+        async def emit(text, kind):
+            events.append((text, kind))
+
+        try:
+            result = await local_executor._run_live(
+                {"goal": "test", "workspace": str(self.workspace)},
+                emit,
+            )
+        finally:
+            local_executor._chat_sync = original
+        self.assertIn("PROCESS_CAPABILITY_DENIED", result["blockers"])
+        self.assertFalse((self.workspace / "executed").exists())
+
+    async def test_07_live_executor_requires_review_and_rejects_nonzero_before_done(self):
+        (self.workspace / "fail.py").write_text("import sys\nsys.exit(3)\n", encoding="utf-8")
+        replies = iter([
+            json.dumps({
+                "status": "READY_FOR_TOOL", "tool": "run_process",
+                "arguments": {"argv": ["python3", "fail.py"]}, "summary": "run it",
+            }),
+            json.dumps({
+                "status": "READY_FOR_VALIDATION", "tool": None,
+                "arguments": {}, "summary": "claim success",
+            }),
+        ])
+        original = local_executor._chat_sync
+        local_executor._chat_sync = lambda _messages: next(replies)
+
+        async def emit(_text, _kind):
+            return None
+
+        try:
+            result = await local_executor._run_live(
+                {"goal": "test", "workspace": str(self.workspace), "allow_processes": True},
+                emit,
+                process_approval=lambda _argv, _decision: True,
+            )
+        finally:
+            local_executor._chat_sync = original
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("PROCESS_EXIT_NONZERO", result["blockers"])
+
+    async def test_08_live_executor_does_not_treat_capability_as_approval(self):
+        (self.workspace / "marker.py").write_text(
+            "from pathlib import Path\nPath('executed').write_text('no')\n", encoding="utf-8"
+        )
+        reply = json.dumps({
+            "status": "READY_FOR_TOOL", "tool": "run_process",
+            "arguments": {"argv": ["python3", "marker.py"]}, "summary": "run it",
+        })
+        original = local_executor._chat_sync
+        local_executor._chat_sync = lambda _messages: reply
+
+        async def emit(_text, _kind):
+            return None
+
+        try:
+            result = await local_executor._run_live(
+                {"goal": "test", "workspace": str(self.workspace), "allow_processes": True}, emit
+            )
+        finally:
+            local_executor._chat_sync = original
+        self.assertEqual(result["status"], "blocked")
+        self.assertIn("PROCESS_APPROVAL_REQUIRED", result["blockers"])
+        self.assertFalse((self.workspace / "executed").exists())
+
+    async def test_09_process_environment_excludes_parent_secrets(self):
         marker = "CORTEX_PARENT_SECRET"
         previous = os.environ.get(marker)
         os.environ[marker] = "do-not-inherit"
@@ -81,7 +192,7 @@ class ProcessPolicyTestCase(unittest.IsolatedAsyncioTestCase):
         result = await ToolExecutor(self.workspace).run_process(["python3", "env.py"])
         self.assertEqual(result["stdout"].strip(), "missing")
 
-    async def test_05_timeout_terminates_the_entire_process_group(self):
+    async def test_10_timeout_terminates_the_entire_process_group(self):
         (self.workspace / "child.py").write_text(
             "import pathlib, sys, time\n"
             "pathlib.Path(sys.argv[1]).write_text(str(__import__('os').getpid()))\n"

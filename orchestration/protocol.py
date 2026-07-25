@@ -68,7 +68,7 @@ TOOL_ARGUMENTS: dict[str, dict[str, Any]] = {
         "required": ["argv"],
         "types": {"argv": list, "cwd": str, "timeoutSeconds": (int, float)},
     },
-    "run_tests": {"required": [], "types": {"command": str, "cwd": str, "timeoutSeconds": (int, float)}},
+    "run_tests": {"required": [], "types": {"argv": list, "cwd": str, "timeoutSeconds": (int, float)}},
     "git_status": {"required": [], "types": {}},
     "git_diff": {"required": [], "types": {"path": str}},
 }
@@ -180,6 +180,12 @@ def _validate_arguments(tool: str, arguments: Any) -> dict:
         if timeout is not None and not (0 < timeout <= 600):
             raise DecisionError(
                 "MALFORMED_ARGUMENTS", "timeoutSeconds must be within (0, 600]"
+            )
+    if tool == "run_tests" and "argv" in arguments:
+        argv = arguments["argv"]
+        if not argv or any(not isinstance(arg, str) or not arg for arg in argv):
+            raise DecisionError(
+                "MALFORMED_ARGUMENTS", "run_tests argv must be a non-empty list of strings"
             )
     if tool == "apply_patch":
         replacements = arguments.get("replacements")
