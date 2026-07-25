@@ -28,3 +28,7 @@ sessions/
 # Frontend build artifacts
 frontend/node_modules/
 frontend/.next/
+
+# Isolated implementation and review workspaces
+.worktrees/
+.superpowers/
