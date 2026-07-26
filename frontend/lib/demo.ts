@@ -85,9 +85,10 @@ export const demoRuntime: RuntimeStatus = {
   volume_mounted: true,
   storage_status: "OK",
   primary: { name: "orchestra-executor", state: "loaded" },
-  fallback: { name: "orchestra-executor-fallback", state: "installed" },
-  mode: "live",
-  model: "orchestra-executor",
+  executor_available: true,
+  executor_kind: "unavailable",
+  executor_model_used: null,
+  runtime_mode: "development_fixture",
 };
 
 export const demoTransport: TransportStatus = {
@@ -103,6 +104,11 @@ export const demoPipeline: PipelineStatus = {
   active_mission_id: "demo-mission",
   active_mission_state: "EXECUTING_LOCAL_ACTION",
   queue_pending: 0,
+  runtime_execution: {
+    executor_kind: "deterministic",
+    executor_model_used: null,
+    runtime_mode: "development_fixture",
+  },
   latency: { transport_ms: 128, local_model_ms: 3700, total_iteration_ms: 12800 },
   components: [
     { id: "transport", label: "Transport ChatGPT", state: "connected", detail: "Conversation verrouillée", latency_ms: 128 },
@@ -111,7 +117,8 @@ export const demoPipeline: PipelineStatus = {
     { id: "chrome", label: "Chrome Research", state: "running", detail: "Page locale chargée" },
     { id: "screenshots", label: "Captures", state: "healthy", detail: "3 preuves enregistrées" },
     { id: "filesystem", label: "Fichiers", state: "healthy", detail: "Lecture / écriture workspace" },
-    { id: "ollama", label: "Ollama", state: "healthy", detail: "Granite chargé" },
+    { id: "ollama", label: "Disponibilité Ollama", state: "available", detail: "daemon fixture · candidat installé" },
+    { id: "executor", label: "Exécuteur réellement utilisé", state: "running", detail: "deterministic · fixture de développement" },
     { id: "approvals", label: "Approbations", state: "idle", detail: "Aucune en attente" },
     { id: "queue", label: "File d'attente", state: "idle", detail: "0 action" },
     { id: "database", label: "Persistance", state: "healthy", detail: "SQLite synchronisé" },
@@ -132,6 +139,9 @@ export const demoMissions: MissionSummary[] = [
     state: "EXECUTING_LOCAL_ACTION",
     created_at: Date.now() / 1000 - 140,
     max_iterations: 25,
+    executor_kind: "deterministic",
+    executor_model_used: null,
+    runtime_mode: "development_fixture",
   },
 ];
 

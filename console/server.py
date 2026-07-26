@@ -16,11 +16,11 @@ from pathlib import Path
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from local_executor import STORAGE_UNAVAILABLE, detect_mode, runtime_status, run_task
+from local_executor import runtime_status, run_task
 from missions import router as missions_router
 from chat import router as chat_router
 from settings import router as settings_router
@@ -112,11 +112,16 @@ async def _run(task: dict) -> None:
             "files_changed": [],
             "blockers": [str(exc)],
             "suggested_next_step": "Check the console server log.",
-            "mode": detect_mode(),
+            "executor_kind": "unavailable",
+            "executor_model_used": None,
+            "runtime_mode": "live",
         }
         await _emit(task, f"executor crashed: {exc}", "error")
     task["report"] = report
     task["status"] = report["status"]
+    task["executor_kind"] = report["executor_kind"]
+    task["executor_model_used"] = report["executor_model_used"]
+    task["runtime_mode"] = report["runtime_mode"]
     task["finished_at"] = _now()
     _save_store()
 
@@ -132,27 +137,10 @@ async def index() -> FileResponse:
         return FileResponse(modern)
     if fallback.is_file():
         return FileResponse(fallback)
-    return FileResponse(STATIC_DIR / "index.html")
-
-
-@app.get("/style.css")
-async def style() -> FileResponse:
-    return FileResponse(STATIC_DIR / "style.css")
-
-
-@app.get("/app.js")
-async def script() -> FileResponse:
-    return FileResponse(STATIC_DIR / "app.js")
-
-
-@app.get("/missions.css")
-async def missions_style() -> FileResponse:
-    return FileResponse(STATIC_DIR / "missions.css")
-
-
-@app.get("/missions.js")
-async def missions_script() -> FileResponse:
-    return FileResponse(STATIC_DIR / "missions.js")
+    raise HTTPException(
+        status_code=503,
+        detail="No release frontend is installed; legacy simulated UI is disabled.",
+    )
 
 
 @app.get("/api/status")
@@ -164,24 +152,15 @@ async def status() -> dict:
 async def create_task(body: TaskIn) -> dict:
     if not body.goal.strip():
         raise HTTPException(status_code=422, detail="goal must not be empty")
-    if runtime_status()["storage_status"] == STORAGE_UNAVAILABLE:
-        return JSONResponse(
-            status_code=409,
-            content={
-                "error": STORAGE_UNAVAILABLE,
-                "message": (
-                    "Local model storage unavailable; the remote Kimi/OpenCodex "
-                    "fallback remains available."
-                ),
-            },
-        )
     task = {
         "id": uuid.uuid4().hex[:12],
         "goal": body.goal.strip(),
         "constraints": [c.strip() for c in body.constraints if c.strip()],
         "workspace": body.workspace.strip() or "~/",
         "status": "running",
-        "mode": detect_mode(),
+        "executor_kind": "unavailable",
+        "executor_model_used": None,
+        "runtime_mode": "live",
         "started_at": _now(),
         "finished_at": None,
         "logs": [],
@@ -191,7 +170,13 @@ async def create_task(body: TaskIn) -> dict:
     _iterations.insert(0, task)
     _save_store()
     asyncio.create_task(_run(task))
-    return {"id": task["id"], "status": task["status"], "mode": task["mode"]}
+    return {
+        "id": task["id"],
+        "status": "running",
+        "executor_kind": "unavailable",
+        "executor_model_used": None,
+        "runtime_mode": "live",
+    }
 
 
 @app.get("/api/tasks")
@@ -201,7 +186,9 @@ async def list_tasks() -> list[dict]:
             "id": it["id"],
             "goal": it["goal"],
             "status": it["status"],
-            "mode": it["mode"],
+            "executor_kind": it.get("executor_kind", "unavailable"),
+            "executor_model_used": it.get("executor_model_used"),
+            "runtime_mode": it.get("runtime_mode", "live"),
             "started_at": it["started_at"],
         }
         for it in _iterations

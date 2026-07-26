@@ -98,9 +98,8 @@ export function SettingsPanel({
   const primaryOptions = useMemo(() => {
     const names = new Set(ollamaModels.map((model) => model.name));
     names.add(settings.primary_executor);
-    names.add(settings.fallback_executor);
     return Array.from(names).filter(Boolean);
-  }, [ollamaModels, settings.primary_executor, settings.fallback_executor]);
+  }, [ollamaModels, settings.primary_executor]);
 
   if (!open) return null;
 
@@ -159,7 +158,7 @@ export function SettingsPanel({
 
             {tab === "models" && (
               <div className="settings-section-stack">
-                <div className="settings-section-title"><h3>Modèles</h3><p>ChatGPT reste le planificateur. Granite exécute les actions explicites et Qwen intervient une seule fois en récupération.</p></div>
+                <div className="settings-section-title"><h3>Modèles</h3><p>ChatGPT planifie. Mode A exécute des outils déterministes ; Ollama n'est revendiqué que lorsqu'un appel local réussit réellement.</p></div>
                 <label className="settings-field"><span>Modèle ChatGPT visible</span>
                   <select
                     value={draft.planner_model}
@@ -172,10 +171,7 @@ export function SettingsPanel({
                   </select>
                   <small>Le changement est confirmé uniquement si le sélecteur visible de ChatGPT affiche le modèle demandé.</small>
                 </label>
-                <div className="settings-grid two">
-                  <label><span>Exécuteur principal</span><select value={draft.primary_executor} onChange={(e) => patch("primary_executor", e.target.value)}>{primaryOptions.map((name) => <option value={name} key={name}>{name}</option>)}</select></label>
-                  <label><span>Exécuteur de secours</span><select value={draft.fallback_executor} onChange={(e) => patch("fallback_executor", e.target.value)}>{primaryOptions.map((name) => <option value={name} key={name}>{name}</option>)}</select></label>
-                </div>
+                <label className="settings-field"><span>Modèle Ollama candidat</span><select value={draft.primary_executor} onChange={(e) => patch("primary_executor", e.target.value)}>{primaryOptions.map((name) => <option value={name} key={name}>{name}</option>)}</select><small>Installé ou chargé ne signifie pas exécuté. Le modèle utilisé apparaît seulement après un appel réussi.</small></label>
                 <label className="settings-field"><span>Contexte Ollama</span><select value={draft.ollama_context} onChange={(e) => patch("ollama_context", Number(e.target.value))}><option value={4096}>4K — rapide</option><option value={8192}>8K — recommandé</option><option value={12288}>12K — Qwen fallback</option><option value={16384}>16K — pression mémoire élevée</option></select><small>Sur un M1 16 Go, le contexte est borné pour laisser de la mémoire au navigateur et aux tests.</small></label>
                 <div className="model-table">
                   {ollamaModels.map((model) => (
@@ -269,7 +265,7 @@ export function SettingsPanel({
                 <BridgeDiagram />
                 <ul className="settings-check-list">
                   <li><CheckIcon /> ChatGPT planifie et découpe — il ne touche à rien directement</li>
-                  <li><CheckIcon /> Ollama exécute les actions dans ton workspace, avec tes approbations</li>
+                  <li><CheckIcon /> Mode A exécute les outils déterministes ; Ollama reste un chemin local distinct</li>
                   <li><CheckIcon /> Le rapport repart dans la conversation et la boucle continue</li>
                   <li><CheckIcon /> Loopback uniquement : rien ne sort de ta machine sauf via ChatGPT</li>
                 </ul>

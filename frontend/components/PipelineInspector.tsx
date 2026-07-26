@@ -143,9 +143,10 @@ export function PipelineInspector({
       <section className="inspector-section runtime-summary">
         <div className="inspector-section-head"><div><span className="panel-eyebrow">Runtime</span><h3>Exécution locale</h3></div></div>
         <dl>
-          <div><dt>Ollama</dt><dd className={runtime.ollama_up ? "good" : "danger"}>{runtime.ollama_status}</dd></div>
-          <div><dt>Modèle principal</dt><dd>{runtime.primary.name}</dd></div>
-          <div><dt>État du modèle</dt><dd>{runtime.primary.state}</dd></div>
+          <div><dt>Disponibilité Ollama</dt><dd className={runtime.executor_available ? "good" : "danger"}>{runtime.executor_available ? "disponible" : "indisponible"}</dd></div>
+          <div><dt>Modèle candidat</dt><dd>{runtime.primary.name}</dd></div>
+          <div><dt>Exécuteur utilisé</dt><dd>{pipeline.runtime_execution.executor_kind}</dd></div>
+          <div><dt>Modèle réellement utilisé</dt><dd>{pipeline.runtime_execution.executor_model_used || "aucun"}</dd></div>
           <div><dt>Disque DJO</dt><dd className={runtime.volume_mounted ? "good" : "danger"}>{runtime.volume_mounted ? "monté" : "absent"}</dd></div>
           <div><dt>Stockage</dt><dd title={runtime.storage_path}>{runtime.storage_path.split("/").slice(-3).join("/")}</dd></div>
           <div><dt>Mission</dt><dd>{missionState || "aucune"}</dd></div>

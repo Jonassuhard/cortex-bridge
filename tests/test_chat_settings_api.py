@@ -359,11 +359,26 @@ class ChatSettingsApiTestCase(unittest.TestCase):
         status, body = self.get("/api/pipeline/status")
         self.assertEqual(status, 200, body)
         ids = {row["id"] for row in body["components"]}
-        self.assertTrue({"transport", "validator", "task", "ollama", "filesystem", "database"}.issubset(ids))
+        self.assertTrue({
+            "transport", "validator", "task", "ollama", "executor",
+            "filesystem", "database",
+        }.issubset(ids))
         self.assertIn(body["overall"], {"healthy", "degraded", "running", "waiting"})
         self.assertIn("events", body)
         transport = next(row for row in body["components"] if row["id"] == "transport")
         self.assertIn("playwright", transport["detail"].lower())
+        ollama = next(row for row in body["components"] if row["id"] == "ollama")
+        executor = next(row for row in body["components"] if row["id"] == "executor")
+        self.assertEqual(ollama["label"], "Disponibilité Ollama")
+        self.assertEqual(executor["label"], "Exécuteur réellement utilisé")
+        self.assertEqual(
+            body["runtime_execution"],
+            {
+                "executor_kind": "unavailable",
+                "executor_model_used": None,
+                "runtime_mode": "live",
+            },
+        )
 
     def test_10_onboarding_opens_dedicated_login_profile(self):
         status, body = self.post("/api/onboarding/browser/open", {})

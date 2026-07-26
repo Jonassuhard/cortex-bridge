@@ -281,6 +281,11 @@ async def pipeline_status() -> dict[str, Any]:
     rt = runtime_status()
     active = _active_missions()
     mission = active[0] if active else None
+    runtime_execution = {
+        "executor_kind": "deterministic" if mission else rt["executor_kind"],
+        "executor_model_used": None if mission else rt["executor_model_used"],
+        "runtime_mode": rt["runtime_mode"],
+    }
     try:
         bridge_health = await browser_driver_factory(
             session="cortex-bridge-ui",
@@ -359,9 +364,36 @@ async def pipeline_status() -> dict[str, Any]:
         },
         {
             "id": "ollama",
-            "label": "Ollama",
-            "state": "healthy" if rt.get("ollama_up") else "failed",
-            "detail": f"{rt.get('primary', {}).get('name')} · {rt.get('primary', {}).get('state')}",
+            "label": "Disponibilité Ollama",
+            "state": "available" if rt.get("executor_available") else "unavailable",
+            "detail": (
+                f"daemon {rt.get('ollama_status')} · candidat "
+                f"{rt.get('primary', {}).get('name')} "
+                f"{rt.get('primary', {}).get('state')}"
+            ),
+            "latency_ms": None,
+            "heartbeat_at": _now(),
+        },
+        {
+            "id": "executor",
+            "label": "Exécuteur réellement utilisé",
+            "state": (
+                "running"
+                if mission
+                else "idle"
+                if runtime_execution["executor_kind"] == "unavailable"
+                else "healthy"
+            ),
+            "detail": (
+                "deterministic · Mode A"
+                if mission
+                else "aucun appel exécuteur observé"
+                if runtime_execution["executor_kind"] == "unavailable"
+                else (
+                    f"{runtime_execution['executor_kind']} · "
+                    f"{runtime_execution['executor_model_used'] or 'sans modèle'}"
+                )
+            ),
             "latency_ms": None,
             "heartbeat_at": _now(),
         },
@@ -406,6 +438,7 @@ async def pipeline_status() -> dict[str, Any]:
         "components": components,
         "active_mission_id": mission.get("id") if mission else None,
         "active_mission_state": mission.get("state") if mission else None,
+        "runtime_execution": runtime_execution,
         "queue_pending": max(0, len(active) - 1),
         "events": events[:10],
         "latency": {

@@ -180,6 +180,15 @@ class ModeARunner:
     experimental_transport_accepted: bool = False  # §6: default OFF
     max_cycles: int = MAX_CYCLES
 
+    @staticmethod
+    def _with_runtime_truth(result: dict) -> dict:
+        return {
+            **result,
+            "executor_kind": "deterministic",
+            "executor_model_used": None,
+            "runtime_mode": "live",
+        }
+
     async def run_mission(
         self,
         objective: str,
@@ -234,12 +243,14 @@ class ModeARunner:
             contract=render_contract(objective, mission_id, str(self.tools.workspace)),
         )
         try:
-            return await loop.run(max_cycles=self.max_cycles)
+            return self._with_runtime_truth(
+                await loop.run(max_cycles=self.max_cycles)
+            )
         except BlockerDetected as exc:
             # §5: login/CAPTCHA/rate-limit — pause safely, never bypass.
-            return self._pause_mission(loop, exc.code)
+            return self._with_runtime_truth(self._pause_mission(loop, exc.code))
         except TransportError as exc:
-            return self._pause_mission(loop, exc.code)
+            return self._with_runtime_truth(self._pause_mission(loop, exc.code))
 
     def _pause_mission(self, loop: MissionLoop, reason: str) -> dict:
         try:

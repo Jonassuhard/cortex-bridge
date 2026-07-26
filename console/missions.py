@@ -213,7 +213,8 @@ def _make_approval_callback(rt: MissionRuntime):
 
 
 def _build_runtime(mission_id: str, workspace: str, approval_mode: str,
-                   primary: str, fallback: str, max_iterations: int,
+                   _legacy_primary: str | None, _legacy_fallback: str | None,
+                   max_iterations: int,
                    max_duration_seconds: int, allow_processes: bool = False,
                    lease=None) -> MissionRuntime:
     if lease is None:
@@ -226,8 +227,6 @@ def _build_runtime(mission_id: str, workspace: str, approval_mode: str,
         ws,
         mode=approval_mode,
         allow_processes=allow_processes,
-        primary_model=primary or "orchestra-executor",
-        fallback_model=fallback or "orchestra-executor-fallback",
     )
     budgets = Budgets(max_iterations=max_iterations, max_duration_seconds=max_duration_seconds)
     rt = MissionRuntime(mission_id=mission_id)
@@ -322,8 +321,10 @@ class MissionIn(BaseModel):
     max_iterations: int = 25
     max_duration_minutes: int = 60
     approval_policy: str = WRITE_WITH_APPROVALS
-    primary_executor: str = "orchestra-executor"
-    fallback_executor: str = "orchestra-executor-fallback"
+    # Accepted only so pre-v0.5 clients do not fail validation.  Mode A uses
+    # deterministic tools and intentionally ignores both legacy promises.
+    primary_executor: str | None = None
+    fallback_executor: str | None = None
     allow_processes: bool = False
     mission_id: str = ""  # optional client-supplied UUID (idempotent submission)
 
@@ -345,6 +346,15 @@ def _mission_or_404(store: Store, mission_id: str) -> dict:
         return store.get_mission(mission_id)
     except StoreError:
         raise HTTPException(status_code=404, detail="mission not found")
+
+
+def _with_mode_a_runtime_truth(mission: dict) -> dict:
+    return {
+        **mission,
+        "executor_kind": "deterministic",
+        "executor_model_used": None,
+        "runtime_mode": "live",
+    }
 
 
 def _objective_with_constraints(body: MissionIn) -> str:
@@ -719,7 +729,7 @@ async def create_mission(body: MissionIn) -> dict:
         store.transition(mission_id, "INITIALIZING_MISSION")
         rt = _build_runtime(
             mission_id, body.workspace, body.approval_policy,
-            body.primary_executor, body.fallback_executor,
+            None, None,
             body.max_iterations, body.max_duration_minutes * 60, body.allow_processes,
             lease=lease,
         )
@@ -739,7 +749,13 @@ async def create_mission(body: MissionIn) -> dict:
     rt.task = asyncio.create_task(
         _run_mission_task(rt, objective, body)
     )
-    return {"id": mission_id, "state": "INITIALIZING_MISSION"}
+    return {
+        "id": mission_id,
+        "state": "INITIALIZING_MISSION",
+        "executor_kind": "deterministic",
+        "executor_model_used": None,
+        "runtime_mode": "live",
+    }
 
 
 # P2b: mission_id -> ChatGPT conversation URL the mission writes into.
@@ -765,7 +781,10 @@ def active_mission_conversations() -> list[str]:
 
 @router.get("/missions")
 async def list_missions() -> list[dict]:
-    return get_store().rows("missions", order_by="created_at DESC")
+    return [
+        _with_mode_a_runtime_truth(row)
+        for row in get_store().rows("missions", order_by="created_at DESC")
+    ]
 
 
 @router.get("/missions/{mission_id}")
@@ -782,7 +801,7 @@ async def get_mission(mission_id: str) -> dict:
     }
     rt = _runtimes.get(mission_id)
     return {
-        "mission": mission,
+        "mission": _with_mode_a_runtime_truth(mission),
         "timeline": timeline,
         "awaiting_approval": rt is not None and not rt.approval_event.is_set()
         and mission["state"] == "WAITING_FOR_APPROVAL",
@@ -863,7 +882,7 @@ async def resume_mission(mission_id: str) -> dict:
     try:
         rt = _build_runtime(
             mission_id, mission["workspace"], WRITE_WITH_APPROVALS,
-            "orchestra-executor", "orchestra-executor-fallback",
+            None, None,
             mission["max_iterations"], mission["max_duration_seconds"],
             lease=lease,
         )

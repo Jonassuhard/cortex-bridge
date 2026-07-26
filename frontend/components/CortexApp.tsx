@@ -35,6 +35,9 @@ import { PipelineInspector } from "./PipelineInspector";
 import { SettingsPanel } from "./SettingsPanel";
 import { OnboardingPanel } from "./OnboardingPanel";
 
+const DEVELOPMENT_FIXTURES_ENABLED =
+  process.env.NEXT_PUBLIC_CORTEX_DEVELOPMENT_FIXTURES === "1";
+
 function normalizeConversation(raw: Partial<ConversationSummary> & { url: string }): ConversationSummary {
   const identity = raw.identity || raw.url.match(/\/c\/([^/?#]+)/)?.[1] || raw.url;
   return {
@@ -102,9 +105,22 @@ export function CortexApp() {
       setTransport(transportData);
       setDemoMode(false);
     } catch {
-      setRuntime(demoRuntime);
-      setTransport(demoTransport);
-      setDemoMode(true);
+      if (DEVELOPMENT_FIXTURES_ENABLED) {
+        setRuntime(demoRuntime);
+        setTransport(demoTransport);
+        setDemoMode(true);
+      } else {
+        setRuntime((current) => ({
+          ...current,
+          ollama_up: false,
+          ollama_status: "unavailable",
+          executor_available: false,
+          executor_kind: "unavailable",
+          executor_model_used: null,
+          runtime_mode: "live",
+        }));
+        setDemoMode(false);
+      }
     }
   }, []);
 
@@ -147,9 +163,14 @@ export function CortexApp() {
         return normalized[0] || null;
       });
     } catch {
-      setConversations(demoConversations);
-      setSelectedConversation((current) => current || demoConversations[0]);
-      setDemoMode(true);
+      if (DEVELOPMENT_FIXTURES_ENABLED) {
+        setConversations(demoConversations);
+        setSelectedConversation((current) => current || demoConversations[0]);
+        setDemoMode(true);
+      } else {
+        setConversations([]);
+        setDemoMode(false);
+      }
     } finally {
       setLoadingConversations(false);
     }
@@ -162,8 +183,10 @@ export function CortexApp() {
       const currentId = selectedMissionId || data.find((mission) => nonTerminal(mission.state))?.id || data[0]?.id || null;
       if (currentId && currentId !== selectedMissionId) setSelectedMissionId(currentId);
     } catch {
-      setMissions(demoMissions);
-      setSelectedMissionId((current) => current || demoMissions[0].id);
+      if (DEVELOPMENT_FIXTURES_ENABLED) {
+        setMissions(demoMissions);
+        setSelectedMissionId((current) => current || demoMissions[0].id);
+      }
     }
   }, [selectedMissionId]);
 
@@ -407,8 +430,6 @@ export function CortexApp() {
         max_iterations: settings.max_iterations,
         max_duration_minutes: settings.max_duration_minutes,
         approval_policy: settings.approval_policy,
-        primary_executor: settings.primary_executor,
-        fallback_executor: settings.fallback_executor,
       });
       setSelectedMissionId(response.id);
       setMissionDetail(null);
@@ -600,7 +621,7 @@ export function CortexApp() {
 
       {!settingsOpen && <OnboardingPanel onOpenSettings={() => setSettingsOpen(true)} />}
 
-      {demoMode && <div className="demo-mode-badge">Aperçu hors ligne · connecte FastAPI pour les données réelles</div>}
+      {demoMode && <div className="demo-mode-badge">development_fixture · aucune preuve de release</div>}
       {toast && <div className="app-toast" role="status">{toast}</div>}
     </main>
   );

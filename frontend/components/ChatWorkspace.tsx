@@ -172,7 +172,7 @@ function EmptyConversation({ onExample }: { onExample: (text: string) => void })
     <div className="empty-conversation">
       <div className="empty-orb"><SparkIcon size={26} /></div>
       <h1>Que doit accomplir Cortex Bridge&nbsp;?</h1>
-      <p>Écris une mission complète. ChatGPT planifie, le bridge autorise, Ollama exécute et les preuves reviennent automatiquement dans la conversation.</p>
+      <p>Écris une mission complète. ChatGPT planifie, le bridge autorise, l&apos;exécuteur déterministe agit et les preuves reviennent automatiquement dans la conversation.</p>
       <div className="empty-examples">
         {examples.map((example) => (
           <button key={example.label} onClick={() => onExample(example.text)}>
@@ -329,7 +329,7 @@ export function ChatWorkspace({
             <p>
               <span>{settings.planner_model}</span>
               <i />
-              <span>{settings.primary_executor}</span>
+              <span>{mission?.mission.executor_kind === "ollama" ? mission.mission.executor_model_used : "Mode A · déterministe"}</span>
               <i />
               <span className={settings.never_delete_files ? "safe-label" : "warning-label"}><ShieldIcon size={12} /> {settings.never_delete_files ? "Aucune suppression" : "Suppression non protégée"}</span>
             </p>
@@ -343,7 +343,7 @@ export function ChatWorkspace({
           </span>
           <span className={`status-pill ${agentUp ? "is-online" : "is-offline"}`} title="Statut de l'agent exécutif local">
             <span className={`presence-dot ${agentUp ? "is-online" : "is-offline"}`} />
-            <span>Agent {settings.primary_executor}</span>
+            <span>Exécuteur {mission?.mission.executor_kind || "indisponible"}</span>
             <strong>{agentLabel}</strong>
           </span>
         </div>

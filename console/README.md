@@ -23,9 +23,9 @@ python server.py
 
 Then open **http://127.0.0.1:8420**.
 
-## Simulation vs live mode
+## Runtime truth
 
-The console picks the mode automatically per task:
+The console reports what actually ran, not what merely looked available:
 
 - **LIVE** — when Ollama answers on `127.0.0.1:11434`, the
   `orchestra-executor` model is installed/loaded, and the model storage
@@ -40,14 +40,15 @@ The console picks the mode automatically per task:
   paths must resolve inside the task workspace) and a denylist (`sudo`,
   `git push`, package installs, `ssh`, `kill`, writes to `/etc`, …); limits
   are 8 tool executions and a 5-minute wall-clock guard per task.
-- **SIMULATION** — the default while the executor model is not installed.
-  The console emits a realistic fake execution (a handful of log lines with
-  small delays) and returns a complete structured report tagged
-  `"mode": "simulation"`. Simulation reports are clearly flagged in the UI —
-  nothing real is executed on your machine.
+- **UNAVAILABLE** — when the local executor cannot be called successfully.
+  The task fails with `EXECUTOR_UNAVAILABLE`; no command is simulated and no
+  model name is reported as used.
+- **DEVELOPMENT FIXTURE** — available only when both the caller requests
+  `development_fixture` and `CORTEX_ALLOW_DEVELOPMENT_FIXTURES=1` is set.
+  Fixture reports are blocked and explicitly ineligible for release evidence.
 
-The current mode is always visible as a chip in the top-right status bar,
-next to the Ollama up/down dot and the active model name.
+Every task/report exposes `executor_kind`, `executor_model_used` and
+`runtime_mode`. Daemon/model availability is shown separately.
 
 ## Local runtime panel
 
@@ -56,8 +57,7 @@ execution stack, refreshed every 10 seconds from `GET /api/status`:
 
 - Ollama endpoint and health (`healthy` / `unhealthy`, from the `/api/tags` probe)
 - Model storage path and whether the external **DJO volume is mounted**
-- Primary executor `orchestra-executor` and fallback
-  `orchestra-executor-fallback`, each with a state chip:
+- Candidate executor `orchestra-executor`, with an availability state:
   `installed` (in `ollama list`), `loaded` (in `ollama ps`, accent blue) or
   `missing` (muted red)
 
@@ -67,8 +67,7 @@ to `~/.ollama/models`). When that volume is not mounted, the API reports
 banner, the *Run task* button is disabled, and `POST /api/tasks` refuses new
 tasks with **HTTP 409** and the same code in the JSON body — local executors
 cannot run without their weights. The remote fallback (Kimi/OpenCodex) remains
-available; the console surfaces this as information only and performs no
-automatic re-routing.
+No remote or local fallback is implied or performed automatically.
 
 Set `CORTEX_STORAGE_PATH` to test the disk-missing path without unplugging the
 drive; set `PORT` to run on a port other than 8420:

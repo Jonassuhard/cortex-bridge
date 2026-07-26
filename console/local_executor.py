@@ -19,7 +19,6 @@ import asyncio
 import inspect
 import json
 import os
-import re
 import shlex
 import subprocess
 import sys
@@ -34,9 +33,6 @@ from executor.policy import PolicyEngine
 OLLAMA_ENDPOINT = "http://127.0.0.1:11434"
 OLLAMA_TAGS_URL = f"{OLLAMA_ENDPOINT}/api/tags"
 OLLAMA_CHAT_URL = f"{OLLAMA_ENDPOINT}/api/chat"
-CODEX_HOME = Path.home() / ".codex-cortex-bridge"
-CONFIG_TOML = CODEX_HOME / "config.toml"
-
 # Local model storage lives on the external DJO volume; override with
 # CORTEX_STORAGE_PATH to test the disk-missing code path.
 DEFAULT_STORAGE_PATH = "/Volumes/DJO/AI/Ollama/models"
@@ -44,7 +40,7 @@ VOLUME_ROOT = "/Volumes/DJO"
 STORAGE_UNAVAILABLE = "LOCAL_MODEL_STORAGE_UNAVAILABLE"
 
 PRIMARY_EXECUTOR = "orchestra-executor"
-FALLBACK_EXECUTOR = "orchestra-executor-fallback"
+DEVELOPMENT_FIXTURE_ENV = "CORTEX_ALLOW_DEVELOPMENT_FIXTURES"
 
 Emit = Callable[[str, str], Awaitable[None]]  # emit(text, kind)
 
@@ -56,20 +52,6 @@ def probe_ollama(timeout: float = 1.0) -> bool:
             return resp.status == 200
     except Exception:
         return False
-
-
-def active_model() -> str:
-    """Read the model name from the Cortex Bridge Codex profile, if present."""
-    if not CONFIG_TOML.is_file():
-        return "not configured"
-    try:
-        for line in CONFIG_TOML.read_text(encoding="utf-8").splitlines():
-            m = re.match(r'\s*model\s*=\s*["\']([^"\']+)["\']', line)
-            if m:
-                return m.group(1)
-    except OSError:
-        pass
-    return "not configured"
 
 
 def detect_mode() -> str:
@@ -136,9 +118,13 @@ def model_state(name: str) -> str:
 
 
 def runtime_status() -> dict:
-    """Full local-runtime snapshot for GET /api/status."""
+    """Availability snapshot for GET /api/status.
+
+    A healthy daemon and an installed model are candidates, not evidence that
+    an executor ran.  Runtime execution truth therefore starts unavailable.
+    """
     up = probe_ollama(timeout=1.0)
-    mode = detect_mode()
+    executor_available = detect_mode() == "live"
     return {
         "ollama_up": up,
         "ollama_status": "healthy" if up else "unhealthy",
@@ -147,21 +133,44 @@ def runtime_status() -> dict:
         "volume_mounted": volume_mounted(),
         "storage_status": storage_status(),
         "primary": {"name": PRIMARY_EXECUTOR, "state": model_state(PRIMARY_EXECUTOR)},
-        "fallback": {"name": FALLBACK_EXECUTOR, "state": model_state(FALLBACK_EXECUTOR)},
-        "mode": mode,
-        "model": PRIMARY_EXECUTOR if mode == "live" else active_model(),
+        "executor_available": executor_available,
+        "executor_kind": "unavailable",
+        "executor_model_used": None,
+        "runtime_mode": "live",
     }
 
 
 async def run_task(task: dict, emit: Emit) -> dict:
     """Run only when the reviewed local executor is available."""
+    if (
+        task.get("development_fixture") is True
+        and os.environ.get(DEVELOPMENT_FIXTURE_ENV) == "1"
+    ):
+        await emit("development fixture requested explicitly; no executor ran", "info")
+        return _report(
+            "blocked",
+            "Development fixture only; no command was executed.",
+            [],
+            [],
+            ["DEVELOPMENT_FIXTURE_NOT_RELEASE_ELIGIBLE"],
+            "Run again against a live executor for release evidence.",
+            executor_kind="unavailable",
+            executor_model_used=None,
+            runtime_mode="development_fixture",
+        )
     if detect_mode() == "live":
         return await _run_live(task, emit)
     await emit("local executor unavailable; refusing simulated completion", "error")
     return _report(
         "failed",
         "Local executor is unavailable; no command was simulated or executed.",
-        [], [], ["EXECUTOR_UNAVAILABLE"], "Start the reviewed local executor and retry.", mode="unavailable",
+        [],
+        [],
+        ["EXECUTOR_UNAVAILABLE"],
+        "Start the reviewed local executor and retry.",
+        executor_kind="unavailable",
+        executor_model_used=None,
+        runtime_mode="live",
     )
 
 
@@ -217,10 +226,10 @@ CMD_TIMEOUT_S = 60          # per-command timeout
 CHAT_TIMEOUT_S = 180        # per /api/chat call (includes model load time)
 OUTPUT_TAIL = 2000          # truncation for captured command output
 
-def _chat_sync(messages: list[dict]) -> str:
+def _chat_sync(messages: list[dict], model: str = PRIMARY_EXECUTOR) -> str:
     """Blocking /api/chat call; returns the raw message content."""
     body = {
-        "model": PRIMARY_EXECUTOR,
+        "model": model,
         "messages": messages,
         "stream": False,
         "format": RESPONSE_SCHEMA,
@@ -322,7 +331,8 @@ async def _auto_validate(changed: list[str], workspace: Path) -> tuple[bool, str
 
 def _report(status: str, summary: str, commands_run: list[str],
             files_changed: list[str], blockers: list[str], next_step: str,
-            mode: str = "live") -> dict:
+            *, executor_kind: str, executor_model_used: str | None,
+            runtime_mode: str) -> dict:
     return {
         "status": status,
         "summary": summary,
@@ -330,14 +340,40 @@ def _report(status: str, summary: str, commands_run: list[str],
         "files_changed": files_changed,
         "blockers": blockers,
         "suggested_next_step": next_step,
-        "mode": mode,
+        "executor_kind": executor_kind,
+        "executor_model_used": executor_model_used,
+        "runtime_mode": runtime_mode,
     }
+
+
+def release_runtime_eligible(report: dict) -> bool:
+    """Return whether runtime evidence may enter a release-pass result."""
+    return (
+        report.get("runtime_mode") == "live"
+        and report.get("executor_kind") in {"deterministic", "ollama"}
+        and report.get("status") in {"done", "COMPLETED"}
+    )
 
 
 async def _run_live(task: dict, emit: Emit, process_approval=None) -> dict:
     goal: str = task["goal"]
     constraints: list[str] = task.get("constraints") or []
     workspace = Path(task.get("workspace") or "~").expanduser().resolve()
+    executor_model_used: str | None = None
+
+    def report(status: str, summary: str, commands_run: list[str],
+               files_changed: list[str], blockers: list[str], next_step: str) -> dict:
+        return _report(
+            status,
+            summary,
+            commands_run,
+            files_changed,
+            blockers,
+            next_step,
+            executor_kind="ollama" if executor_model_used else "unavailable",
+            executor_model_used=executor_model_used,
+            runtime_mode="live",
+        )
 
     await emit(f"executor mode: live (Ollama /api/chat → {PRIMARY_EXECUTOR})", "info")
     await emit(f"workspace jail: {workspace}", "info")
@@ -369,26 +405,27 @@ async def _run_live(task: dict, emit: Emit, process_approval=None) -> dict:
     while True:
         if time.monotonic() - started > WALL_CLOCK_S:
             await emit("wall-clock limit reached (5 min)", "error")
-            return _report("failed", "Task exceeded the 5-minute wall-clock guard.",
-                           commands_run, [], ["wall-clock limit reached"],
-                           "Split the goal into smaller atomic tasks and retry.")
+            return report("failed", "Task exceeded the 5-minute wall-clock guard.",
+                          commands_run, [], ["wall-clock limit reached"],
+                          "Split the goal into smaller atomic tasks and retry.")
 
         try:
-            raw = await asyncio.to_thread(_chat_sync, messages)
+            raw = await asyncio.to_thread(_chat_sync, messages, PRIMARY_EXECUTOR)
+            executor_model_used = PRIMARY_EXECUTOR
         except Exception as exc:
             await emit(f"ollama /api/chat call failed: {exc}", "error")
-            return _report("failed", f"Ollama chat call failed: {exc}",
-                           commands_run, [], [f"chat error: {exc}"],
-                           "Check that Ollama is running and the model is loaded, then retry.")
+            return report("failed", f"Ollama chat call failed: {exc}",
+                          commands_run, [], [f"chat error: {exc}"],
+                          "Check that Ollama is running and the model is loaded, then retry.")
 
         parsed = _parse_status(raw)
         if parsed is None:
             invalid_replies += 1
             await emit("model reply was not a valid status JSON object", "error")
             if invalid_replies >= 2:
-                return _report("failed", "Model repeatedly answered outside the status schema.",
-                               commands_run, [], ["invalid schema reply"],
-                               "Inspect the live log; the model profile may be broken.")
+                return report("failed", "Model repeatedly answered outside the status schema.",
+                              commands_run, [], ["invalid schema reply"],
+                              "Inspect the live log; the model profile may be broken.")
             messages.append({"role": "assistant", "content": raw})
             messages.append({"role": "user", "content":
                              "Your reply did not match the required JSON schema. "
@@ -404,9 +441,9 @@ async def _run_live(task: dict, emit: Emit, process_approval=None) -> dict:
         if status == "READY_FOR_TOOL" and tool == "run_process":
             if steps >= MAX_TOOL_STEPS:
                 await emit("step limit reached (8 tool executions)", "error")
-                return _report("failed", "Step limit reached: 8 tool executions.",
-                               commands_run, [], ["step limit reached"],
-                               "Split the goal into smaller atomic tasks and retry.")
+                return report("failed", "Step limit reached: 8 tool executions.",
+                              commands_run, [], ["step limit reached"],
+                              "Split the goal into smaller atomic tasks and retry.")
             argv = args.get("argv")
             if not isinstance(argv, list) or not argv or not all(isinstance(arg, str) and arg for arg in argv):
                 messages.append({"role": "assistant", "content": raw})
@@ -418,7 +455,7 @@ async def _run_live(task: dict, emit: Emit, process_approval=None) -> dict:
             policy_decision = policy.evaluate("run_process", {"argv": argv})
             if not policy_decision.allowed:
                 await emit(f"bridge refused command: {policy_decision.reason}", "error")
-                return _report(
+                return report(
                     "failed", "Process capability denied for this task.", commands_run, [],
                     [policy_decision.denial_code or "PROCESS_CAPABILITY_DENIED"],
                     "Enable the mission process capability and submit the command for review.",
@@ -426,7 +463,7 @@ async def _run_live(task: dict, emit: Emit, process_approval=None) -> dict:
             if policy_decision.requires_approval:
                 if process_approval is None:
                     await emit("process command requires human approval", "error")
-                    return _report(
+                    return report(
                         "blocked", "Process command requires explicit human approval.", commands_run, [],
                         ["PROCESS_APPROVAL_REQUIRED"],
                         "Approve this exact command in a reviewed mission flow.",
@@ -436,7 +473,7 @@ async def _run_live(task: dict, emit: Emit, process_approval=None) -> dict:
                     approved = await approved
                 if not approved:
                     await emit("process command approval denied", "error")
-                    return _report(
+                    return report(
                         "blocked", "Process command approval was denied.", commands_run, [],
                         ["PROCESS_APPROVAL_DENIED"],
                         "Approve this exact command or revise the task.",
@@ -485,7 +522,7 @@ async def _run_live(task: dict, emit: Emit, process_approval=None) -> dict:
                 false_success_warnings += 1
                 await emit("false-success guard: model claims completion with no executed tool", "error")
                 if false_success_warnings >= 2:
-                    return _report(
+                    return report(
                         "failed",
                         "Model claimed completion without executing any tool (false success).",
                         commands_run, [],
@@ -497,7 +534,7 @@ async def _run_live(task: dict, emit: Emit, process_approval=None) -> dict:
                 continue
             if process_failures:
                 await emit("process failure blocks completion", "error")
-                return _report(
+                return report(
                     "failed", "One or more process commands did not complete cleanly.",
                     commands_run, [], sorted(set(process_failures)),
                     "Resolve every process failure before requesting validation.",
@@ -509,7 +546,7 @@ async def _run_live(task: dict, emit: Emit, process_approval=None) -> dict:
                 validation_retries += 1
                 await emit(f"bridge auto-validation FAILED: {proof[:200]}", "error")
                 if validation_retries >= 2:
-                    return _report(
+                    return report(
                         "failed",
                         "Bridge auto-validation failed twice on the produced files.",
                         commands_run, changed,
@@ -523,18 +560,18 @@ async def _run_live(task: dict, emit: Emit, process_approval=None) -> dict:
                                  "or reply FAILED if you cannot."})
                 continue
             await emit("bridge auto-validation passed", "info")
-            return _report("done", summary or "Executor finished successfully.",
-                           commands_run, changed, [],
-                           "Review the executor output and decide the next task.")
+            return report("done", summary or "Executor finished successfully.",
+                          commands_run, changed, [],
+                          "Review the executor output and decide the next task.")
 
         if status == "BLOCKED":
-            return _report("blocked", summary or "Executor reports BLOCKED.",
-                           commands_run, [],
-                           [summary] if summary else ["blocked"],
-                           "Resolve the blocker (or re-scope the goal) and retry.")
+            return report("blocked", summary or "Executor reports BLOCKED.",
+                          commands_run, [],
+                          [summary] if summary else ["blocked"],
+                          "Resolve the blocker (or re-scope the goal) and retry.")
 
         # FAILED
-        return _report("failed", summary or "Executor reports FAILED.",
-                       commands_run, [],
-                       [summary] if summary else ["failed"],
-                       "Inspect the log, adjust the goal or constraints, and retry.")
+        return report("failed", summary or "Executor reports FAILED.",
+                      commands_run, [],
+                      [summary] if summary else ["failed"],
+                      "Inspect the log, adjust the goal or constraints, and retry.")

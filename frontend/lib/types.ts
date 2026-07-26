@@ -1,6 +1,8 @@
 export type HealthState =
   | "healthy"
   | "connected"
+  | "available"
+  | "unavailable"
   | "idle"
   | "running"
   | "waiting"
@@ -104,7 +106,16 @@ export interface RuntimeModel {
   state: "missing" | "installed" | "loaded";
 }
 
-export interface RuntimeStatus {
+export type ExecutorKind = "deterministic" | "ollama" | "unavailable";
+export type RuntimeMode = "live" | "development_fixture";
+
+export interface RuntimeTruth {
+  executor_kind: ExecutorKind;
+  executor_model_used: string | null;
+  runtime_mode: RuntimeMode;
+}
+
+export interface RuntimeStatus extends RuntimeTruth {
   ollama_up: boolean;
   ollama_status: string;
   endpoint: string;
@@ -112,9 +123,7 @@ export interface RuntimeStatus {
   volume_mounted: boolean;
   storage_status: string;
   primary: RuntimeModel;
-  fallback: RuntimeModel;
-  mode: string;
-  model: string;
+  executor_available: boolean;
 }
 
 export interface TransportStatus {
@@ -147,6 +156,7 @@ export interface PipelineStatus {
   components: PipelineComponent[];
   active_mission_id?: string | null;
   active_mission_state?: string | null;
+  runtime_execution: RuntimeTruth;
   queue_pending: number;
   events: PipelineEvent[];
   latency?: {
@@ -156,7 +166,7 @@ export interface PipelineStatus {
   };
 }
 
-export interface MissionSummary {
+export interface MissionSummary extends RuntimeTruth {
   id: string;
   objective: string;
   workspace: string;

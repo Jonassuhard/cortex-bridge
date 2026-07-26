@@ -438,6 +438,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .execution-orb { width: 27px; height: 27px; display: grid; place-items: center; flex: 0 0 auto; border-radius: 50%; background: rgba(37,99,235,.12); border: 1px solid rgba(96,165,250,.22); }
 .execution-orb span { width: 9px; height: 9px; border: 2px solid rgba(96,165,250,.25); border-top-color: var(--blue-light); border-radius: 50%; animation: spin .75s linear infinite; }
 .execution-orb.is-done span { border: 0; background: var(--green); animation: none; }
+.execution-orb.is-error span { border: 0; background: var(--red); animation: none; }
 .execution-card-title > div { min-width: 0; display: flex; flex-direction: column; }
 .execution-card-title strong { font-size: 11px; }
 .execution-card-title small { max-width: 480px; margin-top: 3px; color: var(--muted); font-size: 9px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

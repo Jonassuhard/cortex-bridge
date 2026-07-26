@@ -121,7 +121,7 @@ class ProcessPolicyTestCase(unittest.IsolatedAsyncioTestCase):
             json.dumps({"status": "BLOCKED", "tool": None, "arguments": {}, "summary": "stop"}),
         ])
         original = local_executor._chat_sync
-        local_executor._chat_sync = lambda _messages: next(replies)
+        local_executor._chat_sync = lambda _messages, _model: next(replies)
         events = []
 
         async def emit(text, kind):
@@ -150,7 +150,7 @@ class ProcessPolicyTestCase(unittest.IsolatedAsyncioTestCase):
             }),
         ])
         original = local_executor._chat_sync
-        local_executor._chat_sync = lambda _messages: next(replies)
+        local_executor._chat_sync = lambda _messages, _model: next(replies)
 
         async def emit(_text, _kind):
             return None
@@ -175,7 +175,7 @@ class ProcessPolicyTestCase(unittest.IsolatedAsyncioTestCase):
             "arguments": {"argv": ["python3", "marker.py"]}, "summary": "run it",
         })
         original = local_executor._chat_sync
-        local_executor._chat_sync = lambda _messages: reply
+        local_executor._chat_sync = lambda _messages, _model: reply
 
         async def emit(_text, _kind):
             return None
