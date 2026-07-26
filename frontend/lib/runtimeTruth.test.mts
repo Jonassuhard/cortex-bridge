@@ -133,6 +133,11 @@ function workspaceProps(executorState: string, conversation: Record<string, unkn
   const noop = () => undefined;
   const asyncTrue = async () => true;
   return {
+    availability: {
+      chatState: "connected",
+      agentState: executorState,
+      transportLatencyMs: null,
+    },
     capabilities: { upload_file: false, take_screenshot: false },
     chatRun: null,
     conversation,

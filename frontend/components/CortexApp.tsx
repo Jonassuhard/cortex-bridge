@@ -34,7 +34,7 @@ import {
   createUnavailableClientState,
 } from "@/lib/runtimeTruth";
 import { ConversationSidebar } from "./ConversationSidebar";
-import { ChatWorkspace } from "./ChatWorkspace";
+import { ChatWorkspace, type WorkspaceAvailability } from "./ChatWorkspace";
 import { PipelineInspector } from "./PipelineInspector";
 import { SettingsPanel } from "./SettingsPanel";
 import { OnboardingPanel } from "./OnboardingPanel";
@@ -80,7 +80,7 @@ function nonTerminal(state?: string) {
   return !!state && !["COMPLETED", "BLOCKED", "FAILED", "CANCELLED"].includes(state);
 }
 
-function pipelineForSelectedMission(
+export function projectPipelineForConversation(
   pipeline: PipelineStatus,
   mission: MissionDetail | null,
 ): PipelineStatus {
@@ -93,6 +93,7 @@ function pipelineForSelectedMission(
   }
   return {
     ...pipeline,
+    overall: "unknown",
     active_mission_id: null,
     active_mission_state: null,
     components: [],
@@ -104,9 +105,13 @@ function pipelineForSelectedMission(
       state: "IDLE",
       active: false,
       observed_at: null,
+      executor_kind: "unavailable",
+      executor_model_used: null,
+      runtime_mode: "live",
+      release_eligible: false,
     },
     latency: {
-      transport_ms: pipeline.latency?.transport_ms ?? null,
+      transport_ms: null,
       local_model_ms: null,
       total_iteration_ms: null,
     },
@@ -223,9 +228,17 @@ export function CortexApp() {
     return null;
   }, [missionDetail]);
   const selectedPipeline = useMemo(
-    () => pipelineForSelectedMission(pipeline, missionDetail),
+    () => projectPipelineForConversation(pipeline, missionDetail),
     [missionDetail, pipeline],
   );
+  const workspaceAvailability = useMemo<WorkspaceAvailability>(() => {
+    const transportComponent = pipeline.components.find((component) => component.id === "transport");
+    return {
+      chatState: transportComponent?.state || pipeline.overall,
+      agentState: runtime.executor_available ? "available" : "unavailable",
+      transportLatencyMs: transportComponent?.latency_ms ?? null,
+    };
+  }, [pipeline, runtime.executor_available]);
 
   const notify = useCallback((message: string) => {
     setToast(message);
@@ -649,6 +662,23 @@ export function CortexApp() {
     }
   }
 
+  function resolveRekeyConflict(
+    fromKey: ConversationKey,
+    toKey: ConversationKey,
+    choice: "source" | "target",
+  ) {
+    const next = dispatchConversation({
+      type: "RESOLVE_REKEY_CONFLICT",
+      fromKey,
+      toKey,
+      choice,
+    });
+    const target = next.entries[toKey];
+    if (!next.entries[fromKey] && target) {
+      chatStreams.rekey(fromKey, toKey, choice, target.streamEpoch);
+    }
+  }
+
   async function refreshMissionFor(key: ConversationKey, missionId: string) {
     const mission = await api<MissionDetail>(`/api/missions/${missionId}`);
     applyMissionDetail(key, missionId, mission);
@@ -792,7 +822,8 @@ export function CortexApp() {
         attachment={selectedEntry?.attachment || null}
         chatRun={chatRun}
         mission={activeMission || missionDetail}
-        pipeline={pipeline}
+        pipeline={selectedPipeline}
+        availability={workspaceAvailability}
         settings={settings}
         inspectorOpen={inspectorOpen}
         sidebarCollapsed={sidebarCollapsed}
@@ -813,12 +844,7 @@ export function CortexApp() {
         onStartMission={startMission}
         onCancelChat={(key) => void cancelChat(key)}
         onRetryChatRecovery={(key) => void retryChatRecovery(key)}
-        onResolveRekeyConflict={(fromKey, toKey, choice) => dispatchConversation({
-          type: "RESOLVE_REKEY_CONFLICT",
-          fromKey,
-          toKey,
-          choice,
-        })}
+        onResolveRekeyConflict={resolveRekeyConflict}
         onPauseMission={(key) => void missionAction(key, "pause")}
         onResumeMission={(key) => void missionAction(key, "resume")}
         onCancelMission={(key) => void missionAction(key, "cancel")}

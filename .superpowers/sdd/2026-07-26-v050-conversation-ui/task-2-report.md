@@ -284,3 +284,74 @@ Generated `frontend/out/**`, `frontend/coverage/**` and
   `frontend/tsconfig.tsbuildinfo` remain intentionally unstaged.
 - A fresh independent reviewer is delegated to the parent after this scoped
   commit; this report does not pre-empt that verdict.
+
+## Fix round 3 — terminal truth, registry integrity and inspector isolation
+
+**Starting commit:** `2482b657b6e693b89498b66f07940e16bb09b7fc`
+
+### Corrections
+
+1. Cancel success now validates and applies the returned backend `ChatRun`
+   instead of manufacturing `CANCELLED`. Concurrent `COMPLETED`, `FAILED` and
+   `CANCELLED` truth uses the normal reducer delivery/failure semantics,
+   canonical rekeying and exact keyed source closure. A terminal SSE event,
+   explicit close or replacement invalidates late cancel responses.
+2. `subscribe` rejects a same-key replacement before constructing an
+   `EventSource` while a live binding, recovery or cancellation still owns the
+   previous non-terminal run. Different-conversation A/B streams remain
+   concurrent; terminal or explicitly closed A1 permits A2.
+3. Recovery and cancellation responses share structural `ChatRun` validation:
+   known API state, matching ID, required string fields, valid ChatGPT
+   conversation/canonical URL shapes, optional timestamp/error strings and
+   finite non-negative latency values. Malformed same-ID payloads consume the
+   bounded attempt budget and exhaust to `DELIVERY_UNCERTAIN` without opening a
+   source.
+4. The stream controller now exposes an explicit collision rekey contract.
+   Source choice transfers the canonical epoch/registry so an uncertain run is
+   retryable; target choice drops the provisional epoch and owned resources.
+   Invalid stale retries are rejected before creating timerless tasks, and
+   unmount aborts the transferred manual recovery.
+5. Selected-conversation pipeline projection now neutralizes overall mission
+   truth, components, events, queue, all runtime-execution identity/truth fields
+   and all latency values. `ChatWorkspace` receives only this projection plus a
+   separate global availability projection for ChatGPT connectivity and local
+   executor readiness; it never receives the raw mission-A pipeline while B is
+   selected.
+
+### TDD evidence
+
+- Initial selected RED: 10 expected failures across hook and app integration.
+  They showed A2 epoch `2` instead of rejection, cancel response truth replaced
+  by `CANCELLED`, one malformed recovery attempt followed by resubscription,
+  missing registry `rekey`, missing neutral projection and mission-A values
+  rendered in B.
+- Registry audit RED: A2 was also accepted during an owned A1 recovery because
+  the temporarily absent socket was mistaken for absent work. The dedicated
+  regression failed with epoch `2`, then passed after the pre-source guard was
+  extended to recovery/cancellation owners.
+- Focused GREEN: reducer, stream hook, workspace and real app integration
+  79/79.
+- The first full gate exposed two historical static-render fixtures missing
+  the new explicit availability prop. After updating those fixtures, the full
+  command was rerun from the start and passed.
+
+### Fix round 3 verification
+
+| Gate | Result |
+|---|---|
+| `corepack npm test` | 90/90 Vitest + 32/32 runtime/privacy/image |
+| `corepack npm run test:coverage` | 90/90 + 32/32; reducer 90.29%, stream hook 88.42%, controller 89.06% statements |
+| `corepack npm run lint` | Green; zero warnings, 6/6 lint-contract families rejected |
+| `corepack npm run typecheck` | Green |
+| `corepack npm run build` | Green; static `/` and `/_not-found` generated |
+| `corepack npm run test:e2e` | 2/2 |
+| `corepack npm run test:a11y` | 1/1, zero automated violations |
+| Full and production dependency audits | 0 vulnerabilities |
+
+### Scope and review handoff
+
+- No dependency or lockfile changes.
+- `frontend/next-env.d.ts` was restored after the generated route import changed.
+- `frontend/out/**`, `frontend/coverage/**` and
+  `frontend/tsconfig.tsbuildinfo` remain intentionally unstaged.
+- The parent will assign the fresh independent review after this commit.

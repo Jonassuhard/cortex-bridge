@@ -94,6 +94,12 @@ export interface ChatRunStreamController {
   close(key: ConversationKey): void;
   cancel(key: ConversationKey, runId: string, streamEpoch: number): boolean;
   retry(key: ConversationKey, runId: string, streamEpoch: number): boolean;
+  rekey(
+    fromKey: ConversationKey,
+    toKey: ConversationKey,
+    choice: "source" | "target",
+    streamEpoch: number,
+  ): boolean;
 }
 
 const TERMINAL_EVENTS = new Set<ChatRunEvent["type"]>(["complete", "error", "cancelled"]);
@@ -103,6 +109,68 @@ const TERMINAL_STATES = new Set<ChatRun["state"]>([
   "CANCELLED",
   "DELIVERY_UNCERTAIN",
 ]);
+const API_RUN_STATES = new Set<ChatRun["state"]>([
+  "QUEUED",
+  "SELECTING_CONVERSATION",
+  "SENDING_TO_CHATGPT",
+  "VISIBLE_IN_CHATGPT",
+  "WAITING_FOR_CHATGPT",
+  "CHATGPT_STREAMING",
+  "COMPLETED",
+  "FAILED",
+  "CANCELLED",
+]);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isChatGptUrl(value: unknown, canonical = false): value is string {
+  if (typeof value !== "string") return false;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" || !["chatgpt.com", "www.chatgpt.com"].includes(url.hostname)) {
+      return false;
+    }
+    if (canonical) return /^\/c\/[^/?#]+\/?$/.test(url.pathname);
+    return url.pathname === "/" || /^\/c\/[^/?#]+\/?$/.test(url.pathname);
+  } catch {
+    return false;
+  }
+}
+
+function isOptionalString(value: unknown): boolean {
+  return value === undefined || value === null || typeof value === "string";
+}
+
+function isValidLatency(value: unknown): boolean {
+  if (value === undefined || value === null) return true;
+  if (!isRecord(value)) return false;
+  return ["delivery_ms", "first_response_ms", "total_ms"].every((field) => {
+    const measurement = value[field];
+    return measurement === undefined
+      || measurement === null
+      || (typeof measurement === "number" && Number.isFinite(measurement) && measurement >= 0);
+  });
+}
+
+export function validatedChatRun(value: unknown, expectedRunId: string): ChatRun | null {
+  if (!isRecord(value)) return null;
+  if (value.id !== expectedRunId || typeof value.id !== "string") return null;
+  if (typeof value.state !== "string" || !API_RUN_STATES.has(value.state as ChatRun["state"])) return null;
+  if (!isChatGptUrl(value.conversation_url)) return null;
+  if (typeof value.text !== "string" || typeof value.created_at !== "string") return null;
+  if (value.canonical_url !== undefined
+    && value.canonical_url !== null
+    && !isChatGptUrl(value.canonical_url, true)) return null;
+  if (!["response_text", "delivered_at", "first_response_at", "completed_at", "error"]
+    .every((field) => isOptionalString(value[field]))) return null;
+  if (!isValidLatency(value.latency)) return null;
+  return {
+    ...(value as unknown as ChatRun),
+    canonical_url: typeof value.canonical_url === "string" ? value.canonical_url : undefined,
+  };
+}
 
 function terminalEventFromRun(run: ChatRun): ChatRunEvent {
   if (run.state === "COMPLETED") {
@@ -228,7 +296,13 @@ export function useChatRunStream({
     deadlineAt = Date.now() + recoveryDeadlineRef.current,
     immediate = false,
   ): boolean => {
-    if (disposedRef.current || !recoverRef.current || recoveriesRef.current.has(key)) return false;
+    if (
+      disposedRef.current
+      || !recoverRef.current
+      || recoveriesRef.current.has(key)
+      || epochsRef.current.get(key) !== streamEpoch
+      || streamsRef.current.has(key)
+    ) return false;
     const task: RecoveryTask = {
       key,
       runId,
@@ -307,9 +381,10 @@ export function useChatRunStream({
         } catch (error) {
           recovered = Promise.reject(error);
         }
-        void Promise.race([recovered, timedOut]).then((nextRun) => {
+        void Promise.race([recovered, timedOut]).then((payload) => {
           if (!isCurrent()) return;
-          if (nextRun.id !== task.runId) {
+          const nextRun = validatedChatRun(payload, task.runId);
+          if (!nextRun) {
             schedule(attempt + 1);
             return;
           }
@@ -369,6 +444,38 @@ export function useChatRunStream({
     if (binding) closeBinding(binding);
   }, [cancelCancellation, cancelRecovery, closeBinding]);
 
+  const rekey = useCallback((
+    fromKey: ConversationKey,
+    toKey: ConversationKey,
+    choice: "source" | "target",
+    streamEpoch: number,
+  ): boolean => {
+    if (disposedRef.current || !Number.isInteger(streamEpoch) || streamEpoch < 0) return false;
+    if (fromKey === toKey) {
+      epochsRef.current.set(toKey, streamEpoch);
+      return true;
+    }
+    const sourceBinding = streamsRef.current.get(fromKey);
+    const targetBinding = streamsRef.current.get(toKey);
+    if (choice === "source" && targetBinding && targetBinding !== sourceBinding) return false;
+    cancelRecovery(fromKey);
+    cancelCancellation(fromKey);
+    cancelRecovery(toKey);
+    cancelCancellation(toKey);
+    if (sourceBinding) {
+      if (choice === "source") {
+        streamsRef.current.delete(fromKey);
+        sourceBinding.key = toKey;
+        streamsRef.current.set(toKey, sourceBinding);
+      } else {
+        closeBinding(sourceBinding);
+      }
+    }
+    epochsRef.current.delete(fromKey);
+    epochsRef.current.set(toKey, streamEpoch);
+    return true;
+  }, [cancelCancellation, cancelRecovery, closeBinding]);
+
   const subscribe = useCallback((
     key: ConversationKey,
     run: ChatRun,
@@ -376,6 +483,9 @@ export function useChatRunStream({
   ): number => {
     if (disposedRef.current) return 0;
     const previous = streamsRef.current.get(key);
+    if ((previous && !previous.closed)
+      || recoveriesRef.current.has(key)
+      || cancellationsRef.current.has(key)) return 0;
     const streamEpoch = (epochsRef.current.get(key) || 0) + 1;
     const source = factoryRef.current(apiUrl(`/api/chat/runs/${run.id}/events`));
     const binding: StreamBinding = {
@@ -406,7 +516,6 @@ export function useChatRunStream({
     }
     cancelRecovery(key);
     cancelCancellation(key);
-    if (previous) closeBinding(previous);
     epochsRef.current.set(key, streamEpoch);
     streamsRef.current.set(key, binding);
 
@@ -442,6 +551,7 @@ export function useChatRunStream({
             streamsRef.current.delete(previousKey);
             binding.key = canonicalKey;
             streamsRef.current.set(canonicalKey, binding);
+            epochsRef.current.delete(previousKey);
             epochsRef.current.set(
               canonicalKey,
               Math.max(epochsRef.current.get(canonicalKey) || 0, binding.streamEpoch),
@@ -530,28 +640,57 @@ export function useChatRunStream({
     } catch (error) {
       request = Promise.reject(error);
     }
-    void request.then(() => {
+    void request.then((payload) => {
       if (disposedRef.current || cancellationsRef.current.get(key) !== task) return;
+      const terminalRun = validatedChatRun(payload, runId);
+      if (!terminalRun || !["COMPLETED", "FAILED", "CANCELLED"].includes(terminalRun.state)) {
+        fail(new Error("Réponse d'annulation invalide : état terminal non confirmé."));
+        return;
+      }
       finishCancellation(task);
       cancelRecovery(key);
-      const next = dispatchRef.current({
-        type: "RUN_CANCELLED",
+      let terminalKey = key;
+      let next = dispatchRef.current({
+        type: "RUN_EVENT",
         key,
         runId,
-        cancelledAt: new Date().toISOString(),
+        streamEpoch,
+        run: terminalRun,
       });
-      const binding = streamsRef.current.get(key);
-      if (next.entries[key]?.run?.state === "CANCELLED"
+      const canonicalUrl = terminalRun.canonical_url;
+      if (canonicalUrl && next.entries[key]?.run?.id === runId) {
+        const canonicalKey = conversationKeyFromUrl(canonicalUrl);
+        const rekeyed = dispatchRef.current({
+          type: "REKEY_CANONICAL",
+          key,
+          canonicalKey,
+          canonicalUrl,
+        });
+        if (!rekeyed.entries[key] && rekeyed.entries[canonicalKey]) {
+          rekey(key, canonicalKey, "source", streamEpoch);
+          terminalKey = canonicalKey;
+          next = rekeyed;
+        }
+      }
+      const binding = streamsRef.current.get(terminalKey) || streamsRef.current.get(key);
+      if (next.entries[terminalKey]?.run?.id === runId
         && binding?.runId === runId
         && binding.streamEpoch === streamEpoch) {
         closeBinding(binding);
+      }
+      if (next.entries[terminalKey]?.run?.id === runId) {
+        terminalRef.current?.({
+          key: terminalKey,
+          runId,
+          event: terminalEventFromRun(terminalRun),
+        });
       }
     }).catch(fail).finally(() => {
       if (task.timer) clearTimeout(task.timer);
       task.timer = null;
     });
     return true;
-  }, [cancelRecovery, closeBinding, finishCancellation, startRecovery]);
+  }, [cancelRecovery, closeBinding, finishCancellation, rekey, startRecovery]);
 
   const retry = useCallback((
     key: ConversationKey,
@@ -590,5 +729,5 @@ export function useChatRunStream({
     };
   }, [closeBinding]);
 
-  return { subscribe, close, cancel, retry };
+  return { subscribe, close, cancel, retry, rekey };
 }

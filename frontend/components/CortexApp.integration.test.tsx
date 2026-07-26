@@ -18,7 +18,7 @@ vi.mock("@/lib/api", async () => {
   return { ...actual, api: network.api, postJson: network.postJson, putJson: network.putJson };
 });
 
-import { CortexApp } from "./CortexApp";
+import { CortexApp, projectPipelineForConversation } from "./CortexApp";
 
 const conversation = (key: string) => ({
   url: `https://chatgpt.com/c/${key}`,
@@ -119,6 +119,47 @@ afterEach(() => {
 });
 
 describe("CortexApp conversation integration", () => {
+  it("neutralizes every mission-specific pipeline field when no selected mission matches", () => {
+    const projected = projectPipelineForConversation({
+      ...demoPipeline,
+      active_mission_id: "mission-a-secret",
+      active_mission_state: "EXECUTING_LOCAL_ACTION_SECRET",
+      components: [{ id: "secret-component", label: "A_SECRET_COMPONENT", state: "running", detail: "A" }],
+      events: [{ id: "secret-event", ts: "now", label: "A_SECRET_EVENT" }],
+      queue_pending: 73,
+      runtime_execution: {
+        task_id: "A_SECRET_TASK",
+        state: "A_SECRET_RUNTIME_STATE",
+        active: true,
+        observed_at: "A_SECRET_TIME",
+        executor_kind: "ollama",
+        executor_model_used: "A_SECRET_MODEL",
+        runtime_mode: "development_fixture",
+        release_eligible: true,
+      },
+      latency: { transport_ms: 11, local_model_ms: 22, total_iteration_ms: 33 },
+    }, null);
+
+    expect(projected).toMatchObject({
+      active_mission_id: null,
+      active_mission_state: null,
+      components: [],
+      events: [],
+      queue_pending: 0,
+      runtime_execution: {
+        task_id: null,
+        state: "IDLE",
+        active: false,
+        observed_at: null,
+        executor_kind: "unavailable",
+        executor_model_used: null,
+        runtime_mode: "live",
+        release_eligible: false,
+      },
+      latency: { transport_ms: null, local_model_ms: null, total_iteration_ms: null },
+    });
+  });
+
   it("blocks Enter and screenshot while A1 is non-terminal without closing its source", async () => {
     let runIndex = 0;
     network.postJson.mockImplementation((path: string) => {
@@ -345,9 +386,24 @@ describe("CortexApp conversation integration", () => {
             { id: "mission-a-only", label: "Composant mission A", state: "running", detail: "A seulement" },
           ],
           events: [
-            { id: "mission-a-event", ts: "2026-07-26T12:00:00.000Z", label: "Événement mission A" },
+            {
+              id: "mission-a-event",
+              ts: "2026-07-26T12:00:00.000Z",
+              label: "Événement mission A",
+              detail: "MISSION_A_EVENT_SECRET",
+            },
           ],
-          runtime_execution: { ...demoPipeline.runtime_execution, task_id: "mission-a", active: true },
+          latency: { transport_ms: 654_321, local_model_ms: 765_432, total_iteration_ms: 876_543 },
+          runtime_execution: {
+            task_id: "MISSION_A_TASK_SECRET",
+            state: "MISSION_A_RUNTIME_SECRET",
+            active: true,
+            observed_at: "2026-07-26T12:34:56.000Z",
+            executor_kind: "ollama",
+            executor_model_used: "MISSION_A_MODEL_SECRET",
+            runtime_mode: "development_fixture",
+            release_eligible: false,
+          },
         });
       }
       if (path === "/api/missions/mission-a") return Promise.resolve(missionA);
@@ -365,19 +421,30 @@ describe("CortexApp conversation integration", () => {
     const inspector = within(screen.getByLabelText("État de la pipeline"));
     expect(inspector.getByText("Composant mission A")).toBeInTheDocument();
     expect(inspector.getByText("Événement mission A")).toBeInTheDocument();
+    expect(inspector.getByText("MISSION_A_MODEL_SECRET")).toBeInTheDocument();
+    expect(screen.getAllByText(/14m 37s/).length).toBeGreaterThan(0);
     expect(inspector.getByRole("button", { name: "Pause" })).toBeEnabled();
 
     await user.click(screen.getByRole("option", { name: /Conversation B/ }));
     expect(inspector.queryByText("Composant mission A")).not.toBeInTheDocument();
     expect(inspector.queryByText("Événement mission A")).not.toBeInTheDocument();
+    expect(screen.queryAllByText("MISSION_A_MODEL_SECRET")).toHaveLength(0);
+    expect(screen.queryByText("MISSION_A_EVENT_SECRET")).not.toBeInTheDocument();
+    expect(screen.queryByText("MISSION_A_RUNTIME_SECRET")).not.toBeInTheDocument();
+    expect(screen.queryByText("MISSION_A_TASK_SECRET")).not.toBeInTheDocument();
+    expect(screen.queryAllByText(/14m 37s/)).toHaveLength(0);
     expect(inspector.getByRole("button", { name: "Pause" })).toBeDisabled();
     expect(inspector.getByRole("button", { name: "Annuler" })).toBeDisabled();
     expect(screen.getAllByText("ChatGPT").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Exécuteur").length).toBeGreaterThan(0);
+    expect(screen.getByTitle("Statut de la connexion ChatGPT")).toHaveTextContent("Connecté");
+    expect(screen.getByTitle("Statut de l'agent exécutif local")).toHaveTextContent("Disponible");
 
     await user.click(screen.getByRole("option", { name: /Conversation A/ }));
     expect(inspector.getByText("Composant mission A")).toBeInTheDocument();
     expect(inspector.getByText("Événement mission A")).toBeInTheDocument();
+    expect(inspector.getByText("MISSION_A_MODEL_SECRET")).toBeInTheDocument();
+    expect(screen.getAllByText(/14m 37s/).length).toBeGreaterThan(0);
     expect(inspector.getByRole("button", { name: "Pause" })).toBeEnabled();
   });
 
@@ -415,7 +482,11 @@ describe("CortexApp conversation integration", () => {
       ([path]) => path === "/api/chat/runs/run-a",
     ).length;
     expect(recoveryCallsBeforeCancelResolution).toBe(1);
-    await act(async () => cancel.resolve({}));
+    await act(async () => cancel.resolve({
+      ...run("a"),
+      state: "CANCELLED",
+      completed_at: "now",
+    }));
 
     await waitFor(() => expect(screen.queryByTitle("Arrêter la réponse")).not.toBeInTheDocument());
     expect(recoveredSource.close).toHaveBeenCalledTimes(1);

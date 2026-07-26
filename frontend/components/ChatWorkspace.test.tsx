@@ -94,6 +94,7 @@ function ControlledWorkspace({
         chatRun={entry?.run || null}
         mission={entry?.mission || null}
         pipeline={demoPipeline}
+        availability={{ chatState: "connected", agentState: "available", transportLatencyMs: 128 }}
         settings={demoSettings}
         inspectorOpen={false}
         sidebarCollapsed={false}

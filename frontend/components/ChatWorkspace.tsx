@@ -7,6 +7,7 @@ import type {
   ConversationMessage,
   ConversationSummary,
   CortexSettings,
+  HealthState,
   MissionDetail,
   PipelineStatus,
 } from "@/lib/types";
@@ -36,6 +37,12 @@ import {
 import { ExecutionCard } from "./ExecutionCard";
 import type { RekeyConflict } from "@/lib/conversation-state";
 
+export interface WorkspaceAvailability {
+  chatState: HealthState;
+  agentState: HealthState;
+  transportLatencyMs: number | null;
+}
+
 interface ChatWorkspaceProps {
   conversationKey: ConversationKey | null;
   conversation: ConversationSummary | null;
@@ -49,6 +56,7 @@ interface ChatWorkspaceProps {
   chatRun: ChatRun | null;
   mission: MissionDetail | null;
   pipeline: PipelineStatus;
+  availability: WorkspaceAvailability;
   settings: CortexSettings;
   inspectorOpen: boolean;
   sidebarCollapsed: boolean;
@@ -218,6 +226,7 @@ export function ChatWorkspace({
   chatRun,
   mission,
   pipeline,
+  availability,
   settings,
   inspectorOpen,
   sidebarCollapsed,
@@ -317,17 +326,15 @@ export function ChatWorkspace({
   }
 
   const title = conversation?.title || "Nouvelle conversation";
-  const latency = pipeline.latency?.transport_ms;
-  const transportComponent = pipeline.components?.find((component) => component.id === "transport");
-  const chatStatus = statusPresentation(transportComponent?.state || pipeline.overall);
+  const latency = availability.transportLatencyMs;
+  const chatStatus = statusPresentation(availability.chatState);
   const activeLabel = chatRun?.state === "CHATGPT_STREAMING"
     ? "Réponse en cours"
     : chatActive
       ? "Message en cours"
       : chatStatus.label;
   const chatTone = chatActive ? "active" : chatStatus.tone;
-  const executorComponent = pipeline.components?.find((component) => component.id === "executor");
-  const agentStatus = statusPresentation(executorComponent?.state);
+  const agentStatus = statusPresentation(availability.agentState);
 
   return (
     <section className="chat-workspace">
