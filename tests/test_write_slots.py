@@ -89,6 +89,20 @@ class WriteSlotsTest(unittest.TestCase):
         self.assertIn("deux conversations", write_slots.REFUSAL_MESSAGE)
         self.assertIn("brouillon est conservé", write_slots.REFUSAL_MESSAGE)
 
+    def test_durable_registry_wrappers_are_available(self) -> None:
+        missing = [
+            name
+            for name in (
+                "acquire_writer",
+                "rekey",
+                "release_writer",
+                "restore_writer",
+                "new_conversation_key",
+            )
+            if not hasattr(write_slots, name)
+        ]
+        self.assertEqual(missing, [])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -133,6 +133,8 @@ CREATE TABLE IF NOT EXISTS conversation_bindings (
     conversation_url TEXT NOT NULL,
     conversation_title TEXT,
     browser_target_id TEXT,
+    session_id TEXT,
+    conversation_target TEXT,
     selected_at REAL NOT NULL
 );
 CREATE TABLE IF NOT EXISTS iterations (
@@ -244,10 +246,29 @@ class Store:
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON")
         self._conn.executescript(_SCHEMA)
+        self._migrate_conversation_bindings()
         self._recover_interrupted_missions()
 
     def close(self) -> None:
         self._conn.close()
+
+    def _migrate_conversation_bindings(self) -> None:
+        """Add v0.5 lease fields without invalidating an existing evidence DB."""
+        columns = {
+            row["name"]
+            for row in self._conn.execute(
+                "PRAGMA table_info(conversation_bindings)"
+            ).fetchall()
+        }
+        with self._conn:
+            if "session_id" not in columns:
+                self._conn.execute(
+                    "ALTER TABLE conversation_bindings ADD COLUMN session_id TEXT"
+                )
+            if "conversation_target" not in columns:
+                self._conn.execute(
+                    "ALTER TABLE conversation_bindings ADD COLUMN conversation_target TEXT"
+                )
 
     # -- §18 restart recovery -------------------------------------------------
 
@@ -493,18 +514,23 @@ class Store:
         conversation_url: str,
         conversation_title: str | None = None,
         browser_target_id: str | None = None,
+        session_id: str | None = None,
+        conversation_target: str | None = None,
     ) -> None:
         with self._conn:
             self._conn.execute(
                 "INSERT INTO conversation_bindings (id, mission_id, conversation_url,"
-                " conversation_title, browser_target_id, selected_at)"
-                " VALUES (?,?,?,?,?,?)",
+                " conversation_title, browser_target_id, session_id,"
+                " conversation_target, selected_at)"
+                " VALUES (?,?,?,?,?,?,?,?)",
                 (
                     binding_id,
                     mission_id,
                     conversation_url,
                     conversation_title,
                     browser_target_id,
+                    session_id,
+                    conversation_target or conversation_url,
                     time.time(),
                 ),
             )
@@ -515,6 +541,8 @@ class Store:
         conversation_url: str,
         conversation_title: str | None = None,
         browser_target_id: str | None = None,
+        session_id: str | None = None,
+        conversation_target: str | None = None,
     ) -> None:
         """Refresh a mission's binding once the real /c/<id> identity is known
         (new-chat case: the binding is first stored with the bare chatgpt.com
@@ -524,9 +552,18 @@ class Store:
             self._conn.execute(
                 "UPDATE conversation_bindings SET conversation_url=?,"
                 " conversation_title=COALESCE(?, conversation_title),"
-                " browser_target_id=?"
+                " browser_target_id=?,"
+                " session_id=COALESCE(?, session_id),"
+                " conversation_target=COALESCE(?, conversation_target)"
                 " WHERE mission_id=?",
-                (conversation_url, conversation_title, browser_target_id, mission_id),
+                (
+                    conversation_url,
+                    conversation_title,
+                    browser_target_id,
+                    session_id,
+                    conversation_target or conversation_url,
+                    mission_id,
+                ),
             )
 
     def record_policy_decision(

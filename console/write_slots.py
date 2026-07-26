@@ -11,6 +11,23 @@ refuses NEW writes.
 
 from __future__ import annotations
 
+try:
+    from .conversation_sessions import (
+        ConversationSessionRegistry,
+        SessionCapacityError,
+        SessionLease,
+        SessionRekeyError,
+        new_conversation_key,
+    )
+except ImportError:
+    from conversation_sessions import (
+        ConversationSessionRegistry,
+        SessionCapacityError,
+        SessionLease,
+        SessionRekeyError,
+        new_conversation_key,
+    )
+
 MAX_WRITE_CONVERSATIONS = 2
 
 REFUSAL_MESSAGE = (
@@ -20,6 +37,7 @@ REFUSAL_MESSAGE = (
 )
 
 TERMINAL_STATES = {"COMPLETED", "BLOCKED", "FAILED", "CANCELLED"}
+_registry = ConversationSessionRegistry(capacity=MAX_WRITE_CONVERSATIONS)
 
 
 def _normalize(url: str) -> str:
@@ -28,7 +46,7 @@ def _normalize(url: str) -> str:
 
 def active_write_conversations() -> set[str]:
     """Conversation URLs with at least one active chat run or mission."""
-    urls: set[str] = set()
+    urls = {_normalize(lease.conversation_key) for lease in _registry.active_leases()}
     try:
         import chat as chat_api  # late import: chat.py imports this module
 
@@ -54,3 +72,23 @@ def write_slot_available(conversation_url: str) -> tuple[bool, set[str]]:
     if key in active or len(active) < MAX_WRITE_CONVERSATIONS:
         return True, active
     return False, active
+
+
+async def acquire_writer(conversation_key: str) -> SessionLease:
+    return await _registry.acquire_writer(conversation_key)
+
+
+async def rekey(provisional_key: str, canonical_key: str) -> SessionLease:
+    return await _registry.rekey(provisional_key, canonical_key)
+
+
+async def release_writer(conversation_key: str) -> None:
+    await _registry.release_writer(conversation_key)
+
+
+def restore_writer(
+    conversation_key: str,
+    session_id: str,
+    target_url: str,
+) -> SessionLease:
+    return _registry.restore_writer(conversation_key, session_id, target_url)

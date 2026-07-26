@@ -81,6 +81,9 @@ class ChatRunRuntime:
     events: list[dict[str, Any]] = field(default_factory=list)
     event_seq: int = 0
     cancelled: bool = False
+    conversation_key: str | None = None
+    session_id: str | None = None
+    lease: Any | None = None
     transport: ChatGPTWebTransport | None = None
     task: asyncio.Task | None = None
 
@@ -100,6 +103,17 @@ class ChatRunRuntime:
             "error": self.error,
             "latency": self.latency,
         }
+
+    def persisted(self) -> dict[str, Any]:
+        payload = self.public()
+        payload.update({
+            "new_conversation": self.new_conversation,
+            "conversation_key": self.conversation_key,
+            "session_id": self.session_id,
+            "attachment_path": self.attachment_path,
+            "attachment_image": self.attachment_image,
+        })
+        return payload
 
 
 class ChatSendIn(BaseModel):
@@ -133,9 +147,10 @@ class ChatCancelIn(BaseModel):
     reason: str = "USER_CANCEL"
 
 
-# A dedicated WebBridge session prevents UI browsing from moving the mission runner tab.
-ui_transport_factory = lambda: ChatGPTWebTransport(  # noqa: E731
-    WebBridgeDriver(session="cortex-bridge-ui")
+# Read-only browsing always uses a session outside the bounded writer registry.
+READ_ONLY_SESSION_ID = "cortex-view-read-only"
+ui_transport_factory = lambda session_id=READ_ONLY_SESSION_ID: ChatGPTWebTransport(  # noqa: E731
+    WebBridgeDriver(session=session_id)
 )
 
 _runs: dict[str, ChatRunRuntime] = {}
@@ -144,12 +159,79 @@ _view_url: str | None = None
 _view_mutex = asyncio.Lock()
 
 
+def _make_transport(session_id: str) -> ChatGPTWebTransport:
+    """Keep zero-argument fixture factories compatible at the API boundary."""
+    try:
+        return ui_transport_factory(session_id)
+    except TypeError:
+        return ui_transport_factory()
+
+
 def _persist_runs() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    payload = [run.public() for run in list(_runs.values())[-100:]]
+    payload = [run.persisted() for run in list(_runs.values())[-100:]]
     tmp = CHAT_RUNS_FILE.with_suffix(".tmp")
     tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     tmp.replace(CHAT_RUNS_FILE)
+
+
+def _load_persisted_runs() -> None:
+    """Restore history and reserve leases for interrupted chat writers."""
+    try:
+        payload = json.loads(CHAT_RUNS_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    if not isinstance(payload, list):
+        return
+    for item in payload[-100:]:
+        if not isinstance(item, dict) or not item.get("id") or not item.get("conversation_url"):
+            continue
+        run = ChatRunRuntime(
+            id=str(item["id"]),
+            conversation_url=str(item["conversation_url"]),
+            text=str(item.get("text") or ""),
+            new_conversation=bool(item.get("new_conversation")),
+            state=str(item.get("state") or "FAILED"),
+            canonical_url=item.get("canonical_url"),
+            response_text=str(item.get("response_text") or ""),
+            attachment_path=item.get("attachment_path"),
+            attachment_image=bool(item.get("attachment_image")),
+            attachment_name=item.get("attachment_name"),
+            created_at=str(item.get("created_at") or _now()),
+            delivered_at=item.get("delivered_at"),
+            first_response_at=item.get("first_response_at"),
+            completed_at=item.get("completed_at"),
+            error=item.get("error"),
+            latency=dict(item.get("latency") or {
+                "delivery_ms": None,
+                "first_response_ms": None,
+                "total_ms": None,
+            }),
+            conversation_key=item.get("conversation_key"),
+            session_id=item.get("session_id"),
+        )
+        if (
+            run.state not in {"COMPLETED", "FAILED", "CANCELLED"}
+            and run.conversation_key
+            and run.session_id
+        ):
+            try:
+                run.lease = write_slots.restore_writer(
+                    run.conversation_key,
+                    run.session_id,
+                    run.canonical_url or run.conversation_url,
+                )
+            except (
+                ValueError,
+                write_slots.SessionCapacityError,
+                write_slots.SessionRekeyError,
+            ):
+                run.state = "FAILED"
+                run.error = "SESSION_RESTORE_FAILED: persisted writer capacity is inconsistent"
+        _runs[run.id] = run
+
+
+_load_persisted_runs()
 
 
 def _emit(run: ChatRunRuntime, event_type: str, payload: dict[str, Any]) -> None:
@@ -178,7 +260,7 @@ async def _ensure_view_transport(url: str) -> ChatGPTWebTransport:
     async with _view_mutex:
         if _view_transport is not None and _view_url == url:
             return _view_transport
-        transport = ui_transport_factory()
+        transport = _make_transport(READ_ONLY_SESSION_ID)
         if url.rstrip("/") == "https://chatgpt.com":
             await transport.start_new_conversation(url)
         else:
@@ -190,7 +272,9 @@ async def _ensure_view_transport(url: str) -> ChatGPTWebTransport:
 
 async def _run_chat(run: ChatRunRuntime) -> None:
     started = time.monotonic()
-    transport = ui_transport_factory()
+    if run.lease is None:
+        raise RuntimeError("chat writer started without a conversation lease")
+    transport = _make_transport(run.lease.session_id)
     run.transport = transport
     try:
         if run.cancelled:
@@ -218,6 +302,14 @@ async def _run_chat(run: ChatRunRuntime) -> None:
         run.delivered_at = _now()
         run.latency["delivery_ms"] = _monotonic_ms(started)
         run.canonical_url = transport.lock.url if transport.lock else run.conversation_url
+        if (
+            run.conversation_key
+            and run.conversation_key.startswith("provisional:")
+            and run.canonical_url
+            and "/c/" in run.canonical_url
+        ):
+            run.lease = await write_slots.rekey(run.conversation_key, run.canonical_url)
+            run.conversation_key = run.lease.conversation_key
         _set_state(run, "VISIBLE_IN_CHATGPT")
         _emit(run, "delivery", {
             "delivered_at": run.delivered_at,
@@ -288,6 +380,8 @@ async def _run_chat(run: ChatRunRuntime) -> None:
         _set_state(run, "FAILED")
         _emit(run, "error", {"error": run.error, "code": "CHAT_RUN_CRASHED"})
     finally:
+        if run.lease is not None:
+            await run.lease.release()
         _persist_runs()
 
 
@@ -341,15 +435,24 @@ async def send_chat(body: ChatSendIn) -> dict[str, Any]:
     if not text:
         raise HTTPException(status_code=422, detail="message text must not be empty")
     url = _validate_chatgpt_url(body.conversation_url)
-    # P2b: at most two WRITE conversations at once (reading is unlimited).
-    allowed, _active = write_slots.write_slot_available(url)
-    if not allowed:
+    missions_api.get_store()  # restore durable mission leases before capacity admission
+    conversation_key = (
+        write_slots.new_conversation_key()
+        if body.new_conversation or url.rstrip("/") == "https://chatgpt.com"
+        else url
+    )
+    try:
+        lease = await write_slots.acquire_writer(conversation_key)
+    except write_slots.SessionCapacityError:
         raise HTTPException(status_code=409, detail=write_slots.REFUSAL_MESSAGE)
     run = ChatRunRuntime(
         id=uuid.uuid4().hex,
         conversation_url=url,
         text=text,
         new_conversation=body.new_conversation,
+        conversation_key=conversation_key,
+        session_id=lease.session_id,
+        lease=lease,
     )
     _runs[run.id] = run
     _emit(run, "status", {"state": run.state})
@@ -362,11 +465,18 @@ def list_active_runs() -> list[ChatRunRuntime]:
     return [run for run in _runs.values() if run.state not in {"COMPLETED", "FAILED", "CANCELLED"}]
 
 
-def _start_attachment_run(
+async def _start_attachment_run(
     *, url: str, text: str, path: str, image: bool, name: str | None, new_conversation: bool
 ) -> dict[str, Any]:
-    allowed, _active = write_slots.write_slot_available(url)
-    if not allowed:
+    missions_api.get_store()  # restore durable mission leases before capacity admission
+    conversation_key = (
+        write_slots.new_conversation_key()
+        if new_conversation or url.rstrip("/") == "https://chatgpt.com"
+        else url
+    )
+    try:
+        lease = await write_slots.acquire_writer(conversation_key)
+    except write_slots.SessionCapacityError:
         raise HTTPException(status_code=409, detail=write_slots.REFUSAL_MESSAGE)
     run = ChatRunRuntime(
         id=uuid.uuid4().hex,
@@ -376,6 +486,9 @@ def _start_attachment_run(
         attachment_path=path,
         attachment_image=image,
         attachment_name=name,
+        conversation_key=conversation_key,
+        session_id=lease.session_id,
+        lease=lease,
     )
     _runs[run.id] = run
     _emit(run, "status", {"state": run.state})
@@ -427,7 +540,7 @@ async def send_with_attachment(body: ChatSendAttachmentIn) -> dict[str, Any]:
         descriptor = attachments.describe_path(body.path)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
-    return _start_attachment_run(
+    return await _start_attachment_run(
         url=url,
         text=body.text,
         path=descriptor["path"],
@@ -445,7 +558,7 @@ async def send_screenshot(body: ChatScreenshotIn) -> dict[str, Any]:
     if not missions_api.optin_accepted():
         raise HTTPException(status_code=403, detail="Experimental ChatGPT Web Transport is not enabled")
     url = _validate_chatgpt_url(body.conversation_url)
-    transport = ui_transport_factory()
+    transport = _make_transport(READ_ONLY_SESSION_ID)
     shooter = getattr(transport.driver, "take_screenshot", None)
     if shooter is None:
         raise HTTPException(status_code=422, detail="ce transport ne sait pas capturer d'écran")
@@ -456,7 +569,7 @@ async def send_screenshot(body: ChatScreenshotIn) -> dict[str, Any]:
         descriptor = attachments.describe_path(str(target))
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"capture impossible: {exc}")
-    return _start_attachment_run(
+    return await _start_attachment_run(
         url=url,
         text=body.text,
         path=descriptor["path"],
@@ -471,7 +584,7 @@ async def transport_capabilities() -> dict[str, Any]:
     """What the active transport can do (P3) — the UI adapts from this."""
     from transport.chatgpt_web import adapter as adapter_mod
 
-    transport = ui_transport_factory()
+    transport = _make_transport(READ_ONLY_SESSION_ID)
     caps_fn = getattr(transport.driver, "capabilities", None)
     caps = caps_fn() if caps_fn else {"send_text": True, "upload_file": False, "upload_image": False, "take_screenshot": False}
     caps.setdefault("limits", {"file_bytes": adapter_mod.MAX_FILE_BYTES, "image_bytes": adapter_mod.MAX_IMAGE_BYTES})
@@ -527,6 +640,8 @@ async def cancel_chat_run(run_id: str, body: ChatCancelIn | None = None) -> dict
     if run is None:
         raise HTTPException(status_code=404, detail="chat run not found")
     if run.state in {"COMPLETED", "FAILED", "CANCELLED"}:
+        if run.lease is not None:
+            await run.lease.release()
         return run.public()
     run.cancelled = True
     if run.transport is not None:
@@ -535,4 +650,8 @@ async def cancel_chat_run(run_id: str, body: ChatCancelIn | None = None) -> dict
         run.task.cancel()
     _set_state(run, "CANCELLED")
     _emit(run, "cancelled", {"reason": body.reason if body else "USER_CANCEL"})
+    if run.task is not None:
+        await asyncio.gather(run.task, return_exceptions=True)
+    elif run.lease is not None:
+        await run.lease.release()
     return run.public()

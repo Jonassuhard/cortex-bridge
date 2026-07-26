@@ -56,6 +56,7 @@ from transport.chatgpt_web.adapter import (  # noqa: E402
     ConversationLock,
     WebBridgeDriver,
 )
+import write_slots  # noqa: E402
 
 CONSOLE_DIR = Path(__file__).resolve().parent
 DATA_DIR = CONSOLE_DIR / "data"
@@ -74,6 +75,7 @@ def get_store() -> Store:
     if _store is None:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         _store = Store(DB_PATH)
+    _restore_persisted_leases()
     return _store
 
 
@@ -103,13 +105,62 @@ class MissionRuntime:
     approval_event: asyncio.Event = field(default_factory=asyncio.Event)
     approval_scope: str | None = None
     stopped: bool = False
+    conversation_key: str | None = None
+    lease: object | None = None
 
 
 _runtimes: dict[str, MissionRuntime] = {}
+_mission_leases: dict[str, object] = {}
 _global_stop = False
 
+
+def _restore_persisted_leases() -> None:
+    """Reserve every persisted non-terminal mission writer after restart."""
+    if _store is None:
+        return
+    terminal = {"COMPLETED", "BLOCKED", "FAILED", "CANCELLED"}
+    for mission in _store.rows("missions", order_by="updated_at DESC"):
+        mission_id = str(mission["id"])
+        if mission.get("state") in terminal or mission_id in _mission_leases:
+            continue
+        bindings = _store.rows("conversation_bindings", mission_id, order_by="rowid")
+        if not bindings:
+            continue
+        binding = bindings[-1]
+        session_id = binding.get("session_id")
+        if not session_id:
+            continue
+        conversation_key = (
+            binding.get("conversation_target")
+            or binding.get("conversation_url")
+        )
+        try:
+            lease = write_slots.restore_writer(
+                conversation_key,
+                session_id,
+                binding.get("conversation_url") or conversation_key,
+            )
+        except (
+            ValueError,
+            write_slots.SessionCapacityError,
+            write_slots.SessionRekeyError,
+        ):
+            continue
+        _mission_leases[mission_id] = lease
+        _mission_write_urls[mission_id] = binding.get("conversation_url") or conversation_key
+
 # Overridable factories (tests inject fixture drivers).
-transport_factory = lambda: ChatGPTWebTransport(WebBridgeDriver())  # noqa: E731
+READ_ONLY_SESSION_ID = "cortex-missions-read-only"
+transport_factory = lambda session_id=READ_ONLY_SESSION_ID: ChatGPTWebTransport(  # noqa: E731
+    WebBridgeDriver(session=session_id)
+)
+
+
+def _make_transport(session_id: str) -> ChatGPTWebTransport:
+    try:
+        return transport_factory(session_id)
+    except TypeError:
+        return transport_factory()
 
 _APPROVAL_SCOPE_MAP = {
     "once": SCOPE_ONCE,
@@ -147,7 +198,8 @@ def _make_approval_callback(rt: MissionRuntime):
 
 def _build_runtime(mission_id: str, workspace: str, approval_mode: str,
                    primary: str, fallback: str, max_iterations: int,
-                   max_duration_seconds: int, allow_processes: bool = False) -> MissionRuntime:
+                   max_duration_seconds: int, allow_processes: bool = False,
+                   lease=None) -> MissionRuntime:
     ws = Path(workspace).expanduser().resolve()
     if not ws.is_dir():
         raise HTTPException(status_code=422, detail=f"workspace is not a directory: {ws}")
@@ -162,11 +214,72 @@ def _build_runtime(mission_id: str, workspace: str, approval_mode: str,
     budgets = Budgets(max_iterations=max_iterations, max_duration_seconds=max_duration_seconds)
     rt = MissionRuntime(mission_id=mission_id)
     rt.policy = policy
-    rt.transport = transport_factory()
+    rt.lease = lease
+    rt.conversation_key = lease.conversation_key if lease is not None else None
+    rt.transport = _make_transport(
+        lease.session_id if lease is not None else READ_ONLY_SESSION_ID
+    )
     rt._tools = tools  # type: ignore[attr-defined]
     rt._budgets = budgets  # type: ignore[attr-defined]
     _runtimes[mission_id] = rt
     return rt
+
+
+async def _persist_mission_lease(rt: MissionRuntime) -> None:
+    """Wait for ModeARunner's binding insert, then make the lease durable."""
+    if rt.lease is None:
+        return
+    store = get_store()
+    _mission_leases.setdefault(rt.mission_id, rt.lease)
+    persisted = False
+    for _ in range(500):
+        bindings = store.rows("conversation_bindings", rt.mission_id, order_by="rowid")
+        if bindings:
+            binding = bindings[-1]
+            current_url = binding["conversation_url"]
+            if not persisted:
+                store.update_conversation_binding(
+                    rt.mission_id,
+                    current_url,
+                    binding.get("conversation_title"),
+                    binding.get("browser_target_id"),
+                    session_id=rt.lease.session_id,
+                    conversation_target=current_url,
+                )
+                persisted = True
+            if not (rt.conversation_key or "").startswith("provisional:"):
+                return
+            if "/c/" in current_url:
+                rt.lease = await write_slots.rekey(rt.conversation_key, current_url)
+                rt.conversation_key = rt.lease.conversation_key
+                _mission_leases[rt.mission_id] = rt.lease
+                _mission_write_urls[rt.mission_id] = current_url
+                store.update_conversation_binding(
+                    rt.mission_id,
+                    current_url,
+                    binding.get("conversation_title"),
+                    binding.get("browser_target_id"),
+                    session_id=rt.lease.session_id,
+                    conversation_target=current_url,
+                )
+                return
+        await asyncio.sleep(0.01)
+
+
+async def _release_terminal_mission(rt: MissionRuntime) -> None:
+    if rt.lease is None:
+        return
+    try:
+        state = get_store().get_mission(rt.mission_id)["state"]
+    except StoreError:
+        await rt.lease.release()
+        _mission_leases.pop(rt.mission_id, None)
+        _mission_write_urls.pop(rt.mission_id, None)
+        return
+    if state in {"COMPLETED", "BLOCKED", "FAILED", "CANCELLED"}:
+        await rt.lease.release()
+        _mission_leases.pop(rt.mission_id, None)
+        _mission_write_urls.pop(rt.mission_id, None)
 
 
 # ------------------------------------------------------------------- schemas
@@ -240,6 +353,7 @@ async def _run_mission_task(rt: MissionRuntime, objective: str, body: MissionIn)
         approval_callback=_make_approval_callback(rt),
         experimental_transport_accepted=True,  # enforced by the endpoint
     )
+    binding_task = asyncio.create_task(_persist_mission_lease(rt))
     try:
         if body.new_conversation:
             await runner.run_mission(objective, new_conversation_url=body.conversation_url,
@@ -255,6 +369,16 @@ async def _run_mission_task(rt: MissionRuntime, objective: str, body: MissionIn)
         store.record_transport_event(
             str(uuid.uuid4()), rt.mission_id, "RUNNER_CRASHED", {"error": str(exc)}
         )
+    finally:
+        if not binding_task.done():
+            try:
+                await asyncio.wait_for(asyncio.shield(binding_task), timeout=0.2)
+            except asyncio.TimeoutError:
+                binding_task.cancel()
+                await asyncio.gather(binding_task, return_exceptions=True)
+        else:
+            await binding_task
+        await _release_terminal_mission(rt)
 
 
 async def _resume_mission_task(rt: MissionRuntime) -> None:
@@ -337,6 +461,8 @@ async def _resume_mission_task(rt: MissionRuntime) -> None:
         store.record_transport_event(
             str(uuid.uuid4()), rt.mission_id, "RUNNER_CRASHED", {"error": str(exc)}
         )
+    finally:
+        await _release_terminal_mission(rt)
 
 
 def _stop_runtime(rt: MissionRuntime) -> None:
@@ -351,6 +477,11 @@ def _stop_runtime(rt: MissionRuntime) -> None:
     if rt.transport is not None and rt.transport.lock is not None:
         try:
             asyncio.get_running_loop().create_task(rt.transport.cancel_generation())
+        except RuntimeError:
+            pass
+    if rt.lease is not None:
+        try:
+            asyncio.get_running_loop().create_task(_release_terminal_mission(rt))
         except RuntimeError:
             pass
 
@@ -379,8 +510,13 @@ async def stop_everything() -> dict:
     current approvals resolved as denied, evidence preserved."""
     global _global_stop
     _global_stop = True
-    for rt in list(_runtimes.values()):
+    runtimes = list(_runtimes.values())
+    for rt in runtimes:
         _stop_runtime(rt)
+    await asyncio.gather(
+        *(_release_terminal_mission(rt) for rt in runtimes),
+        return_exceptions=True,
+    )
     return {"global_stop": True, "missions_stopped": len(_runtimes)}
 
 
@@ -396,7 +532,7 @@ async def transport_probe() -> dict:
     """Read-only DOM health check on the live ChatGPT tab: reports which
     adaptive selector currently matches each role (composer, messages, send,
     stop), with failures/warnings and raw diagnostics for UI regressions."""
-    transport = transport_factory()
+    transport = _make_transport(READ_ONLY_SESSION_ID)
     try:
         return await transport.probe()
     except Exception as exc:
@@ -413,7 +549,7 @@ async def transport_perf() -> dict:
 
 @router.get("/conversations")
 async def list_conversations() -> list[dict]:
-    transport = transport_factory()
+    transport = _make_transport(READ_ONLY_SESSION_ID)
     try:
         return await transport.list_conversations()
     except Exception as exc:
@@ -438,13 +574,6 @@ async def create_mission(body: MissionIn) -> dict:
     if body.approval_policy not in _POLICY_MODES:
         raise HTTPException(status_code=422, detail=f"unknown approval policy {body.approval_policy}")
 
-    # P2b: at most two WRITE conversations at once (reading is unlimited).
-    import write_slots
-
-    allowed, _active = write_slots.write_slot_available(body.conversation_url)
-    if not allowed:
-        raise HTTPException(status_code=409, detail=write_slots.REFUSAL_MESSAGE)
-
     mission_id = body.mission_id.strip() or str(uuid.uuid4())
     try:
         uuid.UUID(mission_id)
@@ -456,11 +585,27 @@ async def create_mission(body: MissionIn) -> dict:
         raise HTTPException(status_code=409, detail=f"mission {mission_id} already exists")
     except StoreError:
         pass  # unknown id — good
-    rt = _build_runtime(
-        mission_id, body.workspace, body.approval_policy,
-        body.primary_executor, body.fallback_executor,
-        body.max_iterations, body.max_duration_minutes * 60, body.allow_processes,
+    conversation_key = (
+        write_slots.new_conversation_key()
+        if body.new_conversation
+        or body.conversation_url.strip().rstrip("/") == "https://chatgpt.com"
+        else body.conversation_url
     )
+    try:
+        lease = await write_slots.acquire_writer(conversation_key)
+    except write_slots.SessionCapacityError:
+        raise HTTPException(status_code=409, detail=write_slots.REFUSAL_MESSAGE)
+    try:
+        rt = _build_runtime(
+            mission_id, body.workspace, body.approval_policy,
+            body.primary_executor, body.fallback_executor,
+            body.max_iterations, body.max_duration_minutes * 60, body.allow_processes,
+            lease=lease,
+        )
+    except Exception:
+        await lease.release()
+        raise
+    _mission_leases[mission_id] = lease
     _mission_write_urls[mission_id] = body.conversation_url
     rt.task = asyncio.create_task(
         _run_mission_task(rt, _objective_with_constraints(body), body)
@@ -568,10 +713,23 @@ async def resume_mission(mission_id: str) -> dict:
         raise HTTPException(status_code=409, detail=f"cannot resume from {mission['state']}")
     # Rebuild the runtime: re-attach the locked conversation, never resend.
     bindings = store.rows("conversation_bindings", mission_id, order_by="rowid")
+    lease = _mission_leases.get(mission_id)
+    if lease is None and bindings and bindings[0].get("session_id"):
+        b = bindings[0]
+        try:
+            lease = write_slots.restore_writer(
+                b["conversation_url"],
+                b["session_id"],
+                b.get("conversation_target") or b["conversation_url"],
+            )
+        except write_slots.SessionCapacityError:
+            raise HTTPException(status_code=409, detail=write_slots.REFUSAL_MESSAGE)
+        _mission_leases[mission_id] = lease
     rt = _build_runtime(
         mission_id, mission["workspace"], WRITE_WITH_APPROVALS,
         "orchestra-executor", "orchestra-executor-fallback",
         mission["max_iterations"], mission["max_duration_seconds"],
+        lease=lease,
     )
     if bindings:
         b = bindings[0]
@@ -602,11 +760,17 @@ async def cancel_mission(mission_id: str) -> dict:
     rt = _runtimes.get(mission_id)
     if rt is not None:
         _stop_runtime(rt)
+        await _release_terminal_mission(rt)
     else:
         try:
             store.transition(mission_id, "CANCELLED", pause_reason="USER_CANCEL")
         except StoreError as exc:
             raise HTTPException(status_code=409, detail=str(exc))
+        lease = _mission_leases.get(mission_id)
+        if lease is not None:
+            await lease.release()
+            _mission_leases.pop(mission_id, None)
+            _mission_write_urls.pop(mission_id, None)
     return {"state": "CANCELLED"}
 
 

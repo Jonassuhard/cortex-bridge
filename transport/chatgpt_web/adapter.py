@@ -1336,6 +1336,7 @@ class WebBridgeDriver:
     def __init__(self, daemon: str = "http://127.0.0.1:10086", session: str = "cortex-bridge"):
         self.daemon = daemon.rstrip("/")
         self.session = session
+        self.target_url: str | None = None
 
     def _command(self, action: str, args: dict | None = None, timeout: float = 30) -> Any:
         payload = {"action": action, "args": args or {}, "session": self.session}
@@ -1371,6 +1372,7 @@ class WebBridgeDriver:
                 await asyncio.to_thread(
                     self._command, "navigate", {"url": url, "newTab": False}, 90
                 )
+                self.target_url = url
                 return
             except DriverError as exc:
                 last = exc
@@ -1393,7 +1395,10 @@ class WebBridgeDriver:
             result = json.loads(raw) if isinstance(raw, str) else (raw or {})
         except json.JSONDecodeError:
             return False
-        return bool(result.get("ok"))
+        handled = bool(result.get("ok"))
+        if handled:
+            self.target_url = url
+        return handled
 
     async def get_state(self) -> dict:
         raw = await asyncio.to_thread(self._command, "evaluate", {"code": _STATE_JS})
@@ -1536,3 +1541,4 @@ class WebBridgeDriver:
 
     async def close_tab(self) -> None:
         await asyncio.to_thread(self._command, "close_tab", {})
+        self.target_url = None
