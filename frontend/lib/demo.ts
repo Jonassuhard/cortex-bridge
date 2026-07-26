@@ -171,4 +171,6 @@ export const demoSettings: CortexSettings = {
   persist_conversation_history: false,
   response_stability_seconds: 2,
   chat_timeout_seconds: 300,
+  browser_transport: "playwright",
+  browser_profile_root: "console/data/browser-profiles",
 };

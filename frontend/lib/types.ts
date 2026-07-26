@@ -210,6 +210,8 @@ export interface CortexSettings {
   persist_conversation_history: boolean;
   response_stability_seconds: number;
   chat_timeout_seconds: number;
+  browser_transport: "playwright" | "webbridge";
+  browser_profile_root: string;
 }
 
 export interface OllamaModelInfo {

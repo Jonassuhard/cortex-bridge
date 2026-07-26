@@ -54,8 +54,8 @@ from transport.chatgpt_web.adapter import (  # noqa: E402
     EXPERIMENTAL_TRANSPORT_WARNING,
     ChatGPTWebTransport,
     ConversationLock,
-    WebBridgeDriver,
 )
+from transport.browser import create_transport  # noqa: E402
 import write_slots  # noqa: E402
 
 CONSOLE_DIR = Path(__file__).resolve().parent
@@ -168,9 +168,7 @@ def _restore_persisted_leases() -> None:
 
 # Overridable factories (tests inject fixture drivers).
 READ_ONLY_SESSION_ID = "cortex-missions-read-only"
-transport_factory = lambda session_id=READ_ONLY_SESSION_ID: ChatGPTWebTransport(  # noqa: E731
-    WebBridgeDriver(session=session_id)
-)
+transport_factory = create_transport
 
 
 def _make_transport(session_id: str) -> ChatGPTWebTransport:

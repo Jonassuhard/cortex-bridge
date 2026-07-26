@@ -30,6 +30,7 @@ import uvicorn  # noqa: E402
 
 import chat as chat_api  # noqa: E402
 import missions as missions_api  # noqa: E402
+import onboarding as onboarding_api  # noqa: E402
 import server as console_server  # noqa: E402
 import settings as settings_api  # noqa: E402
 from orchestration.store import Store  # noqa: E402
@@ -43,10 +44,12 @@ def free_port() -> int:
         return int(sock.getsockname()[1])
 
 
-class FakeWebBridgeDriver:
+class FakeBrowserDriver:
     """Small settings/pipeline fake — no real Chrome access in tests."""
 
     selected = "ChatGPT 5.6 Pro"
+    open_login_calls = 0
+    driver_name = "playwright"
 
     def __init__(self, *args, **kwargs):
         pass
@@ -55,7 +58,11 @@ class FakeWebBridgeDriver:
         self.url = url
 
     async def health(self) -> dict:
-        return {"connected": True, "tabs": 1}
+        return {"connected": True, "tabs": 1, "driver": self.driver_name}
+
+    async def open_login(self) -> dict:
+        type(self).open_login_calls += 1
+        return await self.health()
 
     async def list_models(self) -> dict:
         return {
@@ -79,7 +86,8 @@ class ChatSettingsApiTestCase(unittest.TestCase):
         cls.fixture = FixtureServer().start()
 
         cls.original_validate_url = chat_api._validate_chatgpt_url
-        cls.original_driver = settings_api.WebBridgeDriver
+        cls.original_settings_driver_factory = settings_api.browser_driver_factory
+        cls.original_onboarding_driver_factory = onboarding_api.browser_driver_factory
         cls.original_settings_file = settings_api.SETTINGS_FILE
         cls.original_settings_db = settings_api.DB_PATH
         cls.original_chat_runs_file = chat_api.CHAT_RUNS_FILE
@@ -106,7 +114,8 @@ class ChatSettingsApiTestCase(unittest.TestCase):
 
         settings_api.SETTINGS_FILE = root / "settings.json"
         settings_api.DB_PATH = root / "cortex.db"
-        settings_api.WebBridgeDriver = FakeWebBridgeDriver
+        settings_api.browser_driver_factory = lambda **_kwargs: FakeBrowserDriver()
+        onboarding_api.browser_driver_factory = lambda **_kwargs: FakeBrowserDriver()
 
         cls.port = free_port()
         cls.base = f"http://127.0.0.1:{cls.port}"
@@ -140,12 +149,14 @@ class ChatSettingsApiTestCase(unittest.TestCase):
         missions_api.OPTIN_FILE = cls.original_optin
         settings_api.SETTINGS_FILE = cls.original_settings_file
         settings_api.DB_PATH = cls.original_settings_db
-        settings_api.WebBridgeDriver = cls.original_driver
+        settings_api.browser_driver_factory = cls.original_settings_driver_factory
+        onboarding_api.browser_driver_factory = cls.original_onboarding_driver_factory
         chat_api.CHAT_RUNS_FILE = cls.original_chat_runs_file
         chat_api._validate_chatgpt_url = cls.original_validate_url
         cls._tmp.cleanup()
 
     def setUp(self):
+        FakeBrowserDriver.open_login_calls = 0
         missions_api._global_stop = False
         missions_api.OPTIN_FILE.unlink(missing_ok=True)
         settings_api.SETTINGS_FILE.unlink(missing_ok=True)
@@ -282,6 +293,8 @@ class ChatSettingsApiTestCase(unittest.TestCase):
             defaults.get("process_capabilities"),
             {"allowed": False, "allow_network": False, "allow_deletions": False},
         )
+        self.assertEqual(defaults["browser_transport"], "playwright")
+        self.assertEqual(defaults["browser_profile_root"], "console/data/browser-profiles")
         payload = {
             **defaults,
             "theme": "light",
@@ -294,6 +307,13 @@ class ChatSettingsApiTestCase(unittest.TestCase):
         self.assertTrue(saved["never_delete_files"])
         _, reloaded = self.get("/api/settings")
         self.assertEqual(reloaded, saved)
+
+        status, invalid = self.put("/api/settings", {
+            **defaults,
+            "browser_transport": "selenium",
+            "default_workspace": str(Path(self._tmp.name).resolve()),
+        })
+        self.assertEqual(status, 422, invalid)
 
     def test_07_lab_mode_is_fail_closed(self):
         _, defaults = self.get("/api/settings")
@@ -338,8 +358,17 @@ class ChatSettingsApiTestCase(unittest.TestCase):
         self.assertTrue({"transport", "validator", "task", "ollama", "filesystem", "database"}.issubset(ids))
         self.assertIn(body["overall"], {"healthy", "degraded", "running", "waiting"})
         self.assertIn("events", body)
+        transport = next(row for row in body["components"] if row["id"] == "transport")
+        self.assertIn("playwright", transport["detail"].lower())
 
-    def test_10_modern_fallback_ui_is_served(self):
+    def test_10_onboarding_opens_dedicated_login_profile(self):
+        status, body = self.post("/api/onboarding/browser/open", {})
+        self.assertEqual(status, 200, body)
+        self.assertEqual(body["driver"], "playwright")
+        self.assertTrue(body["connected"])
+        self.assertEqual(FakeBrowserDriver.open_login_calls, 1)
+
+    def test_11_modern_fallback_ui_is_served(self):
         req = urllib.request.Request(self.base + "/", method="GET")
         with urllib.request.urlopen(req, timeout=10) as response:
             html = response.read().decode("utf-8")

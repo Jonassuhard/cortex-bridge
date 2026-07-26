@@ -27,6 +27,7 @@ export function OnboardingPanel({ onOpenSettings }: { onOpenSettings: () => void
   const [state, setState] = useState<OnboardingState | null>(null);
   const [hidden, setHidden] = useState(false);
   const [checking, setChecking] = useState(false);
+  const [openingBrowser, setOpeningBrowser] = useState(false);
 
   const refresh = useCallback(async () => {
     setChecking(true);
@@ -52,6 +53,16 @@ export function OnboardingPanel({ onOpenSettings }: { onOpenSettings: () => void
       // Dismissal persistence failing must not trap the user on the panel.
     }
     setHidden(true);
+  };
+
+  const openBrowser = async () => {
+    setOpeningBrowser(true);
+    try {
+      await postJson("/api/onboarding/browser/open", {});
+      await refresh();
+    } finally {
+      setOpeningBrowser(false);
+    }
   };
 
   return (
@@ -81,6 +92,9 @@ export function OnboardingPanel({ onOpenSettings }: { onOpenSettings: () => void
         <footer className="settings-footer">
           <span>{state.ready ? "✅ Tout est prêt." : "Certains prérequis manquent — tu peux quand même explorer."}</span>
           <div>
+            <button className="secondary-button" disabled={openingBrowser} onClick={() => void openBrowser()}>
+              {openingBrowser ? "Ouverture…" : "Ouvrir le profil de connexion"}
+            </button>
             <button className="secondary-button" onClick={onOpenSettings}>Ouvrir les paramètres</button>
             <button className="secondary-button" disabled={checking} onClick={() => void refresh()}>
               <RefreshIcon size={13} /> {checking ? "Vérification…" : "Revérifier"}

@@ -209,8 +209,12 @@ export function SettingsPanel({
 
             {tab === "transport" && (
               <div className="settings-section-stack">
-                <div className="settings-section-title"><h3>Transport ChatGPT</h3><p>Le bridge contrôle une conversation sélectionnée via WebBridge, sans API OpenAI.</p></div>
+                <div className="settings-section-title"><h3>Transport ChatGPT</h3><p>Le bridge contrôle une conversation sélectionnée avec un profil navigateur Cortex dédié, sans API OpenAI.</p></div>
                 <div className="settings-notice"><GlobeIcon /><span><strong>Transport expérimental</strong><small>La compatibilité dépend du DOM de ChatGPT. Aucun CAPTCHA, identifiant ou mécanisme anti-bot n'est contourné.</small></span></div>
+                <div className="settings-grid two">
+                  <label><span>Driver navigateur</span><select value={draft.browser_transport} onChange={(e) => patch("browser_transport", e.target.value as CortexSettings["browser_transport"])}><option value="playwright">Playwright — distribué</option><option value="webbridge">WebBridge — compatibilité</option></select></label>
+                  <label><span>Racine des profils</span><input value={draft.browser_profile_root} onChange={(e) => patch("browser_profile_root", e.target.value)} /></label>
+                </div>
                 <div className="settings-grid two">
                   <label><span>Stabilité de réponse</span><input type="number" step="0.5" min={1} max={10} value={draft.response_stability_seconds} onChange={(e) => patch("response_stability_seconds", Number(e.target.value))} /></label>
                   <label><span>Timeout ChatGPT</span><input type="number" min={30} max={900} value={draft.chat_timeout_seconds} onChange={(e) => patch("chat_timeout_seconds", Number(e.target.value))} /></label>

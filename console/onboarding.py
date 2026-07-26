@@ -16,7 +16,7 @@ from typing import Any
 from fastapi import APIRouter
 
 from local_executor import runtime_status
-from transport.chatgpt_web.adapter import WebBridgeDriver
+from transport.browser import create_browser_driver
 
 import missions as missions_api
 import settings as settings_api
@@ -25,6 +25,7 @@ router = APIRouter(prefix="/api")
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
 MARKER_FILE = DATA_DIR / "onboarding-done.json"
+browser_driver_factory = create_browser_driver
 
 
 def onboarding_completed() -> bool:
@@ -76,17 +77,25 @@ async def run_checks() -> list[dict[str, Any]]:
         f"Installe-le : ollama pull {primary} — ou choisis un autre modèle dans Paramètres › Modèles.",
     ))
 
-    # 3. WebBridge daemon + extension
+    # 3. Configured browser driver
     try:
-        health = await WebBridgeDriver(session="cortex-bridge-ui").health()
+        health = await browser_driver_factory(
+            session="cortex-bridge-ui",
+            settings=settings,
+        ).health()
     except Exception:
-        health = {"connected": False, "tabs": 0}
+        health = {
+            "connected": False,
+            "tabs": 0,
+            "driver": settings["browser_transport"],
+        }
     bridge_ok = bool(health.get("connected"))
+    driver_name = str(health.get("driver") or settings["browser_transport"])
     checks.append(_check(
-        "webbridge", "WebBridge connecté à Chrome",
+        "browser-driver", f"Transport navigateur {driver_name}",
         bridge_ok,
-        f"Extension connectée · {health.get('tabs', 0)} onglet(s)" if bridge_ok else "Daemon ou extension introuvable",
-        "Lance le daemon WebBridge puis ouvre Chrome avec l'extension activée (voir docs/manual-setup.md).",
+        f"{driver_name} connecté · {health.get('tabs', 0)} onglet(s)" if bridge_ok else f"{driver_name} indisponible",
+        "Ouvre le profil navigateur dédié puis connecte-toi manuellement à ChatGPT.",
     ))
 
     # 4. ChatGPT tab open
@@ -125,3 +134,21 @@ async def get_onboarding() -> dict[str, Any]:
 async def dismiss_onboarding() -> dict[str, Any]:
     _set_completed(True)
     return {"completed": True}
+
+
+@router.post("/onboarding/browser/open")
+async def open_browser_login() -> dict[str, Any]:
+    settings = settings_api.load_settings()
+    driver = browser_driver_factory(
+        session="cortex-bridge-ui",
+        settings=settings,
+    )
+    try:
+        return await driver.open_login()
+    except Exception as exc:
+        return {
+            "connected": False,
+            "tabs": 0,
+            "driver": getattr(driver, "driver_name", settings["browser_transport"]),
+            "error": str(exc),
+        }

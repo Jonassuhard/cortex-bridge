@@ -73,6 +73,9 @@ class MissionsApiTestCase(unittest.TestCase):
         tmp = Path(cls._tmp.name)
         cls.fixture = FixtureServer().start()
         cls.store_path = tmp / "cortex.db"
+        cls.original_store = missions_api._store
+        cls.original_optin_file = missions_api.OPTIN_FILE
+        cls.original_transport_factory = missions_api.transport_factory
         missions_api._store = Store(cls.store_path)
         missions_api.OPTIN_FILE = tmp / "transport-optin.json"
         missions_api.transport_factory = lambda: ChatGPTWebTransport(
@@ -103,6 +106,9 @@ class MissionsApiTestCase(unittest.TestCase):
         cls.thread.join(timeout=5)
         cls.fixture.stop()
         missions_api._store.close()
+        missions_api._store = cls.original_store
+        missions_api.OPTIN_FILE = cls.original_optin_file
+        missions_api.transport_factory = cls.original_transport_factory
         cls._tmp.cleanup()
 
     def setUp(self):

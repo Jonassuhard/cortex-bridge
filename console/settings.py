@@ -12,7 +12,7 @@ import uuid
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
@@ -23,12 +23,13 @@ import chat as chat_api
 import missions as missions_api
 from executor.tools import ProcessCapabilities
 from local_executor import OLLAMA_ENDPOINT, runtime_status
-from transport.chatgpt_web.adapter import WebBridgeDriver
+from transport.browser import create_browser_driver
 
 router = APIRouter(prefix="/api")
 DATA_DIR = Path(__file__).resolve().parent / "data"
 SETTINGS_FILE = DATA_DIR / "settings.json"
 DB_PATH = DATA_DIR / "cortex.db"
+browser_driver_factory = create_browser_driver
 
 
 def _now() -> str:
@@ -55,6 +56,8 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "persist_conversation_history": False,
     "response_stability_seconds": 2.0,
     "chat_timeout_seconds": 300,
+    "browser_transport": "playwright",
+    "browser_profile_root": "console/data/browser-profiles",
 }
 
 
@@ -77,6 +80,8 @@ class SettingsIn(BaseModel):
     persist_conversation_history: bool = False
     response_stability_seconds: float = Field(default=2.0, ge=1.0, le=10.0)
     chat_timeout_seconds: int = Field(default=300, ge=30, le=900)
+    browser_transport: Literal["playwright", "webbridge"] = "playwright"
+    browser_profile_root: str = "console/data/browser-profiles"
 
 
 class ChatGPTModelSelectIn(BaseModel):
@@ -160,6 +165,8 @@ async def update_settings(body: SettingsIn) -> dict[str, Any]:
     # A missing future workspace may be configured, but its parent must be absolute.
     if not workspace.is_absolute():
         raise HTTPException(status_code=422, detail="default workspace must be absolute")
+    if not body.browser_profile_root.strip():
+        raise HTTPException(status_code=422, detail="browser profile root must not be empty")
     return save_settings(body.model_dump())
 
 
@@ -170,7 +177,10 @@ async def list_ollama_models() -> dict[str, Any]:
 
 @router.get("/models/chatgpt")
 async def list_chatgpt_models() -> dict[str, Any]:
-    driver = WebBridgeDriver(session="cortex-bridge-ui")
+    driver = browser_driver_factory(
+        session="cortex-bridge-ui",
+        settings=load_settings(),
+    )
     try:
         result = await driver.list_models()
     except Exception as exc:
@@ -202,7 +212,10 @@ async def select_chatgpt_model(body: ChatGPTModelSelectIn) -> dict[str, Any]:
         raise HTTPException(status_code=403, detail="Experimental ChatGPT Web Transport is not enabled")
     if not body.label.strip():
         raise HTTPException(status_code=422, detail="model label is empty")
-    driver = WebBridgeDriver(session="cortex-bridge-ui")
+    driver = browser_driver_factory(
+        session="cortex-bridge-ui",
+        settings=load_settings(),
+    )
     try:
         await driver.navigate(body.conversation_url)
         selected = await driver.select_model(body.label.strip())
@@ -266,7 +279,10 @@ async def pipeline_status() -> dict[str, Any]:
     active = _active_missions()
     mission = active[0] if active else None
     try:
-        bridge_health = await WebBridgeDriver(session="cortex-bridge-ui").health()
+        bridge_health = await browser_driver_factory(
+            session="cortex-bridge-ui",
+            settings=load_settings(),
+        ).health()
     except Exception as exc:
         bridge_health = {"connected": False, "tabs": 0, "error": str(exc)}
     try:
@@ -291,7 +307,10 @@ async def pipeline_status() -> dict[str, Any]:
             "id": "transport",
             "label": "Transport ChatGPT",
             "state": "connected" if bridge_health.get("connected") else "disconnected",
-            "detail": f"WebBridge · {bridge_health.get('tabs', 0)} onglet(s)",
+            "detail": (
+                f"{bridge_health.get('driver', load_settings()['browser_transport'])}"
+                f" · {bridge_health.get('tabs', 0)} onglet(s)"
+            ),
             "latency_ms": transport_ms,
             "heartbeat_at": _now(),
         },
@@ -427,7 +446,10 @@ async def diagnostics_export() -> dict[str, Any]:
 
     rt = runtime_status()
     try:
-        bridge_health = await WebBridgeDriver(session="cortex-bridge-ui").health()
+        bridge_health = await browser_driver_factory(
+            session="cortex-bridge-ui",
+            settings=load_settings(),
+        ).health()
     except Exception as exc:
         bridge_health = {"connected": False, "error": type(exc).__name__}
     settings = load_settings()
@@ -446,7 +468,8 @@ async def diagnostics_export() -> dict[str, Any]:
             "ollama_primary": (rt.get("primary") or {}).get("name"),
             "ollama_primary_state": (rt.get("primary") or {}).get("state"),
         },
-        "webbridge": {
+        "browser_driver": {
+            "name": bridge_health.get("driver", settings["browser_transport"]),
             "connected": bool(bridge_health.get("connected")),
             "tabs": bridge_health.get("tabs", 0),
             "extension_version": bridge_health.get("extension_version"),

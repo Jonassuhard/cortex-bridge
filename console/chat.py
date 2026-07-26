@@ -31,8 +31,8 @@ from transport.chatgpt_web.adapter import (
     GENERATION_CANCELLED,
     ChatGPTWebTransport,
     TransportError,
-    WebBridgeDriver,
 )
+from transport.browser import create_transport
 
 router = APIRouter(prefix="/api")
 DATA_DIR = Path(__file__).resolve().parent / "data"
@@ -149,9 +149,7 @@ class ChatCancelIn(BaseModel):
 
 # Read-only browsing always uses a session outside the bounded writer registry.
 READ_ONLY_SESSION_ID = "cortex-view-read-only"
-ui_transport_factory = lambda session_id=READ_ONLY_SESSION_ID: ChatGPTWebTransport(  # noqa: E731
-    WebBridgeDriver(session=session_id)
-)
+ui_transport_factory = create_transport
 
 _runs: dict[str, ChatRunRuntime] = {}
 _view_transport: ChatGPTWebTransport | None = None

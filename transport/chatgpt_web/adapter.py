@@ -567,7 +567,7 @@ class ChatGPTWebTransport:
                 code = f"{_ATTACH_FETCH_JS}({json.dumps(raw_url)}, {json.dumps(os.path.basename(path))}, {json.dumps(mime)})"
             else:
                 raise TransportError("ATTACHMENT_FAILED", f"upload rejected: {cdp_exc}") from cdp_exc
-            raw = await asyncio.to_thread(self.driver._command, "evaluate", {"code": code}, 90)
+            raw = await self.driver.evaluate(code, timeout=90)
             if isinstance(raw, dict) and "value" in raw:
                 raw = raw["value"]
             result = json.loads(raw) if isinstance(raw, str) else (raw or {})
@@ -1334,9 +1334,11 @@ class WebBridgeDriver:
     """
 
     def __init__(self, daemon: str = "http://127.0.0.1:10086", session: str = "cortex-bridge"):
+        self.driver_name = "webbridge"
         self.daemon = daemon.rstrip("/")
         self.session = session
         self.target_url: str | None = None
+        self._closed = False
 
     def _command(self, action: str, args: dict | None = None, timeout: float = 30) -> Any:
         payload = {"action": action, "args": args or {}, "session": self.session}
@@ -1378,6 +1380,20 @@ class WebBridgeDriver:
                 last = exc
                 await asyncio.sleep(1.5)
         raise last  # type: ignore[misc]
+
+    async def evaluate(self, code: str, timeout: float = 30) -> Any:
+        raw = await asyncio.to_thread(
+            self._command, "evaluate", {"code": code}, timeout
+        )
+        if isinstance(raw, dict) and "value" in raw:
+            return raw["value"]
+        return raw
+
+    async def list_tabs(self) -> list[dict]:
+        raw = await asyncio.to_thread(self._command, "list_tabs", {}, 5)
+        if isinstance(raw, dict):
+            return list(raw.get("tabs", []))
+        return list(raw or [])
 
     async def spa_navigate(self, url: str) -> bool:
         """Client-side conversation switch via the sidebar link (no reload).
@@ -1514,11 +1530,21 @@ class WebBridgeDriver:
 
     async def health(self) -> dict:
         try:
-            tabs = await asyncio.to_thread(self._command, "list_tabs", {}, 5)
-            tab_list = tabs.get("tabs", []) if isinstance(tabs, dict) else []
-            return {"connected": True, "tabs": len(tab_list)}
+            tabs = await self.list_tabs()
+            return {
+                "connected": True,
+                "tabs": len(tabs),
+                "driver": self.driver_name,
+                "session": self.session,
+            }
         except DriverError as exc:
-            return {"connected": False, "tabs": 0, "error": str(exc)}
+            return {
+                "connected": False,
+                "tabs": 0,
+                "driver": self.driver_name,
+                "session": self.session,
+                "error": str(exc),
+            }
 
     async def list_models(self) -> dict:
         raw = await asyncio.to_thread(self._command, "evaluate", {"code": _MODELS_JS}, 30)
@@ -1542,3 +1568,13 @@ class WebBridgeDriver:
     async def close_tab(self) -> None:
         await asyncio.to_thread(self._command, "close_tab", {})
         self.target_url = None
+
+    async def close(self) -> None:
+        if self._closed:
+            return
+        await self.close_tab()
+        self._closed = True
+
+    async def open_login(self) -> dict:
+        await self.navigate("https://chatgpt.com/")
+        return await self.health()
