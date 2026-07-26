@@ -6,6 +6,7 @@ import asyncio
 import importlib
 import json
 import re
+import sqlite3
 import sys
 import tempfile
 import threading
@@ -143,10 +144,10 @@ class ConversationSessionRegistryTest(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0)
         self.assertFalse(waiting.done())
 
-        await registry.release_writer(first.conversation_key)
+        await first.release()
         second = await asyncio.wait_for(waiting, timeout=1)
         self.assertEqual(second.session_id, first.session_id)
-        await registry.release_writer(second.conversation_key)
+        await second.release()
 
     async def test_provisional_key_is_unique_and_rekeys_without_changing_session(self) -> None:
         provisional = conversation_sessions.new_conversation_key()
@@ -177,13 +178,53 @@ class ConversationSessionRegistryTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(conversation_sessions.SessionCapacityError):
             await registry.acquire_writer("https://chatgpt.com/c/c")
 
-        await registry.release_writer(restored.conversation_key)
-        await registry.release_writer(restored.conversation_key)
+        await restored.release()
+        await restored.release()
         lease_c = await registry.acquire_writer("https://chatgpt.com/c/c")
         self.assertEqual(
             {item.session_id for item in registry.active_leases()},
             {lease_b.session_id, lease_c.session_id},
         )
+
+    async def test_cancelled_same_conversation_waiter_does_not_leak_capacity(self) -> None:
+        registry = conversation_sessions.ConversationSessionRegistry(capacity=2)
+        first = await registry.acquire_writer("https://chatgpt.com/c/a")
+        waiter = asyncio.create_task(
+            registry.acquire_writer("https://chatgpt.com/c/a")
+        )
+        await asyncio.sleep(0)
+
+        await first.release()
+        waiter.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await waiter
+
+        self.assertEqual(registry.active_leases(), ())
+        lease_b = await registry.acquire_writer("https://chatgpt.com/c/b")
+        lease_c = await registry.acquire_writer("https://chatgpt.com/c/c")
+        await lease_b.release()
+        await lease_c.release()
+
+    async def test_release_wrapper_requires_exact_lease_and_stale_release_cannot_free_successor(self) -> None:
+        registry = conversation_sessions.ConversationSessionRegistry(capacity=2)
+        with self.assertRaises(TypeError):
+            await registry.release_writer("https://chatgpt.com/c/a")
+
+        first = await registry.acquire_writer("https://chatgpt.com/c/a")
+        waiter = asyncio.create_task(
+            registry.acquire_writer("https://chatgpt.com/c/a")
+        )
+        await asyncio.sleep(0)
+        await first.release()
+        successor = await asyncio.wait_for(waiter, timeout=1)
+        await registry.release_writer(first)
+
+        lease_b = await registry.acquire_writer("https://chatgpt.com/c/b")
+        with self.assertRaises(conversation_sessions.SessionCapacityError):
+            await registry.acquire_writer("https://chatgpt.com/c/c")
+        self.assertFalse(successor.released)
+        await successor.release()
+        await lease_b.release()
 
 
 class WebBridgeSessionIsolationTest(unittest.IsolatedAsyncioTestCase):
@@ -426,6 +467,64 @@ class ChatRunRestartPersistenceTest(unittest.IsolatedAsyncioTestCase):
             await chat_api.cancel_chat_run("run-persisted")
             self.assertEqual(write_slots._registry.active_leases(), ())
 
+    async def test_old_non_terminal_run_is_never_evicted_by_terminal_history(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "chat-runs.json"
+            saved_file = chat_api.CHAT_RUNS_FILE
+            saved_runs = dict(chat_api._runs)
+            saved_registry = write_slots._registry
+            chat_api.CHAT_RUNS_FILE = path
+            chat_api._runs.clear()
+            write_slots._registry = conversation_sessions.ConversationSessionRegistry(capacity=2)
+            self.addCleanup(setattr, chat_api, "CHAT_RUNS_FILE", saved_file)
+            self.addCleanup(setattr, write_slots, "_registry", saved_registry)
+            self.addCleanup(chat_api._runs.update, saved_runs)
+            self.addCleanup(chat_api._runs.clear)
+
+            active = chat_api.ChatRunRuntime(
+                id="old-active",
+                conversation_url="https://chatgpt.com/c/active",
+                text="must survive",
+                new_conversation=False,
+                state="WAITING_FOR_CHATGPT",
+                conversation_key="https://chatgpt.com/c/active",
+                session_id="cortex-conv-old-active",
+            )
+            active.lease = write_slots.restore_writer(
+                active.conversation_key,
+                active.session_id,
+                active.conversation_url,
+            )
+            chat_api._runs[active.id] = active
+            for index in range(105):
+                run = chat_api.ChatRunRuntime(
+                    id=f"terminal-{index:03d}",
+                    conversation_url=f"https://chatgpt.com/c/t-{index}",
+                    text="done",
+                    new_conversation=False,
+                    state="COMPLETED",
+                )
+                chat_api._runs[run.id] = run
+
+            chat_api._persist_runs()
+            persisted_ids = {
+                item["id"]
+                for item in json.loads(path.read_text(encoding="utf-8"))
+            }
+            self.assertIn("old-active", persisted_ids)
+            self.assertIn("terminal-104", persisted_ids)
+            self.assertNotIn("terminal-000", persisted_ids)
+
+            chat_api._runs.clear()
+            write_slots._registry = conversation_sessions.ConversationSessionRegistry(capacity=2)
+            chat_api._load_persisted_runs()
+            self.assertIn("old-active", chat_api._runs)
+            self.assertEqual(
+                chat_api._runs["old-active"].lease.session_id,
+                "cortex-conv-old-active",
+            )
+            await chat_api._runs["old-active"].lease.release()
+
 
 class MissionRouteSessionIsolationTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
@@ -455,9 +554,6 @@ class MissionRouteSessionIsolationTest(unittest.IsolatedAsyncioTestCase):
             return SimpleNamespace(lock=None)
 
         async def hold(rt, objective, body) -> None:
-            store = missions_api.get_store()
-            store.create_mission(rt.mission_id, objective, str(self.workspace))
-            store.transition(rt.mission_id, "INITIALIZING_MISSION")
             await self.finish.wait()
 
         missions_api.transport_factory = factory
@@ -532,6 +628,77 @@ class MissionRouteSessionIsolationTest(unittest.IsolatedAsyncioTestCase):
             await missions_api.create_mission(body("https://chatgpt.com/c/d"))
         self.assertEqual(raised.exception.status_code, 409)
 
+    async def test_two_provisional_missions_persist_unique_leases_before_return(self) -> None:
+        def body() -> missions_api.MissionIn:
+            return missions_api.MissionIn(
+                objective="new provisional writer",
+                workspace=str(self.workspace),
+                conversation_url="https://chatgpt.com",
+                new_conversation=True,
+                mission_id=str(__import__("uuid").uuid4()),
+            )
+
+        first = await missions_api.create_mission(body())
+        second = await missions_api.create_mission(body())
+        bindings = [
+            missions_api.get_store().rows(
+                "conversation_bindings",
+                mission_id,
+                order_by="rowid",
+            )[0]
+            for mission_id in (first["id"], second["id"])
+        ]
+
+        self.assertEqual(len({item["session_id"] for item in bindings}), 2)
+        self.assertTrue(all(
+            item["conversation_target"].startswith("provisional:")
+            for item in bindings
+        ))
+        self.assertEqual(
+            {item["conversation_target"] for item in bindings},
+            {
+                lease.conversation_key
+                for lease in write_slots._registry.active_leases()
+            },
+        )
+
+        # Simulated restart before either writer navigates or creates /c/<id>.
+        missions_api._mission_leases.clear()
+        missions_api._mission_write_urls.clear()
+        write_slots._registry = conversation_sessions.ConversationSessionRegistry(capacity=2)
+        missions_api._restore_persisted_leases()
+        self.assertEqual(
+            {
+                lease.conversation_key
+                for lease in missions_api._mission_leases.values()
+            },
+            {item["conversation_target"] for item in bindings},
+        )
+
+    async def test_synchronous_binding_failure_fails_mission_and_releases_lease(self) -> None:
+        body = missions_api.MissionIn(
+            objective="binding must persist",
+            workspace=str(self.workspace),
+            conversation_url="https://chatgpt.com/c/sqlite-failure",
+            mission_id=str(__import__("uuid").uuid4()),
+        )
+        store = missions_api.get_store()
+        original = store.bind_conversation
+
+        def fail_binding(*args, **kwargs):
+            raise sqlite3.OperationalError("simulated binding failure")
+
+        store.bind_conversation = fail_binding
+        try:
+            with self.assertRaises(HTTPException) as raised:
+                await missions_api.create_mission(body)
+        finally:
+            store.bind_conversation = original
+
+        self.assertEqual(raised.exception.status_code, 503)
+        self.assertEqual(store.get_mission(body.mission_id)["state"], "FAILED")
+        self.assertEqual(write_slots._registry.active_leases(), ())
+
 
 class MissionRestartPersistenceTest(unittest.IsolatedAsyncioTestCase):
     async def test_non_terminal_mission_rebuilds_writer_slot_after_restart(self) -> None:
@@ -584,6 +751,66 @@ class MissionRestartPersistenceTest(unittest.IsolatedAsyncioTestCase):
             await lease.release()
             missions_api._store.close()
 
+    async def test_migrated_null_session_binding_gets_unique_persisted_lease_before_resume(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "legacy.db"
+            mission_id = "00000000-0000-0000-0000-000000000004"
+            store = Store(db_path)
+            store.create_mission(mission_id, "legacy resume", tmp)
+            store.transition(mission_id, "INITIALIZING_MISSION")
+            store.transition(mission_id, "SENDING_OBJECTIVE")
+            store.transition(mission_id, "WAITING_FOR_CHATGPT")
+            store.bind_conversation(
+                "legacy-binding",
+                mission_id,
+                "https://chatgpt.com/c/legacy",
+                browser_target_id="legacy",
+            )
+            store.close()
+
+            saved_store = missions_api._store
+            saved_registry = write_slots._registry
+            saved_leases = dict(missions_api._mission_leases)
+            saved_urls = dict(missions_api._mission_write_urls)
+            missions_api._store = Store(db_path)
+            missions_api._mission_leases.clear()
+            missions_api._mission_write_urls.clear()
+            write_slots._registry = conversation_sessions.ConversationSessionRegistry(capacity=2)
+            self.addCleanup(setattr, missions_api, "_store", saved_store)
+            self.addCleanup(setattr, write_slots, "_registry", saved_registry)
+            self.addCleanup(missions_api._mission_leases.clear)
+            self.addCleanup(missions_api._mission_leases.update, saved_leases)
+            self.addCleanup(missions_api._mission_write_urls.clear)
+            self.addCleanup(missions_api._mission_write_urls.update, saved_urls)
+
+            missions_api._restore_persisted_leases()
+            self.assertIn(mission_id, missions_api._mission_leases)
+            lease = missions_api._mission_leases[mission_id]
+            self.assertTrue(lease.session_id.startswith("cortex-conv-"))
+            self.assertNotEqual(lease.session_id, missions_api.READ_ONLY_SESSION_ID)
+            binding = missions_api._store.rows(
+                "conversation_bindings",
+                mission_id,
+            )[0]
+            self.assertEqual(binding["session_id"], lease.session_id)
+            self.assertEqual(binding["conversation_target"], lease.conversation_key)
+            await lease.release()
+            missions_api._store.close()
+
+    async def test_writer_runtime_refuses_to_build_without_a_lease(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(RuntimeError):
+                missions_api._build_runtime(
+                    "00000000-0000-0000-0000-000000000005",
+                    tmp,
+                    "workspace-write-with-approvals",
+                    "executor",
+                    "fallback",
+                    2,
+                    60,
+                    lease=None,
+                )
+
 
 class MissionProvisionalRekeyTest(unittest.IsolatedAsyncioTestCase):
     async def test_new_mission_binding_rekeys_when_canonical_url_appears(self) -> None:
@@ -632,6 +859,230 @@ class MissionProvisionalRekeyTest(unittest.IsolatedAsyncioTestCase):
             )
             await runtime.lease.release()
             missions_api._store.close()
+
+
+class MissionPersistenceFailureTest(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.saved_store = missions_api._store
+        self.saved_registry = write_slots._registry
+        self.saved_runner = missions_api.ModeARunner
+        self.saved_factory = missions_api.transport_factory
+        self.saved_runtimes = dict(missions_api._runtimes)
+        self.saved_leases = dict(missions_api._mission_leases)
+        self.saved_urls = dict(missions_api._mission_write_urls)
+        missions_api._store = Store(Path(self.tmp.name) / "cortex.db")
+        write_slots._registry = conversation_sessions.ConversationSessionRegistry(capacity=2)
+        missions_api._runtimes.clear()
+        missions_api._mission_leases.clear()
+        missions_api._mission_write_urls.clear()
+        missions_api.transport_factory = lambda session_id=None: SimpleNamespace(lock=None)
+
+    async def asyncTearDown(self) -> None:
+        for lease in write_slots._registry.active_leases():
+            await lease.release()
+        missions_api._store.close()
+        missions_api._store = self.saved_store
+        write_slots._registry = self.saved_registry
+        missions_api.ModeARunner = self.saved_runner
+        missions_api.transport_factory = self.saved_factory
+        missions_api._runtimes.clear()
+        missions_api._runtimes.update(self.saved_runtimes)
+        missions_api._mission_leases.clear()
+        missions_api._mission_leases.update(self.saved_leases)
+        missions_api._mission_write_urls.clear()
+        missions_api._mission_write_urls.update(self.saved_urls)
+        self.tmp.cleanup()
+
+    def _runtime(self, mission_id: str, lease):
+        store = missions_api.get_store()
+        store.create_mission(mission_id, "persist safely", self.tmp.name)
+        store.bind_conversation(
+            f"binding-{mission_id}",
+            mission_id,
+            "https://chatgpt.com",
+            session_id=lease.session_id,
+            conversation_target=lease.conversation_key,
+        )
+        runtime = missions_api._build_runtime(
+            mission_id,
+            self.tmp.name,
+            "workspace-write-with-approvals",
+            "executor",
+            "fallback",
+            2,
+            60,
+            lease=lease,
+        )
+        missions_api._mission_leases[mission_id] = lease
+        return runtime
+
+    async def test_rekey_collision_fails_mission_releases_only_provisional_owner(self) -> None:
+        provisional = write_slots.new_conversation_key()
+        provisional_lease = await write_slots.acquire_writer(provisional)
+        canonical = "https://chatgpt.com/c/collision"
+        canonical_lease = await write_slots.acquire_writer(canonical)
+        mission_id = "00000000-0000-0000-0000-000000000006"
+        runtime = self._runtime(mission_id, provisional_lease)
+        owner = self
+
+        class CollisionRunner:
+            def __init__(self, **kwargs):
+                pass
+
+            async def run_mission(self, *args, **kwargs):
+                owner._store().update_conversation_binding(
+                    mission_id,
+                    canonical,
+                    browser_target_id="collision",
+                )
+                await asyncio.sleep(0)
+                return owner._store().get_mission(mission_id)
+
+        missions_api.ModeARunner = CollisionRunner
+        body = missions_api.MissionIn(
+            objective="collision",
+            workspace=self.tmp.name,
+            conversation_url="https://chatgpt.com",
+            new_conversation=True,
+            mission_id=mission_id,
+        )
+        error = None
+        try:
+            await missions_api._run_mission_task(runtime, body.objective, body)
+        except Exception as exc:
+            error = exc
+
+        self.assertIsNone(error)
+        self.assertEqual(self._store().get_mission(mission_id)["state"], "FAILED")
+        self.assertTrue(provisional_lease.released)
+        self.assertFalse(canonical_lease.released)
+
+    async def test_sqlite_update_failure_fails_mission_and_releases_exact_lease(self) -> None:
+        provisional = write_slots.new_conversation_key()
+        lease = await write_slots.acquire_writer(provisional)
+        mission_id = "00000000-0000-0000-0000-000000000007"
+        runtime = self._runtime(mission_id, lease)
+        store = self._store()
+        original_update = store.update_conversation_binding
+
+        class IdleRunner:
+            def __init__(self, **kwargs):
+                pass
+
+            async def run_mission(self, *args, **kwargs):
+                await asyncio.sleep(0)
+                return store.get_mission(mission_id)
+
+        def fail_update(*args, **kwargs):
+            raise sqlite3.OperationalError("simulated update failure")
+
+        missions_api.ModeARunner = IdleRunner
+        store.update_conversation_binding = fail_update
+        body = missions_api.MissionIn(
+            objective="sqlite failure",
+            workspace=self.tmp.name,
+            conversation_url="https://chatgpt.com",
+            new_conversation=True,
+            mission_id=mission_id,
+        )
+        error = None
+        try:
+            await missions_api._run_mission_task(runtime, body.objective, body)
+        except Exception as exc:
+            error = exc
+        finally:
+            store.update_conversation_binding = original_update
+
+        self.assertIsNone(error)
+        self.assertEqual(store.get_mission(mission_id)["state"], "FAILED")
+        self.assertTrue(lease.released)
+
+    def _store(self) -> Store:
+        return missions_api._store
+
+
+class MissionStopQuiescenceTest(unittest.IsolatedAsyncioTestCase):
+    async def test_cancel_keeps_slot_until_browser_and_background_task_quiesce(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            saved_store = missions_api._store
+            saved_registry = write_slots._registry
+            saved_runtimes = dict(missions_api._runtimes)
+            saved_leases = dict(missions_api._mission_leases)
+            saved_urls = dict(missions_api._mission_write_urls)
+            saved_timeout = getattr(missions_api, "STOP_QUIESCE_TIMEOUT", None)
+            missions_api._store = Store(Path(tmp) / "cortex.db")
+            write_slots._registry = conversation_sessions.ConversationSessionRegistry(capacity=2)
+            missions_api._runtimes.clear()
+            missions_api._mission_leases.clear()
+            missions_api._mission_write_urls.clear()
+            missions_api.STOP_QUIESCE_TIMEOUT = 0.02
+            self.addCleanup(setattr, missions_api, "_store", saved_store)
+            self.addCleanup(setattr, write_slots, "_registry", saved_registry)
+            self.addCleanup(missions_api._runtimes.clear)
+            self.addCleanup(missions_api._runtimes.update, saved_runtimes)
+            self.addCleanup(missions_api._mission_leases.clear)
+            self.addCleanup(missions_api._mission_leases.update, saved_leases)
+            self.addCleanup(missions_api._mission_write_urls.clear)
+            self.addCleanup(missions_api._mission_write_urls.update, saved_urls)
+            if saved_timeout is not None:
+                self.addCleanup(setattr, missions_api, "STOP_QUIESCE_TIMEOUT", saved_timeout)
+
+            mission_id = "00000000-0000-0000-0000-000000000008"
+            store = missions_api._store
+            store.create_mission(mission_id, "slow stop", tmp)
+            store.transition(mission_id, "INITIALIZING_MISSION")
+            lease_a = await write_slots.acquire_writer("https://chatgpt.com/c/a")
+            lease_b = await write_slots.acquire_writer("https://chatgpt.com/c/b")
+            quiesce = asyncio.Event()
+
+            class SlowTransport:
+                lock = SimpleNamespace(url="https://chatgpt.com/c/a")
+
+                async def cancel_generation(self):
+                    await quiesce.wait()
+
+            runtime = missions_api.MissionRuntime(
+                mission_id=mission_id,
+                transport=SlowTransport(),
+                conversation_key=lease_a.conversation_key,
+                lease=lease_a,
+            )
+
+            async def old_background_activity() -> None:
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    await quiesce.wait()
+                finally:
+                    await missions_api._release_terminal_mission(runtime)
+
+            runtime.task = asyncio.create_task(old_background_activity())
+            await asyncio.sleep(0)
+            missions_api._runtimes[mission_id] = runtime
+            missions_api._mission_leases[mission_id] = lease_a
+            missions_api._mission_write_urls[mission_id] = lease_a.conversation_key
+
+            lease_c = None
+            try:
+                await missions_api.cancel_mission(mission_id)
+                with self.assertRaises(conversation_sessions.SessionCapacityError):
+                    await write_slots.acquire_writer("https://chatgpt.com/c/c")
+                self.assertFalse(lease_a.released)
+
+                quiesce.set()
+                await asyncio.wait_for(runtime.task, timeout=1)
+                await asyncio.wait_for(runtime.quiescence_task, timeout=1)
+                lease_c = await write_slots.acquire_writer("https://chatgpt.com/c/c")
+            finally:
+                quiesce.set()
+                await asyncio.gather(runtime.task, return_exceptions=True)
+                if runtime.quiescence_task is not None:
+                    await asyncio.gather(runtime.quiescence_task, return_exceptions=True)
+                await lease_b.release()
+                if lease_c is not None:
+                    await lease_c.release()
+                store.close()
 
 
 if __name__ == "__main__":

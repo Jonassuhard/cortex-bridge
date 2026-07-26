@@ -1,12 +1,12 @@
-"""Two-write-conversation guard (P2b, Jonas spec).
+"""Durable two-writer conversation lease registry.
 
 Cortex Bridge may WRITE into at most two ChatGPT conversations at once
 (reading stays unlimited). A third write is refused with an explicit French
 message and the user's draft must be preserved by the UI.
 
-This guard is best-effort and in-memory: it tracks active (non-terminal) chat
-runs and missions. It never kills or replaces an existing session — it only
-refuses NEW writes.
+Admission and per-conversation serialization are owned by the tokenized
+ConversationSessionRegistry. The legacy active-run scan remains only for the
+read-only availability helper; production release paths require SessionLease.
 """
 
 from __future__ import annotations
@@ -82,8 +82,8 @@ async def rekey(provisional_key: str, canonical_key: str) -> SessionLease:
     return await _registry.rekey(provisional_key, canonical_key)
 
 
-async def release_writer(conversation_key: str) -> None:
-    await _registry.release_writer(conversation_key)
+async def release_writer(lease: SessionLease) -> None:
+    await _registry.release_writer(lease)
 
 
 def restore_writer(

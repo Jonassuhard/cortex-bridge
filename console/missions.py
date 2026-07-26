@@ -107,11 +107,14 @@ class MissionRuntime:
     stopped: bool = False
     conversation_key: str | None = None
     lease: object | None = None
+    lease_release_ready: bool = True
+    quiescence_task: asyncio.Task | None = None
 
 
 _runtimes: dict[str, MissionRuntime] = {}
 _mission_leases: dict[str, object] = {}
 _global_stop = False
+STOP_QUIESCE_TIMEOUT = 1.0
 
 
 def _restore_persisted_leases() -> None:
@@ -127,13 +130,27 @@ def _restore_persisted_leases() -> None:
         if not bindings:
             continue
         binding = bindings[-1]
-        session_id = binding.get("session_id")
-        if not session_id:
-            continue
         conversation_key = (
             binding.get("conversation_target")
             or binding.get("conversation_url")
         )
+        session_id = binding.get("session_id")
+        if not session_id:
+            if (conversation_key or "").strip().rstrip("/") == "https://chatgpt.com":
+                conversation_key = write_slots.new_conversation_key()
+            session_id = f"cortex-conv-{uuid.uuid4().hex}"
+            try:
+                _store.update_conversation_binding(
+                    mission_id,
+                    binding.get("conversation_url") or conversation_key,
+                    binding.get("conversation_title"),
+                    binding.get("browser_target_id"),
+                    session_id=session_id,
+                    conversation_target=conversation_key,
+                )
+            except Exception as exc:
+                _fail_mission(_store, mission_id, f"lease migration failed: {exc}")
+                continue
         try:
             lease = write_slots.restore_writer(
                 conversation_key,
@@ -200,6 +217,8 @@ def _build_runtime(mission_id: str, workspace: str, approval_mode: str,
                    primary: str, fallback: str, max_iterations: int,
                    max_duration_seconds: int, allow_processes: bool = False,
                    lease=None) -> MissionRuntime:
+    if lease is None:
+        raise RuntimeError("writer runtime requires an acquired SessionLease")
     ws = Path(workspace).expanduser().resolve()
     if not ws.is_dir():
         raise HTTPException(status_code=422, detail=f"workspace is not a directory: {ws}")
@@ -215,10 +234,8 @@ def _build_runtime(mission_id: str, workspace: str, approval_mode: str,
     rt = MissionRuntime(mission_id=mission_id)
     rt.policy = policy
     rt.lease = lease
-    rt.conversation_key = lease.conversation_key if lease is not None else None
-    rt.transport = _make_transport(
-        lease.session_id if lease is not None else READ_ONLY_SESSION_ID
-    )
+    rt.conversation_key = lease.conversation_key
+    rt.transport = _make_transport(lease.session_id)
     rt._tools = tools  # type: ignore[attr-defined]
     rt._budgets = budgets  # type: ignore[attr-defined]
     _runtimes[mission_id] = rt
@@ -226,25 +243,29 @@ def _build_runtime(mission_id: str, workspace: str, approval_mode: str,
 
 
 async def _persist_mission_lease(rt: MissionRuntime) -> None:
-    """Wait for ModeARunner's binding insert, then make the lease durable."""
+    """Persist/rekey a pre-bound lease when a provisional chat becomes canonical."""
     if rt.lease is None:
         return
-    store = get_store()
     _mission_leases.setdefault(rt.mission_id, rt.lease)
+    store = get_store()
     persisted = False
     for _ in range(500):
         bindings = store.rows("conversation_bindings", rt.mission_id, order_by="rowid")
         if bindings:
             binding = bindings[-1]
             current_url = binding["conversation_url"]
-            if not persisted:
+            if (
+                not persisted
+                or binding.get("session_id") != rt.lease.session_id
+                or binding.get("conversation_target") != rt.conversation_key
+            ):
                 store.update_conversation_binding(
                     rt.mission_id,
                     current_url,
                     binding.get("conversation_title"),
                     binding.get("browser_target_id"),
                     session_id=rt.lease.session_id,
-                    conversation_target=current_url,
+                    conversation_target=rt.conversation_key,
                 )
                 persisted = True
             if not (rt.conversation_key or "").startswith("provisional:"):
@@ -267,7 +288,7 @@ async def _persist_mission_lease(rt: MissionRuntime) -> None:
 
 
 async def _release_terminal_mission(rt: MissionRuntime) -> None:
-    if rt.lease is None:
+    if rt.lease is None or not rt.lease_release_ready:
         return
     try:
         state = get_store().get_mission(rt.mission_id)["state"]
@@ -343,9 +364,26 @@ def _fail_mission(store: Store, mission_id: str, reason: str) -> None:
             continue
 
 
+class _PrecreatedMissionStore:
+    """Let ModeARunner reuse the synchronously persisted mission and binding."""
+
+    def __init__(self, store: Store, mission_id: str):
+        self._store = store
+        self._mission_id = mission_id
+
+    def create_mission(self, mission_id: str, *args, **kwargs) -> dict:
+        if mission_id != self._mission_id:
+            return self._store.create_mission(mission_id, *args, **kwargs)
+        return self._store.get_mission(mission_id)
+
+    def __getattr__(self, name: str):
+        return getattr(self._store, name)
+
+
 async def _run_mission_task(rt: MissionRuntime, objective: str, body: MissionIn) -> None:
+    store = get_store()
     runner = ModeARunner(
-        store=get_store(),
+        store=_PrecreatedMissionStore(store, rt.mission_id),
         transport=rt.transport,
         tools=rt._tools,  # type: ignore[attr-defined]
         policy=rt.policy,
@@ -353,31 +391,77 @@ async def _run_mission_task(rt: MissionRuntime, objective: str, body: MissionIn)
         approval_callback=_make_approval_callback(rt),
         experimental_transport_accepted=True,  # enforced by the endpoint
     )
-    binding_task = asyncio.create_task(_persist_mission_lease(rt))
-    try:
+    async def run() -> dict:
         if body.new_conversation:
-            await runner.run_mission(objective, new_conversation_url=body.conversation_url,
-                                     mission_id=rt.mission_id)
+            return await runner.run_mission(
+                objective,
+                new_conversation_url=body.conversation_url,
+                mission_id=rt.mission_id,
+            )
+        return await runner.run_mission(
+            objective,
+            conversation_url=body.conversation_url,
+            mission_id=rt.mission_id,
+        )
+
+    runner_task = asyncio.create_task(run())
+    binding_task = asyncio.create_task(_persist_mission_lease(rt))
+    binding_error = None
+    try:
+        done, _ = await asyncio.wait(
+            {runner_task, binding_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if binding_task in done:
+            try:
+                await binding_task
+            except Exception as exc:
+                binding_error = exc
+                runner_task.cancel()
+                await asyncio.gather(runner_task, return_exceptions=True)
+            else:
+                await runner_task
         else:
-            await runner.run_mission(objective, conversation_url=body.conversation_url,
-                                     mission_id=rt.mission_id)
+            await runner_task
     except OptInRequired:
         pass
+    except asyncio.CancelledError:
+        runner_task.cancel()
+        await asyncio.gather(runner_task, return_exceptions=True)
+        raise
     except Exception as exc:  # never leave a mission stuck running
-        store = get_store()
         _fail_mission(store, rt.mission_id, f"runner crashed: {exc}")
         store.record_transport_event(
             str(uuid.uuid4()), rt.mission_id, "RUNNER_CRASHED", {"error": str(exc)}
         )
     finally:
+        if not runner_task.done():
+            runner_task.cancel()
+            await asyncio.gather(runner_task, return_exceptions=True)
         if not binding_task.done():
             try:
                 await asyncio.wait_for(asyncio.shield(binding_task), timeout=0.2)
             except asyncio.TimeoutError:
                 binding_task.cancel()
-                await asyncio.gather(binding_task, return_exceptions=True)
+                results = await asyncio.gather(binding_task, return_exceptions=True)
+                if results and isinstance(results[0], Exception):
+                    binding_error = results[0]
         else:
-            await binding_task
+            try:
+                await binding_task
+            except Exception as exc:
+                binding_error = exc
+        if binding_error is not None:
+            _fail_mission(store, rt.mission_id, f"lease persistence failed: {binding_error}")
+            try:
+                store.record_transport_event(
+                    str(uuid.uuid4()),
+                    rt.mission_id,
+                    "LEASE_PERSISTENCE_FAILED",
+                    {"error": str(binding_error)},
+                )
+            except Exception:
+                pass
         await _release_terminal_mission(rt)
 
 
@@ -465,8 +549,19 @@ async def _resume_mission_task(rt: MissionRuntime) -> None:
         await _release_terminal_mission(rt)
 
 
-def _stop_runtime(rt: MissionRuntime) -> None:
+async def _release_after_quiescence(
+    rt: MissionRuntime,
+    activities: list[asyncio.Task],
+) -> None:
+    if activities:
+        await asyncio.gather(*activities, return_exceptions=True)
+    rt.lease_release_ready = True
+    await _release_terminal_mission(rt)
+
+
+async def _stop_runtime(rt: MissionRuntime) -> bool:
     rt.stopped = True
+    rt.lease_release_ready = False
     rt.approval_scope = None
     rt.approval_event.set()
     store = get_store()
@@ -474,16 +569,21 @@ def _stop_runtime(rt: MissionRuntime) -> None:
         store.transition(rt.mission_id, "CANCELLED", pause_reason="STOP_EVERYTHING")
     except StoreError:
         pass  # already terminal or a state that cannot transition — evidence intact
-    if rt.transport is not None and rt.transport.lock is not None:
-        try:
-            asyncio.get_running_loop().create_task(rt.transport.cancel_generation())
-        except RuntimeError:
-            pass
-    if rt.lease is not None:
-        try:
-            asyncio.get_running_loop().create_task(_release_terminal_mission(rt))
-        except RuntimeError:
-            pass
+    if rt.quiescence_task is None:
+        activities: list[asyncio.Task] = []
+        if rt.transport is not None and rt.transport.lock is not None:
+            activities.append(asyncio.create_task(rt.transport.cancel_generation()))
+        if rt.task is not None and not rt.task.done():
+            rt.task.cancel()
+            activities.append(rt.task)
+        rt.quiescence_task = asyncio.create_task(
+            _release_after_quiescence(rt, activities)
+        )
+    done, _ = await asyncio.wait(
+        {rt.quiescence_task},
+        timeout=STOP_QUIESCE_TIMEOUT,
+    )
+    return bool(done)
 
 
 # ------------------------------------------------------------------- routes
@@ -511,10 +611,8 @@ async def stop_everything() -> dict:
     global _global_stop
     _global_stop = True
     runtimes = list(_runtimes.values())
-    for rt in runtimes:
-        _stop_runtime(rt)
     await asyncio.gather(
-        *(_release_terminal_mission(rt) for rt in runtimes),
+        *(_stop_runtime(rt) for rt in runtimes),
         return_exceptions=True,
     )
     return {"global_stop": True, "missions_stopped": len(_runtimes)}
@@ -595,20 +693,44 @@ async def create_mission(body: MissionIn) -> dict:
         lease = await write_slots.acquire_writer(conversation_key)
     except write_slots.SessionCapacityError:
         raise HTTPException(status_code=409, detail=write_slots.REFUSAL_MESSAGE)
+    objective = _objective_with_constraints(body)
     try:
+        store.create_mission(
+            mission_id,
+            objective,
+            str(Path(body.workspace).expanduser().resolve()),
+            max_iterations=body.max_iterations,
+            max_duration_seconds=body.max_duration_minutes * 60,
+        )
+        store.bind_conversation(
+            str(uuid.uuid4()),
+            mission_id,
+            body.conversation_url,
+            session_id=lease.session_id,
+            conversation_target=lease.conversation_key,
+        )
+        store.transition(mission_id, "INITIALIZING_MISSION")
         rt = _build_runtime(
             mission_id, body.workspace, body.approval_policy,
             body.primary_executor, body.fallback_executor,
             body.max_iterations, body.max_duration_minutes * 60, body.allow_processes,
             lease=lease,
         )
-    except Exception:
+    except Exception as exc:
+        try:
+            _fail_mission(store, mission_id, f"mission binding failed: {exc}")
+        except Exception:
+            pass
         await lease.release()
-        raise
+        _mission_leases.pop(mission_id, None)
+        _mission_write_urls.pop(mission_id, None)
+        if isinstance(exc, HTTPException):
+            raise
+        raise HTTPException(status_code=503, detail=f"cannot persist mission binding: {exc}")
     _mission_leases[mission_id] = lease
     _mission_write_urls[mission_id] = body.conversation_url
     rt.task = asyncio.create_task(
-        _run_mission_task(rt, _objective_with_constraints(body), body)
+        _run_mission_task(rt, objective, body)
     )
     return {"id": mission_id, "state": "INITIALIZING_MISSION"}
 
@@ -714,17 +836,22 @@ async def resume_mission(mission_id: str) -> dict:
     # Rebuild the runtime: re-attach the locked conversation, never resend.
     bindings = store.rows("conversation_bindings", mission_id, order_by="rowid")
     lease = _mission_leases.get(mission_id)
-    if lease is None and bindings and bindings[0].get("session_id"):
-        b = bindings[0]
+    if lease is None and bindings and bindings[-1].get("session_id"):
+        b = bindings[-1]
         try:
             lease = write_slots.restore_writer(
-                b["conversation_url"],
-                b["session_id"],
                 b.get("conversation_target") or b["conversation_url"],
+                b["session_id"],
+                b["conversation_url"],
             )
-        except write_slots.SessionCapacityError:
+        except (
+            write_slots.SessionCapacityError,
+            write_slots.SessionRekeyError,
+        ):
             raise HTTPException(status_code=409, detail=write_slots.REFUSAL_MESSAGE)
         _mission_leases[mission_id] = lease
+    if lease is None:
+        raise HTTPException(status_code=409, detail="mission has no durable writer lease")
     rt = _build_runtime(
         mission_id, mission["workspace"], WRITE_WITH_APPROVALS,
         "orchestra-executor", "orchestra-executor-fallback",
@@ -759,8 +886,7 @@ async def cancel_mission(mission_id: str) -> dict:
     _mission_or_404(store, mission_id)
     rt = _runtimes.get(mission_id)
     if rt is not None:
-        _stop_runtime(rt)
-        await _release_terminal_mission(rt)
+        await _stop_runtime(rt)
     else:
         try:
             store.transition(mission_id, "CANCELLED", pause_reason="USER_CANCEL")

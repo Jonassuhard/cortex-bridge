@@ -79,6 +79,14 @@ class ConversationSessionRegistry:
         state.current = lease
         return lease
 
+    def _discard_unheld(self, state: _SessionState) -> None:
+        if state.held or state.waiters:
+            return
+        self._states.pop(state.key, None)
+        for alias, target in list(self._aliases.items()):
+            if target == state.key:
+                self._aliases.pop(alias, None)
+
     async def acquire_writer(self, conversation_key: str) -> SessionLease:
         key = self._resolve(conversation_key)
         if not key:
@@ -100,7 +108,12 @@ class ConversationSessionRegistry:
                 try:
                     while state.held:
                         await self._condition.wait()
-                finally:
+                except asyncio.CancelledError:
+                    state.waiters -= 1
+                    self._discard_unheld(state)
+                    self._condition.notify_all()
+                    raise
+                else:
                     state.waiters -= 1
             state.held = True
             return self._lease(state)
@@ -140,20 +153,14 @@ class ConversationSessionRegistry:
                 return
             state.current.released = True
             state.held = False
-            if state.waiters == 0:
-                self._states.pop(state.key, None)
-                for alias, target in list(self._aliases.items()):
-                    if target == state.key:
-                        self._aliases.pop(alias, None)
+            self._discard_unheld(state)
             self._condition.notify_all()
 
-    async def release_writer(self, conversation_key: str) -> None:
-        """Compatibility release by key; lease.release() is stale-safe."""
-        key = self._resolve(conversation_key)
-        state = self._states.get(key)
-        if state is None or state.current is None:
-            return
-        await self._release(key, state.current._token)
+    async def release_writer(self, lease: SessionLease) -> None:
+        """Release only the supplied owner token; string/key release is unsafe."""
+        if not isinstance(lease, SessionLease):
+            raise TypeError("release_writer requires the exact SessionLease owner")
+        await lease.release()
 
     def restore_writer(
         self,

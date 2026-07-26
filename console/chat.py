@@ -169,7 +169,15 @@ def _make_transport(session_id: str) -> ChatGPTWebTransport:
 
 def _persist_runs() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    payload = [run.persisted() for run in list(_runs.values())[-100:]]
+    runs = list(_runs.values())
+    terminal_states = {"COMPLETED", "FAILED", "CANCELLED"}
+    retained_ids = {
+        run.id for run in runs if run.state not in terminal_states
+    }
+    retained_ids.update(
+        run.id for run in [r for r in runs if r.state in terminal_states][-100:]
+    )
+    payload = [run.persisted() for run in runs if run.id in retained_ids]
     tmp = CHAT_RUNS_FILE.with_suffix(".tmp")
     tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     tmp.replace(CHAT_RUNS_FILE)
@@ -183,7 +191,7 @@ def _load_persisted_runs() -> None:
         return
     if not isinstance(payload, list):
         return
-    for item in payload[-100:]:
+    for item in payload:
         if not isinstance(item, dict) or not item.get("id") or not item.get("conversation_url"):
             continue
         run = ChatRunRuntime(
