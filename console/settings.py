@@ -29,6 +29,7 @@ router = APIRouter(prefix="/api")
 DATA_DIR = Path(__file__).resolve().parent / "data"
 SETTINGS_FILE = DATA_DIR / "settings.json"
 DB_PATH = DATA_DIR / "cortex.db"
+TASK_STORE_FILE = DATA_DIR / "iterations.json"
 browser_driver_factory = create_browser_driver
 
 
@@ -276,16 +277,88 @@ def _latest_mission_events(mission_id: str | None) -> list[dict[str, Any]]:
     return sorted(events, key=lambda row: row["ts"], reverse=True)[:10]
 
 
+def _iso_timestamp(value: object) -> str | None:
+    if isinstance(value, str) and value:
+        return value
+    if isinstance(value, (int, float)):
+        return datetime.fromtimestamp(value, timezone.utc).isoformat()
+    return None
+
+
+def _latest_local_task_runtime_truth() -> dict[str, Any] | None:
+    """Read executor evidence persisted by /api/tasks, never daemon guesses."""
+    try:
+        tasks = json.loads(TASK_STORE_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(tasks, list):
+        return None
+    task = next((row for row in tasks if isinstance(row, dict)), None)
+    if task is None:
+        return None
+    report = task.get("report") if isinstance(task.get("report"), dict) else {}
+    status = str(task.get("status") or "unknown")
+    active = status == "running"
+    return {
+        "task_id": task.get("id"),
+        "executor_kind": report.get(
+            "executor_kind", task.get("executor_kind", "unavailable")
+        ),
+        "executor_model_used": report.get(
+            "executor_model_used", task.get("executor_model_used")
+        ),
+        "runtime_mode": report.get(
+            "runtime_mode", task.get("runtime_mode", "live")
+        ),
+        "release_eligible": bool(
+            report.get("release_eligible", task.get("release_eligible", False))
+        ),
+        "state": status,
+        "active": active,
+        "observed_at": _iso_timestamp(
+            task.get("finished_at") or task.get("started_at")
+        ),
+    }
+
+
+def _mission_runtime_truth(mission: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "task_id": mission.get("id"),
+        "executor_kind": mission.get("executor_kind", "unavailable"),
+        "executor_model_used": mission.get("executor_model_used"),
+        "runtime_mode": mission.get("runtime_mode", "live"),
+        "release_eligible": bool(mission.get("release_eligible", False)),
+        "state": mission.get("state", "unknown"),
+        "active": True,
+        "observed_at": _iso_timestamp(
+            mission.get("runtime_observed_at") or mission.get("updated_at")
+        ),
+    }
+
+
+def _idle_runtime_truth() -> dict[str, Any]:
+    return {
+        "task_id": None,
+        "executor_kind": "unavailable",
+        "executor_model_used": None,
+        "runtime_mode": "live",
+        "release_eligible": False,
+        "state": "idle",
+        "active": False,
+        "observed_at": None,
+    }
+
+
 @router.get("/pipeline/status")
 async def pipeline_status() -> dict[str, Any]:
     rt = runtime_status()
     active = _active_missions()
     mission = active[0] if active else None
-    runtime_execution = {
-        "executor_kind": "deterministic" if mission else rt["executor_kind"],
-        "executor_model_used": None if mission else rt["executor_model_used"],
-        "runtime_mode": rt["runtime_mode"],
-    }
+    runtime_execution = (
+        _mission_runtime_truth(mission)
+        if mission
+        else _latest_local_task_runtime_truth() or _idle_runtime_truth()
+    )
     try:
         bridge_health = await browser_driver_factory(
             session="cortex-bridge-ui",
@@ -377,25 +450,25 @@ async def pipeline_status() -> dict[str, Any]:
         {
             "id": "executor",
             "label": "Exécuteur réellement utilisé",
-            "state": (
-                "running"
-                if mission
+            "state": "running" if runtime_execution["active"] else (
+                "healthy" if runtime_execution["state"] in {"done", "COMPLETED"}
+                else "blocked" if runtime_execution["state"] == "blocked"
+                else "failed" if runtime_execution["state"] in {
+                    "failed", "FAILED", "BLOCKED", "CANCELLED"
+                }
                 else "idle"
-                if runtime_execution["executor_kind"] == "unavailable"
-                else "healthy"
             ),
             "detail": (
-                "deterministic · Mode A"
-                if mission
-                else "aucun appel exécuteur observé"
+                "aucun appel exécuteur observé"
                 if runtime_execution["executor_kind"] == "unavailable"
                 else (
                     f"{runtime_execution['executor_kind']} · "
-                    f"{runtime_execution['executor_model_used'] or 'sans modèle'}"
+                    f"{runtime_execution['executor_model_used'] or 'sans modèle'} · "
+                    f"{runtime_execution['state']}"
                 )
             ),
             "latency_ms": None,
-            "heartbeat_at": _now(),
+            "heartbeat_at": runtime_execution["observed_at"],
         },
         {
             "id": "approvals",

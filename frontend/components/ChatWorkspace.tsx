@@ -10,6 +10,7 @@ import type {
   PipelineStatus,
 } from "@/lib/types";
 import { formatDuration, shortTime } from "@/lib/api";
+import { executorDisplay, isAvailableComponentState } from "@/lib/runtimeTruth";
 import {
   ActivityIcon,
   BrowserIcon,
@@ -309,7 +310,7 @@ export function ChatWorkspace({
         : "Connexion dégradée";
   // P1a: the agent executor status sits next to the ChatGPT status.
   const ollamaComponent = pipeline.components?.find((component) => component.id === "ollama");
-  const agentUp = ollamaComponent ? ollamaComponent.state === "healthy" : online;
+  const agentUp = isAvailableComponentState(ollamaComponent?.state);
   const agentLabel = missionRunning
     ? "en cours"
     : activeMissionState === "PAUSED" || activeMissionState === "PAUSED_RECOVERY_REQUIRED"
@@ -329,7 +330,7 @@ export function ChatWorkspace({
             <p>
               <span>{settings.planner_model}</span>
               <i />
-              <span>{mission?.mission.executor_kind === "ollama" ? mission.mission.executor_model_used : "Mode A · déterministe"}</span>
+              <span>{executorDisplay(mission?.mission || pipeline.runtime_execution)}</span>
               <i />
               <span className={settings.never_delete_files ? "safe-label" : "warning-label"}><ShieldIcon size={12} /> {settings.never_delete_files ? "Aucune suppression" : "Suppression non protégée"}</span>
             </p>

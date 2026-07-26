@@ -374,9 +374,14 @@ class ChatSettingsApiTestCase(unittest.TestCase):
         self.assertEqual(
             body["runtime_execution"],
             {
+                "task_id": None,
                 "executor_kind": "unavailable",
                 "executor_model_used": None,
                 "runtime_mode": "live",
+                "release_eligible": False,
+                "state": "idle",
+                "active": False,
+                "observed_at": None,
             },
         )
 

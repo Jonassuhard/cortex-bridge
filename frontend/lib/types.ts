@@ -113,6 +113,14 @@ export interface RuntimeTruth {
   executor_kind: ExecutorKind;
   executor_model_used: string | null;
   runtime_mode: RuntimeMode;
+  release_eligible: boolean;
+}
+
+export interface RuntimeExecution extends RuntimeTruth {
+  task_id: string | null;
+  state: string;
+  active: boolean;
+  observed_at: string | null;
 }
 
 export interface RuntimeStatus extends RuntimeTruth {
@@ -156,7 +164,7 @@ export interface PipelineStatus {
   components: PipelineComponent[];
   active_mission_id?: string | null;
   active_mission_state?: string | null;
-  runtime_execution: RuntimeTruth;
+  runtime_execution: RuntimeExecution;
   queue_pending: number;
   events: PipelineEvent[];
   latency?: {

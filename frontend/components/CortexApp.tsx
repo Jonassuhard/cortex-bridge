@@ -29,6 +29,7 @@ import type {
   TransportStatus,
 } from "@/lib/types";
 import { useInterval } from "@/hooks/useInterval";
+import { createUnavailableClientState } from "@/lib/runtimeTruth";
 import { ConversationSidebar } from "./ConversationSidebar";
 import { ChatWorkspace } from "./ChatWorkspace";
 import { PipelineInspector } from "./PipelineInspector";
@@ -37,6 +38,9 @@ import { OnboardingPanel } from "./OnboardingPanel";
 
 const DEVELOPMENT_FIXTURES_ENABLED =
   process.env.NEXT_PUBLIC_CORTEX_DEVELOPMENT_FIXTURES === "1";
+const INITIAL_UNAVAILABLE_STATE = createUnavailableClientState(
+  new Date(0).toISOString(),
+);
 
 function normalizeConversation(raw: Partial<ConversationSummary> & { url: string }): ConversationSummary {
   const identity = raw.identity || raw.url.match(/\/c\/([^/?#]+)/)?.[1] || raw.url;
@@ -65,14 +69,22 @@ export function CortexApp() {
   const [messages, setMessages] = useState<ConversationMessage[]>([]);
   const [loadingConversations, setLoadingConversations] = useState(true);
   const [loadingMessages, setLoadingMessages] = useState(false);
-  const [runtime, setRuntime] = useState<RuntimeStatus>(demoRuntime);
-  const [transport, setTransport] = useState<TransportStatus>(demoTransport);
-  const [pipeline, setPipeline] = useState<PipelineStatus>(demoPipeline);
+  const [runtime, setRuntime] = useState<RuntimeStatus>(
+    DEVELOPMENT_FIXTURES_ENABLED ? demoRuntime : INITIAL_UNAVAILABLE_STATE.runtime,
+  );
+  const [transport, setTransport] = useState<TransportStatus>(
+    DEVELOPMENT_FIXTURES_ENABLED ? demoTransport : INITIAL_UNAVAILABLE_STATE.transport,
+  );
+  const [pipeline, setPipeline] = useState<PipelineStatus>(
+    DEVELOPMENT_FIXTURES_ENABLED ? demoPipeline : INITIAL_UNAVAILABLE_STATE.pipeline,
+  );
   const [, setMissions] = useState<MissionSummary[]>([]);
   const [selectedMissionId, setSelectedMissionId] = useState<string | null>(null);
   const [missionDetail, setMissionDetail] = useState<MissionDetail | null>(null);
   const [chatRun, setChatRun] = useState<ChatRun | null>(null);
-  const [settings, setSettings] = useState<CortexSettings>(demoSettings);
+  const [settings, setSettings] = useState<CortexSettings>(
+    DEVELOPMENT_FIXTURES_ENABLED ? demoSettings : INITIAL_UNAVAILABLE_STATE.settings,
+  );
   const [ollamaModels, setOllamaModels] = useState<OllamaModelInfo[]>([]);
   const [chatgptModels, setChatGPTModels] = useState<ChatGPTModelInfo[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -110,15 +122,9 @@ export function CortexApp() {
         setTransport(demoTransport);
         setDemoMode(true);
       } else {
-        setRuntime((current) => ({
-          ...current,
-          ollama_up: false,
-          ollama_status: "unavailable",
-          executor_available: false,
-          executor_kind: "unavailable",
-          executor_model_used: null,
-          runtime_mode: "live",
-        }));
+        const unavailable = createUnavailableClientState(new Date().toISOString());
+        setRuntime(unavailable.runtime);
+        setTransport(unavailable.transport);
         setDemoMode(false);
       }
     }
@@ -129,17 +135,13 @@ export function CortexApp() {
       const data = await api<PipelineStatus>("/api/pipeline/status");
       setPipeline(data);
     } catch {
-      setPipeline(() => demoMode ? demoPipeline : {
-        ...demoPipeline,
-        updated_at: new Date().toISOString(),
-        components: demoPipeline.components.map((component) =>
-          component.id === "ollama"
-            ? { ...component, state: runtime.ollama_up ? "healthy" : "failed", detail: runtime.ollama_status }
-            : component,
-        ),
-      });
+      setPipeline(
+        DEVELOPMENT_FIXTURES_ENABLED
+          ? demoPipeline
+          : createUnavailableClientState(new Date().toISOString()).pipeline,
+      );
     }
-  }, [demoMode, runtime.ollama_status, runtime.ollama_up]);
+  }, []);
 
   const refreshConversations = useCallback(async () => {
     setLoadingConversations(true);
@@ -199,7 +201,9 @@ export function CortexApp() {
       const data = await api<MissionDetail>(`/api/missions/${selectedMissionId}`);
       setMissionDetail(data);
     } catch {
-      if (selectedMissionId === demoMissionDetail.mission.id) setMissionDetail(demoMissionDetail);
+      if (DEVELOPMENT_FIXTURES_ENABLED && selectedMissionId === demoMissionDetail.mission.id) {
+        setMissionDetail(demoMissionDetail);
+      }
     }
   }, [selectedMissionId]);
 
@@ -214,12 +218,19 @@ export function CortexApp() {
       setOllamaModels(ollamaData.models);
       setChatGPTModels(chatgptData.models);
     } catch {
-      setSettings(demoSettings);
-      setOllamaModels([
-        { name: "orchestra-executor", size: 5_300_000_000, loaded: true },
-        { name: "orchestra-executor-fallback", size: 6_600_000_000, loaded: false },
-      ]);
-      setChatGPTModels([{ label: demoSettings.planner_model, selected: true, available: true }]);
+      if (DEVELOPMENT_FIXTURES_ENABLED) {
+        setSettings(demoSettings);
+        setOllamaModels([
+          { name: "orchestra-executor", size: 5_300_000_000, loaded: true },
+          { name: "orchestra-executor-fallback", size: 6_600_000_000, loaded: false },
+        ]);
+        setChatGPTModels([{ label: demoSettings.planner_model, selected: true, available: true }]);
+      } else {
+        const unavailable = createUnavailableClientState(new Date().toISOString());
+        setSettings(unavailable.settings);
+        setOllamaModels(unavailable.ollamaModels);
+        setChatGPTModels(unavailable.chatgptModels);
+      }
     }
   }, []);
 
@@ -241,7 +252,11 @@ export function CortexApp() {
         setSettings((current) => ({ ...current, planner_model: snapshot.model_label || current.planner_model }));
       }
     } catch {
-      setMessages(conversation.identity.startsWith("demo-") ? demoMessages : []);
+      setMessages(
+        DEVELOPMENT_FIXTURES_ENABLED && conversation.identity.startsWith("demo-")
+          ? demoMessages
+          : [],
+      );
     } finally {
       setLoadingMessages(false);
     }
@@ -437,7 +452,7 @@ export function CortexApp() {
       void refreshMissions();
       return true;
     } catch (error) {
-      if (demoMode) {
+      if (DEVELOPMENT_FIXTURES_ENABLED && demoMode) {
         setSelectedMissionId(demoMissionDetail.mission.id);
         setMissionDetail(demoMissionDetail);
         notify("Aperçu local : mission simulée.");
@@ -520,9 +535,13 @@ export function CortexApp() {
       setSettingsOpen(false);
       notify("Paramètres enregistrés.");
     } catch {
-      setSettings(next);
-      setSettingsOpen(false);
-      notify("Paramètres appliqués localement dans l'aperçu.");
+      if (DEVELOPMENT_FIXTURES_ENABLED) {
+        setSettings(next);
+        setSettingsOpen(false);
+        notify("Paramètres appliqués à la fixture de développement.");
+      } else {
+        notify("Échec de l'enregistrement : paramètres inchangés.");
+      }
     } finally {
       setSettingsSaving(false);
     }
@@ -613,6 +632,7 @@ export function CortexApp() {
         settings={settings}
         ollamaModels={ollamaModels}
         chatgptModels={chatgptModels}
+        runtimeExecution={pipeline.runtime_execution}
         saving={settingsSaving}
         onClose={() => setSettingsOpen(false)}
         onSave={saveSettings}

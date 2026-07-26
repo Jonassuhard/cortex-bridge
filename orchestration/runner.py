@@ -180,14 +180,14 @@ class ModeARunner:
     experimental_transport_accepted: bool = False  # §6: default OFF
     max_cycles: int = MAX_CYCLES
 
-    @staticmethod
-    def _with_runtime_truth(result: dict) -> dict:
-        return {
-            **result,
-            "executor_kind": "deterministic",
-            "executor_model_used": None,
-            "runtime_mode": "live",
-        }
+    def _persist_runtime_truth(self, mission_id: str, result: dict) -> dict:
+        return self.store.record_runtime_truth(
+            mission_id,
+            executor_kind="deterministic",
+            executor_model_used=None,
+            runtime_mode="live",
+            release_eligible=result.get("state") == "COMPLETED",
+        )
 
     async def run_mission(
         self,
@@ -215,6 +215,16 @@ class ModeARunner:
             str(self.tools.workspace),
             max_iterations=(self.budgets or Budgets()).max_iterations,
             max_duration_seconds=(self.budgets or Budgets()).max_duration_seconds,
+            executor_kind="deterministic",
+            executor_model_used=None,
+            runtime_mode="live",
+        )
+        self.store.record_runtime_truth(
+            mission_id,
+            executor_kind="deterministic",
+            executor_model_used=None,
+            runtime_mode="live",
+            release_eligible=False,
         )
 
         # §8: lock exactly one conversation (or capture a brand-new one).
@@ -243,14 +253,18 @@ class ModeARunner:
             contract=render_contract(objective, mission_id, str(self.tools.workspace)),
         )
         try:
-            return self._with_runtime_truth(
-                await loop.run(max_cycles=self.max_cycles)
+            return self._persist_runtime_truth(
+                mission_id, await loop.run(max_cycles=self.max_cycles)
             )
         except BlockerDetected as exc:
             # §5: login/CAPTCHA/rate-limit — pause safely, never bypass.
-            return self._with_runtime_truth(self._pause_mission(loop, exc.code))
+            return self._persist_runtime_truth(
+                mission_id, self._pause_mission(loop, exc.code)
+            )
         except TransportError as exc:
-            return self._with_runtime_truth(self._pause_mission(loop, exc.code))
+            return self._persist_runtime_truth(
+                mission_id, self._pause_mission(loop, exc.code)
+            )
 
     def _pause_mission(self, loop: MissionLoop, reason: str) -> dict:
         try:

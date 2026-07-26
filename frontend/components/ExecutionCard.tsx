@@ -4,6 +4,7 @@
 import { useMemo } from "react";
 import type { MissionDetail, PipelineStatus } from "@/lib/types";
 import { formatDuration, shortTime } from "@/lib/api";
+import { executionStateLabel } from "@/lib/runtimeTruth";
 import {
   ActivityIcon,
   BrowserIcon,
@@ -59,6 +60,7 @@ export function ExecutionCard({ mission, pipeline, expanded, onToggle, onApprove
   const missionState = active?.state || pipeline.active_mission_state || "EXECUTING_LOCAL_ACTION";
   const terminal = ["COMPLETED", "BLOCKED", "FAILED", "CANCELLED"].includes(missionState);
   const completed = missionState === "COMPLETED";
+  const terminalLabel = executionStateLabel(missionState);
   const waitingApproval = !!mission?.awaiting_approval;
 
   const evidence = useMemo(() => {
@@ -118,7 +120,7 @@ export function ExecutionCard({ mission, pipeline, expanded, onToggle, onApprove
 
       <div className="execution-progress-row">
         <div className="execution-progress-track"><span style={{ width: terminal ? "100%" : waitingApproval ? "48%" : "67%" }} /></div>
-        <span>{completed ? "Terminé" : missionState === "FAILED" ? "Échec" : missionState === "BLOCKED" ? "Bloquée" : missionState === "CANCELLED" ? "Annulée" : waitingApproval ? "En attente de validation humaine" : "Boucle autonome en cours"}</span>
+        <span>{terminalLabel || (waitingApproval ? "En attente de validation humaine" : "Boucle autonome en cours")}</span>
       </div>
 
       {waitingApproval && (

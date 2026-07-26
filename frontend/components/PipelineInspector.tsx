@@ -2,6 +2,7 @@
 
 import type { MissionDetail, PipelineComponent, PipelineStatus, RuntimeStatus, TransportStatus } from "@/lib/types";
 import { formatDuration, shortTime } from "@/lib/api";
+import { executorDiagnosticsLabel } from "@/lib/runtimeTruth";
 import {
   ActivityIcon,
   AlertIcon,
@@ -51,10 +52,10 @@ function componentIcon(id: string) {
 }
 
 function stateTone(state: PipelineComponent["state"]) {
-  if (["healthy", "connected", "idle"].includes(state)) return "good";
+  if (["healthy", "connected", "available", "idle"].includes(state)) return "good";
   if (["running", "waiting"].includes(state)) return "active";
   if (["degraded", "blocked"].includes(state)) return "warning";
-  if (["failed", "disconnected"].includes(state)) return "danger";
+  if (["failed", "disconnected", "unavailable"].includes(state)) return "danger";
   return "muted";
 }
 
@@ -147,6 +148,7 @@ export function PipelineInspector({
           <div><dt>Modèle candidat</dt><dd>{runtime.primary.name}</dd></div>
           <div><dt>Exécuteur utilisé</dt><dd>{pipeline.runtime_execution.executor_kind}</dd></div>
           <div><dt>Modèle réellement utilisé</dt><dd>{pipeline.runtime_execution.executor_model_used || "aucun"}</dd></div>
+          <div><dt>Mode d&apos;exécution</dt><dd>{executorDiagnosticsLabel(pipeline.runtime_execution)}</dd></div>
           <div><dt>Disque DJO</dt><dd className={runtime.volume_mounted ? "good" : "danger"}>{runtime.volume_mounted ? "monté" : "absent"}</dd></div>
           <div><dt>Stockage</dt><dd title={runtime.storage_path}>{runtime.storage_path.split("/").slice(-3).join("/")}</dd></div>
           <div><dt>Mission</dt><dd>{missionState || "aucune"}</dd></div>

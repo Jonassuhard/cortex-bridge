@@ -137,6 +137,7 @@ def runtime_status() -> dict:
         "executor_kind": "unavailable",
         "executor_model_used": None,
         "runtime_mode": "live",
+        "release_eligible": False,
     }
 
 
@@ -333,7 +334,7 @@ def _report(status: str, summary: str, commands_run: list[str],
             files_changed: list[str], blockers: list[str], next_step: str,
             *, executor_kind: str, executor_model_used: str | None,
             runtime_mode: str) -> dict:
-    return {
+    report = {
         "status": status,
         "summary": summary,
         "commands_run": commands_run,
@@ -344,6 +345,8 @@ def _report(status: str, summary: str, commands_run: list[str],
         "executor_model_used": executor_model_used,
         "runtime_mode": runtime_mode,
     }
+    report["release_eligible"] = release_runtime_eligible(report)
+    return report
 
 
 def release_runtime_eligible(report: dict) -> bool:

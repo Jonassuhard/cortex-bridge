@@ -123,6 +123,11 @@ CREATE TABLE IF NOT EXISTS missions (
     max_iterations INTEGER NOT NULL DEFAULT 25,
     max_duration_seconds INTEGER NOT NULL DEFAULT 3600,
     failure_counts TEXT NOT NULL DEFAULT '{}',
+    executor_kind TEXT NOT NULL DEFAULT 'unavailable',
+    executor_model_used TEXT,
+    runtime_mode TEXT NOT NULL DEFAULT 'live',
+    release_eligible INTEGER NOT NULL DEFAULT 0,
+    runtime_observed_at REAL,
     created_at REAL NOT NULL,
     started_at REAL,
     updated_at REAL NOT NULL
@@ -247,6 +252,7 @@ class Store:
         self._conn.execute("PRAGMA foreign_keys = ON")
         self._conn.executescript(_SCHEMA)
         self._migrate_conversation_bindings()
+        self._migrate_mission_runtime_truth()
         self._recover_interrupted_missions()
 
     def close(self) -> None:
@@ -269,6 +275,26 @@ class Store:
                 self._conn.execute(
                     "ALTER TABLE conversation_bindings ADD COLUMN conversation_target TEXT"
                 )
+
+    def _migrate_mission_runtime_truth(self) -> None:
+        """Add durable runtime evidence fields without replacing old databases."""
+        columns = {
+            row["name"]
+            for row in self._conn.execute("PRAGMA table_info(missions)").fetchall()
+        }
+        additions = {
+            "executor_kind": "TEXT NOT NULL DEFAULT 'unavailable'",
+            "executor_model_used": "TEXT",
+            "runtime_mode": "TEXT NOT NULL DEFAULT 'live'",
+            "release_eligible": "INTEGER NOT NULL DEFAULT 0",
+            "runtime_observed_at": "REAL",
+        }
+        with self._conn:
+            for name, definition in additions.items():
+                if name not in columns:
+                    self._conn.execute(
+                        f"ALTER TABLE missions ADD COLUMN {name} {definition}"
+                    )
 
     # -- §18 restart recovery -------------------------------------------------
 
@@ -306,14 +332,19 @@ class Store:
         max_iterations: int = 25,
         max_duration_seconds: int = 3600,
         started_at: float | None = None,
+        executor_kind: str = "unavailable",
+        executor_model_used: str | None = None,
+        runtime_mode: str = "live",
+        release_eligible: bool = False,
     ) -> dict:
         now = time.time()
         with self._conn:
             self._conn.execute(
                 "INSERT INTO missions (id, objective, workspace, state, pause_reason,"
                 " iteration, max_iterations, max_duration_seconds, failure_counts,"
-                " created_at, started_at, updated_at)"
-                " VALUES (?,?,?,?,?,0,?,?,'{}',?,?,?)",
+                " executor_kind, executor_model_used, runtime_mode, release_eligible,"
+                " runtime_observed_at, created_at, started_at, updated_at)"
+                " VALUES (?,?,?,?,?,0,?,?,'{}',?,?,?,?,?,?,?,?)",
                 (
                     mission_id,
                     objective,
@@ -322,11 +353,49 @@ class Store:
                     None,
                     max_iterations,
                     max_duration_seconds,
+                    executor_kind,
+                    executor_model_used,
+                    runtime_mode,
+                    1 if release_eligible else 0,
+                    now,
                     now,
                     started_at if started_at is not None else now,
                     now,
                 ),
             )
+        return self.get_mission(mission_id)
+
+    def record_runtime_truth(
+        self,
+        mission_id: str,
+        *,
+        executor_kind: str,
+        executor_model_used: str | None,
+        runtime_mode: str,
+        release_eligible: bool,
+    ) -> dict:
+        if executor_kind not in {"deterministic", "ollama", "unavailable"}:
+            raise StoreError(f"unknown executor kind {executor_kind}")
+        if runtime_mode not in {"live", "development_fixture"}:
+            raise StoreError(f"unknown runtime mode {runtime_mode}")
+        now = time.time()
+        with self._conn:
+            cursor = self._conn.execute(
+                "UPDATE missions SET executor_kind = ?, executor_model_used = ?,"
+                " runtime_mode = ?, release_eligible = ?, runtime_observed_at = ?,"
+                " updated_at = ? WHERE id = ?",
+                (
+                    executor_kind,
+                    executor_model_used,
+                    runtime_mode,
+                    1 if release_eligible else 0,
+                    now,
+                    now,
+                    mission_id,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise StoreError(f"unknown mission {mission_id}")
         return self.get_mission(mission_id)
 
     def get_mission(self, mission_id: str) -> dict:
@@ -337,6 +406,7 @@ class Store:
             raise StoreError(f"unknown mission {mission_id}")
         data = dict(row)
         data["failure_counts"] = json.loads(data["failure_counts"] or "{}")
+        data["release_eligible"] = bool(data.get("release_eligible", False))
         return data
 
     def transition(self, mission_id: str, new_state: str, *, pause_reason: str | None = None) -> str:
@@ -702,7 +772,11 @@ class Store:
             params = (mission_id,)
         if order_by is not None:
             sql += f" ORDER BY {order_by}"
-        return [dict(r) for r in self._conn.execute(sql, params).fetchall()]
+        rows = [dict(r) for r in self._conn.execute(sql, params).fetchall()]
+        if table == "missions":
+            for row in rows:
+                row["release_eligible"] = bool(row.get("release_eligible", False))
+        return rows
 
     def table_names(self) -> list[str]:
         rows = self._conn.execute(

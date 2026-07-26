@@ -20,7 +20,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from local_executor import runtime_status, run_task
+from local_executor import DEVELOPMENT_FIXTURE_ENV, runtime_status, run_task
 from missions import router as missions_router
 from chat import router as chat_router
 from settings import router as settings_router
@@ -88,6 +88,8 @@ class TaskIn(BaseModel):
     goal: str
     constraints: list[str] = []
     workspace: str = "~/"
+    allow_processes: bool = False
+    development_fixture: bool = False
 
 
 class ReplyIn(BaseModel):
@@ -115,6 +117,7 @@ async def _run(task: dict) -> None:
             "executor_kind": "unavailable",
             "executor_model_used": None,
             "runtime_mode": "live",
+            "release_eligible": False,
         }
         await _emit(task, f"executor crashed: {exc}", "error")
     task["report"] = report
@@ -122,6 +125,7 @@ async def _run(task: dict) -> None:
     task["executor_kind"] = report["executor_kind"]
     task["executor_model_used"] = report["executor_model_used"]
     task["runtime_mode"] = report["runtime_mode"]
+    task["release_eligible"] = bool(report.get("release_eligible", False))
     task["finished_at"] = _now()
     _save_store()
 
@@ -152,6 +156,21 @@ async def status() -> dict:
 async def create_task(body: TaskIn) -> dict:
     if not body.goal.strip():
         raise HTTPException(status_code=422, detail="goal must not be empty")
+    fixtures_allowed = os.environ.get(DEVELOPMENT_FIXTURE_ENV) == "1"
+    if body.development_fixture and not fixtures_allowed:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "DEVELOPMENT_FIXTURES_DISABLED",
+                "message": (
+                    "development_fixture requires "
+                    f"{DEVELOPMENT_FIXTURE_ENV}=1"
+                ),
+            },
+        )
+    requested_runtime_mode = (
+        "development_fixture" if body.development_fixture else "live"
+    )
     task = {
         "id": uuid.uuid4().hex[:12],
         "goal": body.goal.strip(),
@@ -160,7 +179,10 @@ async def create_task(body: TaskIn) -> dict:
         "status": "running",
         "executor_kind": "unavailable",
         "executor_model_used": None,
-        "runtime_mode": "live",
+        "runtime_mode": requested_runtime_mode,
+        "release_eligible": False,
+        "allow_processes": body.allow_processes,
+        "development_fixture": body.development_fixture,
         "started_at": _now(),
         "finished_at": None,
         "logs": [],
@@ -175,7 +197,8 @@ async def create_task(body: TaskIn) -> dict:
         "status": "running",
         "executor_kind": "unavailable",
         "executor_model_used": None,
-        "runtime_mode": "live",
+        "runtime_mode": requested_runtime_mode,
+        "release_eligible": False,
     }
 
 
@@ -189,6 +212,7 @@ async def list_tasks() -> list[dict]:
             "executor_kind": it.get("executor_kind", "unavailable"),
             "executor_model_used": it.get("executor_model_used"),
             "runtime_mode": it.get("runtime_mode", "live"),
+            "release_eligible": bool(it.get("release_eligible", False)),
             "started_at": it["started_at"],
         }
         for it in _iterations

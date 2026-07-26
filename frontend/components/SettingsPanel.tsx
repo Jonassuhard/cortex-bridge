@@ -2,8 +2,9 @@
 /* eslint-disable react/no-unescaped-entities */
 
 import { useMemo, useState } from "react";
-import type { ChatGPTModelInfo, CortexSettings, OllamaModelInfo } from "@/lib/types";
+import type { ChatGPTModelInfo, CortexSettings, OllamaModelInfo, RuntimeTruth } from "@/lib/types";
 import { formatBytes } from "@/lib/api";
+import { executorDiagnosticsLabel, isAvailableComponentState } from "@/lib/runtimeTruth";
 import {
   AlertIcon,
   BrowserIcon,
@@ -25,6 +26,7 @@ interface SettingsPanelProps {
   settings: CortexSettings;
   ollamaModels: OllamaModelInfo[];
   chatgptModels: ChatGPTModelInfo[];
+  runtimeExecution: RuntimeTruth;
   saving: boolean;
   onClose: () => void;
   onSave: (settings: CortexSettings) => Promise<void>;
@@ -66,6 +68,7 @@ export function SettingsPanel({
   settings,
   ollamaModels,
   chatgptModels,
+  runtimeExecution,
   saving,
   onClose,
   onSave,
@@ -86,7 +89,7 @@ export function SettingsPanel({
       const payload = await response.json();
       const component = (payload.components || []).find((row: { id: string }) => row.id === componentId);
       if (!component) throw new Error("composant introuvable");
-      const ok = ["connected", "healthy", "idle"].includes(String(component.state));
+      const ok = isAvailableComponentState(component.state) || component.state === "idle";
       setDiagResult({ label, state: ok ? "ok" : "failed", detail: String(component.detail || component.state) });
     } catch {
       setDiagResult({ label, state: "failed", detail: "Test impossible — la console est-elle démarrée ?" });
@@ -255,7 +258,7 @@ export function SettingsPanel({
                   </p>
                 )}
                 <p className="diagnostic-note">Le rapport est anonymisé : chemins personnels remplacés par ~, identifiants de conversation hachés, aucun contenu de message. Tu peux le coller tel quel dans une issue GitHub.</p>
-                <pre className="diagnostic-console">{`Cortex Bridge UI\n- frontend: Next.js static export\n- backend: FastAPI\n- transport: WebBridge experimental\n- executor: Ollama structured tools\n- deletion: blocked / archive only`}</pre>
+                <pre className="diagnostic-console">{`Cortex Bridge UI\n- frontend: Next.js static export\n- backend: FastAPI\n- transport: WebBridge experimental\n- executor: ${executorDiagnosticsLabel(runtimeExecution)}\n- deletion: blocked / archive only`}</pre>
               </div>
             )}
 

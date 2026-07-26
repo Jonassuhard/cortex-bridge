@@ -89,6 +89,7 @@ export const demoRuntime: RuntimeStatus = {
   executor_kind: "unavailable",
   executor_model_used: null,
   runtime_mode: "development_fixture",
+  release_eligible: false,
 };
 
 export const demoTransport: TransportStatus = {
@@ -105,9 +106,14 @@ export const demoPipeline: PipelineStatus = {
   active_mission_state: "EXECUTING_LOCAL_ACTION",
   queue_pending: 0,
   runtime_execution: {
+    task_id: "demo-mission",
     executor_kind: "deterministic",
     executor_model_used: null,
     runtime_mode: "development_fixture",
+    release_eligible: false,
+    state: "EXECUTING_LOCAL_ACTION",
+    active: true,
+    observed_at: new Date().toISOString(),
   },
   latency: { transport_ms: 128, local_model_ms: 3700, total_iteration_ms: 12800 },
   components: [
@@ -142,6 +148,7 @@ export const demoMissions: MissionSummary[] = [
     executor_kind: "deterministic",
     executor_model_used: null,
     runtime_mode: "development_fixture",
+    release_eligible: false,
   },
 ];
 

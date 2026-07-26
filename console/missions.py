@@ -213,10 +213,13 @@ def _make_approval_callback(rt: MissionRuntime):
 
 
 def _build_runtime(mission_id: str, workspace: str, approval_mode: str,
-                   _legacy_primary: str | None, _legacy_fallback: str | None,
-                   max_iterations: int,
-                   max_duration_seconds: int, allow_processes: bool = False,
+                   primary_executor: str | None = None,
+                   fallback_executor: str | None = None,
+                   max_iterations: int = 25,
+                   max_duration_seconds: int = 3600,
+                   allow_processes: bool = False,
                    lease=None) -> MissionRuntime:
+    del primary_executor, fallback_executor
     if lease is None:
         raise RuntimeError("writer runtime requires an acquired SessionLease")
     ws = Path(workspace).expanduser().resolve()
@@ -346,15 +349,6 @@ def _mission_or_404(store: Store, mission_id: str) -> dict:
         return store.get_mission(mission_id)
     except StoreError:
         raise HTTPException(status_code=404, detail="mission not found")
-
-
-def _with_mode_a_runtime_truth(mission: dict) -> dict:
-    return {
-        **mission,
-        "executor_kind": "deterministic",
-        "executor_model_used": None,
-        "runtime_mode": "live",
-    }
 
 
 def _objective_with_constraints(body: MissionIn) -> str:
@@ -718,6 +712,9 @@ async def create_mission(body: MissionIn) -> dict:
             str(Path(body.workspace).expanduser().resolve()),
             max_iterations=body.max_iterations,
             max_duration_seconds=body.max_duration_minutes * 60,
+            executor_kind="deterministic",
+            executor_model_used=None,
+            runtime_mode="live",
         )
         store.bind_conversation(
             str(uuid.uuid4()),
@@ -749,13 +746,7 @@ async def create_mission(body: MissionIn) -> dict:
     rt.task = asyncio.create_task(
         _run_mission_task(rt, objective, body)
     )
-    return {
-        "id": mission_id,
-        "state": "INITIALIZING_MISSION",
-        "executor_kind": "deterministic",
-        "executor_model_used": None,
-        "runtime_mode": "live",
-    }
+    return store.get_mission(mission_id)
 
 
 # P2b: mission_id -> ChatGPT conversation URL the mission writes into.
@@ -781,10 +772,7 @@ def active_mission_conversations() -> list[str]:
 
 @router.get("/missions")
 async def list_missions() -> list[dict]:
-    return [
-        _with_mode_a_runtime_truth(row)
-        for row in get_store().rows("missions", order_by="created_at DESC")
-    ]
+    return get_store().rows("missions", order_by="created_at DESC")
 
 
 @router.get("/missions/{mission_id}")
@@ -801,7 +789,7 @@ async def get_mission(mission_id: str) -> dict:
     }
     rt = _runtimes.get(mission_id)
     return {
-        "mission": _with_mode_a_runtime_truth(mission),
+        "mission": mission,
         "timeline": timeline,
         "awaiting_approval": rt is not None and not rt.approval_event.is_set()
         and mission["state"] == "WAITING_FOR_APPROVAL",
