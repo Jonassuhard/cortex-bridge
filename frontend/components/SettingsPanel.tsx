@@ -147,7 +147,7 @@ export function SettingsPanel({
                 <div className="settings-section-title"><h3>Expérience générale</h3><p>Préférences de l'application locale et comportement de la conversation.</p></div>
                 <div className="settings-grid two">
                   <label><span>Langue</span><select value={draft.language} onChange={(e) => patch("language", e.target.value as CortexSettings["language"])}><option value="fr">Français</option><option value="en">English</option></select></label>
-                  <label><span>Thème</span><select value={draft.theme} onChange={(e) => patch("theme", e.target.value as CortexSettings["theme"])}><option value="dark">Sombre Preuvia</option><option value="light">Clair</option><option value="system">Système</option></select></label>
+                  <label><span>Thème</span><select value={draft.theme} onChange={(e) => patch("theme", e.target.value as CortexSettings["theme"])}><option value="dark">Sombre</option><option value="light">Clair</option><option value="system">Système</option></select></label>
                 </div>
                 <label className="settings-field"><span>Workspace par défaut</span><input value={draft.default_workspace} onChange={(e) => patch("default_workspace", e.target.value)} /><small>Les outils structurés restent confinés à ce dossier sauf profil étendu explicite.</small></label>
                 <div className="settings-grid two">
@@ -180,7 +180,7 @@ export function SettingsPanel({
                   {ollamaModels.map((model) => (
                     <div className="model-table-row" key={model.name}>
                       <span className="model-state-dot" />
-                      <span><strong>{model.name}</strong><small>{model.loaded ? "chargé en mémoire" : "installé sur DJO"}</small></span>
+                      <span><strong>{model.name}</strong><small>{model.loaded ? "chargé en mémoire" : "installé localement"}</small></span>
                       <em>{formatBytes(model.size)}</em>
                     </div>
                   ))}
@@ -236,10 +236,10 @@ export function SettingsPanel({
             {tab === "storage" && (
               <div className="settings-section-stack">
                 <div className="settings-section-title"><h3>Stockage</h3><p>Modèles, preuves, archives et historique local.</p></div>
-                <div className="storage-path-card"><FolderIcon /><span><strong>Modèles Ollama</strong><small>/Volumes/DJO/AI/Ollama/models</small></span></div>
+                <div className="storage-path-card"><FolderIcon /><span><strong>Modèles Ollama</strong><small>/tmp/cortex-demo-workspace/models</small></span></div>
                 <div className="storage-path-card"><DatabaseIcon /><span><strong>Base de missions</strong><small>console/data/cortex.db</small></span></div>
                 <div className="storage-path-card"><TrashBlockedIcon /><span><strong>Archives restaurables</strong><small>.cortex-archive/&lt;mission&gt;/&lt;timestamp&gt;</small></span></div>
-                <div className="settings-notice"><ShieldIcon /><span><strong>Repli interdit</strong><small>Si DJO est absent, Cortex n'enregistre pas silencieusement les modèles sur le disque interne.</small></span></div>
+                <div className="settings-notice"><ShieldIcon /><span><strong>Repli interdit</strong><small>Si le stockage local est absent, Cortex n'enregistre pas silencieusement les modèles ailleurs.</small></span></div>
               </div>
             )}
 
@@ -272,7 +272,7 @@ export function SettingsPanel({
                   <li><CheckIcon /> Le rapport repart dans la conversation et la boucle continue</li>
                   <li><CheckIcon /> Loopback uniquement : rien ne sort de ta machine sauf via ChatGPT</li>
                 </ul>
-                <div className="settings-notice"><GlobeIcon /><span><strong>Projet open source (MIT)</strong><small>github.com/Jonassuhard/cortex-bridge — idées et contributions bienvenues via Issues et Discussions.</small></span></div>
+                <div className="settings-notice"><GlobeIcon /><span><strong>Projet open source (MIT)</strong><small>Dépôt public Cortex Bridge — idées et contributions bienvenues via Issues et Discussions.</small></span></div>
               </div>
             )}
           </div>

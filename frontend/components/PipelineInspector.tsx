@@ -150,7 +150,7 @@ export function PipelineInspector({
           <div><dt>Exécuteur utilisé</dt><dd>{pipeline.runtime_execution.executor_kind}</dd></div>
           <div><dt>Modèle réellement utilisé</dt><dd>{pipeline.runtime_execution.executor_model_used || "aucun"}</dd></div>
           <div><dt>Mode d&apos;exécution</dt><dd>{executorDiagnosticsLabel(pipeline.runtime_execution)}</dd></div>
-          <div><dt>Disque DJO</dt><dd className={runtime.volume_mounted ? "good" : "danger"}>{runtime.volume_mounted ? "monté" : "absent"}</dd></div>
+          <div><dt>Stockage local</dt><dd className={runtime.volume_mounted ? "good" : "danger"}>{runtime.volume_mounted ? "monté" : "absent"}</dd></div>
           <div><dt>Stockage</dt><dd title={runtime.storage_path}>{runtime.storage_path.split("/").slice(-3).join("/")}</dd></div>
           <div><dt>Mission</dt><dd>{missionState || "aucune"}</dd></div>
           <div><dt>Session</dt><dd>{mission?.mission.id?.slice(0, 8) || "—"}</dd></div>

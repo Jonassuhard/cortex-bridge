@@ -203,7 +203,7 @@ export function CortexApp() {
     setLoadingConversations(true);
     try {
       const data = await api<ConversationSummary[]>("/api/conversations");
-      // 50 most recent max (Jonas spec P1d); the backend already caps, this
+      // 50 most recent max (release spec P1d); the backend already caps, this
       // is a second belt for demo/fallback data.
       const normalized = data.map(normalizeConversation).slice(0, 50);
       setDemoMode(false);

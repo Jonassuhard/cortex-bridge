@@ -197,7 +197,8 @@ The harness is pinned to versions whose published engines support Node 20:
 - tsx `4.20.6`: `>=18.0.0`
 - axe-core and its Playwright integration `4.12.1`
 
-The package declares `engines.node: >=20`. Vite is pinned directly so the
+The package declares `engines.node: >=20.9.0`, matching Next `16.2.9` rather
+than claiming compatibility with every earlier Node 20 release. Vite is pinned directly so the
 Vitest dependency range cannot resolve back to Vite 8 and its Node 20.19
 minimum.
 
@@ -283,3 +284,110 @@ forced remediation was applied.
 
 Open concerns are limited to the unavailable registry audit result and the two
 transitive deprecation notices reported during clean installation.
+
+## Fix round 2
+
+Date: 2026-07-26
+Starting commit: `56bbc715b9921845b5299c4a145d2420e32d47fa`
+
+### Node minimum aligned with Next
+
+The package and lockfile now declare `engines.node: >=20.9.0`. This is the
+actual minimum published by Next `16.2.9`; the harness no longer implies that
+Node `20.0.0` through `20.8.x` are supported.
+
+Compatibility was rerun with Node `20.9.0` and npm `10.9.4`. The complete
+`npm test` command passed two Vitest component tests, 18 historical runtime
+tests, and the new privacy test.
+
+### Frontend-wide privacy gate
+
+A new Node test enumerates tracked and non-ignored frontend source, fixture,
+and configuration files through `git ls-files`. It scans CSS, HTML, JSON,
+Markdown, MJS, MTS, TS, and TSX while explicitly excluding generated output,
+`.next`, dependency directories, coverage, browser reports, caches, the lockfile,
+and `tsconfig.tsbuildinfo`.
+
+The scanner rejects encoded markers for personal names, personal workspaces,
+mounted personal volumes, unrelated project names, and personal macOS home or
+volume paths. Encoding the markers prevents the privacy test from matching its
+own source.
+
+RED result:
+
+- one privacy test failed;
+- 22 findings were reported across seven frontend files;
+- findings covered the README, CSS, application components, development
+  fixtures, and standalone fallback.
+
+GREEN result:
+
+- neutral labels replace every finding;
+- all demo storage and workspace paths use
+  `/tmp/cortex-demo-workspace` or its `models` subdirectory;
+- the fallback storage state keeps the same behavior under a neutral internal
+  identifier;
+- the privacy test passes with zero findings.
+
+The sidebar component test now asserts `CL`, `Compte local`, and
+`Session locale`. It also reconstructs the three former labels at runtime and
+asserts that none is rendered, without embedding banned personal strings in
+the committed test source.
+
+`test:runtime` explicitly runs both `lib/runtimeTruth.test.mts` and
+`test/privacy.test.mts`, so the privacy gate is part of `npm test` and
+`test:coverage`.
+
+### fsevents lockfile accounting
+
+The previous statement of zero changes referred only to versions that already
+existed in the pre-harness lock; it did not mean that the test harness added no
+packages.
+
+`fsevents@2.3.2` is an optional macOS transitive dependency with `os: darwin`.
+The installed graph proves two paths:
+
+- `@playwright/test` -> `playwright` -> optional `fsevents@2.3.2`;
+- Vitest/Vite -> Rollup -> optional `fsevents@~2.3.2`.
+
+The lock also contains development-optional `fsevents@2.3.3` entries beneath
+Vite and tsx. These entries are required by the selected tooling's declared
+cross-platform graph and were not removed. Round 2 changes no fsevents version;
+the only lockfile change is the root Node engine floor.
+
+### Fresh verification
+
+```text
+npm test
+```
+
+Result: exit `0`; two Vitest tests and 19 runtime tests passed.
+
+```text
+npm run test:coverage
+```
+
+Result: exit `0`; the same 21 tests passed. Application coverage remained
+48.23% statements/lines, 38.21% branches, and 29.41% functions.
+
+```text
+npm run test:e2e
+npm run test:a11y
+npm run typecheck
+npm run lint
+```
+
+Results: E2E `2/2`, a11y `1/1`, TypeScript exit `0`, ESLint exit `0`.
+
+The targeted case-insensitive privacy grep returned zero source, fixture, or
+configuration matches outside the explicit generated/dependency exclusions.
+No frontend build or export was run. Existing `frontend/out/**` and
+`frontend/tsconfig.tsbuildinfo` changes remain outside the scoped commit.
+
+### Audit status
+
+The frontend audit was rerun from `frontend/` against the explicit official
+registry with a clean dedicated cache. The endpoint again returned a gzip
+stream that npm treated as invalid JSON (`Unexpected token '\u001f'`), exit
+`1`. Audit status remains `[UNCLEAR]`; no forced remediation or safety claim
+was applied.

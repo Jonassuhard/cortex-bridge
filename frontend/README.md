@@ -28,7 +28,7 @@ mode only when the backend cannot be reached.
 
 ## Visual direction
 
-The interface adapts the Preuvia design language to a desktop execution
+The interface uses a dark technical design language for a desktop execution
 client:
 
 - ink-black surface
