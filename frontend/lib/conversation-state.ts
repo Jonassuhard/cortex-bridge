@@ -58,6 +58,14 @@ export type ConversationEvent =
       cancelledAt: string;
     }
   | {
+      type: "RUN_OPERATION_PENDING";
+      operation: "cancel" | "recovery";
+      pending: boolean;
+      key: ConversationKey;
+      runId: string;
+      streamEpoch: number;
+    }
+  | {
       type: "MISSION_EVENT";
       key: ConversationKey;
       missionId: string;
@@ -74,6 +82,7 @@ export type ConversationEvent =
       type: "RESOLVE_REKEY_CONFLICT";
       fromKey: ConversationKey;
       toKey: ConversationKey;
+      choice: "source" | "target";
     }
   | {
       type: "REQUEST_FAILED";
@@ -98,6 +107,7 @@ const TERMINAL_RUN_STATES = new Set<ChatRunState>([
   "DELIVERY_UNCERTAIN",
 ]);
 const TERMINAL_MISSION_STATES = new Set(["COMPLETED", "BLOCKED", "FAILED", "CANCELLED"]);
+const TERMINAL_RUN_EVENT_TYPES = new Set<ChatRunEvent["type"]>(["complete", "error", "cancelled"]);
 
 export function conversationKeyFromUrl(url: string): ConversationKey {
   const normalized = url.trim().replace(/\/$/, "");
@@ -156,6 +166,8 @@ function createEntry(summary: ConversationSummary): ConversationEntry {
     missionId: null,
     mission: null,
     sendPending: false,
+    cancelPending: false,
+    recoveryPending: false,
     sendError: null,
   };
 }
@@ -202,8 +214,24 @@ function isMissionActive(entry: ConversationEntry): boolean {
   return !entry.mission || !TERMINAL_MISSION_STATES.has(entry.mission.mission.state);
 }
 
+function hasActiveWork(entry: ConversationEntry): boolean {
+  return entry.sendPending
+    || entry.cancelPending
+    || entry.recoveryPending
+    || isRunActive(entry.run)
+    || isMissionActive(entry);
+}
+
+export function canResolveRekeyConflict(state: ConversationState): boolean {
+  const conflict = state.rekeyConflict;
+  if (!conflict) return false;
+  const source = state.entries[conflict.fromKey];
+  const target = state.entries[conflict.toKey];
+  return !!source && !!target && !hasActiveWork(source) && !hasActiveWork(target);
+}
+
 function shouldRetainOmittedEntry(entry: ConversationEntry, selected: boolean): boolean {
-  if (entry.sendPending || isRunActive(entry.run) || isMissionActive(entry)) return true;
+  if (hasActiveWork(entry)) return true;
   if (entry.draft || entry.attachment || entry.submittedPayload) return true;
   if (entry.key.startsWith("provisional:")) return selected;
   return false;
@@ -412,7 +440,8 @@ export function conversationReducer(
     const entry = state.entries[event.key];
     if (!entry) return state;
     if (event.run) {
-      if (event.run.id !== event.runId) return state;
+      const incomingRun = event.run;
+      if (incomingRun.id !== event.runId) return state;
       if (!event.accepted && (
         !entry.run
         || entry.run.id !== event.runId
@@ -428,15 +457,15 @@ export function conversationReducer(
                 : event.submittedAttachment,
             }
           : current.submittedPayload;
-        const delivered = !!event.run && (
-          !!event.run.delivered_at
-          || ["VISIBLE_IN_CHATGPT", "WAITING_FOR_CHATGPT", "CHATGPT_STREAMING", "COMPLETED"].includes(event.run.state)
+        const delivered = (
+          !!incomingRun.delivered_at
+          || ["VISIBLE_IN_CHATGPT", "WAITING_FOR_CHATGPT", "CHATGPT_STREAMING", "COMPLETED"].includes(incomingRun.state)
         );
-        const endedWithoutDelivery = !!event.run
-          && ["FAILED", "CANCELLED"].includes(event.run.state);
+        const endedWithoutDelivery = ["FAILED", "CANCELLED"].includes(incomingRun.state);
+        const terminal = TERMINAL_RUN_STATES.has(incomingRun.state);
         return {
           ...current,
-          run: event.run || null,
+          run: incomingRun,
           streamEpoch: event.streamEpoch,
           draft: delivered && submittedPayload && current.draft === submittedPayload.draft ? "" : current.draft,
           attachment: delivered && submittedPayload && current.attachment === submittedPayload.attachment
@@ -444,6 +473,8 @@ export function conversationReducer(
             : current.attachment,
           submittedPayload: delivered || endedWithoutDelivery ? null : submittedPayload,
           sendPending: event.accepted ? false : current.sendPending,
+          cancelPending: terminal ? false : current.cancelPending,
+          recoveryPending: false,
           sendError: null,
         };
       });
@@ -455,6 +486,7 @@ export function conversationReducer(
       const delivery = event.event?.type === "delivery";
       const endedWithoutDelivery = event.event?.type === "error" || event.event?.type === "cancelled";
       const submitted = current.submittedPayload?.runId === event.runId ? current.submittedPayload : null;
+      const terminal = TERMINAL_RUN_EVENT_TYPES.has(event.event!.type);
       return {
         ...current,
         run: current.run ? applyRunEvent(current.run, event.event!) : null,
@@ -463,6 +495,8 @@ export function conversationReducer(
           ? null
           : current.attachment,
         submittedPayload: delivery || endedWithoutDelivery ? null : current.submittedPayload,
+        cancelPending: terminal ? false : current.cancelPending,
+        recoveryPending: terminal ? false : current.recoveryPending,
       };
     });
   }
@@ -478,6 +512,7 @@ export function conversationReducer(
       ...current,
       run: current.run ? { ...current.run, state: "DELIVERY_UNCERTAIN", error: event.error } : null,
       sendPending: false,
+      recoveryPending: false,
       sendError: event.error,
     }));
   }
@@ -485,12 +520,27 @@ export function conversationReducer(
   if (event.type === "RUN_CANCELLED") {
     const entry = state.entries[event.key];
     if (!entry?.run || entry.run.id !== event.runId) return state;
+    if (entry.run.state === "CANCELLED") return state;
     return updateEntry(state, event.key, (current) => ({
       ...current,
       run: current.run ? { ...current.run, state: "CANCELLED", completed_at: event.cancelledAt } : null,
       submittedPayload: null,
       sendPending: false,
+      cancelPending: false,
+      recoveryPending: false,
     }));
+  }
+
+  if (event.type === "RUN_OPERATION_PENDING") {
+    const entry = state.entries[event.key];
+    if (
+      !entry?.run
+      || entry.run.id !== event.runId
+      || entry.streamEpoch !== event.streamEpoch
+    ) return state;
+    const field = event.operation === "cancel" ? "cancelPending" : "recoveryPending";
+    if (entry[field] === event.pending) return state;
+    return updateEntry(state, event.key, (current) => ({ ...current, [field]: event.pending }));
   }
 
   if (event.type === "MISSION_EVENT") {
@@ -528,21 +578,41 @@ export function conversationReducer(
     ) return state;
     const source = state.entries[event.fromKey];
     if (!source) return { ...state, selectedKey: event.toKey, rekeyConflict: null };
-    const safeToDiscard = !source.sendPending
-      && !source.draft
-      && !source.attachment
-      && !source.submittedPayload
-      && !source.snapshot
-      && source.messages.length === 0
-      && !source.run
-      && !source.missionId;
-    if (!safeToDiscard) return { ...state, selectedKey: event.toKey };
+    if (!canResolveRekeyConflict(state)) return state;
+    const target = state.entries[event.toKey];
+    const chosen = event.choice === "source" ? source : target;
+    const other = event.choice === "source" ? target : source;
+    const seen = new Set<string>();
+    const messages = [...target.messages, ...source.messages].filter((message) => {
+      if (seen.has(message.id)) return false;
+      seen.add(message.id);
+      return true;
+    });
+    const snapshot = chosen.snapshot || other.snapshot;
+    const canonicalEntry: ConversationEntry = {
+      ...chosen,
+      key: event.toKey,
+      summary: target.summary,
+      snapshot: snapshot ? { ...snapshot, url: target.summary.url, messages } : null,
+      messages,
+      draft: chosen.draft,
+      attachment: chosen.attachment,
+      submittedPayload: chosen.submittedPayload,
+      run: chosen.run || other.run,
+      streamEpoch: chosen.run ? chosen.streamEpoch : other.streamEpoch,
+      missionId: chosen.missionId || other.missionId,
+      mission: chosen.mission || other.mission,
+      sendPending: false,
+      cancelPending: false,
+      recoveryPending: false,
+    };
     const entries = { ...state.entries };
     delete entries[event.fromKey];
+    entries[event.toKey] = canonicalEntry;
     return {
       ...state,
       entries,
-      order: state.order.filter((key) => key !== event.fromKey),
+      order: [...new Set(state.order.map((key) => key === event.fromKey ? event.toKey : key))],
       selectedKey: event.toKey,
       rekeyConflict: null,
     };

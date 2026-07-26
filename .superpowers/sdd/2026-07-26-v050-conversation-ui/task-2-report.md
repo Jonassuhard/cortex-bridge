@@ -211,3 +211,76 @@ is clean.
 
 Generated `frontend/out/**`, `frontend/coverage/**` and
 `frontend/tsconfig.tsbuildinfo` changes remain intentionally unstaged.
+
+## Fix round 2 — lifecycle ownership and collision recovery
+
+**Starting commit:** `fc4bf045cadd1957bf1361301474c4a736366abb`
+
+### Corrections
+
+1. Every initial send path now has one keyed owner, an abort signal and one
+   absolute 10-second deadline. Message, attachment, screenshot and mission
+   POSTs reject duplicate execution while a send, non-terminal chat run or
+   non-terminal mission already exists. Attachment upload and delivery share
+   the same signal; a late descriptor cannot trigger a second POST. Timeout
+   preserves the exact draft and `File` and reports the deadline in French.
+2. Cancellation is owned by `useChatRunStream` in a per-key task map. Duplicate
+   clicks are rejected, the healthy SSE source remains followed while the
+   bounded POST is pending, success terminalizes the matching run once, and
+   terminal SSE truth aborts any late cancel request. Failure/timeout clears
+   pending state and either keeps the healthy source or resumes bounded
+   recovery when the source was lost. Unmount aborts every cancel request.
+3. Manual recovery moved out of `CortexApp` into the same keyed recovery owner
+   as automatic reconnect. It is deduplicated, visibly pending, abortable and
+   deadline-bound; close, replacement and unmount invalidate it synchronously.
+   A recovery response with a mismatched run ID consumes an attempt instead of
+   freezing the old run.
+4. Canonical collisions now expose two explicit choices. Resolution is allowed
+   only when source and target own no active send, run, recovery, cancellation
+   or mission. It atomically deletes the provisional key, selects the canonical
+   key, preserves the exact chosen draft/`File`, and unions messages by ID
+   without duplicates.
+5. Mission inspection is selected-conversation scoped. If the global pipeline
+   belongs to mission A while B is selected, the inspector receives neutral
+   components, events, runtime execution, controls and mission identifiers;
+   the global ChatGPT/executor availability rail remains visible. Selecting A
+   restores its details.
+
+### TDD evidence
+
+- Initial `CortexApp` RED: 6/6 selected regressions failed with three execution
+  POSTs for A1/A2, duplicate cancel POSTs, missing abort signals, duplicate
+  manual recovery GETs, leaked mission-A inspector details and no bounded
+  attachment request.
+- Recovery RED: a mismatched recovery ID made only one GET and left the run
+  queued instead of consuming both configured attempts and becoming uncertain.
+- Collision RED: the reducer lacked `canResolveRekeyConflict` and the workspace
+  lacked the two safe source/target actions.
+- Additional RED regressions covered cancel timeout and manual A1 recovery
+  invalidation when A2 starts.
+- Focused GREEN command covering reducer, stream hook, workspace and real app
+  integration: 68/68.
+
+### Fix round 2 verification
+
+| Gate | Result |
+|---|---|
+| `corepack npm test` | 79/79 Vitest + 32/32 runtime/privacy/image |
+| `corepack npm run test:coverage` | 79/79 + 32/32; reducer 90.71%, stream hook 90.87%, controller 89.06% statements |
+| `corepack npm run lint` | Green; zero warnings, 6/6 lint-contract families rejected |
+| `corepack npm run typecheck` | Green |
+| `corepack npm run build` | Green; static `/` and `/_not-found` generated |
+| `corepack npm run test:e2e` | 2/2 |
+| `corepack npm run test:a11y` | 1/1, zero automated violations |
+| Full and production dependency audits | 0 vulnerabilities |
+| `git diff --check` | Green |
+
+### Scope and review handoff
+
+- No dependency or lockfile changes.
+- `frontend/next-env.d.ts` was restored after the build-generated route import
+  changed it.
+- `frontend/out/**`, `frontend/coverage/**` and
+  `frontend/tsconfig.tsbuildinfo` remain intentionally unstaged.
+- A fresh independent reviewer is delegated to the parent after this scoped
+  commit; this report does not pre-empt that verdict.

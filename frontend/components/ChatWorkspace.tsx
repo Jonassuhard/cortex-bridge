@@ -42,6 +42,8 @@ interface ChatWorkspaceProps {
   messages: ConversationMessage[];
   loadingMessages: boolean;
   sending: boolean;
+  cancelPending: boolean;
+  recoveryPending: boolean;
   draft: string;
   attachment: File | null;
   chatRun: ChatRun | null;
@@ -52,6 +54,7 @@ interface ChatWorkspaceProps {
   sidebarCollapsed: boolean;
   capabilities: { upload_file: boolean; take_screenshot: boolean };
   rekeyConflict: RekeyConflict | null;
+  rekeyResolutionAllowed: boolean;
   onDraftChange: (key: ConversationKey, draft: string) => void;
   onAttachmentStaged: (key: ConversationKey, attachment: File | null) => void;
   onToggleSidebar: () => void;
@@ -62,7 +65,11 @@ interface ChatWorkspaceProps {
   onStartMission: (key: ConversationKey, text: string) => Promise<boolean>;
   onCancelChat: (key: ConversationKey) => void;
   onRetryChatRecovery: (key: ConversationKey) => void;
-  onResolveRekeyConflict: (fromKey: ConversationKey, toKey: ConversationKey) => void;
+  onResolveRekeyConflict: (
+    fromKey: ConversationKey,
+    toKey: ConversationKey,
+    choice: "source" | "target",
+  ) => void;
   onPauseMission: (key: ConversationKey) => void;
   onResumeMission: (key: ConversationKey) => void;
   onCancelMission: (key: ConversationKey) => void;
@@ -204,6 +211,8 @@ export function ChatWorkspace({
   messages,
   loadingMessages,
   sending,
+  cancelPending,
+  recoveryPending,
   draft,
   attachment,
   chatRun,
@@ -214,6 +223,7 @@ export function ChatWorkspace({
   sidebarCollapsed,
   capabilities,
   rekeyConflict,
+  rekeyResolutionAllowed,
   onDraftChange,
   onAttachmentStaged,
   onToggleSidebar,
@@ -242,6 +252,7 @@ export function ChatWorkspace({
   const chatActive = !!chatRun && !["COMPLETED", "FAILED", "CANCELLED", "DELIVERY_UNCERTAIN"].includes(chatRun.state);
   const ambiguousProvisional = !!conversationKey && rekeyConflict?.fromKey === conversationKey;
   const composerBlocked = sending || ambiguousProvisional;
+  const executionBlocked = composerBlocked || missionRunning || chatActive;
   const busy = missionRunning || chatActive || sending;
 
   const mergedMessages = useMemo(() => {
@@ -289,7 +300,7 @@ export function ChatWorkspace({
     const key = conversationKey;
     const text = draft;
     const stagedFile = attachment;
-    if (!key || (!text.trim() && !stagedFile) || composerBlocked) return;
+    if (!key || (!text.trim() && !stagedFile) || executionBlocked) return;
     if (stagedFile) {
       await onSendAttachment(key, text, stagedFile);
     } else if (mode === "mission") {
@@ -301,7 +312,7 @@ export function ChatWorkspace({
 
   async function submitScreenshot() {
     const key = conversationKey;
-    if (!key || composerBlocked) return;
+    if (!key || executionBlocked) return;
     await onSendScreenshot(key, draft);
   }
 
@@ -412,9 +423,17 @@ export function ChatWorkspace({
                 <strong>Livraison incertaine</strong>
                 <small>{chatRun.error || "Le bridge ne peut pas confirmer la réception. Le contenu reste dans le composer et ne sera pas renvoyé automatiquement."}</small>
               </span>
-              <button onClick={() => conversationKey && onRetryChatRecovery(conversationKey)}>
-                Réessayer la synchronisation
+              <button
+                disabled={recoveryPending}
+                onClick={() => conversationKey && onRetryChatRecovery(conversationKey)}
+              >
+                {recoveryPending ? "Synchronisation en cours…" : "Réessayer la synchronisation"}
               </button>
+            </output>
+          )}
+          {chatActive && (
+            <output className="inline-chat-status">
+              Une réponse est déjà en cours pour cette conversation.
             </output>
           )}
           {ambiguousProvisional && rekeyConflict && (
@@ -424,9 +443,28 @@ export function ChatWorkspace({
                 <strong>Identité de conversation ambiguë</strong>
                 <small>La conversation canonique existe déjà. Aucun envoi ni aucune exécution ne démarrera depuis cette copie provisoire.</small>
               </span>
-              <button onClick={() => onResolveRekeyConflict(rekeyConflict.fromKey, rekeyConflict.toKey)}>
-                Ouvrir la conversation existante
-              </button>
+              <div>
+                <button
+                  disabled={!rekeyResolutionAllowed}
+                  onClick={() => onResolveRekeyConflict(
+                    rekeyConflict.fromKey,
+                    rekeyConflict.toKey,
+                    "source",
+                  )}
+                >
+                  Conserver le brouillon provisoire
+                </button>
+                <button
+                  disabled={!rekeyResolutionAllowed}
+                  onClick={() => onResolveRekeyConflict(
+                    rekeyConflict.fromKey,
+                    rekeyConflict.toKey,
+                    "target",
+                  )}
+                >
+                  Conserver le brouillon canonique
+                </button>
+              </div>
             </div>
           )}
           <div className="scroll-anchor" />
@@ -475,7 +513,7 @@ export function ChatWorkspace({
                 <PaperclipIcon size={18} />
               </button>
               {capabilities.take_screenshot && (
-                <button title="Capturer l'onglet ChatGPT et l'envoyer" onClick={() => void submitScreenshot()} disabled={composerBlocked}>
+                <button title="Capturer l'onglet ChatGPT et l'envoyer" onClick={() => void submitScreenshot()} disabled={executionBlocked}>
                   <BrowserIcon size={17} />
                 </button>
               )}
@@ -501,6 +539,7 @@ export function ChatWorkspace({
                   onClick={() => {
                     if (conversationKey) onCancelChat(conversationKey);
                   }}
+                  disabled={cancelPending}
                   title="Arrêter la réponse"
                 ><StopIcon size={17} /></button>
               ) : missionRunning ? (
@@ -512,7 +551,7 @@ export function ChatWorkspace({
                   title="Mettre la mission en pause"
                 ><PauseIcon size={17} /></button>
               ) : (
-                <button className="send-button" onClick={() => void submit()} disabled={(!draft.trim() && !attachment) || composerBlocked} title="Envoyer"><SendIcon size={17} /></button>
+                <button className="send-button" onClick={() => void submit()} disabled={(!draft.trim() && !attachment) || executionBlocked} title="Envoyer"><SendIcon size={17} /></button>
               )}
             </div>
           </div>

@@ -101,6 +101,8 @@ export interface ConversationEntry {
   missionId: string | null;
   mission: MissionDetail | null;
   sendPending: boolean;
+  cancelPending: boolean;
+  recoveryPending: boolean;
   sendError: string | null;
 }
 

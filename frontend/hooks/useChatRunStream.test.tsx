@@ -395,6 +395,30 @@ describe("useChatRunStream", () => {
     expect(result.current.controller.state.entries.a.run?.state).toBe("DELIVERY_UNCERTAIN");
   });
 
+  it("counts mismatched recovery run ids as failed attempts and exhausts truthfully", async () => {
+    vi.useFakeTimers();
+    const recoverRun = vi.fn<(
+      key: string,
+      runId: string,
+      context: { signal: AbortSignal; deadlineAt: number; remainingMs: number },
+    ) => Promise<ChatRun>>()
+      .mockResolvedValueOnce({ ...run("a", "wrong-1"), state: "WAITING_FOR_CHATGPT" })
+      .mockResolvedValueOnce({ ...run("a", "wrong-2"), state: "WAITING_FOR_CHATGPT" });
+    const { result } = renderHook(() => useStreamHarness(
+      [summary("a")],
+      "a",
+      recoverRun,
+      { baseDelayMs: 0, maxAttempts: 2, deadlineMs: 300 },
+    ));
+    act(() => result.current.streams.subscribe("a", run("a")));
+    act(() => result.current.sources[0].fail());
+    await act(async () => Promise.resolve());
+
+    expect(recoverRun).toHaveBeenCalledTimes(2);
+    expect(result.current.sources).toHaveLength(1);
+    expect(result.current.controller.state.entries.a.run?.state).toBe("DELIVERY_UNCERTAIN");
+  });
+
   it("aborts recovery on unmount and ignores a late resolution", async () => {
     let resolveRecovery!: (value: ChatRun) => void;
     let recoverySignal!: AbortSignal;

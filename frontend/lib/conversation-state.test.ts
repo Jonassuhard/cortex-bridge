@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ChatRun, ConversationSnapshot, ConversationSummary, MissionDetail } from "./types";
 import {
+  canResolveRekeyConflict,
   canonicalConversationUrlFromMission,
   conversationReducer,
   createConversationState,
@@ -502,11 +503,12 @@ describe("conversationReducer", () => {
       type: "RESOLVE_REKEY_CONFLICT",
       fromKey: provisional.identity,
       toKey: "canonical-a",
+      choice: "target",
     });
 
     expect(resolved.selectedKey).toBe("canonical-a");
     expect(resolved.entries[provisional.identity]).toBeUndefined();
-    expect(resolved.entries["canonical-a"]).toBe(collided.entries["canonical-a"]);
+    expect(resolved.entries["canonical-a"]).toStrictEqual(collided.entries["canonical-a"]);
     expect(resolved.rekeyConflict).toBeNull();
   });
 
@@ -515,6 +517,14 @@ describe("conversationReducer", () => {
     const active = reduce(
       createConversationState([provisional, summary("canonical-a")], provisional.identity),
       { type: "DRAFT_CHANGED", key: provisional.identity, draft: "à préserver" },
+      {
+        type: "RUN_EVENT",
+        key: provisional.identity,
+        runId: "run-active",
+        streamEpoch: 1,
+        run: run("active", "run-active"),
+        accepted: true,
+      },
       {
         type: "REKEY_CANONICAL",
         key: provisional.identity,
@@ -526,11 +536,106 @@ describe("conversationReducer", () => {
       type: "RESOLVE_REKEY_CONFLICT",
       fromKey: provisional.identity,
       toKey: "canonical-a",
+      choice: "target",
     });
 
-    expect(resolved.selectedKey).toBe("canonical-a");
+    expect(resolved).toBe(active);
+    expect(resolved.selectedKey).toBe(provisional.identity);
     expect(resolved.entries[provisional.identity].draft).toBe("à préserver");
     expect(resolved.rekeyConflict).toEqual(active.rekeyConflict);
+  });
+
+  it.each([
+    ["source" as const, "brouillon provisoire", "source.txt"],
+    ["target" as const, "brouillon canonique", "target.txt"],
+  ])("resolves a safe collision with the chosen exact %s composer and one canonical entry", (choice, expectedDraft, expectedFile) => {
+    const provisional = createProvisionalConversation(() => `choice-${choice}`);
+    const sourceFile = new File(["source"], "source.txt");
+    const targetFile = new File(["target"], "target.txt");
+    const sourceSnapshot = {
+      ...snapshot("source", "source message"),
+      messages: [
+        { id: "shared", role: "assistant" as const, text: "partagé" },
+        { id: "source-only", role: "user" as const, text: "source" },
+      ],
+    };
+    const targetSnapshot = {
+      ...snapshot("canonical-a", "target message"),
+      messages: [
+        { id: "shared", role: "assistant" as const, text: "partagé" },
+        { id: "target-only", role: "assistant" as const, text: "target" },
+      ],
+    };
+    const collided = reduce(
+      createConversationState([provisional, summary("canonical-a")], provisional.identity),
+      { type: "DRAFT_CHANGED", key: provisional.identity, draft: "brouillon provisoire" },
+      { type: "ATTACHMENT_STAGED", key: provisional.identity, attachment: sourceFile },
+      { type: "SWITCH_STARTED", key: provisional.identity, epoch: 1 },
+      { type: "SNAPSHOT_RECEIVED", key: provisional.identity, epoch: 1, snapshot: sourceSnapshot },
+      { type: "DRAFT_CHANGED", key: "canonical-a", draft: "brouillon canonique" },
+      { type: "ATTACHMENT_STAGED", key: "canonical-a", attachment: targetFile },
+      { type: "SWITCH_STARTED", key: "canonical-a", epoch: 1 },
+      { type: "SNAPSHOT_RECEIVED", key: "canonical-a", epoch: 1, snapshot: targetSnapshot },
+      {
+        type: "REKEY_CANONICAL",
+        key: provisional.identity,
+        canonicalKey: "canonical-a",
+        canonicalUrl: "https://chatgpt.com/c/canonical-a",
+      },
+    );
+    expect(canResolveRekeyConflict(collided)).toBe(true);
+
+    const resolved = conversationReducer(collided, {
+      type: "RESOLVE_REKEY_CONFLICT",
+      fromKey: provisional.identity,
+      toKey: "canonical-a",
+      choice,
+    });
+
+    expect(resolved.order).toEqual(["canonical-a"]);
+    expect(resolved.selectedKey).toBe("canonical-a");
+    expect(resolved.entries[provisional.identity]).toBeUndefined();
+    expect(resolved.rekeyConflict).toBeNull();
+    expect(resolved.entries["canonical-a"].draft).toBe(expectedDraft);
+    expect(resolved.entries["canonical-a"].attachment?.name).toBe(expectedFile);
+    expect(resolved.entries["canonical-a"].messages.map((message) => message.id)).toEqual([
+      "shared",
+      "target-only",
+      "source-only",
+    ]);
+  });
+
+  it("refuses collision resolution while either entry owns active work", () => {
+    const provisional = createProvisionalConversation(() => "unsafe-choice");
+    const collided = reduce(
+      createConversationState([provisional, summary("canonical-a")], provisional.identity),
+      {
+        type: "RUN_EVENT",
+        key: provisional.identity,
+        runId: "run-active",
+        streamEpoch: 1,
+        run: run("active", "run-active"),
+        accepted: true,
+      },
+      {
+        type: "REKEY_CANONICAL",
+        key: provisional.identity,
+        canonicalKey: "canonical-a",
+        canonicalUrl: "https://chatgpt.com/c/canonical-a",
+      },
+    );
+    expect(canResolveRekeyConflict(collided)).toBe(false);
+    const refused = conversationReducer(collided, {
+      type: "RESOLVE_REKEY_CONFLICT",
+      fromKey: provisional.identity,
+      toKey: "canonical-a",
+      choice: "source",
+    });
+
+    expect(refused).toBe(collided);
+    expect(refused.rekeyConflict).not.toBeNull();
+    expect(refused.entries[provisional.identity]).toBeDefined();
+    expect(refused.entries["canonical-a"]).toBeDefined();
   });
 
   it("extracts a canonical mission binding URL and atomically rekeys on accepted mission detail", () => {

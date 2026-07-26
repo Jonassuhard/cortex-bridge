@@ -1,11 +1,11 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { demoPipeline, demoRuntime, demoSettings, demoTransport } from "@/lib/demo";
 import type { ChatRun, ChatRunEvent, MissionDetail } from "@/lib/types";
 
 type ApiMock = (path: string, init?: RequestInit) => Promise<unknown>;
-type JsonMock = (path: string, body?: unknown) => Promise<unknown>;
+type JsonMock = (path: string, body?: unknown, init?: RequestInit) => Promise<unknown>;
 
 const network = vi.hoisted(() => ({
   api: vi.fn<ApiMock>(),
@@ -95,9 +95,10 @@ function defaultApi(path: string) {
 }
 
 async function readyApp() {
-  render(<CortexApp />);
+  const rendered = render(<CortexApp />);
   await screen.findByRole("heading", { name: "Conversation A" });
   await waitFor(() => expect(composer()).not.toBeDisabled());
+  return rendered;
 }
 
 function composer(): HTMLTextAreaElement {
@@ -113,10 +114,273 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
 describe("CortexApp conversation integration", () => {
+  it("blocks Enter and screenshot while A1 is non-terminal without closing its source", async () => {
+    let runIndex = 0;
+    network.postJson.mockImplementation((path: string) => {
+      if (path === "/api/chat/send" || path === "/api/chat/send-screenshot") {
+        runIndex += 1;
+        return Promise.resolve(run("a", `run-a-${runIndex}`));
+      }
+      return Promise.reject(new Error(`Unexpected POST ${path}`));
+    });
+    const user = userEvent.setup();
+    await readyApp();
+    await user.click(screen.getByRole("tab", { name: "Message simple" }));
+    await user.type(composer(), "A1");
+    await user.click(screen.getByTitle("Envoyer"));
+    await waitFor(() => expect(AppEventSource.instances).toHaveLength(1));
+    const sourceA1 = AppEventSource.instances[0];
+
+    await user.clear(composer());
+    await user.type(composer(), "A2{enter}");
+    await user.click(screen.getByTitle("Capturer l'onglet ChatGPT et l'envoyer"));
+
+    const executionPosts = network.postJson.mock.calls.filter(([path]) => (
+      path === "/api/chat/send" || path === "/api/chat/send-screenshot" || path === "/api/missions"
+    ));
+    expect(executionPosts).toHaveLength(1);
+    expect(AppEventSource.instances).toHaveLength(1);
+    expect(sourceA1.close).not.toHaveBeenCalled();
+    expect(screen.getByText("Une réponse est déjà en cours pour cette conversation.")).toBeInTheDocument();
+  });
+
+  it("deduplicates cancel, keeps the healthy source until terminal truth, and ignores a late POST failure", async () => {
+    const cancel = deferred<unknown>();
+    let cancelSignal: AbortSignal | null | undefined;
+    network.postJson.mockImplementation((path: string, _body?: unknown, init?: RequestInit) => {
+      if (path === "/api/chat/send") return Promise.resolve(run("a"));
+      if (path === "/api/chat/runs/run-a/cancel") {
+        cancelSignal = init?.signal;
+        return cancel.promise;
+      }
+      return Promise.reject(new Error(`Unexpected POST ${path}`));
+    });
+    const user = userEvent.setup();
+    await readyApp();
+    await user.click(screen.getByRole("tab", { name: "Message simple" }));
+    await user.type(composer(), "A active");
+    await user.click(screen.getByTitle("Envoyer"));
+    const source = AppEventSource.instances[0];
+    const stop = await screen.findByTitle("Arrêter la réponse");
+
+    await user.click(stop);
+    await user.click(stop);
+    expect(network.postJson.mock.calls.filter(([path]) => path === "/api/chat/runs/run-a/cancel")).toHaveLength(1);
+    expect(source.close).not.toHaveBeenCalled();
+    expect(stop).toBeDisabled();
+
+    act(() => source.emit({ seq: 9, ts: "now", type: "cancelled", payload: {} }));
+    await act(async () => cancel.reject(new Error("échec tardif")));
+    await waitFor(() => expect(screen.queryByTitle("Arrêter la réponse")).not.toBeInTheDocument());
+    expect(screen.queryByText("Livraison incertaine")).not.toBeInTheDocument();
+    expect(cancelSignal?.aborted).toBe(true);
+    expect(source.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("aborts a hung cancel on unmount", async () => {
+    let cancelSignal: AbortSignal | null | undefined;
+    network.postJson.mockImplementation((path: string, _body?: unknown, init?: RequestInit) => {
+      if (path === "/api/chat/send") return Promise.resolve(run("a"));
+      if (path === "/api/chat/runs/run-a/cancel") {
+        cancelSignal = init?.signal;
+        return new Promise(() => undefined);
+      }
+      return Promise.reject(new Error(path));
+    });
+    const user = userEvent.setup();
+    const rendered = await readyApp();
+    await user.click(screen.getByRole("tab", { name: "Message simple" }));
+    await user.type(composer(), "A active");
+    await user.click(screen.getByTitle("Envoyer"));
+    await user.click(await screen.findByTitle("Arrêter la réponse"));
+    rendered.unmount();
+
+    expect(cancelSignal).toBeInstanceOf(AbortSignal);
+    expect(cancelSignal?.aborted).toBe(true);
+  });
+
+  it("times out a hung cancel without closing its healthy source or stranding the action", async () => {
+    let cancelSignal: AbortSignal | null | undefined;
+    network.postJson.mockImplementation((path: string, _body?: unknown, init?: RequestInit) => {
+      if (path === "/api/chat/send") return Promise.resolve(run("a"));
+      if (path === "/api/chat/runs/run-a/cancel") {
+        cancelSignal = init?.signal;
+        return new Promise(() => undefined);
+      }
+      return Promise.reject(new Error(path));
+    });
+    const user = userEvent.setup();
+    await readyApp();
+    await user.click(screen.getByRole("tab", { name: "Message simple" }));
+    await user.type(composer(), "A active");
+    await user.click(screen.getByTitle("Envoyer"));
+    const source = AppEventSource.instances[0];
+    const stop = await screen.findByTitle("Arrêter la réponse");
+
+    vi.useFakeTimers();
+    fireEvent.click(stop);
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(cancelSignal?.aborted).toBe(true);
+    expect(source.close).not.toHaveBeenCalled();
+    vi.useRealTimers();
+    await waitFor(() => expect(screen.getByTitle("Arrêter la réponse")).toBeEnabled());
+    expect(screen.queryByText("Livraison incertaine")).not.toBeInTheDocument();
+  });
+
+  it("deduplicates a manual retry, disables its action, and aborts it on unmount", async () => {
+    let retrySignal: AbortSignal | null | undefined;
+    let recoveryCount = 0;
+    network.postJson.mockImplementation((path: string) => {
+      if (path === "/api/chat/send") return Promise.resolve(run("a"));
+      return Promise.reject(new Error(path));
+    });
+    network.api.mockImplementation((path: string, init?: RequestInit) => {
+      if (path === "/api/chat/runs/run-a") {
+        recoveryCount += 1;
+        if (recoveryCount <= 3) return Promise.reject(new Error("recovery indisponible"));
+        retrySignal = init?.signal;
+        return new Promise(() => undefined);
+      }
+      return defaultApi(path);
+    });
+    const user = userEvent.setup();
+    const rendered = await readyApp();
+    await user.click(screen.getByRole("tab", { name: "Message simple" }));
+    await user.type(composer(), "A incertaine");
+    await user.click(screen.getByTitle("Envoyer"));
+    vi.useFakeTimers();
+    act(() => AppEventSource.instances[0].fail());
+    await act(async () => vi.advanceTimersByTimeAsync(2_000));
+    vi.useRealTimers();
+    const retry = await screen.findByRole("button", { name: "Réessayer la synchronisation" });
+    const callsBeforeManualRetry = network.api.mock.calls.filter(
+      ([path]) => path === "/api/chat/runs/run-a",
+    ).length;
+
+    await user.click(retry);
+    await user.click(retry);
+    expect(network.api.mock.calls.filter(([path]) => path === "/api/chat/runs/run-a"))
+      .toHaveLength(callsBeforeManualRetry + 1);
+    expect(retry).toBeDisabled();
+    rendered.unmount();
+    expect(retrySignal?.aborted).toBe(true);
+  });
+
+  it("times out a hung attachment POST, preserves the exact draft and File, and ignores its late result", async () => {
+    const attachmentUpload = deferred<unknown>();
+    let uploadSignal: AbortSignal | null | undefined;
+    network.postJson.mockImplementation((path: string, _body?: unknown, init?: RequestInit) => {
+      if (path === "/api/chat/attachments") {
+        uploadSignal = init?.signal;
+        return attachmentUpload.promise;
+      }
+      return Promise.reject(new Error(`Unexpected POST ${path}`));
+    });
+    const user = userEvent.setup();
+    const rendered = await readyApp();
+    await user.click(screen.getByRole("tab", { name: "Message simple" }));
+    await user.type(composer(), "preuve exacte");
+    const file = new File(["preuve"], "preuve.txt", { type: "text/plain" });
+    const input = rendered.container.querySelector<HTMLInputElement>('input[type="file"]');
+    if (!input) throw new Error("file input missing");
+    await user.upload(input, file);
+
+    vi.stubGlobal("FileReader", class {
+      result: string | ArrayBuffer | null = "data:text/plain;base64,cHJldXZl";
+      error: DOMException | null = null;
+      onload: ((event: ProgressEvent<FileReader>) => void) | null = null;
+      onerror: ((event: ProgressEvent<FileReader>) => void) | null = null;
+      readAsDataURL() {
+        this.onload?.({} as ProgressEvent<FileReader>);
+      }
+    });
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByTitle("Envoyer"));
+    await act(async () => {
+      await Promise.resolve();
+      expect(uploadSignal).toBeInstanceOf(AbortSignal);
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+
+    expect(uploadSignal?.aborted).toBe(true);
+    expect(composer()).toHaveValue("preuve exacte");
+    expect(screen.getByText("preuve.txt")).toBeInTheDocument();
+    expect(screen.getByText(/délai.*10 secondes/i)).toBeInTheDocument();
+    expect(screen.getByTitle("Envoyer")).not.toBeDisabled();
+    await act(async () => attachmentUpload.resolve({ path: "/tmp/late", name: "preuve.txt", kind: "file" }));
+    expect(network.postJson.mock.calls.some(([path]) => path === "/api/chat/send-with-attachment")).toBe(false);
+  });
+
+  it("removes every mission-A inspector detail on B and restores it only when A is selected again", async () => {
+    const missionA: MissionDetail = {
+      mission: {
+        id: "mission-a",
+        objective: "Mission A isolée",
+        workspace: "/tmp/a",
+        state: "EXECUTING_LOCAL_ACTION",
+        created_at: 1,
+        executor_kind: "deterministic",
+        executor_model_used: null,
+        runtime_mode: "live",
+        release_eligible: true,
+      },
+      timeline: {},
+      awaiting_approval: false,
+      stopped: false,
+    };
+    network.api.mockImplementation((path: string) => {
+      if (path === "/api/pipeline/status") {
+        return Promise.resolve({
+          ...demoPipeline,
+          active_mission_id: "mission-a",
+          active_mission_state: "EXECUTING_LOCAL_ACTION",
+          components: [
+            ...demoPipeline.components,
+            { id: "mission-a-only", label: "Composant mission A", state: "running", detail: "A seulement" },
+          ],
+          events: [
+            { id: "mission-a-event", ts: "2026-07-26T12:00:00.000Z", label: "Événement mission A" },
+          ],
+          runtime_execution: { ...demoPipeline.runtime_execution, task_id: "mission-a", active: true },
+        });
+      }
+      if (path === "/api/missions/mission-a") return Promise.resolve(missionA);
+      return defaultApi(path);
+    });
+    network.postJson.mockImplementation((path: string) => {
+      if (path === "/api/missions") return Promise.resolve({ id: "mission-a", state: "EXECUTING_LOCAL_ACTION" });
+      return Promise.reject(new Error(path));
+    });
+    const user = userEvent.setup();
+    await readyApp();
+    await user.type(composer(), "Mission A isolée");
+    await user.click(screen.getByTitle("Envoyer"));
+    await screen.findByText("Mission A isolée");
+    const inspector = within(screen.getByLabelText("État de la pipeline"));
+    expect(inspector.getByText("Composant mission A")).toBeInTheDocument();
+    expect(inspector.getByText("Événement mission A")).toBeInTheDocument();
+    expect(inspector.getByRole("button", { name: "Pause" })).toBeEnabled();
+
+    await user.click(screen.getByRole("option", { name: /Conversation B/ }));
+    expect(inspector.queryByText("Composant mission A")).not.toBeInTheDocument();
+    expect(inspector.queryByText("Événement mission A")).not.toBeInTheDocument();
+    expect(inspector.getByRole("button", { name: "Pause" })).toBeDisabled();
+    expect(inspector.getByRole("button", { name: "Annuler" })).toBeDisabled();
+    expect(screen.getAllByText("ChatGPT").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Exécuteur").length).toBeGreaterThan(0);
+
+    await user.click(screen.getByRole("option", { name: /Conversation A/ }));
+    expect(inspector.getByText("Composant mission A")).toBeInTheDocument();
+    expect(inspector.getByText("Événement mission A")).toBeInTheDocument();
+    expect(inspector.getByRole("button", { name: "Pause" })).toBeEnabled();
+  });
+
   it("closes recovery synchronously and cancels the same run after a reconnect advanced its epoch", async () => {
     const cancel = deferred<unknown>();
     let recoverySignal: AbortSignal | null | undefined;
@@ -144,7 +408,7 @@ describe("CortexApp conversation integration", () => {
     expect(recoverySignal).toBeInstanceOf(AbortSignal);
     const recoveredSource = AppEventSource.instances[1];
     await user.click(screen.getByTitle("Arrêter la réponse"));
-    expect(recoveredSource.close).toHaveBeenCalledTimes(1);
+    expect(recoveredSource.close).not.toHaveBeenCalled();
 
     act(() => recoveredSource.fail());
     const recoveryCallsBeforeCancelResolution = network.api.mock.calls.filter(
@@ -154,6 +418,7 @@ describe("CortexApp conversation integration", () => {
     await act(async () => cancel.resolve({}));
 
     await waitFor(() => expect(screen.queryByTitle("Arrêter la réponse")).not.toBeInTheDocument());
+    expect(recoveredSource.close).toHaveBeenCalledTimes(1);
     expect(composer()).not.toBeDisabled();
     expect(AppEventSource.instances).toHaveLength(2);
   });
@@ -210,17 +475,23 @@ describe("CortexApp conversation integration", () => {
 
   it("ignores a stale manual A1 retry after A2 starts and leaves the A2 stream followed", async () => {
     const retryA1 = deferred<unknown>();
+    let retryA1Signal: AbortSignal | null | undefined;
     let sendCount = 0;
+    let recoveryCount = 0;
     network.postJson.mockImplementation((path: string) => {
       if (path === "/api/chat/send") {
         sendCount += 1;
         return Promise.resolve(run("a", `run-a-${sendCount}`));
       }
-      if (path === "/api/chat/runs/run-a-1/cancel") return Promise.reject(new Error("cancel indisponible"));
       return Promise.reject(new Error(`Unexpected POST ${path}`));
     });
-    network.api.mockImplementation((path: string) => {
-      if (path === "/api/chat/runs/run-a-1") return retryA1.promise;
+    network.api.mockImplementation((path: string, init?: RequestInit) => {
+      if (path === "/api/chat/runs/run-a-1") {
+        recoveryCount += 1;
+        if (recoveryCount <= 3) return Promise.reject(new Error("recovery indisponible"));
+        retryA1Signal = init?.signal;
+        return retryA1.promise;
+      }
       return defaultApi(path);
     });
     const user = userEvent.setup();
@@ -228,7 +499,10 @@ describe("CortexApp conversation integration", () => {
     await user.click(screen.getByRole("tab", { name: "Message simple" }));
     await user.type(composer(), "A1");
     await user.click(screen.getByTitle("Envoyer"));
-    await user.click(await screen.findByTitle("Arrêter la réponse"));
+    vi.useFakeTimers();
+    act(() => AppEventSource.instances[0].fail());
+    await act(async () => vi.advanceTimersByTimeAsync(2_000));
+    vi.useRealTimers();
     await screen.findByText("Livraison incertaine");
     await user.click(screen.getByRole("button", { name: "Réessayer la synchronisation" }));
     await waitFor(() => expect(network.api.mock.calls.some(([path]) => path === "/api/chat/runs/run-a-1")).toBe(true));
@@ -238,6 +512,7 @@ describe("CortexApp conversation integration", () => {
     await user.click(screen.getByTitle("Envoyer"));
     await waitFor(() => expect(AppEventSource.instances).toHaveLength(2));
     const sourceA2 = AppEventSource.instances[1];
+    expect(retryA1Signal?.aborted).toBe(true);
     await act(async () => retryA1.resolve({ ...run("a", "run-a-1"), state: "WAITING_FOR_CHATGPT" }));
 
     expect(sourceA2.close).not.toHaveBeenCalled();
@@ -248,6 +523,7 @@ describe("CortexApp conversation integration", () => {
 
   it("rekeys a provisional chat when manual terminal recovery proves its canonical URL", async () => {
     let sendCount = 0;
+    let recoveryCount = 0;
     network.postJson.mockImplementation((path: string) => {
       if (path === "/api/chat/send") {
         sendCount += 1;
@@ -256,11 +532,12 @@ describe("CortexApp conversation integration", () => {
           conversation_url: sendCount === 1 ? "https://chatgpt.com/" : "https://chatgpt.com/c/canonical-manual",
         });
       }
-      if (path === "/api/chat/runs/run-provisional-1/cancel") return Promise.reject(new Error("cancel indisponible"));
       return Promise.reject(new Error(`Unexpected POST ${path}`));
     });
     network.api.mockImplementation((path: string) => {
       if (path === "/api/chat/runs/run-provisional-1") {
+        recoveryCount += 1;
+        if (recoveryCount <= 3) return Promise.reject(new Error("recovery indisponible"));
         return Promise.resolve({
           ...run("provisional", "run-provisional-1"),
           state: "COMPLETED",
@@ -278,7 +555,10 @@ describe("CortexApp conversation integration", () => {
     await user.click(screen.getByRole("tab", { name: "Message simple" }));
     await user.type(composer(), "premier");
     await user.click(screen.getByTitle("Envoyer"));
-    await user.click(await screen.findByTitle("Arrêter la réponse"));
+    vi.useFakeTimers();
+    act(() => AppEventSource.instances.at(-1)?.fail());
+    await act(async () => vi.advanceTimersByTimeAsync(2_000));
+    vi.useRealTimers();
     await screen.findByText("Livraison incertaine");
     await user.click(screen.getByRole("button", { name: "Réessayer la synchronisation" }));
     await waitFor(() => expect(screen.queryByText("Livraison incertaine")).not.toBeInTheDocument());

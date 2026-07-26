@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { demoPipeline, demoSettings } from "@/lib/demo";
 import {
+  canResolveRekeyConflict,
   conversationReducer,
   createConversationState,
   type ConversationEvent,
@@ -86,6 +87,8 @@ function ControlledWorkspace({
         messages={entry?.messages || []}
         loadingMessages={entry?.loadPhase === "loading"}
         sending={entry?.sendPending || false}
+        cancelPending={entry?.cancelPending || false}
+        recoveryPending={entry?.recoveryPending || false}
         draft={entry?.draft || ""}
         attachment={entry?.attachment || null}
         chatRun={entry?.run || null}
@@ -96,6 +99,7 @@ function ControlledWorkspace({
         sidebarCollapsed={false}
         capabilities={{ upload_file: true, take_screenshot: true }}
         rekeyConflict={state.rekeyConflict}
+        rekeyResolutionAllowed={canResolveRekeyConflict(state)}
         onDraftChange={(key, draft) => dispatch({ type: "DRAFT_CHANGED", key, draft })}
         onAttachmentStaged={(key, attachment) => dispatch({ type: "ATTACHMENT_STAGED", key, attachment })}
         onToggleSidebar={() => undefined}
@@ -106,10 +110,11 @@ function ControlledWorkspace({
         onStartMission={(key) => send(key)}
         onCancelChat={() => undefined}
         onRetryChatRecovery={onRetryRecovery}
-        onResolveRekeyConflict={(fromKey, toKey) => dispatch({
+        onResolveRekeyConflict={(fromKey, toKey, choice) => dispatch({
           type: "RESOLVE_REKEY_CONFLICT",
           fromKey,
           toKey,
+          choice,
         })}
         onPauseMission={() => undefined}
         onResumeMission={() => undefined}
@@ -283,7 +288,7 @@ describe("ChatWorkspace controlled composer", () => {
     expect(retry).toHaveBeenCalledWith("a");
   });
 
-  it("blocks an ambiguous provisional composer and resolves toward the existing canonical entry", async () => {
+  it("blocks an ambiguous provisional composer and exposes two explicit safe resolution choices", async () => {
     const provisional: ConversationSummary = {
       url: "https://chatgpt.com/",
       identity: "provisional:collision",
@@ -307,8 +312,39 @@ describe("ChatWorkspace controlled composer", () => {
     expect(screen.getByText("Identité de conversation ambiguë")).toBeInTheDocument();
     expect(screen.getByRole("textbox")).toBeDisabled();
     expect(screen.getByTitle("Envoyer")).toBeDisabled();
-    await user.click(screen.getByRole("button", { name: "Ouvrir la conversation existante" }));
+    expect(screen.getByRole("button", { name: "Conserver le brouillon provisoire" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Conserver le brouillon canonique" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Conserver le brouillon provisoire" }));
     expect(screen.getByRole("heading", { name: "Conversation CANONICAL-A" })).toBeInTheDocument();
     expect(screen.getByRole("textbox")).not.toBeDisabled();
+    expect(screen.getByRole("textbox")).toHaveValue("brouillon ambigu");
+    expect(screen.queryByText("Identité de conversation ambiguë")).not.toBeInTheDocument();
+  });
+
+  it("keeps both collision choices disabled while the provisional entry owns an active run", () => {
+    const provisional: ConversationSummary = {
+      url: "https://chatgpt.com/",
+      identity: "provisional:active-collision",
+      title: "Nouvelle conversation",
+    };
+    let initial = createConversationState([provisional, summary("canonical-a")], provisional.identity);
+    initial = conversationReducer(initial, {
+      type: "RUN_EVENT",
+      key: provisional.identity,
+      runId: "run-active",
+      streamEpoch: 1,
+      run: { ...acceptedRun(provisional.identity), id: "run-active" },
+      accepted: true,
+    });
+    initial = conversationReducer(initial, {
+      type: "REKEY_CANONICAL",
+      key: provisional.identity,
+      canonicalKey: "canonical-a",
+      canonicalUrl: "https://chatgpt.com/c/canonical-a",
+    });
+    render(<ControlledWorkspace initialState={initial} />);
+
+    expect(screen.getByRole("button", { name: "Conserver le brouillon provisoire" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Conserver le brouillon canonique" })).toBeDisabled();
   });
 });

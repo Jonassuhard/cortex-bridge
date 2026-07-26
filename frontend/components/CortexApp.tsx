@@ -28,7 +28,7 @@ import type {
 import { useInterval } from "@/hooks/useInterval";
 import { useChatRunStream } from "@/hooks/useChatRunStream";
 import { useConversationController } from "@/hooks/useConversationController";
-import { conversationKeyFromUrl } from "@/lib/conversation-state";
+import { canResolveRekeyConflict } from "@/lib/conversation-state";
 import {
   createRequestEpoch,
   createUnavailableClientState,
@@ -44,6 +44,18 @@ const DEVELOPMENT_FIXTURES_ENABLED =
 const INITIAL_UNAVAILABLE_STATE = createUnavailableClientState(
   new Date(0).toISOString(),
 );
+const INITIAL_POST_DEADLINE_MS = 10_000;
+const INITIAL_POST_TIMEOUT_MESSAGE =
+  "Envoi incertain : le délai de 10 secondes a expiré. Le brouillon et la pièce jointe sont conservés.";
+
+interface InitialRequestTask {
+  token: symbol;
+  controller: AbortController;
+  timer: ReturnType<typeof setTimeout>;
+  rejectInterrupted: (error: Error) => void;
+}
+
+class InitialRequestInterruptedError extends Error {}
 
 function normalizeConversation(raw: Partial<ConversationSummary> & { url: string }): ConversationSummary {
   const identity = raw.identity || raw.url.match(/\/c\/([^/?#]+)/)?.[1] || raw.url;
@@ -66,6 +78,39 @@ function normalizeConversation(raw: Partial<ConversationSummary> & { url: string
 
 function nonTerminal(state?: string) {
   return !!state && !["COMPLETED", "BLOCKED", "FAILED", "CANCELLED"].includes(state);
+}
+
+function pipelineForSelectedMission(
+  pipeline: PipelineStatus,
+  mission: MissionDetail | null,
+): PipelineStatus {
+  if (mission && pipeline.active_mission_id === mission.mission.id) {
+    return {
+      ...pipeline,
+      active_mission_id: mission.mission.id,
+      active_mission_state: mission.mission.state,
+    };
+  }
+  return {
+    ...pipeline,
+    active_mission_id: null,
+    active_mission_state: null,
+    components: [],
+    events: [],
+    queue_pending: 0,
+    runtime_execution: {
+      ...pipeline.runtime_execution,
+      task_id: null,
+      state: "IDLE",
+      active: false,
+      observed_at: null,
+    },
+    latency: {
+      transport_ms: pipeline.latency?.transport_ms ?? null,
+      local_model_ms: null,
+      total_iteration_ms: null,
+    },
+  };
 }
 
 export function CortexApp() {
@@ -171,16 +216,16 @@ export function CortexApp() {
   const [toast, setToast] = useState<string | null>(null);
   const missionDetailRequestEpoch = useRef(createRequestEpoch());
   const terminalRefreshTimer = useRef<number | null>(null);
+  const initialRequestsRef = useRef(new Map<ConversationKey, InitialRequestTask>());
 
   const activeMission = useMemo(() => {
     if (missionDetail && nonTerminal(missionDetail.mission.state)) return missionDetail;
     return null;
   }, [missionDetail]);
-  const selectedPipeline = useMemo<PipelineStatus>(() => ({
-    ...pipeline,
-    active_mission_id: missionDetail?.mission.id || null,
-    active_mission_state: missionDetail?.mission.state || null,
-  }), [missionDetail, pipeline]);
+  const selectedPipeline = useMemo(
+    () => pipelineForSelectedMission(pipeline, missionDetail),
+    [missionDetail, pipeline],
+  );
 
   const notify = useCallback((message: string) => {
     setToast(message);
@@ -302,6 +347,51 @@ export function CortexApp() {
     reloadSelected({ background: true });
   }, [reloadSelected]);
 
+  const runInitialRequest = useCallback(async function runInitialRequest<T>(
+    key: ConversationKey,
+    operation: (signal: AbortSignal) => Promise<T>,
+  ): Promise<T> {
+    if (initialRequestsRef.current.has(key)) {
+      throw new Error("Un envoi est déjà en cours pour cette conversation.");
+    }
+    const controller = new AbortController();
+    const token = Symbol(key);
+    let rejectInterrupted!: (error: Error) => void;
+    const interrupted = new Promise<never>((_resolve, reject) => {
+      rejectInterrupted = reject;
+    });
+    const timedOut = new Promise<never>((_resolve, reject) => {
+      const task: InitialRequestTask = {
+        token,
+        controller,
+        timer: setTimeout(() => {
+          if (initialRequestsRef.current.get(key)?.token !== token) return;
+          controller.abort();
+          reject(new Error(INITIAL_POST_TIMEOUT_MESSAGE));
+        }, INITIAL_POST_DEADLINE_MS),
+        rejectInterrupted,
+      };
+      initialRequestsRef.current.set(key, task);
+    });
+    const task = initialRequestsRef.current.get(key)!;
+    let request: Promise<T>;
+    try {
+      request = operation(controller.signal);
+    } catch (error) {
+      request = Promise.reject(error);
+    }
+    try {
+      const result = await Promise.race([request, timedOut, interrupted]);
+      if (initialRequestsRef.current.get(key) !== task || controller.signal.aborted) {
+        throw new InitialRequestInterruptedError();
+      }
+      return result;
+    } finally {
+      clearTimeout(task.timer);
+      if (initialRequestsRef.current.get(key) === task) initialRequestsRef.current.delete(key);
+    }
+  }, []);
+
   const chatStreams = useChatRunStream({
     dispatch: dispatchConversation,
     onTerminal: () => {
@@ -314,6 +404,13 @@ export function CortexApp() {
     recoverRun: (_key, runId, context) => api<ChatRun>(`/api/chat/runs/${runId}`, {
       signal: context.signal,
     }),
+    cancelRun: (_key, runId, context) => postJson(`/api/chat/runs/${runId}/cancel`, {}, {
+      signal: context.signal,
+    }),
+    onCancelFailure: (_key, _runId, error) => {
+      if (error instanceof InitialRequestInterruptedError) return;
+      notify(error instanceof Error ? error.message : "Impossible d'arrêter la réponse.");
+    },
   });
 
   useEffect(() => {
@@ -331,6 +428,12 @@ export function CortexApp() {
   useEffect(() => () => {
     if (terminalRefreshTimer.current) window.clearTimeout(terminalRefreshTimer.current);
     terminalRefreshTimer.current = null;
+    for (const [key, task] of initialRequestsRef.current) {
+      initialRequestsRef.current.delete(key);
+      clearTimeout(task.timer);
+      task.controller.abort();
+      task.rejectInterrupted(new InitialRequestInterruptedError());
+    }
   }, []);
 
   useEffect(() => {
@@ -370,6 +473,27 @@ export function CortexApp() {
     return key.startsWith("provisional:") || conversation.url.replace(/\/$/, "") === "https://chatgpt.com";
   }
 
+  function beginExecution(key: ConversationKey): boolean {
+    const current = conversationStateRef.current;
+    const entry = current.entries[key];
+    const runActive = !!entry?.run
+      && !["COMPLETED", "FAILED", "CANCELLED", "DELIVERY_UNCERTAIN"].includes(entry.run.state);
+    const missionActive = !!entry?.missionId
+      && (!entry.mission || nonTerminal(entry.mission.mission.state));
+    const conflicted = current.rekeyConflict?.fromKey === key;
+    if (!entry || conflicted) {
+      notify("L'identité de cette conversation doit être résolue avant tout nouvel envoi.");
+      return false;
+    }
+    if (entry.sendPending || runActive || missionActive || initialRequestsRef.current.has(key)) {
+      notify("Une réponse est déjà en cours pour cette conversation.");
+      return false;
+    }
+    chatStreams.close(key);
+    dispatchConversation({ type: "REQUEST_STARTED", request: "send", key });
+    return true;
+  }
+
   async function sendChat(key: ConversationKey, text: string): Promise<boolean> {
     const conversation = conversationForKey(key);
     if (!conversation) return false;
@@ -378,16 +502,17 @@ export function CortexApp() {
       setSettingsOpen(true);
       return false;
     }
-    dispatchConversation({ type: "REQUEST_STARTED", request: "send", key });
+    if (!beginExecution(key)) return false;
     try {
-      const run = await postJson<ChatRun>("/api/chat/send", {
-        conversation_url: conversation.url,
-        text,
-        new_conversation: isProvisional(key, conversation),
-      });
+      const run = await runInitialRequest(key, (signal) => postJson<ChatRun>("/api/chat/send", {
+          conversation_url: conversation.url,
+          text,
+          new_conversation: isProvisional(key, conversation),
+        }, { signal }));
       chatStreams.subscribe(key, run, { submittedDraft: text, submittedAttachment: null });
       return true;
     } catch (error) {
+      if (error instanceof InitialRequestInterruptedError) return false;
       requestFailed(key, error, "Impossible d'envoyer le message.");
       return false;
     }
@@ -401,30 +526,36 @@ export function CortexApp() {
       setSettingsOpen(true);
       return false;
     }
-    dispatchConversation({ type: "REQUEST_STARTED", request: "send", key });
+    if (!beginExecution(key)) return false;
     try {
-      const dataB64 = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(String(reader.result).split(",", 2)[1] || "");
-        reader.onerror = () => reject(reader.error);
-        reader.readAsDataURL(file);
-      });
-      const descriptor = await postJson<{ path: string; name: string; kind: string }>("/api/chat/attachments", {
-        name: file.name,
-        data_b64: dataB64,
-      });
-      const run = await postJson<ChatRun>("/api/chat/send-with-attachment", {
-        conversation_url: conversation.url,
-        text,
-        path: descriptor.path,
-        name: descriptor.name,
-        image: descriptor.kind === "image",
-        new_conversation: isProvisional(key, conversation),
+      const { descriptor, run } = await runInitialRequest(key, async (signal) => {
+        const dataB64 = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result).split(",", 2)[1] || "");
+          reader.onerror = () => reject(reader.error);
+          reader.readAsDataURL(file);
+        });
+        if (signal.aborted) throw new InitialRequestInterruptedError();
+        const descriptor = await postJson<{ path: string; name: string; kind: string }>("/api/chat/attachments", {
+          name: file.name,
+          data_b64: dataB64,
+        }, { signal });
+        if (signal.aborted) throw new InitialRequestInterruptedError();
+        const run = await postJson<ChatRun>("/api/chat/send-with-attachment", {
+          conversation_url: conversation.url,
+          text,
+          path: descriptor.path,
+          name: descriptor.name,
+          image: descriptor.kind === "image",
+          new_conversation: isProvisional(key, conversation),
+        }, { signal });
+        return { descriptor, run };
       });
       chatStreams.subscribe(key, run, { submittedDraft: text, submittedAttachment: file });
       notify(`Pièce jointe prise en charge : ${descriptor.name}. Confirmation en cours.`);
       return true;
     } catch (error) {
+      if (error instanceof InitialRequestInterruptedError) return false;
       requestFailed(key, error, "Impossible d'envoyer la pièce jointe.");
       return false;
     }
@@ -438,17 +569,18 @@ export function CortexApp() {
       setSettingsOpen(true);
       return false;
     }
-    dispatchConversation({ type: "REQUEST_STARTED", request: "send", key });
+    if (!beginExecution(key)) return false;
     try {
-      const run = await postJson<ChatRun>("/api/chat/send-screenshot", {
+      const run = await runInitialRequest(key, (signal) => postJson<ChatRun>("/api/chat/send-screenshot", {
         conversation_url: conversation.url,
         text,
         new_conversation: isProvisional(key, conversation),
-      });
+      }, { signal }));
       chatStreams.subscribe(key, run, { submittedDraft: text, submittedAttachment: null });
       notify("Capture prise en charge. Confirmation ChatGPT en cours.");
       return true;
     } catch (error) {
+      if (error instanceof InitialRequestInterruptedError) return false;
       requestFailed(key, error, "Capture impossible.");
       return false;
     }
@@ -457,9 +589,9 @@ export function CortexApp() {
   async function startMission(key: ConversationKey, text: string): Promise<boolean> {
     const conversation = conversationForKey(key);
     if (!conversation) return false;
-    dispatchConversation({ type: "REQUEST_STARTED", request: "send", key });
+    if (!beginExecution(key)) return false;
     try {
-      const response = await postJson<{ id: string; state: string }>("/api/missions", {
+      const response = await runInitialRequest(key, (signal) => postJson<{ id: string; state: string }>("/api/missions", {
         objective: text,
         workspace: settings.default_workspace,
         constraints: ["Ne jamais supprimer définitivement un fichier", "Rester dans les racines autorisées"],
@@ -468,7 +600,7 @@ export function CortexApp() {
         max_iterations: settings.max_iterations,
         max_duration_minutes: settings.max_duration_minutes,
         approval_policy: settings.approval_policy,
-      });
+      }, { signal }));
       missionDetailRequestEpoch.current.invalidate();
       dispatchConversation({
         type: "MISSION_EVENT",
@@ -482,6 +614,7 @@ export function CortexApp() {
       notify("Mission autonome lancée.");
       return true;
     } catch (error) {
+      if (error instanceof InitialRequestInterruptedError) return false;
       if (DEVELOPMENT_FIXTURES_ENABLED && demoMode) {
         missionDetailRequestEpoch.current.invalidate();
         dispatchConversation({
@@ -500,68 +633,19 @@ export function CortexApp() {
     }
   }
 
-  async function cancelChat(key: ConversationKey) {
-    const entry = conversationState.entries[key];
+  function cancelChat(key: ConversationKey) {
+    const entry = conversationStateRef.current.entries[key];
     const run = entry?.run;
     if (!run) return;
-    const runId = run.id;
-    const streamEpoch = entry.streamEpoch;
-    chatStreams.close(key);
-    try {
-      await postJson(`/api/chat/runs/${runId}/cancel`, {});
-      dispatchConversation({
-        type: "RUN_CANCELLED",
-        key,
-        runId,
-        cancelledAt: new Date().toISOString(),
-      });
-    } catch (error) {
-      dispatchConversation({
-        type: "RUN_RECOVERY_EXHAUSTED",
-        key,
-        runId,
-        streamEpoch,
-        error: "Annulation incertaine : la réponse n'est plus suivie par le bridge.",
-      });
-      notify(error instanceof Error ? error.message : "Impossible d'arrêter la réponse.");
-    }
+    chatStreams.cancel(key, run.id, entry.streamEpoch);
   }
 
-  async function retryChatRecovery(key: ConversationKey) {
+  function retryChatRecovery(key: ConversationKey) {
     const entry = conversationStateRef.current.entries[key];
     const runId = entry?.run?.id;
     if (!entry || !runId) return;
-    const controller = new AbortController();
-    const timer = window.setTimeout(() => controller.abort(), 10_000);
-    try {
-      const recovered = await api<ChatRun>(`/api/chat/runs/${runId}`, { signal: controller.signal });
-      if (recovered.id !== runId) return;
-      const current = conversationStateRef.current.entries[key];
-      if (!current?.run || current.run.id !== runId) return;
-      if (["COMPLETED", "FAILED", "CANCELLED"].includes(recovered.state)) {
-        const next = dispatchConversation({
-          type: "RUN_EVENT",
-          key,
-          runId,
-          streamEpoch: current.streamEpoch,
-          run: recovered,
-        });
-        const canonicalUrl = recovered.canonical_url;
-        if (canonicalUrl && next.entries[key]?.run?.id === runId) {
-          dispatchConversation({
-            type: "REKEY_CANONICAL",
-            key,
-            canonicalKey: conversationKeyFromUrl(canonicalUrl),
-            canonicalUrl,
-          });
-        }
-      } else {
-        chatStreams.subscribe(key, recovered, { accepted: false });
-      }
-    } catch {
-      notify("Synchronisation toujours impossible. Aucun renvoi automatique n'a été effectué.");
-    } finally {
-      window.clearTimeout(timer);
+    if (!chatStreams.retry(key, runId, entry.streamEpoch)) {
+      notify("Une synchronisation est déjà en cours pour cette conversation.");
     }
   }
 
@@ -702,16 +786,19 @@ export function CortexApp() {
         messages={messages}
         loadingMessages={loadingMessages}
         sending={selectedEntry?.sendPending || false}
+        cancelPending={selectedEntry?.cancelPending || false}
+        recoveryPending={selectedEntry?.recoveryPending || false}
         draft={selectedEntry?.draft || ""}
         attachment={selectedEntry?.attachment || null}
         chatRun={chatRun}
         mission={activeMission || missionDetail}
-        pipeline={selectedPipeline}
+        pipeline={pipeline}
         settings={settings}
         inspectorOpen={inspectorOpen}
         sidebarCollapsed={sidebarCollapsed}
         capabilities={capabilities}
         rekeyConflict={conversationState.rekeyConflict}
+        rekeyResolutionAllowed={canResolveRekeyConflict(conversationState)}
         onDraftChange={(key, draft) => dispatchConversation({ type: "DRAFT_CHANGED", key, draft })}
         onAttachmentStaged={(key, attachment) => dispatchConversation({
           type: "ATTACHMENT_STAGED",
@@ -726,10 +813,11 @@ export function CortexApp() {
         onStartMission={startMission}
         onCancelChat={(key) => void cancelChat(key)}
         onRetryChatRecovery={(key) => void retryChatRecovery(key)}
-        onResolveRekeyConflict={(fromKey, toKey) => dispatchConversation({
+        onResolveRekeyConflict={(fromKey, toKey, choice) => dispatchConversation({
           type: "RESOLVE_REKEY_CONFLICT",
           fromKey,
           toKey,
+          choice,
         })}
         onPauseMission={(key) => void missionAction(key, "pause")}
         onResumeMission={(key) => void missionAction(key, "resume")}
