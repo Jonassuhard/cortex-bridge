@@ -109,6 +109,7 @@ class MissionRuntime:
     lease: object | None = None
     lease_release_ready: bool = True
     quiescence_task: asyncio.Task | None = None
+    transport_closed: bool = False
 
 
 _runtimes: dict[str, MissionRuntime] = {}
@@ -286,19 +287,27 @@ async def _persist_mission_lease(rt: MissionRuntime) -> None:
 
 
 async def _release_terminal_mission(rt: MissionRuntime) -> None:
-    if rt.lease is None or not rt.lease_release_ready:
+    if not rt.lease_release_ready:
         return
     try:
         state = get_store().get_mission(rt.mission_id)["state"]
     except StoreError:
-        await rt.lease.release()
-        _mission_leases.pop(rt.mission_id, None)
-        _mission_write_urls.pop(rt.mission_id, None)
+        state = "FAILED"
+    if state not in {"COMPLETED", "BLOCKED", "FAILED", "CANCELLED"}:
         return
-    if state in {"COMPLETED", "BLOCKED", "FAILED", "CANCELLED"}:
+    if not rt.transport_closed:
+        rt.transport_closed = True
+        closer = getattr(rt.transport, "close", None)
+        if closer is not None:
+            try:
+                await closer()
+            except Exception:
+                pass
+    if rt.lease is not None:
         await rt.lease.release()
-        _mission_leases.pop(rt.mission_id, None)
-        _mission_write_urls.pop(rt.mission_id, None)
+        rt.lease = None
+    _mission_leases.pop(rt.mission_id, None)
+    _mission_write_urls.pop(rt.mission_id, None)
 
 
 # ------------------------------------------------------------------- schemas

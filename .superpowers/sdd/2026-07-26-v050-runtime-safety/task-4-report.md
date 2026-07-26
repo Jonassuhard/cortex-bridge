@@ -4,13 +4,14 @@
 
 - Added the `BrowserDriver` protocol and the single runtime factory in
   `transport/browser.py`.
-- Added a persistent Playwright Chromium driver in
+- Added a shared persistent Playwright Chromium runtime in
   `transport/browser_playwright/`.
 - Kept WebBridge as the explicit `webbridge` compatibility backend.
 - Routed chat, missions, settings, diagnostics and onboarding through injectable
   factories.
 - Added the dedicated-profile onboarding action and visible frontend button.
-- Added only `playwright>=1.52,<2`; Chromium remains an installer/runtime step.
+- Added only `playwright>=1.52,<2`; the local launcher now ensures both Python
+  requirements and the matching Chromium binary.
 
 ## TDD evidence
 
@@ -136,9 +137,12 @@ Result: both exited 0. No frontend export/build was run; existing
 ## Implementation notes
 
 - Playwright sync objects are created, used and closed only on one dedicated
-  worker thread per driver. Async callers enqueue serialized operations and
-  await `concurrent.futures.Future` instances without blocking the event loop.
-- Persistent profiles resolve to `<browser_profile_root>/<session>`.
+  worker thread per authenticated runtime. Async callers enqueue serialized
+  operations and await protected `concurrent.futures.Future` instances without
+  blocking the event loop.
+- All logical sessions share
+  `<browser_profile_root>/cortex-bridge-ui`; each session owns an isolated,
+  bounded page inside that one authenticated persistent context.
 - Driver construction is lazy. Health checks do not open Chromium; the
   onboarding button calls `open_login()` and starts the visible dedicated
   profile.
@@ -153,8 +157,9 @@ Result: both exited 0. No frontend export/build was run; existing
 
 ## Self-review
 
-- No test or implementation navigated to `chatgpt.com`; all real browser tests
-  used the loopback fixture server.
+- No test navigated to `chatgpt.com`; all browser and WebBridge contract tests
+  used loopback fixture servers. Production `open_login()` and conversation
+  discovery intentionally default to `https://chatgpt.com/`.
 - No cookies or profiles are copied from another browser.
 - Session names are validated before profile-path construction.
 - The adapter no longer calls `driver._command` for upload fallback.
@@ -165,10 +170,8 @@ Result: both exited 0. No frontend export/build was run; existing
 
 ## Concerns / follow-up
 
-- A distributable installer still needs to run
-  `python -m playwright install chromium`; Python requirements install the
-  package, not the browser binary. This worktree installed Chromium and ran the
-  browser suite successfully.
+- `scripts/start-local.sh` now runs both requirements installation and
+  `python -m playwright install chromium` before starting the console.
 - Live ChatGPT DOM compatibility is intentionally not exercised in Task 4.
   The existing local DOM fixture/probe regressions remain the release evidence.
 
@@ -177,9 +180,93 @@ Result: both exited 0. No frontend export/build was run; existing
 - Required transport suite: 36/36 passed.
 - Full Python suite: 180/180 passed.
 - Directly affected API/session suite: 54/54 passed.
-- Final Playwright contract rerun after removing every external URL literal:
-  7/7 passed in 4.604 s.
+- Final Playwright contract rerun used loopback URLs only; production external
+  defaults remain explicit and intentional.
 - Frontend typecheck (`--incremental false`) and ESLint: exit 0.
 - `py_compile` for every changed Python source/test: exit 0.
 - `git diff --check`: exit 0.
 - Staged-file audit and commit are recorded in the handoff.
+
+## Fix round 1/5 — runtime safety review
+
+### RED evidence
+
+The new regression suite was written before the fixes. The first targeted run
+failed the shared-authentication assertion, then hung after cancelling a queued
+evaluation. The captured stack showed the cancelled asyncio wrapper cancelling
+the underlying `concurrent.futures.Future`; the worker subsequently attempted
+to settle that cancelled future and became unusable.
+
+The additional REDs covered:
+
+- atomic admission versus shutdown;
+- bounded `evaluate(timeout)` with a never-resolving Promise;
+- raw Playwright exception normalization and delivery uncertainty after click;
+- startup failure eviction and recovery;
+- bounded logical-page/profile lifecycle;
+- concurrent WebBridge close;
+- meaningful adapter flows through Playwright and WebBridge loopback fixtures;
+- unconditional requirements/Chromium bootstrap;
+- structured onboarding failure;
+- traversal/symlink profile-root rejection and external-path anonymization.
+
+### Corrective architecture
+
+- One runtime is shared per `(profile_root, headless)` and owns the sole
+  persistent Chromium context at `cortex-bridge-ui`.
+- Logical chat, mission, diagnostics and onboarding sessions use isolated pages
+  in that context, with an eight-page LRU bound and a short bounded idle
+  shutdown window.
+- Admission, page release and the terminal sentinel are serialized under the
+  runtime state lock.
+- Cross-thread futures are shielded from caller cancellation; worker settlement
+  is defensive and every queued call is settled when the worker exits.
+- JavaScript evaluation uses an in-page `Promise.race` timeout and remains
+  usable after a timeout.
+- Playwright failures cross the public driver boundary as `DriverError`, so the
+  adapter's fallback and `DELIVERY_UNCERTAIN` rules apply consistently.
+- Terminal chat and mission transports release their logical pages; WebBridge
+  close is concurrently idempotent.
+- Settings validate profile roots both when loaded and when updated. Relative
+  traversal and configured symlink roots fail closed; diagnostics redact
+  non-home absolute paths.
+
+### GREEN evidence
+
+Focused fix-round suite:
+
+```bash
+.venv/bin/python -m unittest tests.test_playwright_driver tests.test_start_local \
+  tests.test_chat_settings_api.ChatSettingsApiTestCase.test_10b_onboarding_browser_failure_is_structured_non_2xx \
+  tests.test_chat_settings_api.ChatSettingsApiTestCase.test_10c_browser_profile_root_rejects_traversal_and_symlinks \
+  tests.test_chat_settings_api.ChatSettingsApiTestCase.test_10d_loaded_invalid_browser_settings_fail_closed_and_external_paths_are_anonymized -v
+```
+
+Result: 21 tests passed in 10.972 s.
+
+Fresh full backend regression:
+
+```bash
+.venv/bin/python -m unittest discover -s tests -v
+```
+
+Result: 194 tests passed in 184.856 s. Existing `ResourceWarning` noise remains,
+with zero failures/errors.
+
+Frontend:
+
+```bash
+npm run typecheck -- --incremental false
+npm run lint
+```
+
+Result: both exited 0.
+
+Final strict-timeout Playwright rerun:
+
+```bash
+.venv/bin/python -m unittest tests.test_playwright_driver -v
+```
+
+Result: 17 tests passed in 17.020 s, followed by successful `py_compile` and
+`git diff --check`.

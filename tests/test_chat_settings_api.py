@@ -49,6 +49,7 @@ class FakeBrowserDriver:
 
     selected = "ChatGPT 5.6 Pro"
     open_login_calls = 0
+    fail_login = False
     driver_name = "playwright"
 
     def __init__(self, *args, **kwargs):
@@ -62,6 +63,8 @@ class FakeBrowserDriver:
 
     async def open_login(self) -> dict:
         type(self).open_login_calls += 1
+        if type(self).fail_login:
+            raise RuntimeError("browser launch failed")
         return await self.health()
 
     async def list_models(self) -> dict:
@@ -157,6 +160,7 @@ class ChatSettingsApiTestCase(unittest.TestCase):
 
     def setUp(self):
         FakeBrowserDriver.open_login_calls = 0
+        FakeBrowserDriver.fail_login = False
         missions_api._global_stop = False
         missions_api.OPTIN_FILE.unlink(missing_ok=True)
         settings_api.SETTINGS_FILE.unlink(missing_ok=True)
@@ -367,6 +371,44 @@ class ChatSettingsApiTestCase(unittest.TestCase):
         self.assertEqual(body["driver"], "playwright")
         self.assertTrue(body["connected"])
         self.assertEqual(FakeBrowserDriver.open_login_calls, 1)
+
+    def test_10b_onboarding_browser_failure_is_structured_non_2xx(self):
+        FakeBrowserDriver.fail_login = True
+        status, body = self.post("/api/onboarding/browser/open", {})
+        self.assertEqual(status, 503, body)
+        self.assertEqual(body["detail"]["code"], "BROWSER_LOGIN_FAILED")
+        self.assertEqual(body["detail"]["driver"], "playwright")
+
+    def test_10c_browser_profile_root_rejects_traversal_and_symlinks(self):
+        _, defaults = self.get("/api/settings")
+        status, _ = self.put("/api/settings", {
+            **defaults,
+            "browser_profile_root": "../../outside",
+            "default_workspace": str(Path(self._tmp.name).resolve()),
+        })
+        self.assertEqual(status, 422)
+
+        outside = Path(self._tmp.name) / "outside-profile"
+        outside.mkdir(exist_ok=True)
+        link = Path(self._tmp.name) / "profile-link"
+        link.symlink_to(outside, target_is_directory=True)
+        status, _ = self.put("/api/settings", {
+            **defaults,
+            "browser_profile_root": str(link),
+            "default_workspace": str(Path(self._tmp.name).resolve()),
+        })
+        self.assertEqual(status, 422)
+
+    def test_10d_loaded_invalid_browser_settings_fail_closed_and_external_paths_are_anonymized(self):
+        settings_api.SETTINGS_FILE.write_text(json.dumps({
+            "browser_transport": "selenium",
+            "browser_profile_root": "",
+        }), encoding="utf-8")
+        with self.assertRaises(ValueError):
+            settings_api.load_settings()
+        anonymized = settings_api._anonymize("/Volumes/ClientSecret/browser-profile")
+        self.assertNotIn("Volumes", anonymized)
+        self.assertNotIn("ClientSecret", anonymized)
 
     def test_11_modern_fallback_ui_is_served(self):
         req = urllib.request.Request(self.base + "/", method="GET")

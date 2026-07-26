@@ -305,6 +305,12 @@ class ChatGPTWebTransport:
         self._cancel_requested = False
         self._pending_new_chat = False
 
+    async def close(self) -> None:
+        """Release the logical browser page owned by this transport."""
+        closer = getattr(self.driver, "close", None)
+        if closer is not None:
+            await closer()
+
     # -- pause/resume (§5: pause safely on any blocker) ------------------------------
 
     def pause(self, reason: str) -> None:
@@ -1339,6 +1345,7 @@ class WebBridgeDriver:
         self.session = session
         self.target_url: str | None = None
         self._closed = False
+        self._close_lock = asyncio.Lock()
 
     def _command(self, action: str, args: dict | None = None, timeout: float = 30) -> Any:
         payload = {"action": action, "args": args or {}, "session": self.session}
@@ -1570,10 +1577,11 @@ class WebBridgeDriver:
         self.target_url = None
 
     async def close(self) -> None:
-        if self._closed:
-            return
-        await self.close_tab()
-        self._closed = True
+        async with self._close_lock:
+            if self._closed:
+                return
+            await self.close_tab()
+            self._closed = True
 
     async def open_login(self) -> dict:
         await self.navigate("https://chatgpt.com/")

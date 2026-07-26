@@ -66,14 +66,38 @@ def load_browser_settings(settings: dict[str, Any] | None = None) -> dict[str, A
         raise ValueError(
             "browser_transport must be exactly one of: playwright, webbridge"
         )
+    _profile_root(str(result["browser_profile_root"]))
     return result
 
 
 def _profile_root(value: str | Path) -> Path:
-    root = Path(value).expanduser()
+    raw = str(value).strip()
+    if not raw:
+        raise ValueError("browser_profile_root must not be empty")
+    root = Path(raw).expanduser()
     if not root.is_absolute():
+        if ".." in root.parts:
+            raise ValueError("browser_profile_root must not traverse outside the repository")
         root = REPO_ROOT / root
-    return root.resolve()
+    absolute = root.absolute()
+    configured = Path(raw).expanduser()
+    if configured.is_symlink():
+        raise ValueError("browser_profile_root must not contain symlinks")
+    if not configured.is_absolute():
+        current = REPO_ROOT
+        for part in configured.parts:
+            current /= part
+            if current.is_symlink():
+                raise ValueError("browser_profile_root must not contain symlinks")
+    resolved = absolute.resolve()
+    if not Path(raw).expanduser().is_absolute():
+        try:
+            resolved.relative_to(REPO_ROOT.resolve())
+        except ValueError as exc:
+            raise ValueError(
+                "browser_profile_root must stay inside the repository"
+            ) from exc
+    return resolved
 
 
 def create_browser_driver(
@@ -97,7 +121,7 @@ def create_browser_driver(
     key = (selected, str(root), session, headless)
     with _driver_cache_lock:
         cached = _driver_cache.get(key)
-        if cached is not None and not cached.closed:
+        if cached is not None and cached.live:
             return cached
         driver = PlaywrightBrowserDriver(
             session=session,

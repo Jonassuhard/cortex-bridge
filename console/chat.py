@@ -386,6 +386,10 @@ async def _run_chat(run: ChatRunRuntime) -> None:
         _set_state(run, "FAILED")
         _emit(run, "error", {"error": run.error, "code": "CHAT_RUN_CRASHED"})
     finally:
+        try:
+            await transport.close()
+        except Exception:
+            pass
         if run.lease is not None:
             await run.lease.release()
         _persist_runs()

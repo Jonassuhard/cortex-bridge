@@ -13,7 +13,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 from local_executor import runtime_status
 from transport.browser import create_browser_driver
@@ -146,9 +146,13 @@ async def open_browser_login() -> dict[str, Any]:
     try:
         return await driver.open_login()
     except Exception as exc:
-        return {
-            "connected": False,
-            "tabs": 0,
-            "driver": getattr(driver, "driver_name", settings["browser_transport"]),
-            "error": str(exc),
-        }
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "BROWSER_LOGIN_FAILED",
+                "driver": getattr(
+                    driver, "driver_name", settings["browser_transport"]
+                ),
+                "error": str(exc),
+            },
+        ) from exc

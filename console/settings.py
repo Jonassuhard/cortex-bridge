@@ -23,7 +23,7 @@ import chat as chat_api
 import missions as missions_api
 from executor.tools import ProcessCapabilities
 from local_executor import OLLAMA_ENDPOINT, runtime_status
-from transport.browser import create_browser_driver
+from transport.browser import create_browser_driver, load_browser_settings
 
 router = APIRouter(prefix="/api")
 DATA_DIR = Path(__file__).resolve().parent / "data"
@@ -97,6 +97,7 @@ def load_settings() -> dict[str, Any]:
     result = {**DEFAULT_SETTINGS, **raw}
     # This is an invariant, not a preference.
     result["never_delete_files"] = True
+    load_browser_settings(result)
     return result
 
 
@@ -165,8 +166,10 @@ async def update_settings(body: SettingsIn) -> dict[str, Any]:
     # A missing future workspace may be configured, but its parent must be absolute.
     if not workspace.is_absolute():
         raise HTTPException(status_code=422, detail="default workspace must be absolute")
-    if not body.browser_profile_root.strip():
-        raise HTTPException(status_code=422, detail="browser profile root must not be empty")
+    try:
+        load_browser_settings(body.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return save_settings(body.model_dump())
 
 
@@ -427,6 +430,8 @@ def _anonymize(value: Any) -> Any:
     home = str(Path.home())
     if isinstance(value, str):
         scrubbed = value.replace(home, "~")
+        if scrubbed.startswith("/") and not scrubbed.startswith("//"):
+            scrubbed = f"/<redacted>/{Path(scrubbed).name}"
         # /c/<conversation-id> → /c/conv-xxxxxxxx (first 8 chars of sha1)
         def _mask(match: "re.Match[str]") -> str:
             digest = hashlib.sha1(match.group(1).encode("utf-8")).hexdigest()[:8]

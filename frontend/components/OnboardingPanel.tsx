@@ -2,7 +2,7 @@
 /* eslint-disable react-hooks/set-state-in-effect */
 
 import { useCallback, useEffect, useState } from "react";
-import { api, postJson } from "@/lib/api";
+import { ApiError, api, postJson } from "@/lib/api";
 import { AlertIcon, CheckIcon, RefreshIcon, XIcon } from "./Icons";
 
 interface OnboardingCheck {
@@ -28,6 +28,7 @@ export function OnboardingPanel({ onOpenSettings }: { onOpenSettings: () => void
   const [hidden, setHidden] = useState(false);
   const [checking, setChecking] = useState(false);
   const [openingBrowser, setOpeningBrowser] = useState(false);
+  const [browserError, setBrowserError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     setChecking(true);
@@ -57,9 +58,21 @@ export function OnboardingPanel({ onOpenSettings }: { onOpenSettings: () => void
 
   const openBrowser = async () => {
     setOpeningBrowser(true);
+    setBrowserError(null);
     try {
       await postJson("/api/onboarding/browser/open", {});
       await refresh();
+    } catch (error) {
+      if (error instanceof ApiError) {
+        const envelope = error.detail as { detail?: { error?: string } } | undefined;
+        setBrowserError(
+          envelope?.detail?.error
+            ? `Le profil navigateur n’a pas pu être ouvert : ${envelope.detail.error}`
+            : "Le profil navigateur n’a pas pu être ouvert. Vérifie l’installation de Chromium."
+        );
+      } else {
+        setBrowserError("Le profil navigateur n’a pas pu être ouvert.");
+      }
     } finally {
       setOpeningBrowser(false);
     }
@@ -88,6 +101,9 @@ export function OnboardingPanel({ onOpenSettings }: { onOpenSettings: () => void
               </span>
             </div>
           ))}
+          {browserError ? (
+            <p className="diagnostic-result failed" role="alert">{browserError}</p>
+          ) : null}
         </div>
         <footer className="settings-footer">
           <span>{state.ready ? "✅ Tout est prêt." : "Certains prérequis manquent — tu peux quand même explorer."}</span>
