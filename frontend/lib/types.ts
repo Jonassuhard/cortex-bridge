@@ -74,6 +74,29 @@ export interface ConversationSnapshot {
   messages: ConversationMessage[];
 }
 
+export type ConversationKey = string;
+export type ConversationLoadPhase = "idle" | "loading" | "ready" | "error";
+export type ConversationFreshness = "empty" | "cached" | "live" | "stale";
+
+export interface ConversationEntry {
+  key: ConversationKey;
+  summary: ConversationSummary;
+  snapshot: ConversationSnapshot | null;
+  messages: ConversationMessage[];
+  draft: string;
+  attachment: File | null;
+  loadEpoch: number;
+  loadPhase: ConversationLoadPhase;
+  loadError: string | null;
+  freshness: ConversationFreshness;
+  run: ChatRun | null;
+  streamEpoch: number;
+  missionId: string | null;
+  mission: MissionDetail | null;
+  sendPending: boolean;
+  sendError: string | null;
+}
+
 export type ChatRunState =
   | "QUEUED"
   | "SELECTING_CONVERSATION"

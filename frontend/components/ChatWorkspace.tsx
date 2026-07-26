@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   ChatRun,
+  ConversationKey,
   ConversationMessage,
   ConversationSummary,
   CortexSettings,
@@ -35,9 +36,13 @@ import {
 import { ExecutionCard } from "./ExecutionCard";
 
 interface ChatWorkspaceProps {
+  conversationKey: ConversationKey | null;
   conversation: ConversationSummary | null;
   messages: ConversationMessage[];
   loadingMessages: boolean;
+  sending: boolean;
+  draft: string;
+  attachment: File | null;
   chatRun: ChatRun | null;
   mission: MissionDetail | null;
   pipeline: PipelineStatus;
@@ -45,18 +50,20 @@ interface ChatWorkspaceProps {
   inspectorOpen: boolean;
   sidebarCollapsed: boolean;
   capabilities: { upload_file: boolean; take_screenshot: boolean };
+  onDraftChange: (key: ConversationKey, draft: string) => void;
+  onAttachmentStaged: (key: ConversationKey, attachment: File | null) => void;
   onToggleSidebar: () => void;
   onToggleInspector: () => void;
-  onSendChat: (text: string) => Promise<boolean>;
-  onSendAttachment: (text: string, file: File) => Promise<boolean>;
-  onSendScreenshot: (text: string) => Promise<boolean>;
-  onStartMission: (text: string) => Promise<boolean>;
-  onCancelChat: () => void;
-  onPauseMission: () => void;
-  onResumeMission: () => void;
-  onCancelMission: () => void;
-  onApprove: (scope: "once" | "tool" | "all-writes") => void;
-  onReject: () => void;
+  onSendChat: (key: ConversationKey, text: string) => Promise<boolean>;
+  onSendAttachment: (key: ConversationKey, text: string, file: File) => Promise<boolean>;
+  onSendScreenshot: (key: ConversationKey, text: string) => Promise<boolean>;
+  onStartMission: (key: ConversationKey, text: string) => Promise<boolean>;
+  onCancelChat: (key: ConversationKey) => void;
+  onPauseMission: (key: ConversationKey) => void;
+  onResumeMission: (key: ConversationKey) => void;
+  onCancelMission: (key: ConversationKey) => void;
+  onApprove: (key: ConversationKey, scope: "once" | "tool" | "all-writes") => void;
+  onReject: (key: ConversationKey) => void;
 }
 
 function cleanMessageText(text: string): string {
@@ -188,9 +195,13 @@ function EmptyConversation({ onExample }: { onExample: (text: string) => void })
 }
 
 export function ChatWorkspace({
+  conversationKey,
   conversation,
   messages,
   loadingMessages,
+  sending,
+  draft,
+  attachment,
   chatRun,
   mission,
   pipeline,
@@ -198,6 +209,8 @@ export function ChatWorkspace({
   inspectorOpen,
   sidebarCollapsed,
   capabilities,
+  onDraftChange,
+  onAttachmentStaged,
   onToggleSidebar,
   onToggleInspector,
   onSendChat,
@@ -211,10 +224,7 @@ export function ChatWorkspace({
   onApprove,
   onReject,
 }: ChatWorkspaceProps) {
-  const [draft, setDraft] = useState("");
   const [mode, setMode] = useState<"chat" | "mission">("mission");
-  const [sending, setSending] = useState(false);
-  const [stagedFile, setStagedFile] = useState<File | null>(null);
   const [executionExpanded, setExecutionExpanded] = useState(true);
   const viewportRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -267,35 +277,23 @@ export function ChatWorkspace({
   }, [mergedMessages.length, chatRun?.response_text, mission?.mission.state]);
 
   async function submit() {
-    const text = draft.trim();
-    if ((!text && !stagedFile) || sending) return;
-    setSending(true);
-    try {
-      // P2b: the draft is only cleared on success — a refused send (e.g.
-      // third write conversation) must never lose what the user typed.
-      const ok = stagedFile
-        ? await onSendAttachment(text, stagedFile)
-        : mode === "mission"
-          ? await onStartMission(text)
-          : await onSendChat(text);
-      if (ok) {
-        setDraft("");
-        setStagedFile(null);
-      }
-    } finally {
-      setSending(false);
+    const key = conversationKey;
+    const text = draft;
+    const stagedFile = attachment;
+    if (!key || (!text.trim() && !stagedFile) || sending) return;
+    if (stagedFile) {
+      await onSendAttachment(key, text, stagedFile);
+    } else if (mode === "mission") {
+      await onStartMission(key, text);
+    } else {
+      await onSendChat(key, text);
     }
   }
 
   async function submitScreenshot() {
-    if (sending) return;
-    setSending(true);
-    try {
-      const ok = await onSendScreenshot(draft.trim());
-      if (ok) setDraft("");
-    } finally {
-      setSending(false);
-    }
+    const key = conversationKey;
+    if (!key || sending) return;
+    await onSendScreenshot(key, draft);
   }
 
   const title = conversation?.title || "Nouvelle conversation";
@@ -361,14 +359,20 @@ export function ChatWorkspace({
           {loadingMessages && mergedMessages.length === 0 && (
             <div className="message-loading-state"><span className="thinking-spinner" /><p>Synchronisation de « {title} »…</p></div>
           )}
-          {!loadingMessages && mergedMessages.length === 0 && <EmptyConversation onExample={setDraft} />}
+          {!loadingMessages && mergedMessages.length === 0 && (
+            <EmptyConversation
+              onExample={(text) => {
+                if (conversationKey) onDraftChange(conversationKey, text);
+              }}
+            />
+          )}
           {mergedMessages.map((message) => {
             if (message.role === "user") return <UserMessage key={message.id} message={message} />;
             if (message.role === "assistant") return <AssistantMessage key={message.id} message={message} />;
             return null;
           })}
 
-          {(mission || pipeline.active_mission_id) && (
+          {mission && (
             <div className="message-row message-cortex">
               <div className="assistant-avatar cortex-avatar"><ActivityIcon size={15} /></div>
               <div className="assistant-content execution-content">
@@ -378,8 +382,12 @@ export function ChatWorkspace({
                   pipeline={pipeline}
                   expanded={executionExpanded}
                   onToggle={() => setExecutionExpanded((value) => !value)}
-                  onApprove={onApprove}
-                  onReject={onReject}
+                  onApprove={(scope) => {
+                    if (conversationKey) onApprove(conversationKey, scope);
+                  }}
+                  onReject={() => {
+                    if (conversationKey) onReject(conversationKey);
+                  }}
                 />
               </div>
             </div>
@@ -400,7 +408,9 @@ export function ChatWorkspace({
         <div className={`composer-box ${busy ? "is-busy" : ""}`}>
           <textarea
             value={draft}
-            onChange={(event) => setDraft(event.target.value)}
+            onChange={(event) => {
+              if (conversationKey) onDraftChange(conversationKey, event.target.value);
+            }}
             onKeyDown={(event) => {
               if (event.key === "Enter" && !event.shiftKey && !event.metaKey) {
                 event.preventDefault();
@@ -416,16 +426,17 @@ export function ChatWorkspace({
               <input
                 ref={fileInputRef}
                 type="file"
+                disabled={sending}
                 style={{ display: "none" }}
                 onChange={(event) => {
                   const file = event.target.files?.[0] || null;
-                  setStagedFile(file);
+                  if (conversationKey) onAttachmentStaged(conversationKey, file);
                   event.target.value = "";
                 }}
               />
               <button
                 title={capabilities.upload_file ? "Joindre un fichier ou une image (512 Mo / 20 Mo max)" : "Pièces jointes non confirmées par ce transport"}
-                disabled={!capabilities.upload_file}
+                disabled={!capabilities.upload_file || sending}
                 onClick={() => fileInputRef.current?.click()}
               >
                 <PaperclipIcon size={18} />
@@ -435,10 +446,16 @@ export function ChatWorkspace({
                   <BrowserIcon size={17} />
                 </button>
               )}
-              {stagedFile && (
+              {attachment && (
                 <span className="staged-file-pill">
-                  <PaperclipIcon size={12} /> {stagedFile.name}
-                  <button onClick={() => setStagedFile(null)} aria-label="Retirer la pièce jointe">×</button>
+                  <PaperclipIcon size={12} /> {attachment.name}
+                  <button
+                    onClick={() => {
+                      if (conversationKey) onAttachmentStaged(conversationKey, null);
+                    }}
+                    disabled={sending}
+                    aria-label="Retirer la pièce jointe"
+                  >×</button>
                 </span>
               )}
               <span className="workspace-pill"><FolderIcon size={13} /> {settings.default_workspace.split("/").filter(Boolean).at(-1) || "workspace"}</span>
@@ -446,11 +463,23 @@ export function ChatWorkspace({
             <div className="composer-right-actions">
               <span className="composer-shortcut">Entrée pour envoyer · ⇧ Entrée pour une ligne</span>
               {chatActive ? (
-                <button className="send-button is-stop" onClick={onCancelChat} title="Arrêter la réponse"><StopIcon size={17} /></button>
+                <button
+                  className="send-button is-stop"
+                  onClick={() => {
+                    if (conversationKey) onCancelChat(conversationKey);
+                  }}
+                  title="Arrêter la réponse"
+                ><StopIcon size={17} /></button>
               ) : missionRunning ? (
-                <button className="send-button is-stop" onClick={onPauseMission} title="Mettre la mission en pause"><PauseIcon size={17} /></button>
+                <button
+                  className="send-button is-stop"
+                  onClick={() => {
+                    if (conversationKey) onPauseMission(conversationKey);
+                  }}
+                  title="Mettre la mission en pause"
+                ><PauseIcon size={17} /></button>
               ) : (
-                <button className="send-button" onClick={() => void submit()} disabled={!draft.trim() || sending} title="Envoyer"><SendIcon size={17} /></button>
+                <button className="send-button" onClick={() => void submit()} disabled={(!draft.trim() && !attachment) || sending} title="Envoyer"><SendIcon size={17} /></button>
               )}
             </div>
           </div>
@@ -459,9 +488,13 @@ export function ChatWorkspace({
           <span><ShieldIcon size={12} /> Profil {settings.access_profile} · suppression remplacée par archivage</span>
           <div>
             {activeMissionState === "PAUSED" || activeMissionState === "PAUSED_RECOVERY_REQUIRED" ? (
-              <button onClick={onResumeMission}><PlayIcon size={13} /> Reprendre</button>
+              <button onClick={() => {
+                if (conversationKey) onResumeMission(conversationKey);
+              }}><PlayIcon size={13} /> Reprendre</button>
             ) : missionRunning ? (
-              <button onClick={onCancelMission}><StopIcon size={13} /> Annuler la mission</button>
+              <button onClick={() => {
+                if (conversationKey) onCancelMission(conversationKey);
+              }}><StopIcon size={13} /> Annuler la mission</button>
             ) : null}
             <label className="mini-toggle"><span>Auto-continue</span><input type="checkbox" checked={settings.auto_continue} readOnly /><i /></label>
           </div>

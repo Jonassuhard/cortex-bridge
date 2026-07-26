@@ -1,8 +1,8 @@
 "use client";
 /* eslint-disable react-hooks/set-state-in-effect */
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { api, apiUrl, postJson, putJson } from "@/lib/api";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { api, ApiError, postJson, putJson } from "@/lib/api";
 import {
   demoConversations,
   demoMessages,
@@ -16,8 +16,7 @@ import {
 import type {
   ChatGPTModelInfo,
   ChatRun,
-  ChatRunEvent,
-  ConversationMessage,
+  ConversationKey,
   ConversationSnapshot,
   ConversationSummary,
   CortexSettings,
@@ -29,14 +28,11 @@ import type {
   TransportStatus,
 } from "@/lib/types";
 import { useInterval } from "@/hooks/useInterval";
+import { useChatRunStream } from "@/hooks/useChatRunStream";
+import { useConversationController } from "@/hooks/useConversationController";
 import {
-  createConversationLoadController,
-  createConversationSelectionCoordinator,
   createRequestEpoch,
   createUnavailableClientState,
-  reduceConversationRefreshFailure,
-  reduceMissionRefreshFailure,
-  type ConversationRefreshState,
 } from "@/lib/runtimeTruth";
 import { ConversationSidebar } from "./ConversationSidebar";
 import { ChatWorkspace } from "./ChatWorkspace";
@@ -74,15 +70,83 @@ function nonTerminal(state?: string) {
 }
 
 export function CortexApp() {
-  const [conversationState, setConversationState] = useState<ConversationRefreshState>({
-    conversations: [],
-    selectedConversation: null,
-    sync: { state: "unknown", error: null, updated_at: null },
+  const {
+    state: conversationState,
+    selectedEntry,
+    dispatch: dispatchConversation,
+    replaceSummaries,
+    selectConversation,
+    reloadSelected,
+    newConversation,
+  } = useConversationController({
+    fetchSnapshot: async (requested, signal) => {
+      if (DEVELOPMENT_FIXTURES_ENABLED && requested.identity.startsWith("demo-")) {
+        return {
+          url: requested.url,
+          conversation_id: requested.identity,
+          title: requested.title,
+          blocker: null,
+          composer_present: true,
+          send_button_present: true,
+          stop_button_present: false,
+          streaming: false,
+          model_label: demoSettings.planner_model,
+          messages: demoMessages,
+        } satisfies ConversationSnapshot;
+      }
+      return api<ConversationSnapshot>(
+        `/api/conversations/snapshot?url=${encodeURIComponent(requested.url)}`,
+        { signal },
+      );
+    },
+    fetchBackgroundSnapshot: async (requested, entry, signal) => {
+      if (DEVELOPMENT_FIXTURES_ENABLED && requested.identity.startsWith("demo-")) {
+        return {
+          url: requested.url,
+          conversation_id: requested.identity,
+          title: requested.title,
+          blocker: null,
+          composer_present: true,
+          send_button_present: true,
+          stop_button_present: false,
+          streaming: false,
+          model_label: demoSettings.planner_model,
+          messages: demoMessages,
+        } satisfies ConversationSnapshot;
+      }
+      const light = await api<{
+        message_count: number;
+        last_id: string | null;
+        streaming: boolean;
+      }>(
+        `/api/conversations/snapshot?url=${encodeURIComponent(requested.url)}&light=1`,
+        { signal },
+      );
+      const lastId = entry.messages.at(-1)?.id || null;
+      if (
+        entry.snapshot
+        && light.message_count === entry.messages.length
+        && light.last_id === lastId
+        && light.streaming === entry.snapshot.streaming
+      ) {
+        return entry.snapshot;
+      }
+      return api<ConversationSnapshot>(
+        `/api/conversations/snapshot?url=${encodeURIComponent(requested.url)}`,
+        { signal },
+      );
+    },
   });
-  const { conversations, selectedConversation } = conversationState;
-  const [messages, setMessages] = useState<ConversationMessage[]>([]);
+  const conversations = conversationState.order
+    .map((key) => conversationState.entries[key]?.summary)
+    .filter((conversation): conversation is ConversationSummary => !!conversation);
+  const selectedConversation = selectedEntry?.summary || null;
+  const messages = selectedEntry?.messages || [];
+  const loadingMessages = selectedEntry?.loadPhase === "loading";
+  const chatRun = selectedEntry?.run || null;
+  const selectedMissionId = selectedEntry?.missionId || null;
+  const missionDetail = selectedEntry?.mission || null;
   const [loadingConversations, setLoadingConversations] = useState(true);
-  const [loadingMessages, setLoadingMessages] = useState(false);
   const [runtime, setRuntime] = useState<RuntimeStatus>(
     DEVELOPMENT_FIXTURES_ENABLED ? demoRuntime : INITIAL_UNAVAILABLE_STATE.runtime,
   );
@@ -93,9 +157,6 @@ export function CortexApp() {
     DEVELOPMENT_FIXTURES_ENABLED ? demoPipeline : INITIAL_UNAVAILABLE_STATE.pipeline,
   );
   const [, setMissions] = useState<MissionSummary[]>([]);
-  const [selectedMissionId, setSelectedMissionId] = useState<string | null>(null);
-  const [missionDetail, setMissionDetail] = useState<MissionDetail | null>(null);
-  const [chatRun, setChatRun] = useState<ChatRun | null>(null);
   const [settings, setSettings] = useState<CortexSettings>(
     DEVELOPMENT_FIXTURES_ENABLED ? demoSettings : INITIAL_UNAVAILABLE_STATE.settings,
   );
@@ -106,52 +167,9 @@ export function CortexApp() {
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
-  const [lastLightSig, setLastLightSig] = useState<string | null>(null);
   const [demoMode, setDemoMode] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
-  const chatEventSource = useRef<EventSource | null>(null);
-  const selectedConversationRef = useRef<ConversationSummary | null>(selectedConversation);
   const missionDetailRequestEpoch = useRef(createRequestEpoch());
-  const conversationPollRequestEpoch = useRef(createRequestEpoch());
-  const [conversationLoadController] = useState(() => createConversationLoadController({
-    onStart(conversation) {
-      setConversationState((current) => ({ ...current, selectedConversation: conversation }));
-      setLoadingMessages(true);
-      setMessages([]);
-      setLastLightSig(null);
-    },
-    onSuccess(conversation, snapshot) {
-      const count = snapshot.messages.length;
-      setMessages(snapshot.messages);
-      setConversationState((current) => ({
-        conversations: current.conversations.map((item) => (
-          item.url === conversation.url
-            ? { ...item, message_count: count, sync_state: "live", sync_error: null }
-            : item
-        )),
-        selectedConversation: current.selectedConversation?.url === conversation.url
-          ? { ...current.selectedConversation, message_count: count, sync_state: "live", sync_error: null }
-          : current.selectedConversation,
-        sync: { state: "live", error: null, updated_at: new Date().toISOString() },
-      }));
-      if (snapshot.model_label) {
-        setSettings((current) => ({ ...current, planner_model: snapshot.model_label || current.planner_model }));
-      }
-    },
-    onFailure(conversation) {
-      setConversationState((current) => reduceConversationRefreshFailure(
-        current,
-        "Chargement de la conversation impossible",
-        conversation.url,
-      ));
-    },
-    onFinish() {
-      setLoadingMessages(false);
-    },
-  }));
-  const [conversationSelectionCoordinator] = useState(() => (
-    createConversationSelectionCoordinator(conversationLoadController)
-  ));
 
   const activeMission = useMemo(() => {
     if (missionDetail && nonTerminal(missionDetail.mission.state)) return missionDetail;
@@ -203,117 +221,68 @@ export function CortexApp() {
     setLoadingConversations(true);
     try {
       const data = await api<ConversationSummary[]>("/api/conversations");
-      // 50 most recent max (release spec P1d); the backend already caps, this
-      // is a second belt for demo/fallback data.
       const normalized = data.map(normalizeConversation).slice(0, 50);
       setDemoMode(false);
-      setConversationState((current) => {
-        let selected: ConversationSummary | null;
-        const currentSelection = current.selectedConversation;
-        if (currentSelection) {
-          const stillThere = normalized.find((item) => item.url === currentSelection.url);
-          if (stillThere) selected = stillThere;
-          // Deletion sync: the conversation vanished from ChatGPT — drop it
-          // from Cortex too, unless a chat run is actively writing into it.
-          else {
-            const runActive = chatRun && !["COMPLETED", "FAILED", "CANCELLED"].includes(chatRun.state);
-            selected = currentSelection.identity === "__new__" || runActive
-              ? { ...currentSelection, sync_state: "live", sync_error: null }
-              : normalized[0] || null;
-          }
-        } else {
-          selected = normalized[0] || null;
-        }
-        selectedConversationRef.current = selected;
-        return {
-          conversations: normalized,
-          selectedConversation: selected,
-          sync: { state: "live", error: null, updated_at: new Date().toISOString() },
-        };
-      });
+      replaceSummaries(normalized);
     } catch {
       if (DEVELOPMENT_FIXTURES_ENABLED) {
-        setConversationState((current) => {
-          const selected = current.selectedConversation || normalizeConversation(demoConversations[0]);
-          selectedConversationRef.current = selected;
-          return {
-            conversations: demoConversations.map(normalizeConversation),
-            selectedConversation: selected,
-            sync: { state: "live", error: null, updated_at: new Date().toISOString() },
-          };
-        });
+        replaceSummaries(demoConversations.map(normalizeConversation));
         setDemoMode(true);
       } else {
-        setConversationState((current) => reduceConversationRefreshFailure(
-          current,
-          "Synchronisation ChatGPT impossible",
-        ));
+        dispatchConversation({
+          type: "CONVERSATIONS_FAILED",
+          error: "Synchronisation ChatGPT impossible",
+        });
         setDemoMode(false);
       }
     } finally {
       setLoadingConversations(false);
     }
-  }, [chatRun]);
+  }, [dispatchConversation, replaceSummaries]);
 
   const refreshMissions = useCallback(async () => {
     try {
       const data = await api<MissionSummary[]>("/api/missions");
       setMissions(data);
-      const currentId = selectedMissionId || data.find((mission) => nonTerminal(mission.state))?.id || data[0]?.id || null;
-      if (currentId && currentId !== selectedMissionId) {
-        missionDetailRequestEpoch.current.invalidate();
-        setSelectedMissionId(currentId);
-      }
     } catch {
       if (DEVELOPMENT_FIXTURES_ENABLED) {
         setMissions(demoMissions);
-        setSelectedMissionId((current) => {
-          const selected = current || demoMissions[0].id;
-          missionDetailRequestEpoch.current.invalidate();
-          return selected;
-        });
       } else {
-        missionDetailRequestEpoch.current.invalidate();
         setMissions([]);
-        setSelectedMissionId(null);
-        setMissionDetail(null);
-        setPipeline((current) => reduceMissionRefreshFailure({
-          selectedMissionId: null,
-          missionDetail: null,
-          pipeline: current,
-        }, new Date().toISOString()).pipeline);
       }
     }
-  }, [selectedMissionId]);
+  }, []);
 
   const refreshMissionDetail = useCallback(async () => {
-    if (!selectedMissionId) {
+    const key = conversationState.selectedKey;
+    if (!key || !selectedMissionId) {
       missionDetailRequestEpoch.current.invalidate();
-      setMissionDetail(null);
       return;
     }
     const requestedMissionId = selectedMissionId;
-    const ticket = missionDetailRequestEpoch.current.begin(requestedMissionId);
+    const identity = `${key}:${requestedMissionId}`;
+    const ticket = missionDetailRequestEpoch.current.begin(identity);
     try {
       const data = await api<MissionDetail>(`/api/missions/${requestedMissionId}`);
-      if (!missionDetailRequestEpoch.current.isCurrent(ticket, requestedMissionId)) return;
-      setMissionDetail(data);
+      if (!missionDetailRequestEpoch.current.isCurrent(ticket, identity)) return;
+      dispatchConversation({
+        type: "MISSION_EVENT",
+        key,
+        missionId: requestedMissionId,
+        mission: data,
+      });
     } catch {
-      if (!missionDetailRequestEpoch.current.isCurrent(ticket, requestedMissionId)) return;
+      if (!missionDetailRequestEpoch.current.isCurrent(ticket, identity)) return;
       if (DEVELOPMENT_FIXTURES_ENABLED && requestedMissionId === demoMissionDetail.mission.id) {
-        setMissionDetail(demoMissionDetail);
-      } else if (!DEVELOPMENT_FIXTURES_ENABLED) {
-        missionDetailRequestEpoch.current.invalidate();
-        setSelectedMissionId(null);
-        setMissionDetail(null);
-        setPipeline((current) => reduceMissionRefreshFailure({
-          selectedMissionId: null,
-          missionDetail: null,
-          pipeline: current,
-        }, new Date().toISOString()).pipeline);
+        dispatchConversation({
+          type: "MISSION_EVENT",
+          key,
+          missionId: requestedMissionId,
+          mission: demoMissionDetail,
+        });
       }
     }
-  }, [selectedMissionId]);
+  }, [conversationState.selectedKey, dispatchConversation, selectedMissionId]);
 
   const refreshSettings = useCallback(async () => {
     try {
@@ -342,69 +311,17 @@ export function CortexApp() {
     }
   }, []);
 
-  const loadConversation = useCallback((conversation: ConversationSummary) => {
-    conversationPollRequestEpoch.current.invalidate();
-    return conversationLoadController.load(conversation, async (requested) => {
-      if (DEVELOPMENT_FIXTURES_ENABLED && requested.identity.startsWith("demo-")) {
-        return {
-          url: requested.url,
-          conversation_id: requested.identity,
-          title: requested.title,
-          blocker: null,
-          composer_present: true,
-          send_button_present: true,
-          stop_button_present: false,
-          streaming: false,
-          model_label: demoSettings.planner_model,
-          messages: demoMessages,
-        };
-      }
-      return api<ConversationSnapshot>(`/api/conversations/snapshot?url=${encodeURIComponent(requested.url)}`);
-    });
-  }, [conversationLoadController]);
+  const refreshSelectedConversation = useCallback(() => {
+    reloadSelected({ background: true });
+  }, [reloadSelected]);
 
-  const refreshSelectedConversation = useCallback(async () => {
-    if (!selectedConversation || selectedConversation.identity === "__new__" || selectedConversation.identity.startsWith("demo-")) {
-      conversationPollRequestEpoch.current.invalidate();
-      return;
-    }
-    const requestedUrl = selectedConversation.url;
-    const ticket = conversationPollRequestEpoch.current.begin(requestedUrl);
-    try {
-      // P0c: cheap light poll first; only fetch the full snapshot (which
-      // serializes every message) when the conversation actually changed.
-      const light = await api<{ message_count: number; last_id: string | null; streaming: boolean }>(
-        `/api/conversations/snapshot?url=${encodeURIComponent(requestedUrl)}&light=1`,
-      );
-      if (!conversationPollRequestEpoch.current.isCurrent(ticket, requestedUrl)) return;
-      const sig = `${light.message_count}|${light.last_id}|${light.streaming}`;
-      setConversationState((current) => ({
-        conversations: current.conversations.map((item) => (
-          item.url === requestedUrl
-            ? { ...item, message_count: light.message_count, sync_state: "live", sync_error: null }
-            : item
-        )),
-        selectedConversation: current.selectedConversation?.url === requestedUrl
-          ? { ...current.selectedConversation, message_count: light.message_count, sync_state: "live", sync_error: null }
-          : current.selectedConversation,
-        sync: { state: "live", error: null, updated_at: new Date().toISOString() },
-      }));
-      if (sig === lastLightSig) return;
-      setLastLightSig(sig);
-      if (!chatRun || ["COMPLETED", "FAILED", "CANCELLED"].includes(chatRun.state)) {
-        const snapshot = await api<ConversationSnapshot>(`/api/conversations/snapshot?url=${encodeURIComponent(requestedUrl)}`);
-        if (!conversationPollRequestEpoch.current.isCurrent(ticket, requestedUrl)) return;
-        setMessages(snapshot.messages || []);
-      }
-    } catch {
-      if (!conversationPollRequestEpoch.current.isCurrent(ticket, requestedUrl)) return;
-      setConversationState((current) => reduceConversationRefreshFailure(
-        current,
-        "Actualisation de la conversation impossible",
-        requestedUrl,
-      ));
-    }
-  }, [chatRun, lastLightSig, selectedConversation]);
+  const chatStreams = useChatRunStream({
+    dispatch: dispatchConversation,
+    onTerminal: () => {
+      window.setTimeout(() => void refreshConversations(), 900);
+    },
+    recoverRun: (_key, runId) => api<ChatRun>(`/api/chat/runs/${runId}`),
+  });
 
   useEffect(() => {
     void Promise.all([
@@ -417,108 +334,78 @@ export function CortexApp() {
     api<{ upload_file?: boolean; take_screenshot?: boolean }>("/api/transport/capabilities")
       .then((caps) => setCapabilities({ upload_file: !!caps.upload_file, take_screenshot: !!caps.take_screenshot }))
       .catch(() => undefined);
-    return () => {
-      conversationLoadController.invalidate();
-      chatEventSource.current?.close();
-    };
-  }, [conversationLoadController, refreshConversations, refreshMissions, refreshPipeline, refreshRuntime, refreshSettings]);
-
-  const selectedConversationIdentity = selectedConversation?.identity || null;
-  useLayoutEffect(() => {
-    const selected = selectedConversationRef.current;
-    const loadable = selected && selected.identity !== "__new__" && selected.sync_state !== "stale"
-      ? selected
-      : null;
-    conversationSelectionCoordinator.reconcile(loadable, {
-      reset() {
-        conversationPollRequestEpoch.current.invalidate();
-        setMessages([]);
-        setLoadingMessages(false);
-        setLastLightSig(null);
-      },
-      load(conversation) {
-        return loadConversation(conversation);
-      },
-    });
-  }, [conversationSelectionCoordinator, loadConversation, selectedConversationIdentity]);
+  }, [refreshConversations, refreshMissions, refreshPipeline, refreshRuntime, refreshSettings]);
 
   useEffect(() => {
     void refreshMissionDetail();
   }, [refreshMissionDetail]);
 
+  useEffect(() => {
+    const modelLabel = selectedEntry?.snapshot?.model_label;
+    if (!modelLabel) return;
+    setSettings((current) => (
+      current.planner_model === modelLabel ? current : { ...current, planner_model: modelLabel }
+    ));
+  }, [selectedEntry?.snapshot?.model_label]);
+
   useInterval(() => void refreshRuntime(), 5000);
   useInterval(() => void refreshPipeline(), 2500);
   useInterval(() => void refreshMissions(), 3500);
   useInterval(() => void refreshMissionDetail(), selectedMissionId ? 1600 : null);
-  useInterval(() => void refreshSelectedConversation(), selectedConversation ? 2200 : null);
+  useInterval(() => refreshSelectedConversation(), selectedConversation ? 2200 : null);
 
-  function subscribeRun(run: ChatRun) {
-    setChatRun(run);
-    chatEventSource.current?.close();
-    const events = new EventSource(apiUrl(`/api/chat/runs/${run.id}/events`));
-    chatEventSource.current = events;
-    events.onmessage = (event) => {
-      const payload = JSON.parse(event.data) as ChatRunEvent;
-      setChatRun((current) => {
-        if (!current || current.id !== run.id) return current;
-        if (payload.type === "status") return { ...current, state: String(payload.payload.state) as ChatRun["state"] };
-        if (payload.type === "delivery") return { ...current, state: "VISIBLE_IN_CHATGPT", delivered_at: String(payload.payload.delivered_at || new Date().toISOString()), canonical_url: String(payload.payload.canonical_url || current.canonical_url || current.conversation_url) };
-        if (payload.type === "stream") return { ...current, state: "CHATGPT_STREAMING", response_text: String(payload.payload.text || ""), first_response_at: current.first_response_at || String(payload.payload.first_response_at || new Date().toISOString()) };
-        if (payload.type === "complete") return { ...current, state: "COMPLETED", response_text: String(payload.payload.text || current.response_text || ""), completed_at: String(payload.payload.completed_at || new Date().toISOString()), latency: payload.payload.latency as ChatRun["latency"] };
-        if (payload.type === "error") return { ...current, state: "FAILED", error: String(payload.payload.error || "Erreur transport") };
-        if (payload.type === "cancelled") return { ...current, state: "CANCELLED" };
-        return current;
-      });
-      if (payload.type === "complete" || payload.type === "error" || payload.type === "cancelled") {
-        events.close();
-        window.setTimeout(() => {
-          void refreshConversations();
-          void refreshSelectedConversation();
-        }, 900);
-      }
-    };
-    events.onerror = () => {
-      events.close();
-      void api<ChatRun>(`/api/chat/runs/${run.id}`).then(setChatRun).catch(() => undefined);
-    };
+  function requestFailed(key: ConversationKey, error: unknown, fallback: string) {
+    const message = error instanceof Error ? error.message : fallback;
+    dispatchConversation({
+      type: "REQUEST_FAILED",
+      request: "send",
+      key,
+      status: error instanceof ApiError ? error.status : undefined,
+      error: message,
+    });
+    notify(message);
   }
 
-  async function sendChat(text: string): Promise<boolean> {
-    const conversation = selectedConversation || {
-      url: "https://chatgpt.com/",
-      identity: "__new__",
-      title: "Nouvelle conversation",
-    };
+  function conversationForKey(key: ConversationKey): ConversationSummary | null {
+    return conversationState.entries[key]?.summary || null;
+  }
+
+  function isProvisional(key: ConversationKey, conversation: ConversationSummary): boolean {
+    return key.startsWith("provisional:") || conversation.url.replace(/\/$/, "") === "https://chatgpt.com";
+  }
+
+  async function sendChat(key: ConversationKey, text: string): Promise<boolean> {
+    const conversation = conversationForKey(key);
+    if (!conversation) return false;
     if (!transport.opt_in_accepted && !demoMode) {
       notify("Active d'abord le transport expérimental dans les paramètres.");
       setSettingsOpen(true);
       return false;
     }
+    dispatchConversation({ type: "REQUEST_STARTED", request: "send", key });
     try {
       const run = await postJson<ChatRun>("/api/chat/send", {
         conversation_url: conversation.url,
         text,
-        new_conversation: conversation.identity === "__new__" || conversation.url === "https://chatgpt.com/",
+        new_conversation: isProvisional(key, conversation),
       });
-      subscribeRun(run);
+      chatStreams.subscribe(key, run);
       return true;
     } catch (error) {
-      notify(error instanceof Error ? error.message : "Impossible d'envoyer le message.");
+      requestFailed(key, error, "Impossible d'envoyer le message.");
       return false;
     }
   }
 
-  async function sendAttachment(text: string, file: File): Promise<boolean> {
-    const conversation = selectedConversation || {
-      url: "https://chatgpt.com/",
-      identity: "__new__",
-      title: "Nouvelle conversation",
-    };
+  async function sendAttachment(key: ConversationKey, text: string, file: File): Promise<boolean> {
+    const conversation = conversationForKey(key);
+    if (!conversation) return false;
     if (!transport.opt_in_accepted && !demoMode) {
       notify("Active d'abord le transport expérimental dans les paramètres.");
       setSettingsOpen(true);
       return false;
     }
+    dispatchConversation({ type: "REQUEST_STARTED", request: "send", key });
     try {
       const dataB64 = await new Promise<string>((resolve, reject) => {
         const reader = new FileReader();
@@ -536,112 +423,147 @@ export function CortexApp() {
         path: descriptor.path,
         name: descriptor.name,
         image: descriptor.kind === "image",
-        new_conversation: conversation.identity === "__new__" || conversation.url === "https://chatgpt.com/",
+        new_conversation: isProvisional(key, conversation),
       });
-      subscribeRun(run);
+      chatStreams.subscribe(key, run);
       notify(`Pièce jointe envoyée : ${descriptor.name}`);
       return true;
     } catch (error) {
-      notify(error instanceof Error ? error.message : "Impossible d'envoyer la pièce jointe.");
+      requestFailed(key, error, "Impossible d'envoyer la pièce jointe.");
       return false;
     }
   }
 
-  async function sendScreenshot(text: string): Promise<boolean> {
-    const conversation = selectedConversation || {
-      url: "https://chatgpt.com/",
-      identity: "__new__",
-      title: "Nouvelle conversation",
-    };
+  async function sendScreenshot(key: ConversationKey, text: string): Promise<boolean> {
+    const conversation = conversationForKey(key);
+    if (!conversation) return false;
+    if (!transport.opt_in_accepted && !demoMode) {
+      notify("Active d'abord le transport expérimental dans les paramètres.");
+      setSettingsOpen(true);
+      return false;
+    }
+    dispatchConversation({ type: "REQUEST_STARTED", request: "send", key });
     try {
       const run = await postJson<ChatRun>("/api/chat/send-screenshot", {
         conversation_url: conversation.url,
         text,
-        new_conversation: conversation.identity === "__new__" || conversation.url === "https://chatgpt.com/",
+        new_conversation: isProvisional(key, conversation),
       });
-      subscribeRun(run);
+      chatStreams.subscribe(key, run, { clearAttachment: false });
       notify("Capture d'écran envoyée dans ChatGPT.");
       return true;
     } catch (error) {
-      notify(error instanceof Error ? error.message : "Capture impossible.");
+      requestFailed(key, error, "Capture impossible.");
       return false;
     }
   }
 
-  async function startMission(text: string): Promise<boolean> {
-    const conversation = selectedConversation || {
-      url: "https://chatgpt.com/",
-      identity: "__new__",
-      title: "Nouvelle conversation",
-    };
+  async function startMission(key: ConversationKey, text: string): Promise<boolean> {
+    const conversation = conversationForKey(key);
+    if (!conversation) return false;
+    dispatchConversation({ type: "REQUEST_STARTED", request: "send", key });
     try {
       const response = await postJson<{ id: string; state: string }>("/api/missions", {
         objective: text,
         workspace: settings.default_workspace,
         constraints: ["Ne jamais supprimer définitivement un fichier", "Rester dans les racines autorisées"],
         conversation_url: conversation.url,
-        new_conversation: conversation.identity === "__new__" || conversation.url === "https://chatgpt.com/",
+        new_conversation: isProvisional(key, conversation),
         max_iterations: settings.max_iterations,
         max_duration_minutes: settings.max_duration_minutes,
         approval_policy: settings.approval_policy,
       });
       missionDetailRequestEpoch.current.invalidate();
-      setSelectedMissionId(response.id);
-      setMissionDetail(null);
+      dispatchConversation({
+        type: "MISSION_EVENT",
+        key,
+        missionId: response.id,
+        accepted: true,
+      });
+      void api<MissionDetail>(`/api/missions/${response.id}`).then((mission) => {
+        dispatchConversation({ type: "MISSION_EVENT", key, missionId: response.id, mission });
+      }).catch(() => undefined);
       notify("Mission autonome lancée.");
       void refreshMissions();
       return true;
     } catch (error) {
       if (DEVELOPMENT_FIXTURES_ENABLED && demoMode) {
         missionDetailRequestEpoch.current.invalidate();
-        setSelectedMissionId(demoMissionDetail.mission.id);
-        setMissionDetail(demoMissionDetail);
+        dispatchConversation({
+          type: "MISSION_EVENT",
+          key,
+          missionId: demoMissionDetail.mission.id,
+          mission: demoMissionDetail,
+          accepted: true,
+        });
         notify("Aperçu local : mission simulée.");
         return true;
       } else {
-        notify(error instanceof Error ? error.message : "Impossible de lancer la mission.");
+        requestFailed(key, error, "Impossible de lancer la mission.");
         return false;
       }
     }
   }
 
-  async function cancelChat() {
-    if (!chatRun) return;
+  async function cancelChat(key: ConversationKey) {
+    const entry = conversationState.entries[key];
+    const run = entry?.run;
+    if (!run) return;
     try {
-      await postJson(`/api/chat/runs/${chatRun.id}/cancel`, {});
-      setChatRun((current) => current ? { ...current, state: "CANCELLED" } : current);
+      await postJson(`/api/chat/runs/${run.id}/cancel`, {});
+      dispatchConversation({
+        type: "RUN_EVENT",
+        key,
+        runId: run.id,
+        streamEpoch: entry.streamEpoch,
+        event: {
+          seq: 0,
+          ts: new Date().toISOString(),
+          type: "cancelled",
+          payload: {},
+        },
+      });
+      chatStreams.close(key);
     } catch (error) {
       notify(error instanceof Error ? error.message : "Impossible d'arrêter la réponse.");
     }
   }
 
-  async function missionAction(action: "pause" | "resume" | "cancel") {
-    if (!selectedMissionId) return;
+  async function refreshMissionFor(key: ConversationKey, missionId: string) {
+    const mission = await api<MissionDetail>(`/api/missions/${missionId}`);
+    dispatchConversation({ type: "MISSION_EVENT", key, missionId, mission });
+  }
+
+  async function missionAction(key: ConversationKey, action: "pause" | "resume" | "cancel") {
+    const missionId = conversationState.entries[key]?.missionId;
+    if (!missionId) return;
     try {
-      await postJson(`/api/missions/${selectedMissionId}/${action}`, {});
-      await refreshMissionDetail();
+      await postJson(`/api/missions/${missionId}/${action}`, {});
+      await refreshMissionFor(key, missionId);
     } catch (error) {
       notify(error instanceof Error ? error.message : `Impossible de ${action} la mission.`);
     }
   }
 
-  async function approve(scope: "once" | "tool" | "all-writes") {
-    if (!selectedMissionId) return;
+  async function approve(key: ConversationKey, scope: "once" | "tool" | "all-writes") {
+    const missionId = conversationState.entries[key]?.missionId;
+    if (!missionId) return;
     try {
-      await postJson(`/api/missions/${selectedMissionId}/approve`, { scope, approve: true });
+      await postJson(`/api/missions/${missionId}/approve`, { scope, approve: true });
       notify("Action approuvée.");
-      await refreshMissionDetail();
+      await refreshMissionFor(key, missionId);
     } catch (error) {
       notify(error instanceof Error ? error.message : "Approbation impossible.");
     }
   }
 
-  async function reject() {
-    if (!selectedMissionId) return;
+  async function reject(key: ConversationKey) {
+    const missionId = conversationState.entries[key]?.missionId;
+    if (!missionId) return;
     try {
-      await postJson(`/api/missions/${selectedMissionId}/approve`, { scope: "once", approve: false });
+      await postJson(`/api/missions/${missionId}/approve`, { scope: "once", approve: false });
       notify("Action refusée et rapportée à ChatGPT.");
-      await refreshMissionDetail();
+      await refreshMissionFor(key, missionId);
     } catch (error) {
       notify(error instanceof Error ? error.message : "Refus impossible.");
     }
@@ -701,8 +623,6 @@ export function CortexApp() {
     }
   }
 
-  const selectedUrl = selectedConversation?.url || null;
-
   return (
     <main
       aria-label="Conversation principale"
@@ -712,45 +632,42 @@ export function CortexApp() {
       <div className="app-signal-sweep" aria-hidden="true" />
       <ConversationSidebar
         conversations={conversations}
-        selectedUrl={selectedUrl}
+        selectedKey={conversationState.selectedKey}
         loading={loadingConversations}
         collapsed={sidebarCollapsed}
         onCollapse={() => setSidebarCollapsed((value) => !value)}
         onSelect={(conversation) => {
-          if (selectedConversation?.identity === conversation.identity) {
-            void loadConversation(conversation);
-            return;
-          }
-          selectedConversationRef.current = conversation;
-          setConversationState((current) => ({ ...current, selectedConversation: conversation }));
+          selectConversation(conversation, {
+            force: selectedConversation?.identity === conversation.identity,
+          });
         }}
         onRefresh={() => void refreshConversations()}
-        onNewConversation={() => {
-          const fresh: ConversationSummary = { url: "https://chatgpt.com/", identity: "__new__", title: "Nouvelle conversation", preview: "Le chat sera créé au premier envoi", status: "idle" };
-          conversationPollRequestEpoch.current.invalidate();
-          conversationLoadController.invalidate();
-          selectedConversationRef.current = fresh;
-          setConversationState((current) => ({ ...current, selectedConversation: fresh }));
-          setMessages([]);
-          setLoadingMessages(false);
-        }}
+        onNewConversation={() => newConversation()}
         onNewMission={() => {
-          const fresh: ConversationSummary = { url: "https://chatgpt.com/", identity: "__new__", title: "Nouvelle mission", preview: "ChatGPT orchestrera la mission", status: "mission" };
-          conversationPollRequestEpoch.current.invalidate();
-          conversationLoadController.invalidate();
-          selectedConversationRef.current = fresh;
-          setConversationState((current) => ({ ...current, selectedConversation: fresh }));
-          setMessages([]);
-          setLoadingMessages(false);
+          const fresh = newConversation();
+          dispatchConversation({
+            type: "SELECT",
+            key: fresh.identity,
+            summary: {
+              ...fresh,
+              title: "Nouvelle mission",
+              preview: "ChatGPT orchestrera la mission",
+              status: "mission",
+            },
+          });
           notify("Décris la mission dans le composer central.");
         }}
         onOpenSettings={() => setSettingsOpen(true)}
       />
 
       <ChatWorkspace
+        conversationKey={conversationState.selectedKey}
         conversation={selectedConversation}
         messages={messages}
         loadingMessages={loadingMessages}
+        sending={selectedEntry?.sendPending || false}
+        draft={selectedEntry?.draft || ""}
+        attachment={selectedEntry?.attachment || null}
         chatRun={chatRun}
         mission={activeMission || missionDetail}
         pipeline={pipeline}
@@ -758,18 +675,24 @@ export function CortexApp() {
         inspectorOpen={inspectorOpen}
         sidebarCollapsed={sidebarCollapsed}
         capabilities={capabilities}
+        onDraftChange={(key, draft) => dispatchConversation({ type: "DRAFT_CHANGED", key, draft })}
+        onAttachmentStaged={(key, attachment) => dispatchConversation({
+          type: "ATTACHMENT_STAGED",
+          key,
+          attachment,
+        })}
         onToggleSidebar={() => setSidebarCollapsed((value) => !value)}
         onToggleInspector={() => setInspectorOpen((value) => !value)}
         onSendChat={sendChat}
         onSendAttachment={sendAttachment}
         onSendScreenshot={sendScreenshot}
         onStartMission={startMission}
-        onCancelChat={() => void cancelChat()}
-        onPauseMission={() => void missionAction("pause")}
-        onResumeMission={() => void missionAction("resume")}
-        onCancelMission={() => void missionAction("cancel")}
-        onApprove={(scope) => void approve(scope)}
-        onReject={() => void reject()}
+        onCancelChat={(key) => void cancelChat(key)}
+        onPauseMission={(key) => void missionAction(key, "pause")}
+        onResumeMission={(key) => void missionAction(key, "resume")}
+        onCancelMission={(key) => void missionAction(key, "cancel")}
+        onApprove={(key, scope) => void approve(key, scope)}
+        onReject={(key) => void reject(key)}
       />
 
       <PipelineInspector
@@ -779,9 +702,15 @@ export function CortexApp() {
         transport={transport}
         mission={activeMission || missionDetail}
         onClose={() => setInspectorOpen(false)}
-        onPause={() => void missionAction("pause")}
-        onResume={() => void missionAction("resume")}
-        onCancel={() => void missionAction("cancel")}
+        onPause={() => {
+          if (conversationState.selectedKey) void missionAction(conversationState.selectedKey, "pause");
+        }}
+        onResume={() => {
+          if (conversationState.selectedKey) void missionAction(conversationState.selectedKey, "resume");
+        }}
+        onCancel={() => {
+          if (conversationState.selectedKey) void missionAction(conversationState.selectedKey, "cancel");
+        }}
         onStopAll={() => void stopEverything()}
         onResetStop={() => void resetStop()}
       />

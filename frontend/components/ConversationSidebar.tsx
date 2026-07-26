@@ -20,7 +20,7 @@ import { CortexLogo } from "./CortexLogo";
 
 interface ConversationSidebarProps {
   conversations: ConversationSummary[];
-  selectedUrl: string | null;
+  selectedKey: string | null;
   loading: boolean;
   collapsed: boolean;
   onCollapse: () => void;
@@ -40,7 +40,7 @@ function statusClass(status?: ConversationSummary["status"]) {
 
 export function ConversationSidebar({
   conversations,
-  selectedUrl,
+  selectedKey,
   loading,
   collapsed,
   onCollapse,
@@ -145,7 +145,7 @@ export function ConversationSidebar({
           </div>
         )}
         {filtered.map((conversation) => {
-          const selected = selectedUrl === conversation.url;
+          const selected = selectedKey === conversation.identity;
           return (
             // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role -- Interactive rich rows are keyboard-focusable listbox options.
             <button role="option"
