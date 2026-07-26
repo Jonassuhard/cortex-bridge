@@ -401,3 +401,51 @@ with zero failures/errors.
 
 Targeted `py_compile` and `git diff --check` both exited 0. No frontend source
 changed in this round, so frontend checks were not rerun.
+
+## Fix round 4/5 — post-construction resume cleanup proof
+
+### Characterization
+
+`test_resume_attach_failure_closes_inserted_runtime_and_clears_all_ownership`
+injects failure from `transport.attach()` after `_build_runtime()` has
+successfully constructed and inserted the runtime. During `attach()`, the test
+observes the live `_runtimes`, `_mission_leases` and `_mission_write_urls`
+entries, including the exact restored lease and conversation lock.
+
+The existing production compensation passed this direct characterization
+without modification. The regression asserts:
+
+- structured HTTP 503 detail;
+- legal persisted terminal `FAILED` state and exact failure detail;
+- one awaited transport close and a quiescent, closed runtime;
+- release of the exact restored lease;
+- removal from all three ownership maps;
+- empty active-lease state and restored capacity for exactly two writers.
+
+Focused command:
+
+```bash
+.venv/bin/python -m unittest \
+  tests.test_transport_session_isolation.MissionRouteSessionIsolationTest.test_resume_attach_failure_closes_inserted_runtime_and_clears_all_ownership -v
+```
+
+Result: 1 test passed in 0.022 s.
+
+Affected mission/session suites:
+
+```bash
+.venv/bin/python -m unittest tests.test_transport_session_isolation \
+  tests.test_missions_api tests.test_write_slots -v
+```
+
+Result: 48 tests passed in 45.191 s.
+
+Fresh full backend regression:
+
+```bash
+.venv/bin/python -m unittest discover -s tests -v
+```
+
+Result: 200 tests passed in 188.209 s. Existing `ResourceWarning` noise remains,
+with zero failures/errors. No frontend or production source changed in this
+round, so frontend checks were not rerun.

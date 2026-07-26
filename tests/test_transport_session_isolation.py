@@ -890,6 +890,89 @@ class MissionRouteSessionIsolationTest(unittest.IsolatedAsyncioTestCase):
         await first.release()
         await second.release()
 
+    async def test_resume_attach_failure_closes_inserted_runtime_and_clears_all_ownership(self) -> None:
+        mission_id = str(__import__("uuid").uuid4())
+        conversation = "https://chatgpt.com/c/resume-attach-failure"
+        store = missions_api.get_store()
+        store.create_mission(mission_id, "attach safely", str(self.workspace))
+        store.bind_conversation(
+            str(__import__("uuid").uuid4()),
+            mission_id,
+            conversation,
+            browser_target_id="resume-attach-failure",
+            session_id="cortex-conv-resume-attach-failure",
+            conversation_target=conversation,
+        )
+        for state in (
+            "INITIALIZING_MISSION",
+            "SENDING_OBJECTIVE",
+            "WAITING_FOR_CHATGPT",
+            "PAUSED",
+        ):
+            store.transition(mission_id, state, pause_reason="test pause")
+        missions_api._mission_write_urls[mission_id] = conversation
+        observed = {}
+
+        class FailingAttachTransport:
+            def __init__(self):
+                self.close_calls = 0
+                self.closed = False
+                self.lock = None
+
+            async def attach(self, lock):
+                observed["runtime"] = missions_api._runtimes.get(mission_id)
+                observed["lease"] = missions_api._mission_leases.get(mission_id)
+                observed["write_url"] = missions_api._mission_write_urls.get(mission_id)
+                observed["lock"] = lock
+                raise RuntimeError("resume attach failed after runtime construction")
+
+            async def close(self):
+                self.close_calls += 1
+                await asyncio.sleep(0)
+                self.closed = True
+
+        transport = FailingAttachTransport()
+        missions_api.transport_factory = lambda _session_id=None: transport
+
+        with self.assertRaises(HTTPException) as raised:
+            await missions_api.resume_mission(mission_id)
+
+        self.assertEqual(raised.exception.status_code, 503)
+        self.assertEqual(
+            raised.exception.detail,
+            "cannot resume mission: resume attach failed after runtime construction",
+        )
+        inserted_runtime = observed["runtime"]
+        restored_lease = observed["lease"]
+        self.assertIsNotNone(inserted_runtime)
+        self.assertIs(inserted_runtime.transport, transport)
+        self.assertIs(inserted_runtime.lease, None)
+        self.assertEqual(restored_lease.session_id, "cortex-conv-resume-attach-failure")
+        self.assertTrue(restored_lease.released)
+        self.assertEqual(observed["write_url"], conversation)
+        self.assertEqual(observed["lock"].url, conversation)
+        self.assertEqual(transport.close_calls, 1)
+        self.assertTrue(transport.closed)
+        self.assertTrue(inserted_runtime.transport_closed)
+
+        mission = store.get_mission(mission_id)
+        self.assertEqual(mission["state"], "FAILED")
+        self.assertEqual(
+            mission["pause_reason"],
+            "mission resume failed: resume attach failed after runtime construction",
+        )
+        self.assertNotIn(mission_id, missions_api._runtimes)
+        self.assertNotIn(mission_id, missions_api._mission_write_urls)
+        self.assertNotIn(mission_id, missions_api._mission_leases)
+        self.assertEqual(write_slots._registry.active_leases(), ())
+
+        first = await write_slots.acquire_writer("https://chatgpt.com/c/attach-recovered-1")
+        second = await write_slots.acquire_writer("https://chatgpt.com/c/attach-recovered-2")
+        with self.assertRaises(conversation_sessions.SessionCapacityError):
+            await write_slots.acquire_writer("https://chatgpt.com/c/attach-recovered-3")
+        await first.release()
+        await second.release()
+
 
 class MissionRestartPersistenceTest(unittest.IsolatedAsyncioTestCase):
     async def test_non_terminal_mission_rebuilds_writer_slot_after_restart(self) -> None:
