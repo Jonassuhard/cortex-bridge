@@ -7,7 +7,6 @@ import {
   demoConversations,
   demoMessages,
   demoMissionDetail,
-  demoMissions,
   demoPipeline,
   demoRuntime,
   demoSettings,
@@ -21,7 +20,6 @@ import type {
   ConversationSummary,
   CortexSettings,
   MissionDetail,
-  MissionSummary,
   OllamaModelInfo,
   PipelineStatus,
   RuntimeStatus,
@@ -30,6 +28,7 @@ import type {
 import { useInterval } from "@/hooks/useInterval";
 import { useChatRunStream } from "@/hooks/useChatRunStream";
 import { useConversationController } from "@/hooks/useConversationController";
+import { conversationKeyFromUrl } from "@/lib/conversation-state";
 import {
   createRequestEpoch,
   createUnavailableClientState,
@@ -137,6 +136,8 @@ export function CortexApp() {
       );
     },
   });
+  const conversationStateRef = useRef(conversationState);
+  conversationStateRef.current = conversationState;
   const conversations = conversationState.order
     .map((key) => conversationState.entries[key]?.summary)
     .filter((conversation): conversation is ConversationSummary => !!conversation);
@@ -156,7 +157,6 @@ export function CortexApp() {
   const [pipeline, setPipeline] = useState<PipelineStatus>(
     DEVELOPMENT_FIXTURES_ENABLED ? demoPipeline : INITIAL_UNAVAILABLE_STATE.pipeline,
   );
-  const [, setMissions] = useState<MissionSummary[]>([]);
   const [settings, setSettings] = useState<CortexSettings>(
     DEVELOPMENT_FIXTURES_ENABLED ? demoSettings : INITIAL_UNAVAILABLE_STATE.settings,
   );
@@ -170,11 +170,17 @@ export function CortexApp() {
   const [demoMode, setDemoMode] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const missionDetailRequestEpoch = useRef(createRequestEpoch());
+  const terminalRefreshTimer = useRef<number | null>(null);
 
   const activeMission = useMemo(() => {
     if (missionDetail && nonTerminal(missionDetail.mission.state)) return missionDetail;
     return null;
   }, [missionDetail]);
+  const selectedPipeline = useMemo<PipelineStatus>(() => ({
+    ...pipeline,
+    active_mission_id: missionDetail?.mission.id || null,
+    active_mission_state: missionDetail?.mission.state || null,
+  }), [missionDetail, pipeline]);
 
   const notify = useCallback((message: string) => {
     setToast(message);
@@ -240,18 +246,9 @@ export function CortexApp() {
     }
   }, [dispatchConversation, replaceSummaries]);
 
-  const refreshMissions = useCallback(async () => {
-    try {
-      const data = await api<MissionSummary[]>("/api/missions");
-      setMissions(data);
-    } catch {
-      if (DEVELOPMENT_FIXTURES_ENABLED) {
-        setMissions(demoMissions);
-      } else {
-        setMissions([]);
-      }
-    }
-  }, []);
+  const applyMissionDetail = useCallback((key: ConversationKey, missionId: string, data: MissionDetail) => {
+    dispatchConversation({ type: "MISSION_EVENT", key, missionId, mission: data });
+  }, [dispatchConversation]);
 
   const refreshMissionDetail = useCallback(async () => {
     const key = conversationState.selectedKey;
@@ -265,24 +262,14 @@ export function CortexApp() {
     try {
       const data = await api<MissionDetail>(`/api/missions/${requestedMissionId}`);
       if (!missionDetailRequestEpoch.current.isCurrent(ticket, identity)) return;
-      dispatchConversation({
-        type: "MISSION_EVENT",
-        key,
-        missionId: requestedMissionId,
-        mission: data,
-      });
+      applyMissionDetail(key, requestedMissionId, data);
     } catch {
       if (!missionDetailRequestEpoch.current.isCurrent(ticket, identity)) return;
       if (DEVELOPMENT_FIXTURES_ENABLED && requestedMissionId === demoMissionDetail.mission.id) {
-        dispatchConversation({
-          type: "MISSION_EVENT",
-          key,
-          missionId: requestedMissionId,
-          mission: demoMissionDetail,
-        });
+        applyMissionDetail(key, requestedMissionId, demoMissionDetail);
       }
     }
-  }, [conversationState.selectedKey, dispatchConversation, selectedMissionId]);
+  }, [applyMissionDetail, conversationState.selectedKey, selectedMissionId]);
 
   const refreshSettings = useCallback(async () => {
     try {
@@ -318,23 +305,33 @@ export function CortexApp() {
   const chatStreams = useChatRunStream({
     dispatch: dispatchConversation,
     onTerminal: () => {
-      window.setTimeout(() => void refreshConversations(), 900);
+      if (terminalRefreshTimer.current) window.clearTimeout(terminalRefreshTimer.current);
+      terminalRefreshTimer.current = window.setTimeout(() => {
+        terminalRefreshTimer.current = null;
+        void refreshConversations();
+      }, 900);
     },
-    recoverRun: (_key, runId) => api<ChatRun>(`/api/chat/runs/${runId}`),
+    recoverRun: (_key, runId, context) => api<ChatRun>(`/api/chat/runs/${runId}`, {
+      signal: context.signal,
+    }),
   });
 
   useEffect(() => {
     void Promise.all([
       refreshRuntime(),
       refreshConversations(),
-      refreshMissions(),
       refreshSettings(),
       refreshPipeline(),
     ]);
     api<{ upload_file?: boolean; take_screenshot?: boolean }>("/api/transport/capabilities")
       .then((caps) => setCapabilities({ upload_file: !!caps.upload_file, take_screenshot: !!caps.take_screenshot }))
       .catch(() => undefined);
-  }, [refreshConversations, refreshMissions, refreshPipeline, refreshRuntime, refreshSettings]);
+  }, [refreshConversations, refreshPipeline, refreshRuntime, refreshSettings]);
+
+  useEffect(() => () => {
+    if (terminalRefreshTimer.current) window.clearTimeout(terminalRefreshTimer.current);
+    terminalRefreshTimer.current = null;
+  }, []);
 
   useEffect(() => {
     void refreshMissionDetail();
@@ -350,7 +347,6 @@ export function CortexApp() {
 
   useInterval(() => void refreshRuntime(), 5000);
   useInterval(() => void refreshPipeline(), 2500);
-  useInterval(() => void refreshMissions(), 3500);
   useInterval(() => void refreshMissionDetail(), selectedMissionId ? 1600 : null);
   useInterval(() => refreshSelectedConversation(), selectedConversation ? 2200 : null);
 
@@ -389,7 +385,7 @@ export function CortexApp() {
         text,
         new_conversation: isProvisional(key, conversation),
       });
-      chatStreams.subscribe(key, run);
+      chatStreams.subscribe(key, run, { submittedDraft: text, submittedAttachment: null });
       return true;
     } catch (error) {
       requestFailed(key, error, "Impossible d'envoyer le message.");
@@ -425,8 +421,8 @@ export function CortexApp() {
         image: descriptor.kind === "image",
         new_conversation: isProvisional(key, conversation),
       });
-      chatStreams.subscribe(key, run);
-      notify(`Pièce jointe envoyée : ${descriptor.name}`);
+      chatStreams.subscribe(key, run, { submittedDraft: text, submittedAttachment: file });
+      notify(`Pièce jointe prise en charge : ${descriptor.name}. Confirmation en cours.`);
       return true;
     } catch (error) {
       requestFailed(key, error, "Impossible d'envoyer la pièce jointe.");
@@ -449,8 +445,8 @@ export function CortexApp() {
         text,
         new_conversation: isProvisional(key, conversation),
       });
-      chatStreams.subscribe(key, run, { clearAttachment: false });
-      notify("Capture d'écran envoyée dans ChatGPT.");
+      chatStreams.subscribe(key, run, { submittedDraft: text, submittedAttachment: null });
+      notify("Capture prise en charge. Confirmation ChatGPT en cours.");
       return true;
     } catch (error) {
       requestFailed(key, error, "Capture impossible.");
@@ -481,10 +477,9 @@ export function CortexApp() {
         accepted: true,
       });
       void api<MissionDetail>(`/api/missions/${response.id}`).then((mission) => {
-        dispatchConversation({ type: "MISSION_EVENT", key, missionId: response.id, mission });
+        applyMissionDetail(key, response.id, mission);
       }).catch(() => undefined);
       notify("Mission autonome lancée.");
-      void refreshMissions();
       return true;
     } catch (error) {
       if (DEVELOPMENT_FIXTURES_ENABLED && demoMode) {
@@ -509,29 +504,70 @@ export function CortexApp() {
     const entry = conversationState.entries[key];
     const run = entry?.run;
     if (!run) return;
+    const runId = run.id;
+    const streamEpoch = entry.streamEpoch;
+    chatStreams.close(key);
     try {
-      await postJson(`/api/chat/runs/${run.id}/cancel`, {});
+      await postJson(`/api/chat/runs/${runId}/cancel`, {});
       dispatchConversation({
-        type: "RUN_EVENT",
+        type: "RUN_CANCELLED",
         key,
-        runId: run.id,
-        streamEpoch: entry.streamEpoch,
-        event: {
-          seq: 0,
-          ts: new Date().toISOString(),
-          type: "cancelled",
-          payload: {},
-        },
+        runId,
+        cancelledAt: new Date().toISOString(),
       });
-      chatStreams.close(key);
     } catch (error) {
+      dispatchConversation({
+        type: "RUN_RECOVERY_EXHAUSTED",
+        key,
+        runId,
+        streamEpoch,
+        error: "Annulation incertaine : la réponse n'est plus suivie par le bridge.",
+      });
       notify(error instanceof Error ? error.message : "Impossible d'arrêter la réponse.");
+    }
+  }
+
+  async function retryChatRecovery(key: ConversationKey) {
+    const entry = conversationStateRef.current.entries[key];
+    const runId = entry?.run?.id;
+    if (!entry || !runId) return;
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 10_000);
+    try {
+      const recovered = await api<ChatRun>(`/api/chat/runs/${runId}`, { signal: controller.signal });
+      if (recovered.id !== runId) return;
+      const current = conversationStateRef.current.entries[key];
+      if (!current?.run || current.run.id !== runId) return;
+      if (["COMPLETED", "FAILED", "CANCELLED"].includes(recovered.state)) {
+        const next = dispatchConversation({
+          type: "RUN_EVENT",
+          key,
+          runId,
+          streamEpoch: current.streamEpoch,
+          run: recovered,
+        });
+        const canonicalUrl = recovered.canonical_url;
+        if (canonicalUrl && next.entries[key]?.run?.id === runId) {
+          dispatchConversation({
+            type: "REKEY_CANONICAL",
+            key,
+            canonicalKey: conversationKeyFromUrl(canonicalUrl),
+            canonicalUrl,
+          });
+        }
+      } else {
+        chatStreams.subscribe(key, recovered, { accepted: false });
+      }
+    } catch {
+      notify("Synchronisation toujours impossible. Aucun renvoi automatique n'a été effectué.");
+    } finally {
+      window.clearTimeout(timer);
     }
   }
 
   async function refreshMissionFor(key: ConversationKey, missionId: string) {
     const mission = await api<MissionDetail>(`/api/missions/${missionId}`);
-    dispatchConversation({ type: "MISSION_EVENT", key, missionId, mission });
+    applyMissionDetail(key, missionId, mission);
   }
 
   async function missionAction(key: ConversationKey, action: "pause" | "resume" | "cancel") {
@@ -670,11 +706,12 @@ export function CortexApp() {
         attachment={selectedEntry?.attachment || null}
         chatRun={chatRun}
         mission={activeMission || missionDetail}
-        pipeline={pipeline}
+        pipeline={selectedPipeline}
         settings={settings}
         inspectorOpen={inspectorOpen}
         sidebarCollapsed={sidebarCollapsed}
         capabilities={capabilities}
+        rekeyConflict={conversationState.rekeyConflict}
         onDraftChange={(key, draft) => dispatchConversation({ type: "DRAFT_CHANGED", key, draft })}
         onAttachmentStaged={(key, attachment) => dispatchConversation({
           type: "ATTACHMENT_STAGED",
@@ -688,6 +725,12 @@ export function CortexApp() {
         onSendScreenshot={sendScreenshot}
         onStartMission={startMission}
         onCancelChat={(key) => void cancelChat(key)}
+        onRetryChatRecovery={(key) => void retryChatRecovery(key)}
+        onResolveRekeyConflict={(fromKey, toKey) => dispatchConversation({
+          type: "RESOLVE_REKEY_CONFLICT",
+          fromKey,
+          toKey,
+        })}
         onPauseMission={(key) => void missionAction(key, "pause")}
         onResumeMission={(key) => void missionAction(key, "resume")}
         onCancelMission={(key) => void missionAction(key, "cancel")}
@@ -697,7 +740,7 @@ export function CortexApp() {
 
       <PipelineInspector
         open={inspectorOpen}
-        pipeline={pipeline}
+        pipeline={selectedPipeline}
         runtime={runtime}
         transport={transport}
         mission={activeMission || missionDetail}

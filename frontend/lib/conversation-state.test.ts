@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ChatRun, ConversationSnapshot, ConversationSummary, MissionDetail } from "./types";
 import {
+  canonicalConversationUrlFromMission,
   conversationReducer,
   createConversationState,
   createProvisionalConversation,
@@ -152,7 +153,7 @@ describe("conversationReducer", () => {
     expect(transportFailed.entries.c.sendError).toBe("transport interrompu");
   });
 
-  it("clears only the accepted conversation after send success", () => {
+  it("keeps the immutable submitted payload until delivery, then clears only the matching composer", () => {
     const fileA = new File(["a"], "a.txt");
     const fileB = new File(["b"], "b.txt");
     const seeded = reduce(
@@ -169,13 +170,167 @@ describe("conversationReducer", () => {
       streamEpoch: 1,
       run: run("a"),
       accepted: true,
+      submittedDraft: "A",
+      submittedAttachment: fileA,
     });
 
     expect(accepted.selectedKey).toBe("b");
-    expect(accepted.entries.a.draft).toBe("");
-    expect(accepted.entries.a.attachment).toBeNull();
+    expect(accepted.entries.a.draft).toBe("A");
+    expect(accepted.entries.a.attachment).toBe(fileA);
+    expect(accepted.entries.a.submittedPayload).toEqual({
+      runId: "run-a",
+      draft: "A",
+      attachment: fileA,
+    });
     expect(accepted.entries.b.draft).toBe("B");
     expect(accepted.entries.b.attachment).toBe(fileB);
+
+    const delivered = conversationReducer(accepted, {
+      type: "RUN_EVENT",
+      key: "a",
+      runId: "run-a",
+      streamEpoch: 1,
+      event: {
+        seq: 1,
+        ts: "2026-07-26T12:00:01.000Z",
+        type: "delivery",
+        payload: { delivered_at: "2026-07-26T12:00:01.000Z" },
+      },
+    });
+
+    expect(delivered.entries.a.draft).toBe("");
+    expect(delivered.entries.a.attachment).toBeNull();
+    expect(delivered.entries.a.submittedPayload).toBeNull();
+    expect(delivered.entries.b.draft).toBe("B");
+    expect(delivered.entries.b.attachment).toBe(fileB);
+  });
+
+  it("does not erase newer composer edits when delivery proves an older submitted payload", () => {
+    const submittedFile = new File(["one"], "one.txt");
+    const newerFile = new File(["two"], "two.txt");
+    const accepted = reduce(
+      createConversationState([summary("a")], "a"),
+      { type: "DRAFT_CHANGED", key: "a", draft: "premier" },
+      { type: "ATTACHMENT_STAGED", key: "a", attachment: submittedFile },
+      {
+        type: "RUN_EVENT",
+        key: "a",
+        runId: "run-a",
+        streamEpoch: 1,
+        run: run("a"),
+        accepted: true,
+        submittedDraft: "premier",
+        submittedAttachment: submittedFile,
+      },
+      { type: "DRAFT_CHANGED", key: "a", draft: "nouveau" },
+      { type: "ATTACHMENT_STAGED", key: "a", attachment: newerFile },
+    );
+    const delivered = conversationReducer(accepted, {
+      type: "RUN_EVENT",
+      key: "a",
+      runId: "run-a",
+      streamEpoch: 1,
+      event: { seq: 1, ts: "2026-07-26T12:00:01.000Z", type: "delivery", payload: {} },
+    });
+
+    expect(delivered.entries.a.draft).toBe("nouveau");
+    expect(delivered.entries.a.attachment).toBe(newerFile);
+    expect(delivered.entries.a.submittedPayload).toBeNull();
+  });
+
+  it("marks recovery exhaustion as delivery uncertain without losing exact draft or File", () => {
+    const file = new File(["preuve"], "preuve.txt");
+    const seeded = reduce(
+      createConversationState([summary("a")], "a"),
+      { type: "DRAFT_CHANGED", key: "a", draft: "contenu exact  " },
+      { type: "ATTACHMENT_STAGED", key: "a", attachment: file },
+      {
+        type: "RUN_EVENT",
+        key: "a",
+        runId: "run-a",
+        streamEpoch: 2,
+        run: run("a"),
+        accepted: true,
+        submittedDraft: "contenu exact  ",
+        submittedAttachment: file,
+      },
+    );
+    const exhausted = conversationReducer(seeded, {
+      type: "RUN_RECOVERY_EXHAUSTED",
+      key: "a",
+      runId: "run-a",
+      streamEpoch: 2,
+      error: "Livraison incertaine : impossible de confirmer le message.",
+    });
+
+    expect(exhausted.entries.a.run?.state).toBe("DELIVERY_UNCERTAIN");
+    expect(exhausted.entries.a.run?.error).toMatch(/Livraison incertaine/);
+    expect(exhausted.entries.a.draft).toBe("contenu exact  ");
+    expect(exhausted.entries.a.attachment).toBe(file);
+    expect(exhausted.entries.a.submittedPayload).toEqual({
+      runId: "run-a",
+      draft: "contenu exact  ",
+      attachment: file,
+    });
+
+    const proven = conversationReducer(exhausted, {
+      type: "RUN_EVENT",
+      key: "a",
+      runId: "run-a",
+      streamEpoch: 3,
+      run: { ...run("a"), state: "WAITING_FOR_CHATGPT", delivered_at: "now" },
+    });
+    expect(proven.entries.a.draft).toBe("");
+    expect(proven.entries.a.attachment).toBeNull();
+    expect(proven.entries.a.submittedPayload).toBeNull();
+  });
+
+  it("abandons an uncertain submitted payload only when the composer is explicitly changed", () => {
+    const seeded = reduce(
+      createConversationState([summary("a")], "a"),
+      { type: "DRAFT_CHANGED", key: "a", draft: "original" },
+      {
+        type: "RUN_EVENT",
+        key: "a",
+        runId: "run-a",
+        streamEpoch: 1,
+        run: run("a"),
+        accepted: true,
+        submittedDraft: "original",
+        submittedAttachment: null,
+      },
+      {
+        type: "RUN_RECOVERY_EXHAUSTED",
+        key: "a",
+        runId: "run-a",
+        streamEpoch: 1,
+        error: "incertain",
+      },
+    );
+    expect(seeded.entries.a.submittedPayload?.draft).toBe("original");
+    const edited = conversationReducer(seeded, {
+      type: "DRAFT_CHANGED",
+      key: "a",
+      draft: "nouveau choix",
+    });
+    expect(edited.entries.a.submittedPayload).toBeNull();
+  });
+
+  it("cancels the current run by identity even after its stream epoch advanced", () => {
+    const seeded = reduce(
+      createConversationState([summary("a")], "a"),
+      { type: "RUN_EVENT", key: "a", runId: "run-a", streamEpoch: 1, run: run("a"), accepted: true },
+      { type: "RUN_EVENT", key: "a", runId: "run-a", streamEpoch: 3, run: { ...run("a"), state: "WAITING_FOR_CHATGPT" } },
+    );
+    const cancelled = conversationReducer(seeded, {
+      type: "RUN_CANCELLED",
+      key: "a",
+      runId: "run-a",
+      cancelledAt: "2026-07-26T12:00:05.000Z",
+    });
+
+    expect(cancelled.entries.a.run?.state).toBe("CANCELLED");
+    expect(cancelled.entries.a.streamEpoch).toBe(3);
   });
 
   it("terminates A without changing B's concurrent run", () => {
@@ -248,7 +403,7 @@ describe("conversationReducer", () => {
     expect(staleRecovery.entries.a.streamEpoch).toBe(2);
   });
 
-  it("can clear a screenshot draft without discarding its staged File", () => {
+  it("keeps a screenshot draft and staged File until delivery proof", () => {
     const attachment = new File(["later"], "later.txt");
     const seeded = reduce(
       createConversationState([summary("a")], "a"),
@@ -262,10 +417,11 @@ describe("conversationReducer", () => {
       streamEpoch: 1,
       run: run("a", "run-shot"),
       accepted: true,
-      clearAttachment: false,
+      submittedDraft: "capture",
+      submittedAttachment: null,
     });
 
-    expect(accepted.entries.a.draft).toBe("");
+    expect(accepted.entries.a.draft).toBe("capture");
     expect(accepted.entries.a.attachment).toBe(attachment);
   });
 
@@ -329,6 +485,187 @@ describe("conversationReducer", () => {
       toKey: "canonical-a",
       error: "La conversation canonique existe déjà dans le cache.",
     });
+  });
+
+  it("selects the existing canonical entry and discards only a safe provisional collision", () => {
+    const provisional = createProvisionalConversation(() => "safe-collision");
+    const collided = conversationReducer(
+      createConversationState([provisional, summary("canonical-a")], provisional.identity),
+      {
+        type: "REKEY_CANONICAL",
+        key: provisional.identity,
+        canonicalKey: "canonical-a",
+        canonicalUrl: "https://chatgpt.com/c/canonical-a",
+      },
+    );
+    const resolved = conversationReducer(collided, {
+      type: "RESOLVE_REKEY_CONFLICT",
+      fromKey: provisional.identity,
+      toKey: "canonical-a",
+    });
+
+    expect(resolved.selectedKey).toBe("canonical-a");
+    expect(resolved.entries[provisional.identity]).toBeUndefined();
+    expect(resolved.entries["canonical-a"]).toBe(collided.entries["canonical-a"]);
+    expect(resolved.rekeyConflict).toBeNull();
+  });
+
+  it("never discards an active provisional entry while resolving a canonical collision", () => {
+    const provisional = createProvisionalConversation(() => "active-collision");
+    const active = reduce(
+      createConversationState([provisional, summary("canonical-a")], provisional.identity),
+      { type: "DRAFT_CHANGED", key: provisional.identity, draft: "à préserver" },
+      {
+        type: "REKEY_CANONICAL",
+        key: provisional.identity,
+        canonicalKey: "canonical-a",
+        canonicalUrl: "https://chatgpt.com/c/canonical-a",
+      },
+    );
+    const resolved = conversationReducer(active, {
+      type: "RESOLVE_REKEY_CONFLICT",
+      fromKey: provisional.identity,
+      toKey: "canonical-a",
+    });
+
+    expect(resolved.selectedKey).toBe("canonical-a");
+    expect(resolved.entries[provisional.identity].draft).toBe("à préserver");
+    expect(resolved.rekeyConflict).toEqual(active.rekeyConflict);
+  });
+
+  it("extracts a canonical mission binding URL and atomically rekeys on accepted mission detail", () => {
+    const provisional = createProvisionalConversation(() => "mission-new");
+    const detail = mission("mission-a");
+    detail.timeline.conversation_bindings = [{
+      conversation_url: "https://chatgpt.com/c/canonical-mission",
+      conversation_target: "https://chatgpt.com/c/canonical-mission",
+    }];
+    const canonicalUrl = canonicalConversationUrlFromMission(detail);
+    expect(canonicalUrl).toBe("https://chatgpt.com/c/canonical-mission");
+
+    const rekeyed = conversationReducer(
+      createConversationState([provisional], provisional.identity),
+      { type: "MISSION_EVENT", key: provisional.identity, missionId: "mission-a", mission: detail },
+    );
+    expect(rekeyed.selectedKey).toBe("canonical-mission");
+    expect(rekeyed.entries["canonical-mission"].mission).toBe(detail);
+  });
+
+  it("does not rekey from a stale canonical mission detail after a newer mission was accepted", () => {
+    const provisional = createProvisionalConversation(() => "mission-stale");
+    const oldDetail = mission("mission-old");
+    oldDetail.timeline.conversation_bindings = [{
+      conversation_url: "https://chatgpt.com/c/wrong-old",
+    }];
+    const seeded = reduce(
+      createConversationState([provisional], provisional.identity),
+      { type: "MISSION_EVENT", key: provisional.identity, missionId: "mission-new", accepted: true },
+    );
+    const stale = conversationReducer(seeded, {
+      type: "MISSION_EVENT",
+      key: provisional.identity,
+      missionId: "mission-old",
+      mission: oldDetail,
+    });
+
+    expect(stale).toBe(seeded);
+    expect(stale.selectedKey).toBe(provisional.identity);
+    expect(stale.entries["wrong-old"]).toBeUndefined();
+  });
+
+  it("retains omitted pending/non-terminal entries but purges absent terminal and idle entries", () => {
+    const activeMission = mission("mission-active");
+    const terminalMission = mission("mission-terminal");
+    terminalMission.mission.state = "COMPLETED";
+    let seeded = reduce(
+      createConversationState([summary("pending"), summary("run"), summary("mission"), summary("terminal"), summary("idle")], "run"),
+      { type: "REQUEST_STARTED", request: "send", key: "pending" },
+      { type: "RUN_EVENT", key: "run", runId: "run-active", streamEpoch: 1, run: run("run", "run-active"), accepted: true },
+      { type: "MISSION_EVENT", key: "mission", missionId: "mission-active", mission: activeMission },
+      { type: "MISSION_EVENT", key: "terminal", missionId: "mission-terminal", mission: terminalMission },
+    );
+    seeded = conversationReducer(seeded, {
+      type: "SUMMARIES_RECEIVED",
+      summaries: [summary("fresh")],
+      updatedAt: "2026-07-26T13:00:00.000Z",
+    });
+
+    expect(seeded.entries.pending).toBeDefined();
+    expect(seeded.entries.run).toBeDefined();
+    expect(seeded.entries.mission).toBeDefined();
+    expect(seeded.entries.terminal).toBeUndefined();
+    expect(seeded.entries.idle).toBeUndefined();
+    expect(seeded.selectedKey).toBe("run");
+    expect(seeded.order).toEqual(["pending", "run", "mission", "fresh"]);
+  });
+
+  it("purges an omitted selected idle entry and selects a fresh canonical summary", () => {
+    const reconciled = conversationReducer(
+      createConversationState([summary("old")], "old"),
+      { type: "SUMMARIES_RECEIVED", summaries: [summary("fresh")], updatedAt: "now" },
+    );
+
+    expect(reconciled.entries.old).toBeUndefined();
+    expect(reconciled.selectedKey).toBe("fresh");
+  });
+
+  it("releases terminal submitted payload references so a cleared omitted entry can be purged", () => {
+    const file = new File(["large"], "large.bin");
+    const failed = reduce(
+      createConversationState([summary("a")], "a"),
+      { type: "DRAFT_CHANGED", key: "a", draft: "échec" },
+      { type: "ATTACHMENT_STAGED", key: "a", attachment: file },
+      {
+        type: "RUN_EVENT",
+        key: "a",
+        runId: "run-a",
+        streamEpoch: 1,
+        run: run("a"),
+        accepted: true,
+        submittedDraft: "échec",
+        submittedAttachment: file,
+      },
+      {
+        type: "RUN_EVENT",
+        key: "a",
+        runId: "run-a",
+        streamEpoch: 1,
+        event: { seq: 2, ts: "now", type: "error", payload: { error: "transport" } },
+      },
+    );
+    expect(failed.entries.a.draft).toBe("échec");
+    expect(failed.entries.a.attachment).toBe(file);
+    expect(failed.entries.a.submittedPayload).toBeNull();
+    const cleared = reduce(
+      failed,
+      { type: "DRAFT_CHANGED", key: "a", draft: "" },
+      { type: "ATTACHMENT_STAGED", key: "a", attachment: null },
+      { type: "SUMMARIES_RECEIVED", summaries: [], updatedAt: "later" },
+    );
+    expect(cleared.entries.a).toBeUndefined();
+  });
+
+  it("purges an omitted non-selected provisional entry whose run is terminal", () => {
+    const provisional = createProvisionalConversation(() => "terminal-provisional");
+    const seeded = reduce(
+      createConversationState([provisional, summary("b")], "b"),
+      {
+        type: "RUN_EVENT",
+        key: provisional.identity,
+        runId: "run-p",
+        streamEpoch: 1,
+        run: { ...run("p", "run-p"), state: "COMPLETED", delivered_at: "now" },
+        accepted: true,
+      },
+    );
+    const reconciled = conversationReducer(seeded, {
+      type: "SUMMARIES_RECEIVED",
+      summaries: [summary("b")],
+      updatedAt: "later",
+    });
+
+    expect(reconciled.entries[provisional.identity]).toBeUndefined();
+    expect(reconciled.order).toEqual(["b"]);
   });
 
   it("attaches mission state to its conversation entry", () => {

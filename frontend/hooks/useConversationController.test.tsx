@@ -105,7 +105,7 @@ describe("useConversationController", () => {
     act(() => result.current.replaceSummaries([summary("b")]));
     expect(signals.get("a")?.aborted).toBe(true);
     expect(result.current.state.selectedKey).toBe("b");
-    expect(result.current.state.entries.a.loadPhase).toBe("idle");
+    expect(result.current.state.entries.a).toBeUndefined();
     expect(result.current.selectedEntry?.loadPhase).toBe("loading");
 
     act(() => result.current.replaceSummaries([summary("b")]));
@@ -118,7 +118,7 @@ describe("useConversationController", () => {
     await act(async () => requests.get("a")!.resolve(snapshot("a", "A tardive")));
     expect(result.current.state.selectedKey).toBe("b");
     expect(result.current.selectedEntry?.messages[0].text).toBe("B fraîche");
-    expect(result.current.state.entries.a.messages).toEqual([]);
+    expect(result.current.state.entries.a).toBeUndefined();
   });
 
   it("aborts at the hard 10 second deadline and ignores a late success", async () => {

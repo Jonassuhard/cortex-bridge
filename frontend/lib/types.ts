@@ -78,6 +78,12 @@ export type ConversationKey = string;
 export type ConversationLoadPhase = "idle" | "loading" | "ready" | "error";
 export type ConversationFreshness = "empty" | "cached" | "live" | "stale";
 
+export interface SubmittedConversationPayload {
+  runId: string;
+  draft: string;
+  attachment: File | null;
+}
+
 export interface ConversationEntry {
   key: ConversationKey;
   summary: ConversationSummary;
@@ -85,6 +91,7 @@ export interface ConversationEntry {
   messages: ConversationMessage[];
   draft: string;
   attachment: File | null;
+  submittedPayload: SubmittedConversationPayload | null;
   loadEpoch: number;
   loadPhase: ConversationLoadPhase;
   loadError: string | null;
@@ -106,7 +113,8 @@ export type ChatRunState =
   | "CHATGPT_STREAMING"
   | "COMPLETED"
   | "FAILED"
-  | "CANCELLED";
+  | "CANCELLED"
+  | "DELIVERY_UNCERTAIN";
 
 export interface ChatRun {
   id: string;

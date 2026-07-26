@@ -34,6 +34,7 @@ import {
   TerminalIcon,
 } from "./Icons";
 import { ExecutionCard } from "./ExecutionCard";
+import type { RekeyConflict } from "@/lib/conversation-state";
 
 interface ChatWorkspaceProps {
   conversationKey: ConversationKey | null;
@@ -50,6 +51,7 @@ interface ChatWorkspaceProps {
   inspectorOpen: boolean;
   sidebarCollapsed: boolean;
   capabilities: { upload_file: boolean; take_screenshot: boolean };
+  rekeyConflict: RekeyConflict | null;
   onDraftChange: (key: ConversationKey, draft: string) => void;
   onAttachmentStaged: (key: ConversationKey, attachment: File | null) => void;
   onToggleSidebar: () => void;
@@ -59,6 +61,8 @@ interface ChatWorkspaceProps {
   onSendScreenshot: (key: ConversationKey, text: string) => Promise<boolean>;
   onStartMission: (key: ConversationKey, text: string) => Promise<boolean>;
   onCancelChat: (key: ConversationKey) => void;
+  onRetryChatRecovery: (key: ConversationKey) => void;
+  onResolveRekeyConflict: (fromKey: ConversationKey, toKey: ConversationKey) => void;
   onPauseMission: (key: ConversationKey) => void;
   onResumeMission: (key: ConversationKey) => void;
   onCancelMission: (key: ConversationKey) => void;
@@ -209,6 +213,7 @@ export function ChatWorkspace({
   inspectorOpen,
   sidebarCollapsed,
   capabilities,
+  rekeyConflict,
   onDraftChange,
   onAttachmentStaged,
   onToggleSidebar,
@@ -218,6 +223,8 @@ export function ChatWorkspace({
   onSendScreenshot,
   onStartMission,
   onCancelChat,
+  onRetryChatRecovery,
+  onResolveRekeyConflict,
   onPauseMission,
   onResumeMission,
   onCancelMission,
@@ -232,7 +239,9 @@ export function ChatWorkspace({
 
   const activeMissionState = mission?.mission.state;
   const missionRunning = !!activeMissionState && !["COMPLETED", "FAILED", "BLOCKED", "CANCELLED"].includes(activeMissionState);
-  const chatActive = !!chatRun && !["COMPLETED", "FAILED", "CANCELLED"].includes(chatRun.state);
+  const chatActive = !!chatRun && !["COMPLETED", "FAILED", "CANCELLED", "DELIVERY_UNCERTAIN"].includes(chatRun.state);
+  const ambiguousProvisional = !!conversationKey && rekeyConflict?.fromKey === conversationKey;
+  const composerBlocked = sending || ambiguousProvisional;
   const busy = missionRunning || chatActive || sending;
 
   const mergedMessages = useMemo(() => {
@@ -246,7 +255,7 @@ export function ChatWorkspace({
           text: chatRun.text,
           created_at: chatRun.created_at,
           delivery:
-            chatRun.state === "FAILED"
+            chatRun.state === "FAILED" || chatRun.state === "DELIVERY_UNCERTAIN"
               ? "failed"
               : ["VISIBLE_IN_CHATGPT", "WAITING_FOR_CHATGPT", "CHATGPT_STREAMING", "COMPLETED"].includes(chatRun.state)
                 ? "visible"
@@ -280,7 +289,7 @@ export function ChatWorkspace({
     const key = conversationKey;
     const text = draft;
     const stagedFile = attachment;
-    if (!key || (!text.trim() && !stagedFile) || sending) return;
+    if (!key || (!text.trim() && !stagedFile) || composerBlocked) return;
     if (stagedFile) {
       await onSendAttachment(key, text, stagedFile);
     } else if (mode === "mission") {
@@ -292,7 +301,7 @@ export function ChatWorkspace({
 
   async function submitScreenshot() {
     const key = conversationKey;
-    if (!key || sending) return;
+    if (!key || composerBlocked) return;
     await onSendScreenshot(key, draft);
   }
 
@@ -396,14 +405,38 @@ export function ChatWorkspace({
           {chatRun?.state === "FAILED" && (
             <div className="inline-chat-error"><ShieldIcon size={17} /><span><strong>Transport interrompu</strong><small>{chatRun.error || "Le message n'a pas pu être confirmé dans ChatGPT."}</small></span></div>
           )}
+          {chatRun?.state === "DELIVERY_UNCERTAIN" && (
+            <output className="inline-chat-error">
+              <ShieldIcon size={17} />
+              <span>
+                <strong>Livraison incertaine</strong>
+                <small>{chatRun.error || "Le bridge ne peut pas confirmer la réception. Le contenu reste dans le composer et ne sera pas renvoyé automatiquement."}</small>
+              </span>
+              <button onClick={() => conversationKey && onRetryChatRecovery(conversationKey)}>
+                Réessayer la synchronisation
+              </button>
+            </output>
+          )}
+          {ambiguousProvisional && rekeyConflict && (
+            <div className="inline-chat-error" role="alert">
+              <ShieldIcon size={17} />
+              <span>
+                <strong>Identité de conversation ambiguë</strong>
+                <small>La conversation canonique existe déjà. Aucun envoi ni aucune exécution ne démarrera depuis cette copie provisoire.</small>
+              </span>
+              <button onClick={() => onResolveRekeyConflict(rekeyConflict.fromKey, rekeyConflict.toKey)}>
+                Ouvrir la conversation existante
+              </button>
+            </div>
+          )}
           <div className="scroll-anchor" />
         </div>
       </div>
 
       <div className="composer-shell">
         <div className="composer-mode-tabs" role="tablist">
-          <button role="tab" aria-selected={mode === "mission"} className={mode === "mission" ? "is-active" : ""} onClick={() => setMode("mission")}><SparkIcon size={14} /> Mission autonome</button>
-          <button role="tab" aria-selected={mode === "chat"} className={mode === "chat" ? "is-active" : ""} onClick={() => setMode("chat")}><EyeIcon size={14} /> Message simple</button>
+          <button role="tab" aria-selected={mode === "mission"} className={mode === "mission" ? "is-active" : ""} disabled={ambiguousProvisional} onClick={() => setMode("mission")}><SparkIcon size={14} /> Mission autonome</button>
+          <button role="tab" aria-selected={mode === "chat"} className={mode === "chat" ? "is-active" : ""} disabled={ambiguousProvisional} onClick={() => setMode("chat")}><EyeIcon size={14} /> Message simple</button>
         </div>
         <div className={`composer-box ${busy ? "is-busy" : ""}`}>
           <textarea
@@ -419,14 +452,14 @@ export function ChatWorkspace({
             }}
             placeholder={mode === "mission" ? "Décris l'objectif. Cortex planifie, exécute et valide automatiquement…" : "Écrire dans la conversation ChatGPT sélectionnée…"}
             rows={1}
-            disabled={sending}
+            disabled={composerBlocked}
           />
           <div className="composer-controls">
             <div className="composer-left-actions">
               <input
                 ref={fileInputRef}
                 type="file"
-                disabled={sending}
+                disabled={composerBlocked}
                 style={{ display: "none" }}
                 onChange={(event) => {
                   const file = event.target.files?.[0] || null;
@@ -436,13 +469,13 @@ export function ChatWorkspace({
               />
               <button
                 title={capabilities.upload_file ? "Joindre un fichier ou une image (512 Mo / 20 Mo max)" : "Pièces jointes non confirmées par ce transport"}
-                disabled={!capabilities.upload_file || sending}
+                disabled={!capabilities.upload_file || composerBlocked}
                 onClick={() => fileInputRef.current?.click()}
               >
                 <PaperclipIcon size={18} />
               </button>
               {capabilities.take_screenshot && (
-                <button title="Capturer l'onglet ChatGPT et l'envoyer" onClick={() => void submitScreenshot()} disabled={sending}>
+                <button title="Capturer l'onglet ChatGPT et l'envoyer" onClick={() => void submitScreenshot()} disabled={composerBlocked}>
                   <BrowserIcon size={17} />
                 </button>
               )}
@@ -453,7 +486,7 @@ export function ChatWorkspace({
                     onClick={() => {
                       if (conversationKey) onAttachmentStaged(conversationKey, null);
                     }}
-                    disabled={sending}
+                    disabled={composerBlocked}
                     aria-label="Retirer la pièce jointe"
                   >×</button>
                 </span>
@@ -479,7 +512,7 @@ export function ChatWorkspace({
                   title="Mettre la mission en pause"
                 ><PauseIcon size={17} /></button>
               ) : (
-                <button className="send-button" onClick={() => void submit()} disabled={(!draft.trim() && !attachment) || sending} title="Envoyer"><SendIcon size={17} /></button>
+                <button className="send-button" onClick={() => void submit()} disabled={(!draft.trim() && !attachment) || composerBlocked} title="Envoyer"><SendIcon size={17} /></button>
               )}
             </div>
           </div>

@@ -41,8 +41,21 @@ export type ConversationEvent =
       run?: ChatRun;
       event?: ChatRunEvent;
       accepted?: boolean;
-      clearDraft?: boolean;
-      clearAttachment?: boolean;
+      submittedDraft?: string;
+      submittedAttachment?: File | null;
+    }
+  | {
+      type: "RUN_RECOVERY_EXHAUSTED";
+      key: ConversationKey;
+      runId: string;
+      streamEpoch: number;
+      error: string;
+    }
+  | {
+      type: "RUN_CANCELLED";
+      key: ConversationKey;
+      runId: string;
+      cancelledAt: string;
     }
   | {
       type: "MISSION_EVENT";
@@ -56,6 +69,11 @@ export type ConversationEvent =
       key: ConversationKey;
       canonicalKey: ConversationKey;
       canonicalUrl: string;
+    }
+  | {
+      type: "RESOLVE_REKEY_CONFLICT";
+      fromKey: ConversationKey;
+      toKey: ConversationKey;
     }
   | {
       type: "REQUEST_FAILED";
@@ -73,7 +91,13 @@ export type ConversationEvent =
       status?: number;
     };
 
-const TERMINAL_RUN_STATES = new Set<ChatRunState>(["COMPLETED", "FAILED", "CANCELLED"]);
+const TERMINAL_RUN_STATES = new Set<ChatRunState>([
+  "COMPLETED",
+  "FAILED",
+  "CANCELLED",
+  "DELIVERY_UNCERTAIN",
+]);
+const TERMINAL_MISSION_STATES = new Set(["COMPLETED", "BLOCKED", "FAILED", "CANCELLED"]);
 
 export function conversationKeyFromUrl(url: string): ConversationKey {
   const normalized = url.trim().replace(/\/$/, "");
@@ -83,6 +107,19 @@ export function conversationKeyFromUrl(url: string): ConversationKey {
 
 export function conversationKeyOf(summary: ConversationSummary): ConversationKey {
   return summary.identity || conversationKeyFromUrl(summary.url);
+}
+
+export function canonicalConversationUrlFromMission(mission: MissionDetail): string | null {
+  const bindings = mission.timeline.conversation_bindings || [];
+  for (let index = bindings.length - 1; index >= 0; index -= 1) {
+    const binding = bindings[index];
+    for (const candidate of [binding.conversation_url, binding.conversation_target]) {
+      if (typeof candidate !== "string") continue;
+      const normalized = candidate.trim().replace(/\/$/, "");
+      if (/^https?:\/\//i.test(normalized) && /\/c\/[^/?#]+/.test(normalized)) return normalized;
+    }
+  }
+  return null;
 }
 
 export function createProvisionalConversation(
@@ -109,6 +146,7 @@ function createEntry(summary: ConversationSummary): ConversationEntry {
     messages: [],
     draft: "",
     attachment: null,
+    submittedPayload: null,
     loadEpoch: 0,
     loadPhase: "idle",
     loadError: null,
@@ -159,12 +197,24 @@ function isRunActive(run: ChatRun | null): boolean {
   return !!run && !TERMINAL_RUN_STATES.has(run.state);
 }
 
+function isMissionActive(entry: ConversationEntry): boolean {
+  if (!entry.missionId) return false;
+  return !entry.mission || !TERMINAL_MISSION_STATES.has(entry.mission.mission.state);
+}
+
+function shouldRetainOmittedEntry(entry: ConversationEntry, selected: boolean): boolean {
+  if (entry.sendPending || isRunActive(entry.run) || isMissionActive(entry)) return true;
+  if (entry.draft || entry.attachment || entry.submittedPayload) return true;
+  if (entry.key.startsWith("provisional:")) return selected;
+  return false;
+}
+
 function reduceSummaries(
   state: ConversationState,
   summaries: ConversationSummary[],
   updatedAt: string,
 ): ConversationState {
-  const entries = { ...state.entries };
+  const entries: Record<ConversationKey, ConversationEntry> = {};
   const incomingOrder: ConversationKey[] = [];
   const incoming = new Set<ConversationKey>();
   for (const summary of summaries) {
@@ -172,23 +222,20 @@ function reduceSummaries(
     if (incoming.has(key)) continue;
     incoming.add(key);
     incomingOrder.push(key);
-    const current = entries[key];
+    const current = state.entries[key];
     entries[key] = current ? { ...current, summary: { ...current.summary, ...summary } } : createEntry(summary);
   }
 
-  const currentSelected = state.selectedKey ? entries[state.selectedKey] : null;
-  const preserveSelected = !!currentSelected && (
-    incoming.has(currentSelected.key)
-    || currentSelected.key.startsWith("provisional:")
-    || isRunActive(currentSelected.run)
-    || !!currentSelected.missionId
-  );
-  const selectedKey = preserveSelected ? currentSelected.key : incomingOrder[0] || null;
   const retainedLocal = state.order.filter((key) => {
     if (incoming.has(key)) return false;
-    const entry = entries[key];
-    return !!entry && (key.startsWith("provisional:") || isRunActive(entry.run) || !!entry.missionId);
+    const entry = state.entries[key];
+    if (!entry || !shouldRetainOmittedEntry(entry, state.selectedKey === key)) return false;
+    entries[key] = entry;
+    return true;
   });
+  const selectedKey = state.selectedKey && (incoming.has(state.selectedKey) || retainedLocal.includes(state.selectedKey))
+    ? state.selectedKey
+    : incomingOrder[0] || retainedLocal[0] || null;
 
   return {
     ...state,
@@ -272,15 +319,31 @@ export function conversationReducer(
   }
 
   if (event.type === "DRAFT_CHANGED") {
-    return updateEntry(state, event.key, (entry) => (
-      entry.draft === event.draft ? entry : { ...entry, draft: event.draft }
-    ));
+    return updateEntry(state, event.key, (entry) => {
+      if (entry.draft === event.draft) return entry;
+      const abandonUncertainPayload = entry.run?.state === "DELIVERY_UNCERTAIN"
+        && !!entry.submittedPayload
+        && event.draft !== entry.submittedPayload.draft;
+      return {
+        ...entry,
+        draft: event.draft,
+        submittedPayload: abandonUncertainPayload ? null : entry.submittedPayload,
+      };
+    });
   }
 
   if (event.type === "ATTACHMENT_STAGED") {
-    return updateEntry(state, event.key, (entry) => (
-      entry.attachment === event.attachment ? entry : { ...entry, attachment: event.attachment }
-    ));
+    return updateEntry(state, event.key, (entry) => {
+      if (entry.attachment === event.attachment) return entry;
+      const abandonUncertainPayload = entry.run?.state === "DELIVERY_UNCERTAIN"
+        && !!entry.submittedPayload
+        && event.attachment !== entry.submittedPayload.attachment;
+      return {
+        ...entry,
+        attachment: event.attachment,
+        submittedPayload: abandonUncertainPayload ? null : entry.submittedPayload,
+      };
+    });
   }
 
   if (event.type === "REQUEST_STARTED") {
@@ -355,22 +418,78 @@ export function conversationReducer(
         || entry.run.id !== event.runId
         || event.streamEpoch < entry.streamEpoch
       )) return state;
-      return updateEntry(state, event.key, (current) => ({
-        ...current,
-        run: event.run || null,
-        streamEpoch: event.streamEpoch,
-        draft: event.accepted && event.clearDraft !== false ? "" : current.draft,
-        attachment: event.accepted && event.clearAttachment !== false ? null : current.attachment,
-        sendPending: event.accepted ? false : current.sendPending,
-        sendError: null,
-      }));
+      return updateEntry(state, event.key, (current) => {
+        const submittedPayload = event.accepted
+          ? {
+              runId: event.runId,
+              draft: event.submittedDraft ?? current.draft,
+              attachment: event.submittedAttachment === undefined
+                ? current.attachment
+                : event.submittedAttachment,
+            }
+          : current.submittedPayload;
+        const delivered = !!event.run && (
+          !!event.run.delivered_at
+          || ["VISIBLE_IN_CHATGPT", "WAITING_FOR_CHATGPT", "CHATGPT_STREAMING", "COMPLETED"].includes(event.run.state)
+        );
+        const endedWithoutDelivery = !!event.run
+          && ["FAILED", "CANCELLED"].includes(event.run.state);
+        return {
+          ...current,
+          run: event.run || null,
+          streamEpoch: event.streamEpoch,
+          draft: delivered && submittedPayload && current.draft === submittedPayload.draft ? "" : current.draft,
+          attachment: delivered && submittedPayload && current.attachment === submittedPayload.attachment
+            ? null
+            : current.attachment,
+          submittedPayload: delivered || endedWithoutDelivery ? null : submittedPayload,
+          sendPending: event.accepted ? false : current.sendPending,
+          sendError: null,
+        };
+      });
     }
     if (!event.event || !entry.run || entry.run.id !== event.runId || entry.streamEpoch !== event.streamEpoch) {
       return state;
     }
+    return updateEntry(state, event.key, (current) => {
+      const delivery = event.event?.type === "delivery";
+      const endedWithoutDelivery = event.event?.type === "error" || event.event?.type === "cancelled";
+      const submitted = current.submittedPayload?.runId === event.runId ? current.submittedPayload : null;
+      return {
+        ...current,
+        run: current.run ? applyRunEvent(current.run, event.event!) : null,
+        draft: delivery && submitted && current.draft === submitted.draft ? "" : current.draft,
+        attachment: delivery && submitted && current.attachment === submitted.attachment
+          ? null
+          : current.attachment,
+        submittedPayload: delivery || endedWithoutDelivery ? null : current.submittedPayload,
+      };
+    });
+  }
+
+  if (event.type === "RUN_RECOVERY_EXHAUSTED") {
+    const entry = state.entries[event.key];
+    if (
+      !entry?.run
+      || entry.run.id !== event.runId
+      || entry.streamEpoch !== event.streamEpoch
+    ) return state;
     return updateEntry(state, event.key, (current) => ({
       ...current,
-      run: current.run ? applyRunEvent(current.run, event.event!) : null,
+      run: current.run ? { ...current.run, state: "DELIVERY_UNCERTAIN", error: event.error } : null,
+      sendPending: false,
+      sendError: event.error,
+    }));
+  }
+
+  if (event.type === "RUN_CANCELLED") {
+    const entry = state.entries[event.key];
+    if (!entry?.run || entry.run.id !== event.runId) return state;
+    return updateEntry(state, event.key, (current) => ({
+      ...current,
+      run: current.run ? { ...current.run, state: "CANCELLED", completed_at: event.cancelledAt } : null,
+      submittedPayload: null,
+      sendPending: false,
     }));
   }
 
@@ -378,7 +497,7 @@ export function conversationReducer(
     const current = state.entries[event.key];
     if (!current) return state;
     if (!event.accepted && current.missionId && current.missionId !== event.missionId) return state;
-    return updateEntry(state, event.key, (entry) => ({
+    const next = updateEntry(state, event.key, (entry) => ({
       ...entry,
       missionId: event.missionId,
       mission: event.mission === undefined ? (event.accepted ? null : entry.mission) : event.mission,
@@ -387,8 +506,49 @@ export function conversationReducer(
       sendPending: event.accepted ? false : entry.sendPending,
       sendError: null,
     }));
+    const canonicalUrl = event.mission && event.key.startsWith("provisional:")
+      ? canonicalConversationUrlFromMission(event.mission)
+      : null;
+    if (!canonicalUrl || next.entries[event.key]?.missionId !== event.missionId) return next;
+    return conversationReducer(next, {
+      type: "REKEY_CANONICAL",
+      key: event.key,
+      canonicalKey: conversationKeyFromUrl(canonicalUrl),
+      canonicalUrl,
+    });
   }
 
+  if (event.type === "RESOLVE_REKEY_CONFLICT") {
+    const conflict = state.rekeyConflict;
+    if (
+      !conflict
+      || conflict.fromKey !== event.fromKey
+      || conflict.toKey !== event.toKey
+      || !state.entries[event.toKey]
+    ) return state;
+    const source = state.entries[event.fromKey];
+    if (!source) return { ...state, selectedKey: event.toKey, rekeyConflict: null };
+    const safeToDiscard = !source.sendPending
+      && !source.draft
+      && !source.attachment
+      && !source.submittedPayload
+      && !source.snapshot
+      && source.messages.length === 0
+      && !source.run
+      && !source.missionId;
+    if (!safeToDiscard) return { ...state, selectedKey: event.toKey };
+    const entries = { ...state.entries };
+    delete entries[event.fromKey];
+    return {
+      ...state,
+      entries,
+      order: state.order.filter((key) => key !== event.fromKey),
+      selectedKey: event.toKey,
+      rekeyConflict: null,
+    };
+  }
+
+  if (event.type !== "REKEY_CANONICAL") return state;
   const source = state.entries[event.key];
   if (!source) return state;
   if (event.key !== event.canonicalKey && state.entries[event.canonicalKey]) {

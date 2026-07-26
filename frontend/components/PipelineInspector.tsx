@@ -72,7 +72,7 @@ export function PipelineInspector({
   onStopAll,
   onResetStop,
 }: PipelineInspectorProps) {
-  const missionState = mission?.mission.state || pipeline.active_mission_state;
+  const missionState = mission?.mission.state;
   const running = !!missionState && !["COMPLETED", "BLOCKED", "FAILED", "CANCELLED", "PAUSED", "PAUSED_RECOVERY_REQUIRED"].includes(missionState);
   const paused = missionState === "PAUSED" || missionState === "PAUSED_RECOVERY_REQUIRED";
   const pipelinePresentation = statusPresentation(pipeline.overall);

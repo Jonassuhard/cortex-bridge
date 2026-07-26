@@ -137,3 +137,77 @@ or Important finding and a clean `git diff --check`.
   are intentionally excluded from the commit.
 - `frontend/next-env.d.ts` was restored after Next.js rewrote its generated
   route import.
+
+## Fix round 1 — external review findings
+
+**Starting commit:** `990bdcb283d08961a2fe2938a5b6640384eb534b`
+
+### Corrections
+
+1. Recovery GET now receives an `AbortSignal`, one absolute deadline and the
+   remaining budget. Each suspended attempt is aborted within its share of the
+   same 10-second budget; close, replacement and unmount abort in-flight work.
+   Exhaustion transitions the exact keyed run to `DELIVERY_UNCERTAIN` instead
+   of leaving an indefinite active spinner.
+2. Chat cancellation closes and invalidates the keyed stream/recovery before
+   awaiting the cancel POST. The reducer applies cancellation by current run
+   identity, independently of a reconnect-advanced stream epoch.
+3. A chat POST acceptance stores an immutable submitted draft and exact `File`
+   reference without clearing the composer. Only delivery proof clears matching
+   values; newer edits survive, and failures/exhaustion preserve the original
+   payload without automatic resend.
+4. Canonical mission bindings rekey provisional entries atomically. Canonical
+   collisions render a blocking French state, disable send/mission execution,
+   select the existing canonical entry deterministically and discard only an
+   empty safe provisional entry.
+5. Pipeline controls and mission status now use only the selected
+   conversation's mission. Global mission A cannot activate controls while B
+   is selected.
+6. Summary reconciliation retains omitted POST-pending, active-run and
+   non-terminal-mission entries, while purging truly absent terminal/idle
+   entries and selecting a valid remaining entry.
+7. Removed the unused mission-list state and 3.5-second polling. Terminal A/B
+   events share one deduplicated refresh timeout, cancelled on unmount.
+
+### TDD evidence
+
+- Initial focused RED: 20 failures out of 44 tests, covering all seven review
+  findings before production corrections.
+- Focused GREEN: 44/44.
+- Added four `CortexApp` API → reducer/hook → rendered UI integrations for
+  reconnect/cancel, provisional mission rekey, terminal refresh coalescing,
+  unmount cleanup and absence of mission-list polling.
+- A scheduler audit exposed a second-attempt timeout being cleared by the
+  previous attempt's `finally`. A dedicated regression failed with a frozen
+  `QUEUED` run, then passed after attempt-local timeout ownership.
+- The first final review then found stale manual retry A1 → active A2, missing
+  canonical rekey on terminal recovery, stale-mission rekey risk, premature
+  uncertain-payload release and provisional-terminal retention. All five were
+  reproduced with focused regressions before fixes. Manual retry and terminal
+  canonical recovery are also exercised through real `CortexApp` API → state
+  → rendered UI integrations.
+- Final Vitest suite: 67/67.
+
+### Fix round 1 verification
+
+| Gate | Result |
+|---|---|
+| `corepack npm test` | 67/67 Vitest + 32/32 runtime/privacy/image |
+| `corepack npm run test:coverage` | 67/67 + 32/32; reducer 88.72%, stream hook 90.86%, controller 89.06% statements |
+| `corepack npm run lint` | Green; zero warnings, 6/6 lint-contract families rejected |
+| `corepack npm run typecheck` | Green |
+| `corepack npm run build` | Green; static `/` and `/_not-found` generated |
+| `corepack npm run test:e2e` | 2/2 |
+| `corepack npm run test:a11y` | 1/1, zero automated violations |
+| Full and production dependency audits | 0 vulnerabilities |
+
+### Fix round 1 independent review
+
+The first read-only pass returned two Critical, two Important and one Minor
+finding. Each was converted to a failing regression and corrected. The second
+read-only pass found no remaining Critical, Important or Minor issue on the
+five corrected paths and returned **Ready to merge: Yes**. `git diff --check`
+is clean.
+
+Generated `frontend/out/**`, `frontend/coverage/**` and
+`frontend/tsconfig.tsbuildinfo` changes remain intentionally unstaged.

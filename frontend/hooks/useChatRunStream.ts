@@ -6,6 +6,10 @@ import { conversationKeyFromUrl } from "@/lib/conversation-state";
 import type { ChatRun, ChatRunEvent, ConversationKey } from "@/lib/types";
 import type { ConversationDispatch } from "./useConversationController";
 
+export const CHAT_RECOVERY_DEADLINE_MS = 10_000;
+export const CHAT_RECOVERY_EXHAUSTED_MESSAGE =
+  "Livraison incertaine : impossible de confirmer le message dans ChatGPT.";
+
 export interface ChatEventSource {
   onmessage: ((event: MessageEvent<string>) => void) | null;
   onerror: ((event: Event) => void) | null;
@@ -19,6 +23,18 @@ interface StreamBinding {
   source: ChatEventSource;
   closed: boolean;
   recoveryAttempt: number;
+  recoveryDeadlineAt: number | null;
+}
+
+interface RecoveryTask {
+  key: ConversationKey;
+  runId: string;
+  streamEpoch: number;
+  deadlineAt: number;
+  cancelled: boolean;
+  timer: ReturnType<typeof setTimeout> | null;
+  attemptTimer: ReturnType<typeof setTimeout> | null;
+  controller: AbortController | null;
 }
 
 export interface ChatRunTerminalContext {
@@ -27,21 +43,33 @@ export interface ChatRunTerminalContext {
   event: ChatRunEvent;
 }
 
+export interface ChatRunRecoveryContext {
+  signal: AbortSignal;
+  deadlineAt: number;
+  remainingMs: number;
+}
+
 export interface UseChatRunStreamOptions {
   dispatch: ConversationDispatch;
   createEventSource?: (url: string) => ChatEventSource;
   onTerminal?: (context: ChatRunTerminalContext) => void;
   onDisconnect?: (key: ConversationKey, runId: string) => void;
-  recoverRun?: (key: ConversationKey, runId: string) => Promise<ChatRun>;
+  recoverRun?: (
+    key: ConversationKey,
+    runId: string,
+    context: ChatRunRecoveryContext,
+  ) => Promise<ChatRun>;
   recoveryBaseDelayMs?: number;
   maxRecoveryAttempts?: number;
+  recoveryDeadlineMs?: number;
 }
 
 export interface ChatRunSubscribeOptions {
   accepted?: boolean;
-  clearDraft?: boolean;
-  clearAttachment?: boolean;
+  submittedDraft?: string;
+  submittedAttachment?: File | null;
   recoveryAttempt?: number;
+  recoveryDeadlineAt?: number | null;
 }
 
 export interface ChatRunStreamController {
@@ -50,7 +78,12 @@ export interface ChatRunStreamController {
 }
 
 const TERMINAL_EVENTS = new Set<ChatRunEvent["type"]>(["complete", "error", "cancelled"]);
-const TERMINAL_STATES = new Set<ChatRun["state"]>(["COMPLETED", "FAILED", "CANCELLED"]);
+const TERMINAL_STATES = new Set<ChatRun["state"]>([
+  "COMPLETED",
+  "FAILED",
+  "CANCELLED",
+  "DELIVERY_UNCERTAIN",
+]);
 
 function terminalEventFromRun(run: ChatRun): ChatRunEvent {
   if (run.state === "COMPLETED") {
@@ -80,6 +113,7 @@ export function useChatRunStream({
   recoverRun,
   recoveryBaseDelayMs = 250,
   maxRecoveryAttempts = 3,
+  recoveryDeadlineMs = CHAT_RECOVERY_DEADLINE_MS,
 }: UseChatRunStreamOptions): ChatRunStreamController {
   const dispatchRef = useRef(dispatch);
   const factoryRef = useRef(createEventSource);
@@ -88,6 +122,7 @@ export function useChatRunStream({
   const recoverRef = useRef(recoverRun);
   const recoveryBaseDelayRef = useRef(recoveryBaseDelayMs);
   const maxRecoveryAttemptsRef = useRef(maxRecoveryAttempts);
+  const recoveryDeadlineRef = useRef(recoveryDeadlineMs);
   dispatchRef.current = dispatch;
   factoryRef.current = createEventSource;
   terminalRef.current = onTerminal;
@@ -95,32 +130,37 @@ export function useChatRunStream({
   recoverRef.current = recoverRun;
   recoveryBaseDelayRef.current = recoveryBaseDelayMs;
   maxRecoveryAttemptsRef.current = maxRecoveryAttempts;
+  recoveryDeadlineRef.current = recoveryDeadlineMs;
 
   const streamsRef = useRef(new Map<ConversationKey, StreamBinding>());
   const epochsRef = useRef(new Map<ConversationKey, number>());
+  const recoveriesRef = useRef(new Map<ConversationKey, RecoveryTask>());
   const disposedRef = useRef(false);
   const subscribeRef = useRef<ChatRunStreamController["subscribe"]>(() => 0);
-  const recoveryTimersRef = useRef(new Map<ConversationKey, ReturnType<typeof setTimeout>>());
 
   const closeBinding = useCallback((binding: StreamBinding) => {
     if (binding.closed) return;
     binding.closed = true;
     binding.source.close();
-    if (streamsRef.current.get(binding.key) === binding) {
-      streamsRef.current.delete(binding.key);
-    }
+    if (streamsRef.current.get(binding.key) === binding) streamsRef.current.delete(binding.key);
+  }, []);
+
+  const cancelRecovery = useCallback((key: ConversationKey) => {
+    const task = recoveriesRef.current.get(key);
+    if (!task) return;
+    task.cancelled = true;
+    if (task.timer) clearTimeout(task.timer);
+    if (task.attemptTimer) clearTimeout(task.attemptTimer);
+    task.controller?.abort();
+    recoveriesRef.current.delete(key);
   }, []);
 
   const close = useCallback((key: ConversationKey) => {
-    const recoveryTimer = recoveryTimersRef.current.get(key);
-    if (recoveryTimer) {
-      clearTimeout(recoveryTimer);
-      recoveryTimersRef.current.delete(key);
-    }
+    cancelRecovery(key);
     epochsRef.current.set(key, (epochsRef.current.get(key) || 0) + 1);
     const binding = streamsRef.current.get(key);
     if (binding) closeBinding(binding);
-  }, [closeBinding]);
+  }, [cancelRecovery, closeBinding]);
 
   const subscribe = useCallback((
     key: ConversationKey,
@@ -128,15 +168,8 @@ export function useChatRunStream({
     options: ChatRunSubscribeOptions = {},
   ): number => {
     if (disposedRef.current) return 0;
-    const pendingRecovery = recoveryTimersRef.current.get(key);
-    if (pendingRecovery) {
-      clearTimeout(pendingRecovery);
-      recoveryTimersRef.current.delete(key);
-    }
     const previous = streamsRef.current.get(key);
-    if (previous) closeBinding(previous);
     const streamEpoch = (epochsRef.current.get(key) || 0) + 1;
-    epochsRef.current.set(key, streamEpoch);
     const source = factoryRef.current(apiUrl(`/api/chat/runs/${run.id}/events`));
     const binding: StreamBinding = {
       key,
@@ -145,18 +178,29 @@ export function useChatRunStream({
       source,
       closed: false,
       recoveryAttempt: options.recoveryAttempt || 0,
+      recoveryDeadlineAt: options.recoveryDeadlineAt ?? null,
     };
-    streamsRef.current.set(key, binding);
-    dispatchRef.current({
+    const next = dispatchRef.current({
       type: "RUN_EVENT",
       key,
       runId: run.id,
       streamEpoch,
       run,
       accepted: options.accepted !== false,
-      clearDraft: options.clearDraft,
-      clearAttachment: options.clearAttachment,
+      submittedDraft: options.submittedDraft,
+      submittedAttachment: options.submittedAttachment,
     });
+    const acceptedBinding = next.entries[key]?.run?.id === run.id
+      && next.entries[key]?.streamEpoch === streamEpoch;
+    if (!acceptedBinding) {
+      binding.closed = true;
+      source.close();
+      return 0;
+    }
+    cancelRecovery(key);
+    if (previous) closeBinding(previous);
+    epochsRef.current.set(key, streamEpoch);
+    streamsRef.current.set(key, binding);
 
     source.onmessage = (message) => {
       if (disposedRef.current || binding.closed || streamsRef.current.get(binding.key) !== binding) return;
@@ -198,12 +242,10 @@ export function useChatRunStream({
         }
       }
 
-      if (next.entries[previousKey] || next.entries[binding.key]) {
-        if (TERMINAL_EVENTS.has(event.type)) {
-          const terminalKey = binding.key;
-          closeBinding(binding);
-          terminalRef.current?.({ key: terminalKey, runId: binding.runId, event });
-        }
+      if ((next.entries[previousKey] || next.entries[binding.key]) && TERMINAL_EVENTS.has(event.type)) {
+        const terminalKey = binding.key;
+        closeBinding(binding);
+        terminalRef.current?.({ key: terminalKey, runId: binding.runId, event });
       }
     };
 
@@ -213,70 +255,149 @@ export function useChatRunStream({
       const disconnectedEpoch = binding.streamEpoch;
       closeBinding(binding);
       disconnectRef.current?.(disconnectedKey, binding.runId);
-      const recover = recoverRef.current;
-      if (!recover) return;
+      if (!recoverRef.current) return;
+
+      const task: RecoveryTask = {
+        key: disconnectedKey,
+        runId: binding.runId,
+        streamEpoch: disconnectedEpoch,
+        deadlineAt: binding.recoveryDeadlineAt ?? (Date.now() + recoveryDeadlineRef.current),
+        cancelled: false,
+        timer: null,
+        attemptTimer: null,
+        controller: null,
+      };
+      cancelRecovery(disconnectedKey);
+      recoveriesRef.current.set(disconnectedKey, task);
+
+      const isCurrent = () => (
+        !disposedRef.current
+        && !task.cancelled
+        && recoveriesRef.current.get(task.key) === task
+        && epochsRef.current.get(task.key) === task.streamEpoch
+        && !streamsRef.current.has(task.key)
+      );
+      const exhaust = () => {
+        if (!isCurrent()) return;
+        cancelRecovery(task.key);
+        dispatchRef.current({
+          type: "RUN_RECOVERY_EXHAUSTED",
+          key: task.key,
+          runId: task.runId,
+          streamEpoch: task.streamEpoch,
+          error: CHAT_RECOVERY_EXHAUSTED_MESSAGE,
+        });
+      };
       const scheduleRecovery = (attempt: number) => {
-        if (attempt >= maxRecoveryAttemptsRef.current) return;
+        if (!isCurrent()) return;
+        const remainingBeforeDelay = task.deadlineAt - Date.now();
+        if (attempt >= maxRecoveryAttemptsRef.current || remainingBeforeDelay <= 0) {
+          exhaust();
+          return;
+        }
+        const configuredDelay = recoveryBaseDelayRef.current * (2 ** attempt);
+        const delay = Math.min(configuredDelay, remainingBeforeDelay);
         const recoverAfterBackoff = () => {
-          recoveryTimersRef.current.delete(disconnectedKey);
-          if (
-            disposedRef.current
-            || epochsRef.current.get(disconnectedKey) !== disconnectedEpoch
-            || streamsRef.current.has(disconnectedKey)
-          ) return;
-          void recover(disconnectedKey, binding.runId).then((recovered) => {
-            if (
-              disposedRef.current
-              || recovered.id !== binding.runId
-              || epochsRef.current.get(disconnectedKey) !== disconnectedEpoch
-              || streamsRef.current.has(disconnectedKey)
-            ) return;
-            if (TERMINAL_STATES.has(recovered.state)) {
-              const terminalEvent = terminalEventFromRun(recovered);
+          task.timer = null;
+          if (!isCurrent()) return;
+          const remainingMs = task.deadlineAt - Date.now();
+          if (remainingMs <= 0) {
+            exhaust();
+            return;
+          }
+          const recover = recoverRef.current;
+          if (!recover) {
+            exhaust();
+            return;
+          }
+          const controller = new AbortController();
+          task.controller = controller;
+          const attemptsRemaining = Math.max(1, maxRecoveryAttemptsRef.current - attempt);
+          const attemptBudgetMs = Math.max(1, Math.floor(remainingMs / attemptsRemaining));
+          let attemptTimer: ReturnType<typeof setTimeout> | null = null;
+          const timedOut = new Promise<never>((_resolve, reject) => {
+            attemptTimer = setTimeout(() => {
+              controller.abort();
+              reject(new Error("Recovery attempt deadline exceeded"));
+            }, attemptBudgetMs);
+            task.attemptTimer = attemptTimer;
+          });
+          let recovered: Promise<ChatRun>;
+          try {
+            recovered = recover(task.key, task.runId, {
+              signal: controller.signal,
+              deadlineAt: task.deadlineAt,
+              remainingMs,
+            });
+          } catch (error) {
+            recovered = Promise.reject(error);
+          }
+          void Promise.race([recovered, timedOut]).then((nextRun) => {
+            if (!isCurrent() || nextRun.id !== task.runId) return;
+            if (TERMINAL_STATES.has(nextRun.state)) {
+              const terminalEvent = terminalEventFromRun(nextRun);
+              cancelRecovery(task.key);
+              let terminalKey = task.key;
               const next = dispatchRef.current({
                 type: "RUN_EVENT",
-                key: disconnectedKey,
-                runId: binding.runId,
-                streamEpoch: disconnectedEpoch,
-                run: recovered,
+                key: task.key,
+                runId: task.runId,
+                streamEpoch: task.streamEpoch,
+                run: nextRun,
               });
-              if (next.entries[disconnectedKey]?.run?.id === binding.runId) {
-                terminalRef.current?.({ key: disconnectedKey, runId: binding.runId, event: terminalEvent });
+              if (next.entries[task.key]?.run?.id === task.runId) {
+                const canonicalUrl = nextRun.canonical_url;
+                if (canonicalUrl) {
+                  const canonicalKey = conversationKeyFromUrl(canonicalUrl);
+                  const rekeyed = dispatchRef.current({
+                    type: "REKEY_CANONICAL",
+                    key: task.key,
+                    canonicalKey,
+                    canonicalUrl,
+                  });
+                  if (!rekeyed.entries[task.key] && rekeyed.entries[canonicalKey]) terminalKey = canonicalKey;
+                }
+                terminalRef.current?.({ key: terminalKey, runId: task.runId, event: terminalEvent });
               }
               return;
             }
-            subscribeRef.current(disconnectedKey, recovered, {
+            cancelRecovery(task.key);
+            subscribeRef.current(task.key, nextRun, {
               accepted: false,
               recoveryAttempt: attempt + 1,
+              recoveryDeadlineAt: task.deadlineAt,
             });
-          }).catch(() => scheduleRecovery(attempt + 1));
+          }).catch(() => {
+            if (!isCurrent()) return;
+            scheduleRecovery(attempt + 1);
+          }).finally(() => {
+            if (attemptTimer) clearTimeout(attemptTimer);
+            if (task.attemptTimer === attemptTimer) task.attemptTimer = null;
+            if (task.controller === controller) task.controller = null;
+          });
         };
-        const delay = recoveryBaseDelayRef.current * (2 ** attempt);
-        if (delay <= 0) {
-          recoverAfterBackoff();
-        } else {
-          const timer = setTimeout(recoverAfterBackoff, delay);
-          recoveryTimersRef.current.set(disconnectedKey, timer);
+        if (delay <= 0) recoverAfterBackoff();
+        else {
+          task.timer = setTimeout(recoverAfterBackoff, delay);
         }
       };
       scheduleRecovery(binding.recoveryAttempt);
     };
     return streamEpoch;
-  }, [closeBinding]);
+  }, [cancelRecovery, closeBinding]);
   subscribeRef.current = subscribe;
 
   useEffect(() => {
     const streams = streamsRef.current;
-    const recoveryTimers = recoveryTimersRef.current;
+    const recoveries = recoveriesRef.current;
     disposedRef.current = false;
     return () => {
       disposedRef.current = true;
       for (const binding of streams.values()) closeBinding(binding);
       streams.clear();
-      for (const timer of recoveryTimers.values()) clearTimeout(timer);
-      recoveryTimers.clear();
+      for (const key of recoveries.keys()) cancelRecovery(key);
     };
-  }, [closeBinding]);
+  }, [cancelRecovery, closeBinding]);
 
   return { subscribe, close };
 }

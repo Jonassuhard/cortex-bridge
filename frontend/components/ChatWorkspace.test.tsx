@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { demoPipeline, demoSettings } from "@/lib/demo";
 import {
   conversationReducer,
@@ -30,10 +30,12 @@ function ControlledWorkspace({
   initialState = createConversationState([summary("a"), summary("b")], "a"),
   refusedKeys = new Set<string>(),
   pendingKeys = new Map<string, Promise<void>>(),
+  onRetryRecovery = () => undefined,
 }: {
   initialState?: ConversationState;
   refusedKeys?: Set<string>;
   pendingKeys?: Map<string, Promise<void>>;
+  onRetryRecovery?: (key: string) => void;
 }) {
   const [state, setState] = useState(initialState);
   const dispatch = (event: ConversationEvent) => setState((current) => conversationReducer(current, event));
@@ -59,7 +61,15 @@ function ControlledWorkspace({
       streamEpoch: 1,
       run: acceptedRun(key),
       accepted: true,
-      clearAttachment,
+      submittedDraft: state.entries[key]?.draft || "",
+      submittedAttachment: clearAttachment ? state.entries[key]?.attachment || null : null,
+    });
+    dispatch({
+      type: "RUN_EVENT",
+      key,
+      runId: `run-${key}`,
+      streamEpoch: 1,
+      event: { seq: 1, ts: "2026-07-26T12:00:01.000Z", type: "delivery", payload: {} },
     });
     return true;
   };
@@ -85,6 +95,7 @@ function ControlledWorkspace({
         inspectorOpen={false}
         sidebarCollapsed={false}
         capabilities={{ upload_file: true, take_screenshot: true }}
+        rekeyConflict={state.rekeyConflict}
         onDraftChange={(key, draft) => dispatch({ type: "DRAFT_CHANGED", key, draft })}
         onAttachmentStaged={(key, attachment) => dispatch({ type: "ATTACHMENT_STAGED", key, attachment })}
         onToggleSidebar={() => undefined}
@@ -94,6 +105,12 @@ function ControlledWorkspace({
         onSendScreenshot={(key) => send(key, false)}
         onStartMission={(key) => send(key)}
         onCancelChat={() => undefined}
+        onRetryChatRecovery={onRetryRecovery}
+        onResolveRekeyConflict={(fromKey, toKey) => dispatch({
+          type: "RESOLVE_REKEY_CONFLICT",
+          fromKey,
+          toKey,
+        })}
         onPauseMission={() => undefined}
         onResumeMission={() => undefined}
         onCancelMission={() => undefined}
@@ -233,5 +250,65 @@ describe("ChatWorkspace controlled composer", () => {
     render(<ControlledWorkspace />);
 
     expect(screen.queryByText("exécution locale")).not.toBeInTheDocument();
+  });
+
+  it("stops the spinner and offers a truthful recovery action when delivery is uncertain", async () => {
+    const retry = vi.fn<(key: string) => void>();
+    let initial = createConversationState([summary("a")], "a");
+    initial = conversationReducer(initial, { type: "DRAFT_CHANGED", key: "a", draft: "à préserver" });
+    initial = conversationReducer(initial, {
+      type: "RUN_EVENT",
+      key: "a",
+      runId: "run-a",
+      streamEpoch: 1,
+      run: acceptedRun("a"),
+      accepted: true,
+      submittedDraft: "à préserver",
+      submittedAttachment: null,
+    });
+    initial = conversationReducer(initial, {
+      type: "RUN_RECOVERY_EXHAUSTED",
+      key: "a",
+      runId: "run-a",
+      streamEpoch: 1,
+      error: "Livraison incertaine : le bridge ne peut pas confirmer la réception.",
+    });
+    const user = userEvent.setup();
+    render(<ControlledWorkspace initialState={initial} onRetryRecovery={retry} />);
+
+    expect(screen.getByText("Livraison incertaine")).toBeInTheDocument();
+    expect(screen.queryByTitle("Arrêter la réponse")).not.toBeInTheDocument();
+    expect(screen.getByRole("textbox")).toHaveValue("à préserver");
+    await user.click(screen.getByRole("button", { name: "Réessayer la synchronisation" }));
+    expect(retry).toHaveBeenCalledWith("a");
+  });
+
+  it("blocks an ambiguous provisional composer and resolves toward the existing canonical entry", async () => {
+    const provisional: ConversationSummary = {
+      url: "https://chatgpt.com/",
+      identity: "provisional:collision",
+      title: "Nouvelle conversation",
+    };
+    let initial = createConversationState([provisional, summary("canonical-a")], provisional.identity);
+    initial = conversationReducer(initial, {
+      type: "DRAFT_CHANGED",
+      key: provisional.identity,
+      draft: "brouillon ambigu",
+    });
+    initial = conversationReducer(initial, {
+      type: "REKEY_CANONICAL",
+      key: provisional.identity,
+      canonicalKey: "canonical-a",
+      canonicalUrl: "https://chatgpt.com/c/canonical-a",
+    });
+    const user = userEvent.setup();
+    render(<ControlledWorkspace initialState={initial} />);
+
+    expect(screen.getByText("Identité de conversation ambiguë")).toBeInTheDocument();
+    expect(screen.getByRole("textbox")).toBeDisabled();
+    expect(screen.getByTitle("Envoyer")).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Ouvrir la conversation existante" }));
+    expect(screen.getByRole("heading", { name: "Conversation CANONICAL-A" })).toBeInTheDocument();
+    expect(screen.getByRole("textbox")).not.toBeDisabled();
   });
 });
