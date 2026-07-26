@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { extname } from "node:path";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import ts from "typescript";
 
 interface PrivacyFingerprint {
   category: string;
@@ -25,6 +26,7 @@ const excludedDirectories = [
   ".next/", "coverage/", "node_modules/", "out/", "playwright-report/", "test-results/",
 ];
 const antiObfuscationExclusions = new Set(["test/privacy.test.mts"]);
+const astScannedExtensions = new Set([".cjs", ".js", ".jsx", ".mjs", ".mts", ".ts", ".tsx"]);
 
 const bannedFingerprints: PrivacyFingerprint[] = [
   { category: "personal account", length: 8, sha256: "b53fd2a5e757a97ced3d59c11e56f30f793b725e36a30f478d575ff41f340c0d" },
@@ -44,6 +46,7 @@ function decodeCommonLiteralEscapes(value: string): string {
   let decoded = value;
   for (let pass = 0; pass < 3; pass += 1) {
     const next = decoded
+      .replace(/\+/gu, " ")
       .replace(/\\u\{([0-9a-f]{1,6})\}/giu, (_match, codePoint: string) => (
         String.fromCodePoint(Number.parseInt(codePoint, 16))
       ))
@@ -111,6 +114,75 @@ function findDynamicAssemblyCategories(content: string): string[] {
     : [];
 }
 
+function evaluateConstantStringExpression(expression: ts.Expression): string | undefined {
+  if (ts.isStringLiteral(expression) || ts.isNoSubstitutionTemplateLiteral(expression)) {
+    return expression.text;
+  }
+  if (ts.isParenthesizedExpression(expression)) {
+    return evaluateConstantStringExpression(expression.expression);
+  }
+  if (ts.isTemplateExpression(expression)) {
+    let value = expression.head.text;
+    for (const span of expression.templateSpans) {
+      const foldedExpression = evaluateConstantStringExpression(span.expression);
+      if (foldedExpression === undefined) return undefined;
+      value += foldedExpression + span.literal.text;
+    }
+    return value;
+  }
+  if (ts.isBinaryExpression(expression) && expression.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+    const left = evaluateConstantStringExpression(expression.left);
+    const right = evaluateConstantStringExpression(expression.right);
+    return left === undefined || right === undefined ? undefined : left + right;
+  }
+  return undefined;
+}
+
+function scriptKindForPath(path: string): ts.ScriptKind {
+  switch (extname(path)) {
+    case ".cjs":
+    case ".js":
+    case ".mjs":
+      return ts.ScriptKind.JS;
+    case ".jsx":
+      return ts.ScriptKind.JSX;
+    case ".tsx":
+      return ts.ScriptKind.TSX;
+    default:
+      return ts.ScriptKind.TS;
+  }
+}
+
+function findFoldedFingerprintCategories(
+  path: string,
+  content: string,
+  fingerprints: PrivacyFingerprint[],
+): string[] {
+  if (!astScannedExtensions.has(extname(path))) return [];
+
+  const sourceFile = ts.createSourceFile(
+    path,
+    content,
+    ts.ScriptTarget.Latest,
+    true,
+    scriptKindForPath(path),
+  );
+  const findings = new Set<string>();
+  const visit = (node: ts.Node): void => {
+    if (ts.isExpression(node)) {
+      const folded = evaluateConstantStringExpression(node);
+      if (folded !== undefined) {
+        for (const category of findFingerprintCategories(folded, fingerprints)) {
+          findings.add(category);
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return [...findings];
+}
+
 function isScannableSource(path: string): boolean {
   return scannedExtensions.has(extname(path));
 }
@@ -119,14 +191,19 @@ function scanSources(sources: SourceSnippet[], fingerprints: PrivacyFingerprint[
   const findings: string[] = [];
   for (const source of sources) {
     if (!isScannableSource(source.path)) continue;
+    const sourceCategories = new Set<string>();
     for (const category of findFingerprintCategories(source.content, fingerprints)) {
-      findings.push(`${source.path}: ${category}`);
+      sourceCategories.add(category);
+    }
+    for (const category of findFoldedFingerprintCategories(source.path, source.content, fingerprints)) {
+      sourceCategories.add(category);
     }
     if (!antiObfuscationExclusions.has(source.path)) {
       for (const category of findDynamicAssemblyCategories(source.content)) {
-        findings.push(`${source.path}: ${category}`);
+        sourceCategories.add(category);
       }
     }
+    for (const category of sourceCategories) findings.push(`${source.path}: ${category}`);
   }
   return findings;
 }
@@ -166,6 +243,13 @@ test("detects escaped and URL-encoded synthetic marker fingerprints", () => {
   }
 });
 
+test("treats form-urlencoded plus signs as spaces", () => {
+  assert.deepEqual(
+    findFingerprintCategories("synthetic+private+marker", [syntheticFingerprint]),
+    ["synthetic sentinel"],
+  );
+});
+
 test("covers JavaScript and JSX source extensions", () => {
   const sources = [
     { path: "temporary.js", content: syntheticSentinel },
@@ -175,6 +259,22 @@ test("covers JavaScript and JSX source extensions", () => {
     "temporary.js: synthetic sentinel",
     "temporary.jsx: synthetic sentinel",
   ]);
+});
+
+test("detects banned fingerprints in folded literal concatenations", () => {
+  const content = 'const value = "synthetic " + ("private " + "marker");';
+  assert.deepEqual(
+    scanSources([{ path: "temporary.ts", content }], [syntheticFingerprint]),
+    ["temporary.ts: synthetic sentinel"],
+  );
+});
+
+test("detects banned fingerprints in folded template interpolations", () => {
+  const content = 'const value = `synthetic ${"private"} marker`;';
+  assert.deepEqual(
+    scanSources([{ path: "temporary.ts", content }], [syntheticFingerprint]),
+    ["temporary.ts: synthetic sentinel"],
+  );
 });
 
 test("rejects common dynamic string assembly mechanisms", () => {
@@ -194,6 +294,14 @@ test("rejects common dynamic string assembly mechanisms", () => {
 test("accepts neutral synthetic content", () => {
   assert.deepEqual(
     scanSources([{ path: "temporary.jsx", content: "Compte local · /tmp/cortex-demo-workspace" }], [syntheticFingerprint]),
+    [],
+  );
+});
+
+test("accepts neutral constant string expressions", () => {
+  const content = 'const label = "Compte " + "local"; const session = `Session ${"locale"}`;';
+  assert.deepEqual(
+    scanSources([{ path: "temporary.tsx", content }], [syntheticFingerprint]),
     [],
   );
 });

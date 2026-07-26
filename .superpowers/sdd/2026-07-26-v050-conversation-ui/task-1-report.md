@@ -490,3 +490,109 @@ dedicated cache. The endpoint again returned gzip bytes that npm treated as
 invalid JSON (`Unexpected token '\u001f'`), exit `1`. Audit status remains
 `[UNCLEAR]`; no vulnerability count, safety claim, or forced remediation was
 applied.
+
+## Fix round 4
+
+Date: 2026-07-26
+Starting commit: `047669618433a0ee70d95428184349f427b883e8`
+
+### Constant-expression privacy detection
+
+The source gate now parses JavaScript and TypeScript-family files with the
+installed TypeScript compiler and folds a deliberately small set of constant
+string expressions. Folded values are passed through the same NFKC,
+locale-stable lowercase, escape-decoding, length, and SHA-256 fingerprint
+matcher as raw source. Legitimate concatenation is not banned globally; only a
+folded value matching a banned fingerprint produces a finding.
+
+The evaluator supports:
+
+- string literals and no-substitution template literals;
+- parenthesized constant expressions;
+- binary `+` expressions when both operands fold to constant strings;
+- template expressions when every interpolation folds to a constant string.
+
+AST folding applies only to `.cjs`, `.js`, `.jsx`, `.mjs`, `.mts`, `.ts`,
+and `.tsx`. It does not resolve identifier bindings, including `const`
+fragments, and does not evaluate calls, property access, arbitrary expressions,
+or runtime code. The existing raw fingerprint and targeted anti-obfuscation
+checks remain responsible for the wider source-extension set. The only
+self-exclusion remains `test/privacy.test.mts` from the targeted dynamic
+assembly regexes; raw, normalized fingerprint, and AST scans still include it.
+
+Form-urlencoded input is also normalized by converting `+` to a space before
+percent decoding. This closes the multi-word URL-encoding bypass without
+storing or reconstructing original markers.
+
+### TDD evidence
+
+Independent RED/GREEN cycles were recorded for each bypass:
+
+- `synthetic+private+marker` initially returned no finding, then passed after
+  form-urlencoded normalization;
+- a literal `+` expression initially returned no finding, then passed after
+  minimal AST folding;
+- a constant template interpolation initially returned no finding, then passed
+  after template-span folding;
+- the concatenation test was tightened to include nested parentheses and failed
+  without parenthesized-expression support, then passed after restoring it.
+
+A neutral concatenation and neutral template interpolation both return no
+finding, proving the gate does not ban these syntax forms by themselves.
+
+The first full typecheck exposed that the runtime helper
+`getScriptKindFromFileName` is not part of the installed public TypeScript type
+surface. A local explicit extension-to-`ScriptKind` mapping replaced it;
+typecheck and the ten privacy tests then passed.
+
+### Fresh verification
+
+```text
+npm test
+```
+
+Result: exit `0`; two Vitest tests and 28 runtime tests passed. The runtime
+count comprises 18 historical tests and ten privacy tests.
+
+```text
+npm run test:coverage
+```
+
+Result: exit `0`; the same 30 tests passed. Application coverage remained
+48.23% statements/lines, 38.21% branches, and 29.41% functions.
+
+```text
+npm run test:e2e
+npm run test:a11y
+npm run typecheck
+npm run lint
+```
+
+Results: E2E `2/2`, a11y `1/1`, TypeScript exit `0`, ESLint exit `0`.
+Playwright emitted only the existing `NO_COLOR`/`FORCE_COLOR` warning.
+
+The full `npm test` command passed under Node `20.9.0` with npm `10.9.4`:
+two Vitest tests and 28 runtime tests. Package and lockfile engine declarations
+remain aligned at `>=20.9.0`; optional Darwin `fsevents@2.3.2` metadata is
+unchanged.
+
+No frontend build or export was run. `frontend/out/` remains intentionally
+excluded from this source gate. Privacy verification of generated output is a
+later build-and-capture gate, so this round makes no repository-wide export
+privacy claim. Existing `frontend/out/**` and `frontend/tsconfig.tsbuildinfo`
+changes remain outside the scoped commit.
+
+### Audit status
+
+The official registry audit returned valid JSON in this round. It reports 19
+vulnerabilities: two critical and 17 high, with no low or informational
+findings. Directly affected development or application packages include
+`vitest@3.2.4`, `@vitest/coverage-v8@3.2.4`, `vite@6.4.1`, `next@16.2.9`,
+`@tailwindcss/postcss@4.3.1`, `eslint@9.39.4`, and
+`eslint-config-next@16.2.9`. npm proposes non-major updates for Next to
+`16.2.12`, Vite to `6.4.3`, and Vitest coverage to `3.2.7`; some ESLint fixes
+require major changes. The audit exits `1` because findings exist.
+
+No dependency was changed in this privacy-scoped correction, no force fix was
+run, and no safety claim is made. Dependency remediation remains an open,
+separately reviewable concern.
