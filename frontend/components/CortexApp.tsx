@@ -30,6 +30,7 @@ import type {
 } from "@/lib/types";
 import { useInterval } from "@/hooks/useInterval";
 import {
+  createConversationLoadController,
   createRequestEpoch,
   createUnavailableClientState,
   reduceConversationRefreshFailure,
@@ -110,6 +111,42 @@ export function CortexApp() {
   const chatEventSource = useRef<EventSource | null>(null);
   const missionDetailRequestEpoch = useRef(createRequestEpoch());
   const conversationPollRequestEpoch = useRef(createRequestEpoch());
+  const [conversationLoadController] = useState(() => createConversationLoadController({
+    onStart(conversation) {
+      setConversationState((current) => ({ ...current, selectedConversation: conversation }));
+      setLoadingMessages(true);
+      setMessages([]);
+      setLastLightSig(null);
+    },
+    onSuccess(conversation, snapshot) {
+      const count = snapshot.messages.length;
+      setMessages(snapshot.messages);
+      setConversationState((current) => ({
+        conversations: current.conversations.map((item) => (
+          item.url === conversation.url
+            ? { ...item, message_count: count, sync_state: "live", sync_error: null }
+            : item
+        )),
+        selectedConversation: current.selectedConversation?.url === conversation.url
+          ? { ...current.selectedConversation, message_count: count, sync_state: "live", sync_error: null }
+          : current.selectedConversation,
+        sync: { state: "live", error: null, updated_at: new Date().toISOString() },
+      }));
+      if (snapshot.model_label) {
+        setSettings((current) => ({ ...current, planner_model: snapshot.model_label || current.planner_model }));
+      }
+    },
+    onFailure(conversation) {
+      setConversationState((current) => reduceConversationRefreshFailure(
+        current,
+        "Chargement de la conversation impossible",
+        conversation.url,
+      ));
+    },
+    onFinish() {
+      setLoadingMessages(false);
+    },
+  }));
 
   const activeMission = useMemo(() => {
     if (missionDetail && nonTerminal(missionDetail.mission.state)) return missionDetail;
@@ -184,6 +221,7 @@ export function CortexApp() {
         }
         if (selected?.url !== current.selectedConversation?.url) {
           conversationPollRequestEpoch.current.invalidate();
+          conversationLoadController.invalidate();
         }
         return {
           conversations: normalized,
@@ -209,7 +247,7 @@ export function CortexApp() {
     } finally {
       setLoadingConversations(false);
     }
-  }, [chatRun]);
+  }, [chatRun, conversationLoadController]);
 
   const refreshMissions = useCallback(async () => {
     try {
@@ -298,42 +336,26 @@ export function CortexApp() {
     }
   }, []);
 
-  const loadConversation = useCallback(async (conversation: ConversationSummary) => {
+  const loadConversation = useCallback((conversation: ConversationSummary) => {
     conversationPollRequestEpoch.current.invalidate();
-    setConversationState((current) => ({ ...current, selectedConversation: conversation }));
-    setLoadingMessages(true);
-    setMessages([]);
-    setLastLightSig(null);
-    try {
-      if (conversation.identity.startsWith("demo-")) throw new Error("demo");
-      const snapshot = await api<ConversationSnapshot>(`/api/conversations/snapshot?url=${encodeURIComponent(conversation.url)}`);
-      setMessages(snapshot.messages || []);
-      // P1d: remember the synced message count for the sidebar sub-line.
-      const count = (snapshot.messages || []).length;
-      setConversationState((current) => ({
-        conversations: current.conversations.map((item) => (
-          item.url === conversation.url
-            ? { ...item, message_count: count, sync_state: "live", sync_error: null }
-            : item
-        )),
-        selectedConversation: current.selectedConversation?.url === conversation.url
-          ? { ...current.selectedConversation, message_count: count, sync_state: "live", sync_error: null }
-          : current.selectedConversation,
-        sync: { state: "live", error: null, updated_at: new Date().toISOString() },
-      }));
-      if (snapshot.model_label) {
-        setSettings((current) => ({ ...current, planner_model: snapshot.model_label || current.planner_model }));
+    return conversationLoadController.load(conversation, async (requested) => {
+      if (DEVELOPMENT_FIXTURES_ENABLED && requested.identity.startsWith("demo-")) {
+        return {
+          url: requested.url,
+          conversation_id: requested.identity,
+          title: requested.title,
+          blocker: null,
+          composer_present: true,
+          send_button_present: true,
+          stop_button_present: false,
+          streaming: false,
+          model_label: demoSettings.planner_model,
+          messages: demoMessages,
+        };
       }
-    } catch {
-      setMessages(
-        DEVELOPMENT_FIXTURES_ENABLED && conversation.identity.startsWith("demo-")
-          ? demoMessages
-          : [],
-      );
-    } finally {
-      setLoadingMessages(false);
-    }
-  }, []);
+      return api<ConversationSnapshot>(`/api/conversations/snapshot?url=${encodeURIComponent(requested.url)}`);
+    });
+  }, [conversationLoadController]);
 
   const refreshSelectedConversation = useCallback(async () => {
     if (!selectedConversation || selectedConversation.identity === "__new__" || selectedConversation.identity.startsWith("demo-")) {
@@ -389,8 +411,11 @@ export function CortexApp() {
     api<{ upload_file?: boolean; take_screenshot?: boolean }>("/api/transport/capabilities")
       .then((caps) => setCapabilities({ upload_file: !!caps.upload_file, take_screenshot: !!caps.take_screenshot }))
       .catch(() => undefined);
-    return () => chatEventSource.current?.close();
-  }, [refreshConversations, refreshMissions, refreshPipeline, refreshRuntime, refreshSettings]);
+    return () => {
+      conversationLoadController.invalidate();
+      chatEventSource.current?.close();
+    };
+  }, [conversationLoadController, refreshConversations, refreshMissions, refreshPipeline, refreshRuntime, refreshSettings]);
 
   useEffect(() => {
     if (selectedConversation && selectedConversation.sync_state !== "stale" && messages.length === 0 && !loadingMessages) void loadConversation(selectedConversation);
@@ -672,14 +697,18 @@ export function CortexApp() {
         onNewConversation={() => {
           const fresh: ConversationSummary = { url: "https://chatgpt.com/", identity: "__new__", title: "Nouvelle conversation", preview: "Le chat sera créé au premier envoi", status: "idle" };
           conversationPollRequestEpoch.current.invalidate();
+          conversationLoadController.invalidate();
           setConversationState((current) => ({ ...current, selectedConversation: fresh }));
           setMessages([]);
+          setLoadingMessages(false);
         }}
         onNewMission={() => {
           const fresh: ConversationSummary = { url: "https://chatgpt.com/", identity: "__new__", title: "Nouvelle mission", preview: "ChatGPT orchestrera la mission", status: "mission" };
           conversationPollRequestEpoch.current.invalidate();
+          conversationLoadController.invalidate();
           setConversationState((current) => ({ ...current, selectedConversation: fresh }));
           setMessages([]);
+          setLoadingMessages(false);
           notify("Décris la mission dans le composer central.");
         }}
         onOpenSettings={() => setSettingsOpen(true)}

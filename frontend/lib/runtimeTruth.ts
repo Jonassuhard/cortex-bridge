@@ -1,5 +1,6 @@
 import type {
   ChatGPTModelInfo,
+  ConversationSnapshot,
   ConversationSummary,
   CortexSettings,
   MissionDetail,
@@ -39,6 +40,21 @@ export interface RequestEpoch {
   begin(identity: string): RequestTicket;
   invalidate(): void;
   isCurrent(ticket: RequestTicket, currentIdentity: string | null): boolean;
+}
+
+export interface ConversationLoadEffects {
+  onStart(conversation: ConversationSummary): void;
+  onSuccess(conversation: ConversationSummary, snapshot: ConversationSnapshot): void;
+  onFailure(conversation: ConversationSummary, error: unknown): void;
+  onFinish(conversation: ConversationSummary): void;
+}
+
+export interface ConversationLoadController {
+  invalidate(): void;
+  load(
+    conversation: ConversationSummary,
+    fetchSnapshot: (conversation: ConversationSummary) => Promise<ConversationSnapshot>,
+  ): Promise<void>;
 }
 
 export function createUnavailableClientState(updatedAt: string): {
@@ -199,6 +215,31 @@ export function createRequestEpoch(): RequestEpoch {
     },
     isCurrent(ticket, currentIdentity) {
       return ticket.epoch === epoch && ticket.identity === currentIdentity;
+    },
+  };
+}
+
+export function createConversationLoadController(
+  effects: ConversationLoadEffects,
+): ConversationLoadController {
+  const requests = createRequestEpoch();
+  return {
+    invalidate() {
+      requests.invalidate();
+    },
+    async load(conversation, fetchSnapshot) {
+      const ticket = requests.begin(conversation.url);
+      effects.onStart(conversation);
+      try {
+        const snapshot = await fetchSnapshot(conversation);
+        if (!requests.isCurrent(ticket, conversation.url)) return;
+        effects.onSuccess(conversation, snapshot);
+      } catch (error) {
+        if (!requests.isCurrent(ticket, conversation.url)) return;
+        effects.onFailure(conversation, error);
+      } finally {
+        if (requests.isCurrent(ticket, conversation.url)) effects.onFinish(conversation);
+      }
     },
   };
 }

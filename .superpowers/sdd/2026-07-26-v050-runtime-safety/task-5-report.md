@@ -409,3 +409,96 @@ Result: all exited 0 after the final source changes.
   `frontend/tsconfig.tsbuildinfo` remain unstaged and uncommitted.
 - Existing SQLite/HTTP `ResourceWarning` lines remain visible in otherwise
   green backend runs. This round introduces no new warning class.
+
+## Fix round 4/5
+
+### Review finding resolved
+
+- The full conversation snapshot path now uses the exported
+  `createConversationLoadController`, instantiated once and called directly by
+  `CortexApp`. The callback passed by the component performs only the real API
+  read or explicit development-fixture read; it contains no React mutation.
+- The controller owns every load mutation through four guarded effects:
+  selection/loading start, snapshot/messages success, stale/error failure, and
+  loading finish. Each awaited branch verifies the current request ticket and
+  conversation URL before invoking an effect.
+- Starting B advances the epoch and invalidates A. A late success, late failure,
+  or late `finally` therefore cannot replace B's selection, messages, sync
+  marker, error, or loading state.
+- A current B failure marks only B stale with
+  `Chargement de la conversation impossible`; unrelated rows remain live.
+- New-chat, new-mission, list-driven selection reset, and component teardown
+  invalidate any full load in flight. The two explicit new/reset actions also
+  clear messages and set loading false immediately, so an ignored old
+  `finally` is not required to repair the UI.
+
+### TDD evidence
+
+RED command:
+
+```text
+node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON \
+  --experimental-strip-types --test --test-name-pattern="conversation loader" \
+  frontend/lib/runtimeTruth.test.mts
+```
+
+Observed: 4 tests, 4 expected failures because
+`createConversationLoadController` did not exist. The deterministic deferred
+cases were: A success after B success, A failure/finally after B success,
+current B failure, and reset while A is in flight.
+
+Focused GREEN for the same four tests: all pass in `303.789ms`.
+
+Final frontend command:
+
+```text
+node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON \
+  --experimental-strip-types --test frontend/lib/runtimeTruth.test.mts
+```
+
+Result: `16 tests`, all pass in `865.810ms`. Every new case asserts the selected
+URL, messages, stale state/error, and loading state against the exact controller
+used by `CortexApp`.
+
+Focused backend truth command:
+
+```text
+.venv/bin/python -m unittest tests.test_executor_runtime_truth -v
+```
+
+Result: `Ran 11 tests in 6.765s ... OK`. No backend production or backend test
+file changed in this round.
+
+### Full and static verification
+
+The exact backend discovery command ran inside a 300-second process-group
+watchdog:
+
+```text
+.venv/bin/python -m unittest discover -s tests -v
+```
+
+Result: `Ran 216 tests in 198.600s ... OK`, watchdog exit 0.
+
+```text
+npm --prefix frontend run typecheck
+npm --prefix frontend run lint
+.venv/bin/python -m py_compile $(rg --files -g '*.py' -g '!frontend/**')
+git diff --check
+```
+
+Result: all exited 0; the final ESLint run emitted no warning.
+
+### Explicitly deferred fallback audit
+
+- The standalone fallback's `selectConversation` has the analogous unguarded
+  async race: a late A snapshot can still replace B's messages. It was audited
+  but deliberately not changed or claimed fixed in this controller-focused
+  round. Its embedded-script controller and VM regression belong to UI Task 7.
+
+### Preserved external dirt and concern
+
+- Known generated changes under `frontend/out/**` and
+  `frontend/tsconfig.tsbuildinfo` remain unstaged and uncommitted.
+- Existing SQLite/HTTP `ResourceWarning` lines remain visible in otherwise
+  green backend runs.

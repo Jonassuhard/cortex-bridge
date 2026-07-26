@@ -158,6 +158,126 @@ function workspaceProps(executorState: string, conversation: Record<string, unkn
   };
 }
 
+interface Deferred<T> {
+  promise: Promise<T>;
+  resolve(value: T): void;
+  reject(error: Error): void;
+}
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+const loadConversationA = {
+  url: "https://chatgpt.com/c/load-a",
+  identity: "load-a",
+  title: "Conversation A",
+  sync_state: "live",
+  sync_error: null,
+};
+const loadConversationB = {
+  url: "https://chatgpt.com/c/load-b",
+  identity: "load-b",
+  title: "Conversation B",
+  sync_state: "live",
+  sync_error: null,
+};
+
+function conversationSnapshot(url: string, texts: string[]) {
+  return {
+    url,
+    conversation_id: url.split("/").at(-1) || null,
+    title: "Snapshot",
+    blocker: null,
+    composer_present: true,
+    send_button_present: true,
+    stop_button_present: false,
+    streaming: false,
+    model_label: "ChatGPT",
+    messages: texts.map((text, index) => ({ id: `${url}-${index}`, role: "assistant", text })),
+  };
+}
+
+type ConversationLoadFactory = (effects: {
+  onStart(conversation: Record<string, unknown>): void;
+  onSuccess(conversation: Record<string, unknown>, snapshot: ReturnType<typeof conversationSnapshot>): void;
+  onFailure(conversation: Record<string, unknown>, error: unknown): void;
+  onFinish(conversation: Record<string, unknown>): void;
+}) => {
+  invalidate(): void;
+  load(
+    conversation: Record<string, unknown>,
+    fetchSnapshot: (conversation: Record<string, unknown>) => Promise<ReturnType<typeof conversationSnapshot>>,
+  ): Promise<void>;
+};
+
+function createConversationLoadHarness(factory: ConversationLoadFactory) {
+  const view = {
+    conversationState: {
+      conversations: [loadConversationA, loadConversationB].map((conversation) => ({ ...conversation })),
+      selectedConversation: null as Record<string, unknown> | null,
+      sync: { state: "live", error: null as string | null, updated_at: "2026-07-26T13:00:00Z" },
+    },
+    loading: false,
+    messages: [] as string[],
+  };
+  const controller = factory({
+    onStart(conversation) {
+      view.conversationState.selectedConversation = conversation;
+      view.loading = true;
+      view.messages = [];
+    },
+    onSuccess(conversation, snapshot) {
+      view.messages = snapshot.messages.map((message) => message.text);
+      view.conversationState.conversations = view.conversationState.conversations.map((item) => (
+        item.url === conversation.url
+          ? { ...item, sync_state: "live", sync_error: null, message_count: snapshot.messages.length }
+          : item
+      ));
+      view.conversationState.selectedConversation = {
+        ...conversation,
+        sync_state: "live",
+        sync_error: null,
+        message_count: snapshot.messages.length,
+      };
+      view.conversationState.sync = {
+        state: "live",
+        error: null,
+        updated_at: "2026-07-26T13:01:00Z",
+      };
+    },
+    onFailure(conversation) {
+      view.conversationState = runtimeTruthModule.reduceConversationRefreshFailure(
+        view.conversationState as never,
+        "Chargement de la conversation impossible",
+        String(conversation.url),
+      ) as typeof view.conversationState;
+    },
+    onFinish() {
+      view.loading = false;
+    },
+  });
+  return { controller, view };
+}
+
+function conversationView(view: ReturnType<typeof createConversationLoadHarness>["view"]) {
+  const selectedUrl = String(view.conversationState.selectedConversation?.url || "");
+  const selectedRow = view.conversationState.conversations.find((item) => item.url === selectedUrl);
+  return {
+    loading: view.loading,
+    messages: [...view.messages],
+    selectedUrl,
+    staleError: selectedRow?.sync_error || null,
+    staleState: selectedRow?.sync_state || null,
+  };
+}
+
 test("successful conversation cache becomes visibly stale after refresh failure", async () => {
   const runtimeTruth = await import("./runtimeTruth.ts") as Record<string, unknown>;
   const reduceFailure = runtimeTruth.reduceConversationRefreshFailure as ((
@@ -357,6 +477,104 @@ test("newer conversation selection error wins over older deferred poll success",
 
   assert.equal(currentIdentity, "conversation-b");
   assert.deepEqual(messages, ["cache b obsolète"]);
+});
+
+test("conversation loader ignores A success arriving after B success", async () => {
+  const runtimeTruth = await import("./runtimeTruth.ts") as Record<string, unknown>;
+  const factory = runtimeTruth.createConversationLoadController as ConversationLoadFactory | undefined;
+  assert.equal(typeof factory, "function");
+  const { controller, view } = createConversationLoadHarness(factory!);
+  const requestA = deferred<ReturnType<typeof conversationSnapshot>>();
+  const requestB = deferred<ReturnType<typeof conversationSnapshot>>();
+
+  const loadingA = controller.load(loadConversationA, () => requestA.promise);
+  const loadingB = controller.load(loadConversationB, () => requestB.promise);
+  requestB.resolve(conversationSnapshot(loadConversationB.url, ["B récente"]));
+  await loadingB;
+  requestA.resolve(conversationSnapshot(loadConversationA.url, ["A tardive"]));
+  await loadingA;
+
+  assert.deepEqual(conversationView(view), {
+    loading: false,
+    messages: ["B récente"],
+    selectedUrl: loadConversationB.url,
+    staleError: null,
+    staleState: "live",
+  });
+});
+
+test("conversation loader ignores A failure and finally arriving after B success", async () => {
+  const runtimeTruth = await import("./runtimeTruth.ts") as Record<string, unknown>;
+  const factory = runtimeTruth.createConversationLoadController as ConversationLoadFactory | undefined;
+  assert.equal(typeof factory, "function");
+  const { controller, view } = createConversationLoadHarness(factory!);
+  const requestA = deferred<ReturnType<typeof conversationSnapshot>>();
+  const requestB = deferred<ReturnType<typeof conversationSnapshot>>();
+
+  const loadingA = controller.load(loadConversationA, () => requestA.promise);
+  const loadingB = controller.load(loadConversationB, () => requestB.promise);
+  requestB.resolve(conversationSnapshot(loadConversationB.url, ["B confirmée"]));
+  await loadingB;
+  requestA.reject(new Error("A indisponible trop tard"));
+  await loadingA;
+
+  assert.deepEqual(conversationView(view), {
+    loading: false,
+    messages: ["B confirmée"],
+    selectedUrl: loadConversationB.url,
+    staleError: null,
+    staleState: "live",
+  });
+});
+
+test("conversation loader marks only current B stale when B fails", async () => {
+  const runtimeTruth = await import("./runtimeTruth.ts") as Record<string, unknown>;
+  const factory = runtimeTruth.createConversationLoadController as ConversationLoadFactory | undefined;
+  assert.equal(typeof factory, "function");
+  const { controller, view } = createConversationLoadHarness(factory!);
+  const requestB = deferred<ReturnType<typeof conversationSnapshot>>();
+
+  const loadingB = controller.load(loadConversationB, () => requestB.promise);
+  requestB.reject(new Error("B indisponible"));
+  await loadingB;
+
+  assert.deepEqual(conversationView(view), {
+    loading: false,
+    messages: [],
+    selectedUrl: loadConversationB.url,
+    staleError: "Chargement de la conversation impossible",
+    staleState: "stale",
+  });
+  assert.equal(view.conversationState.conversations[0].sync_state, "live");
+  assert.equal(view.conversationState.conversations[0].sync_error, null);
+});
+
+test("conversation loader reset invalidates every late mutation", async () => {
+  const runtimeTruth = await import("./runtimeTruth.ts") as Record<string, unknown>;
+  const factory = runtimeTruth.createConversationLoadController as ConversationLoadFactory | undefined;
+  assert.equal(typeof factory, "function");
+  const { controller, view } = createConversationLoadHarness(factory!);
+  const requestA = deferred<ReturnType<typeof conversationSnapshot>>();
+
+  const loadingA = controller.load(loadConversationA, () => requestA.promise);
+  controller.invalidate();
+  view.conversationState.selectedConversation = {
+    url: "https://chatgpt.com/",
+    identity: "__new__",
+    title: "Nouvelle conversation",
+  };
+  view.messages = ["Brouillon local"];
+  view.loading = false;
+  requestA.resolve(conversationSnapshot(loadConversationA.url, ["A après reset"]));
+  await loadingA;
+
+  assert.deepEqual(conversationView(view), {
+    loading: false,
+    messages: ["Brouillon local"],
+    selectedUrl: "https://chatgpt.com/",
+    staleError: null,
+    staleState: null,
+  });
 });
 
 test("mission refresh failure clears current execution while preserving independent transport", async () => {
