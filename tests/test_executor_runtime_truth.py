@@ -641,7 +641,7 @@ context.saveSettings().then(() => {
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
 
-    def test_fallback_unknown_pipeline_is_not_rendered_online(self) -> None:
+    def test_fallback_status_indicators_are_semantic_and_component_independent(self) -> None:
         html_path = REPO_ROOT / "frontend" / "fallback" / "index.html"
         node_test = r"""
 const fs = require('node:fs');
@@ -651,33 +651,88 @@ const start = html.indexOf('function renderPipeline()');
 const end = html.indexOf('\nasync function refreshAll()', start);
 if (start < 0 || end < 0) throw new Error('renderPipeline function not found');
 const source = html.slice(start, end);
+class Element {
+  constructor() {
+    this.textContent = '';
+    this.className = '';
+    this.dataset = {};
+    this.children = [];
+    this.queries = new Map();
+  }
+  appendChild(child) { this.children.push(child); }
+  replaceChildren() { this.children = []; }
+  querySelector(selector) {
+    if (!this.queries.has(selector)) this.queries.set(selector, new Element());
+    return this.queries.get(selector);
+  }
+}
 const elements = new Map();
-for (const id of ['#pipelineCards', '#pipelineEvents', '#missionState', '#latency', '#onlineLabel', '#pipelineLiveLabel']) {
-  elements.set(id, { textContent: '', replaceChildren() {} });
+for (const id of [
+  '#pipelineCards', '#pipelineEvents', '#missionState', '#latency',
+  '#chatgptIndicator', '#onlineLabel', '#executorIndicator',
+  '#executorStatusLabel', '#pipelineLiveIndicator', '#pipelineLiveLabel',
+]) {
+  elements.set(id, new Element());
 }
 const context = {
   state: {
     pipeline: {
       overall: 'unknown',
-      components: [],
+      components: [
+        { id: 'transport', label: 'Transport', state: 'healthy', detail: 'ok' },
+        { id: 'executor', label: 'Executor', state: 'error', detail: 'failed' },
+      ],
       events: [],
       active_mission_state: null,
       latency: {},
     },
   },
   $: (selector) => elements.get(selector),
-  document: { createElement() { throw new Error('no rows expected'); } },
+  document: { createElement() { return new Element(); } },
   fmt() { return '—'; },
   tm() { return ''; },
 };
 vm.createContext(context);
 vm.runInContext(source + ';this.renderPipeline=renderPipeline', context);
 context.renderPipeline();
-if (elements.get('#onlineLabel').textContent !== 'État inconnu') {
-  throw new Error(`unexpected status: ${elements.get('#onlineLabel').textContent}`);
+if (elements.get('#onlineLabel').textContent !== 'Connecté') {
+  throw new Error(`unexpected transport label: ${elements.get('#onlineLabel').textContent}`);
+}
+if (elements.get('#chatgptIndicator').dataset.state !== 'online') {
+  throw new Error(`unexpected transport data-state: ${elements.get('#chatgptIndicator').dataset.state}`);
+}
+if (elements.get('#executorStatusLabel').textContent !== 'Indisponible') {
+  throw new Error(`unexpected executor label: ${elements.get('#executorStatusLabel').textContent}`);
+}
+if (elements.get('#executorIndicator').dataset.state !== 'offline') {
+  throw new Error(`unexpected executor data-state: ${elements.get('#executorIndicator').dataset.state}`);
 }
 if (elements.get('#pipelineLiveLabel').textContent !== 'État inconnu') {
   throw new Error(`unexpected pipeline label: ${elements.get('#pipelineLiveLabel').textContent}`);
+}
+if (elements.get('#pipelineLiveIndicator').dataset.state !== 'unknown') {
+  throw new Error(`unexpected pipeline data-state: ${elements.get('#pipelineLiveIndicator').dataset.state}`);
+}
+
+context.state.pipeline = {
+  overall: 'error',
+  components: [
+    { id: 'transport', label: 'Transport', state: 'unavailable', detail: 'down' },
+    { id: 'executor', label: 'Executor', state: 'available', detail: 'ready' },
+  ],
+  events: [],
+  active_mission_state: null,
+  latency: {},
+};
+context.renderPipeline();
+if (elements.get('#onlineLabel').textContent !== 'Indisponible' || elements.get('#chatgptIndicator').dataset.state !== 'offline') {
+  throw new Error('unavailable transport did not become offline');
+}
+if (elements.get('#executorStatusLabel').textContent !== 'Disponible' || elements.get('#executorIndicator').dataset.state !== 'online') {
+  throw new Error('available executor did not remain independently online');
+}
+if (elements.get('#pipelineLiveLabel').textContent !== 'Indisponible' || elements.get('#pipelineLiveIndicator').dataset.state !== 'offline') {
+  throw new Error('error pipeline did not become offline');
 }
 """
         completed = subprocess.run(

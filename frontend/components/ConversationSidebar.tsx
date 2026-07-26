@@ -163,11 +163,15 @@ export function ConversationSidebar({
                 <span className="conversation-subline">
                   {conversation.pinned && <span className="conv-type" title="Conversation épinglée"><PinIcon size={11} /> Épinglée</span>}
                   {conversation.project && <span className="conv-type" title="Conversation projet"><ProjectIcon size={11} /> Projet</span>}
-                  <span className="conv-count">
-                    {typeof conversation.message_count === "number"
-                      ? `${conversation.message_count} message${conversation.message_count > 1 ? "s" : ""}`
-                      : "Non synchronisé"}
-                  </span>
+                  {conversation.sync_state === "stale" ? (
+                    <span className="conv-sync-state" title={conversation.sync_error || "Synchronisation en échec"}>Cache obsolète</span>
+                  ) : (
+                    <span className="conv-count">
+                      {typeof conversation.message_count === "number"
+                        ? `${conversation.message_count} message${conversation.message_count > 1 ? "s" : ""}`
+                        : "Non synchronisé"}
+                    </span>
+                  )}
                 </span>
               </span>
               <span className="conversation-meta">

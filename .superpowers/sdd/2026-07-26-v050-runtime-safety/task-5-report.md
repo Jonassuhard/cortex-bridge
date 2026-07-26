@@ -313,3 +313,99 @@ Result: all exited 0 after the final source changes.
   `frontend/tsconfig.tsbuildinfo` remain unstaged and uncommitted.
 - The green backend runs still emit existing `ResourceWarning` lines for a few
   unclosed SQLite/HTTP test resources. They remain a separate lifecycle debt.
+
+## Fix round 3/5
+
+### Review findings resolved
+
+- The real selected-conversation light/full poll no longer swallows errors.
+  Its catch routes through the cache reducer with the requested URL, marks the
+  selected conversation and matching sidebar row `stale` with a French sync
+  error, preserves cached messages, and leaves unrelated conversations live.
+  A no-cache state is explicitly unavailable.
+- `ConversationSidebar` and `ChatWorkspace` now render the stale state rather
+  than merely carrying it in memory: the sidebar shows a compact
+  `Cache obsolète` marker and the header shows
+  `Cache obsolète · synchronisation en échec`, both exposing the precise error
+  as their title.
+- The executor chip is derived only from the pipeline `executor` component.
+  A paused mission cannot replace `unknown`, `unavailable`, or `error` with
+  `En pause`, nor leak the mission's `executor_kind` into that chip. Mission
+  pause remains visible in the separate execution card and controls.
+- Mission-detail and selected-conversation poll requests use a shared
+  monotonic request-epoch helper. Starting a newer request or changing/resetting
+  an identity invalidates older tickets; stale successes and failures return
+  without mutating React state.
+- Fallback ChatGPT transport, executor, and overall pipeline indicators read
+  separate evidence. Their labels and `data-state` attributes drive semantic
+  dots: online green, active blue, unknown neutral, and unavailable/error
+  offline red.
+
+### TDD evidence
+
+Initial frontend RED command:
+
+```text
+node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON \
+  --experimental-strip-types --test frontend/lib/runtimeTruth.test.mts
+```
+
+Observed: `12 tests`; 7 passed and 5 failed for the intended reasons: the
+targeted poll reducer marked an unrelated row stale, the real rendered sidebar
+had no cache marker, a paused mission rendered the executor as `En pause`, and
+the two deferred-order tests found no request-epoch helper.
+
+The fallback RED ran the real embedded `renderPipeline` function in a Node VM:
+
+```text
+.venv/bin/python -m unittest \
+  tests.test_executor_runtime_truth.ExecutorRuntimeTruthTestCase.test_fallback_status_indicators_are_semantic_and_component_independent -v
+```
+
+Observed: failure because a healthy transport still rendered the overall
+pipeline's `État inconnu`. A final focused RED also proved the executor chip
+still leaked `mission.executor_kind=deterministic` after the pause override was
+removed.
+
+Final frontend GREEN result for the Node command: `12 tests`, all pass in
+`501.529ms`. The suite server-renders the real `ChatWorkspace` and
+`ConversationSidebar`, and uses deferred promises with the exact epoch helper
+imported by `CortexApp`.
+
+Focused backend truth command:
+
+```text
+.venv/bin/python -m unittest tests.test_executor_runtime_truth -v
+```
+
+Result: `Ran 11 tests in 6.228s ... OK`, including the real fallback VM test.
+No backend production file changed in this round.
+
+### Full and static verification
+
+The exact backend discovery command ran inside a 300-second process-group
+watchdog:
+
+```text
+.venv/bin/python -m unittest discover -s tests -v
+```
+
+Result: `Ran 216 tests in 199.059s ... OK`, watchdog exit 0.
+
+```text
+node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON \
+  --experimental-strip-types --test frontend/lib/runtimeTruth.test.mts
+npm --prefix frontend run typecheck
+npm --prefix frontend run lint
+.venv/bin/python -m py_compile $(rg --files -g '*.py' -g '!frontend/**')
+git diff --check
+```
+
+Result: all exited 0 after the final source changes.
+
+### Preserved external dirt and concern
+
+- Known generated changes under `frontend/out/**` and
+  `frontend/tsconfig.tsbuildinfo` remain unstaged and uncommitted.
+- Existing SQLite/HTTP `ResourceWarning` lines remain visible in otherwise
+  green backend runs. This round introduces no new warning class.

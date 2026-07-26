@@ -30,6 +30,17 @@ export interface StatusPresentation {
   tone: "online" | "offline" | "unknown" | "active";
 }
 
+export interface RequestTicket {
+  epoch: number;
+  identity: string;
+}
+
+export interface RequestEpoch {
+  begin(identity: string): RequestTicket;
+  invalidate(): void;
+  isCurrent(ticket: RequestTicket, currentIdentity: string | null): boolean;
+}
+
 export function createUnavailableClientState(updatedAt: string): {
   runtime: RuntimeStatus;
   transport: TransportStatus;
@@ -148,6 +159,7 @@ export function executionStateLabel(state?: string): string | null {
 export function reduceConversationRefreshFailure(
   current: ConversationRefreshState,
   error: string,
+  targetUrl?: string,
 ): ConversationRefreshState {
   const markStale = (conversation: ConversationSummary): ConversationSummary => ({
     ...conversation,
@@ -163,11 +175,31 @@ export function reduceConversationRefreshFailure(
     };
   }
   return {
-    conversations: current.conversations.map(markStale),
-    selectedConversation: current.selectedConversation
+    conversations: current.conversations.map((conversation) =>
+      !targetUrl || conversation.url === targetUrl ? markStale(conversation) : conversation,
+    ),
+    selectedConversation: current.selectedConversation && (
+      !targetUrl || current.selectedConversation.url === targetUrl
+    )
       ? markStale(current.selectedConversation)
-      : null,
+      : current.selectedConversation,
     sync: { state: "stale", error, updated_at: current.sync.updated_at },
+  };
+}
+
+export function createRequestEpoch(): RequestEpoch {
+  let epoch = 0;
+  return {
+    begin(identity) {
+      epoch += 1;
+      return { epoch, identity };
+    },
+    invalidate() {
+      epoch += 1;
+    },
+    isCurrent(ticket, currentIdentity) {
+      return ticket.epoch === epoch && ticket.identity === currentIdentity;
+    },
   };
 }
 

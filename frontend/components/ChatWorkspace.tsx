@@ -310,12 +310,6 @@ export function ChatWorkspace({
   const chatTone = chatActive ? "active" : chatStatus.tone;
   const executorComponent = pipeline.components?.find((component) => component.id === "executor");
   const agentStatus = statusPresentation(executorComponent?.state);
-  const agentLabel = activeMissionState === "PAUSED" || activeMissionState === "PAUSED_RECOVERY_REQUIRED"
-    ? "En pause"
-    : agentStatus.label;
-  const agentTone = activeMissionState === "PAUSED" || activeMissionState === "PAUSED_RECOVERY_REQUIRED"
-    ? "active"
-    : agentStatus.tone;
 
   return (
     <section className="chat-workspace">
@@ -341,10 +335,10 @@ export function ChatWorkspace({
             <span>ChatGPT</span>
             <strong>{activeLabel}</strong>
           </span>
-          <span className={`status-pill is-${agentTone}`} title="Statut de l'agent exécutif local">
-            <span className={`presence-dot is-${agentTone}`} />
-            <span>Exécuteur {mission?.mission.executor_kind || "indisponible"}</span>
-            <strong>{agentLabel}</strong>
+          <span className={`status-pill is-${agentStatus.tone}`} title="Statut de l'agent exécutif local">
+            <span className={`presence-dot is-${agentStatus.tone}`} />
+            <span>Exécuteur</span>
+            <strong>{agentStatus.label}</strong>
           </span>
         </div>
         <div className="toolbar-right">

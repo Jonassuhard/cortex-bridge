@@ -30,6 +30,7 @@ import type {
 } from "@/lib/types";
 import { useInterval } from "@/hooks/useInterval";
 import {
+  createRequestEpoch,
   createUnavailableClientState,
   reduceConversationRefreshFailure,
   reduceMissionRefreshFailure,
@@ -107,6 +108,8 @@ export function CortexApp() {
   const [demoMode, setDemoMode] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const chatEventSource = useRef<EventSource | null>(null);
+  const missionDetailRequestEpoch = useRef(createRequestEpoch());
+  const conversationPollRequestEpoch = useRef(createRequestEpoch());
 
   const activeMission = useMemo(() => {
     if (missionDetail && nonTerminal(missionDetail.mission.state)) return missionDetail;
@@ -179,6 +182,9 @@ export function CortexApp() {
         } else {
           selected = normalized[0] || null;
         }
+        if (selected?.url !== current.selectedConversation?.url) {
+          conversationPollRequestEpoch.current.invalidate();
+        }
         return {
           conversations: normalized,
           selectedConversation: selected,
@@ -210,12 +216,20 @@ export function CortexApp() {
       const data = await api<MissionSummary[]>("/api/missions");
       setMissions(data);
       const currentId = selectedMissionId || data.find((mission) => nonTerminal(mission.state))?.id || data[0]?.id || null;
-      if (currentId && currentId !== selectedMissionId) setSelectedMissionId(currentId);
+      if (currentId && currentId !== selectedMissionId) {
+        missionDetailRequestEpoch.current.invalidate();
+        setSelectedMissionId(currentId);
+      }
     } catch {
       if (DEVELOPMENT_FIXTURES_ENABLED) {
         setMissions(demoMissions);
-        setSelectedMissionId((current) => current || demoMissions[0].id);
+        setSelectedMissionId((current) => {
+          const selected = current || demoMissions[0].id;
+          missionDetailRequestEpoch.current.invalidate();
+          return selected;
+        });
       } else {
+        missionDetailRequestEpoch.current.invalidate();
         setMissions([]);
         setSelectedMissionId(null);
         setMissionDetail(null);
@@ -230,16 +244,22 @@ export function CortexApp() {
 
   const refreshMissionDetail = useCallback(async () => {
     if (!selectedMissionId) {
+      missionDetailRequestEpoch.current.invalidate();
       setMissionDetail(null);
       return;
     }
+    const requestedMissionId = selectedMissionId;
+    const ticket = missionDetailRequestEpoch.current.begin(requestedMissionId);
     try {
-      const data = await api<MissionDetail>(`/api/missions/${selectedMissionId}`);
+      const data = await api<MissionDetail>(`/api/missions/${requestedMissionId}`);
+      if (!missionDetailRequestEpoch.current.isCurrent(ticket, requestedMissionId)) return;
       setMissionDetail(data);
     } catch {
-      if (DEVELOPMENT_FIXTURES_ENABLED && selectedMissionId === demoMissionDetail.mission.id) {
+      if (!missionDetailRequestEpoch.current.isCurrent(ticket, requestedMissionId)) return;
+      if (DEVELOPMENT_FIXTURES_ENABLED && requestedMissionId === demoMissionDetail.mission.id) {
         setMissionDetail(demoMissionDetail);
       } else if (!DEVELOPMENT_FIXTURES_ENABLED) {
+        missionDetailRequestEpoch.current.invalidate();
         setSelectedMissionId(null);
         setMissionDetail(null);
         setPipeline((current) => reduceMissionRefreshFailure({
@@ -279,6 +299,7 @@ export function CortexApp() {
   }, []);
 
   const loadConversation = useCallback(async (conversation: ConversationSummary) => {
+    conversationPollRequestEpoch.current.invalidate();
     setConversationState((current) => ({ ...current, selectedConversation: conversation }));
     setLoadingMessages(true);
     setMessages([]);
@@ -315,21 +336,27 @@ export function CortexApp() {
   }, []);
 
   const refreshSelectedConversation = useCallback(async () => {
-    if (!selectedConversation || selectedConversation.identity === "__new__" || selectedConversation.identity.startsWith("demo-")) return;
+    if (!selectedConversation || selectedConversation.identity === "__new__" || selectedConversation.identity.startsWith("demo-")) {
+      conversationPollRequestEpoch.current.invalidate();
+      return;
+    }
+    const requestedUrl = selectedConversation.url;
+    const ticket = conversationPollRequestEpoch.current.begin(requestedUrl);
     try {
       // P0c: cheap light poll first; only fetch the full snapshot (which
       // serializes every message) when the conversation actually changed.
       const light = await api<{ message_count: number; last_id: string | null; streaming: boolean }>(
-        `/api/conversations/snapshot?url=${encodeURIComponent(selectedConversation.url)}&light=1`,
+        `/api/conversations/snapshot?url=${encodeURIComponent(requestedUrl)}&light=1`,
       );
+      if (!conversationPollRequestEpoch.current.isCurrent(ticket, requestedUrl)) return;
       const sig = `${light.message_count}|${light.last_id}|${light.streaming}`;
       setConversationState((current) => ({
         conversations: current.conversations.map((item) => (
-          item.url === selectedConversation.url
+          item.url === requestedUrl
             ? { ...item, message_count: light.message_count, sync_state: "live", sync_error: null }
             : item
         )),
-        selectedConversation: current.selectedConversation?.url === selectedConversation.url
+        selectedConversation: current.selectedConversation?.url === requestedUrl
           ? { ...current.selectedConversation, message_count: light.message_count, sync_state: "live", sync_error: null }
           : current.selectedConversation,
         sync: { state: "live", error: null, updated_at: new Date().toISOString() },
@@ -337,11 +364,17 @@ export function CortexApp() {
       if (sig === lastLightSig) return;
       setLastLightSig(sig);
       if (!chatRun || ["COMPLETED", "FAILED", "CANCELLED"].includes(chatRun.state)) {
-        const snapshot = await api<ConversationSnapshot>(`/api/conversations/snapshot?url=${encodeURIComponent(selectedConversation.url)}`);
+        const snapshot = await api<ConversationSnapshot>(`/api/conversations/snapshot?url=${encodeURIComponent(requestedUrl)}`);
+        if (!conversationPollRequestEpoch.current.isCurrent(ticket, requestedUrl)) return;
         setMessages(snapshot.messages || []);
       }
     } catch {
-      // Keep the last readable snapshot. Transport errors surface in pipeline status.
+      if (!conversationPollRequestEpoch.current.isCurrent(ticket, requestedUrl)) return;
+      setConversationState((current) => reduceConversationRefreshFailure(
+        current,
+        "Actualisation de la conversation impossible",
+        requestedUrl,
+      ));
     }
   }, [chatRun, lastLightSig, selectedConversation]);
 
@@ -506,6 +539,7 @@ export function CortexApp() {
         max_duration_minutes: settings.max_duration_minutes,
         approval_policy: settings.approval_policy,
       });
+      missionDetailRequestEpoch.current.invalidate();
       setSelectedMissionId(response.id);
       setMissionDetail(null);
       notify("Mission autonome lancée.");
@@ -513,6 +547,7 @@ export function CortexApp() {
       return true;
     } catch (error) {
       if (DEVELOPMENT_FIXTURES_ENABLED && demoMode) {
+        missionDetailRequestEpoch.current.invalidate();
         setSelectedMissionId(demoMissionDetail.mission.id);
         setMissionDetail(demoMissionDetail);
         notify("Aperçu local : mission simulée.");
@@ -636,11 +671,13 @@ export function CortexApp() {
         onRefresh={() => void refreshConversations()}
         onNewConversation={() => {
           const fresh: ConversationSummary = { url: "https://chatgpt.com/", identity: "__new__", title: "Nouvelle conversation", preview: "Le chat sera créé au premier envoi", status: "idle" };
+          conversationPollRequestEpoch.current.invalidate();
           setConversationState((current) => ({ ...current, selectedConversation: fresh }));
           setMessages([]);
         }}
         onNewMission={() => {
           const fresh: ConversationSummary = { url: "https://chatgpt.com/", identity: "__new__", title: "Nouvelle mission", preview: "ChatGPT orchestrera la mission", status: "mission" };
+          conversationPollRequestEpoch.current.invalidate();
           setConversationState((current) => ({ ...current, selectedConversation: fresh }));
           setMessages([]);
           notify("Décris la mission dans le composer central.");

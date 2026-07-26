@@ -260,6 +260,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .conversation-subline { display: flex; align-items: center; gap: 8px; margin-top: 3px; color: var(--muted-2); font-size: 9px; line-height: 1.2; }
 .conversation-subline .conv-type { display: inline-flex; align-items: center; gap: 3px; color: var(--muted); }
 .conversation-subline .conv-count { font-family: var(--font-mono); }
+.conversation-subline .conv-sync-state { color: #f6b65c; font-family: var(--font-mono); }
 .conversation-meta { min-width: 16px; display: flex; flex-direction: column; align-items: flex-end; gap: 5px; color: var(--muted); }
 .unread-badge { min-width: 17px; height: 17px; display: grid; place-items: center; padding: 0 4px; color: #fff; background: var(--blue); border-radius: 999px; font: 9px var(--font-mono); }
 .show-more-button, .archived-button {
