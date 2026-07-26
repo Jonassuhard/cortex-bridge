@@ -704,7 +704,10 @@ export function CortexApp() {
   const selectedUrl = selectedConversation?.url || null;
 
   return (
-    <main className={`cortex-app theme-${settings.theme} ${inspectorOpen ? "inspector-visible" : ""}`}>
+    <main
+      aria-label="Conversation principale"
+      className={`cortex-app theme-${settings.theme} ${inspectorOpen ? "inspector-visible" : ""}`}
+    >
       <div className="app-grid-background" aria-hidden="true" />
       <div className="app-signal-sweep" aria-hidden="true" />
       <ConversationSidebar
