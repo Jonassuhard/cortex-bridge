@@ -138,21 +138,24 @@ async def dismiss_onboarding() -> dict[str, Any]:
 
 @router.post("/onboarding/browser/open")
 async def open_browser_login() -> dict[str, Any]:
-    settings = settings_api.load_settings()
-    driver = browser_driver_factory(
-        session="cortex-bridge-ui",
-        settings=settings,
-    )
+    settings: dict[str, Any] | None = None
+    driver = None
     try:
+        settings = settings_api.load_settings()
+        driver = browser_driver_factory(
+            session="cortex-bridge-ui",
+            settings=settings,
+        )
         return await driver.open_login()
     except Exception as exc:
+        driver_name = getattr(driver, "driver_name", None)
+        if driver_name is None and settings is not None:
+            driver_name = settings.get("browser_transport")
         raise HTTPException(
             status_code=503,
             detail={
                 "code": "BROWSER_LOGIN_FAILED",
-                "driver": getattr(
-                    driver, "driver_name", settings["browser_transport"]
-                ),
+                "driver": driver_name or "unknown",
                 "error": str(exc),
             },
         ) from exc

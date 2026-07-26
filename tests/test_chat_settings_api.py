@@ -410,6 +410,26 @@ class ChatSettingsApiTestCase(unittest.TestCase):
         self.assertNotIn("Volumes", anonymized)
         self.assertNotIn("ClientSecret", anonymized)
 
+    def test_10e_onboarding_invalid_persisted_browser_settings_are_structured(self):
+        settings_api.SETTINGS_FILE.write_text(json.dumps({
+            "browser_transport": "selenium",
+            "browser_profile_root": "console/data/browser-profiles",
+        }), encoding="utf-8")
+
+        status, body = self.post("/api/onboarding/browser/open", {})
+
+        self.assertEqual(status, 503, body)
+        self.assertEqual(body, {
+            "detail": {
+                "code": "BROWSER_LOGIN_FAILED",
+                "driver": "unknown",
+                "error": (
+                    "browser_transport must be exactly one of: "
+                    "playwright, webbridge"
+                ),
+            },
+        })
+
     def test_11_modern_fallback_ui_is_served(self):
         req = urllib.request.Request(self.base + "/", method="GET")
         with urllib.request.urlopen(req, timeout=10) as response:

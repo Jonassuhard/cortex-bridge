@@ -270,3 +270,63 @@ Final strict-timeout Playwright rerun:
 
 Result: 17 tests passed in 17.020 s, followed by successful `py_compile` and
 `git diff --check`.
+
+## Fix round 2/5 — configuration-boundary compensation
+
+### RED evidence
+
+Two tests were added before production changes:
+
+```bash
+.venv/bin/python -m unittest \
+  tests.test_chat_settings_api.ChatSettingsApiTestCase.test_10e_onboarding_invalid_persisted_browser_settings_are_structured \
+  tests.test_transport_session_isolation.ChatRouteSessionIsolationTest.test_invalid_settings_fail_run_and_release_exact_writer_capacity -v
+```
+
+Initial result: 2 failures.
+
+- Invalid persisted browser settings escaped onboarding as an unstructured
+  HTTP 500 instead of the documented `BROWSER_LOGIN_FAILED` 503 payload.
+- Transport construction failed after writer acquisition but before the chat
+  `try/finally`; the run remained `QUEUED` and retained the writer lease.
+
+### Correction
+
+- Onboarding now resolves settings, constructs the driver and opens the login
+  page inside one error boundary. Configuration and construction failures use
+  the same structured 503 payload as launch failures; when no driver can be
+  resolved, `driver` is truthfully reported as `unknown`.
+- Chat transport construction now occurs inside the run lifecycle boundary.
+  Every post-acquisition failure records `FAILED`, persists the error, releases
+  the exact lease and restores normal two-writer capacity.
+- The analogous mission path was inspected and not changed: acquisition is
+  already followed by a compensating block covering persistence and
+  `_build_runtime()`. Its existing
+  `test_synchronous_binding_failure_fails_mission_and_releases_lease`
+  regression proves terminal state and lease release.
+
+### GREEN evidence
+
+Focused regression: 2 tests passed in 1.256 s.
+
+Affected API/session/mission suites:
+
+```bash
+.venv/bin/python -m unittest tests.test_chat_settings_api \
+  tests.test_transport_session_isolation tests.test_missions_api \
+  tests.test_write_slots -v
+```
+
+Result: 59 tests passed in 56.605 s.
+
+Fresh full backend regression:
+
+```bash
+.venv/bin/python -m unittest discover -s tests -v
+```
+
+Result: 196 tests passed in 188.442 s. Existing `ResourceWarning` noise remains
+unchanged, with zero failures/errors.
+
+Targeted `py_compile` and `git diff --check` both exited 0. No frontend source
+changed in this round, so frontend checks were not rerun.

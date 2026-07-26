@@ -26,6 +26,7 @@ import missions as missions_api  # noqa: E402
 import write_slots  # noqa: E402
 from fastapi import HTTPException  # noqa: E402
 from orchestration.store import Store  # noqa: E402
+import transport.browser as browser_transport  # noqa: E402
 from transport.chatgpt_web.adapter import WebBridgeDriver
 
 
@@ -329,6 +330,7 @@ class ChatRouteSessionIsolationTest(unittest.IsolatedAsyncioTestCase):
             self.sessions.append(session_id)
             return HoldingTransport(session_id)
 
+        self.holding_factory = factory
         chat_api.ui_transport_factory = factory
 
     async def asyncTearDown(self) -> None:
@@ -385,6 +387,58 @@ class ChatRouteSessionIsolationTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("brouillon est conservé", str(raised.exception.detail))
         self.assertIn(run_a["id"], chat_api._runs)
         self.assertIn(run_b["id"], chat_api._runs)
+
+    async def test_invalid_settings_fail_run_and_release_exact_writer_capacity(self) -> None:
+        invalid_settings = Path(self.tmp.name) / "invalid-settings.json"
+        invalid_settings.write_text(json.dumps({
+            "browser_transport": "selenium",
+            "browser_profile_root": "console/data/browser-profiles",
+        }), encoding="utf-8")
+        saved_settings_file = browser_transport.SETTINGS_FILE
+        browser_transport.SETTINGS_FILE = invalid_settings
+        chat_api.ui_transport_factory = browser_transport.create_transport
+        try:
+            submitted = await chat_api.send_chat(
+                chat_api.ChatSendIn(
+                    conversation_url="https://chatgpt.com/c/invalid-settings",
+                    text="must fail without leaking the writer",
+                )
+            )
+            failed = chat_api._runs[submitted["id"]]
+            await asyncio.gather(failed.task, return_exceptions=True)
+        finally:
+            browser_transport.SETTINGS_FILE = saved_settings_file
+
+        self.assertEqual(failed.state, "FAILED")
+        self.assertEqual(
+            failed.error,
+            "CHAT_RUN_CRASHED: browser_transport must be exactly one of: "
+            "playwright, webbridge",
+        )
+        self.assertEqual(write_slots._registry.active_leases(), ())
+
+        chat_api.ui_transport_factory = self.holding_factory
+        await chat_api.send_chat(
+            chat_api.ChatSendIn(
+                conversation_url="https://chatgpt.com/c/recovered-a",
+                text="a",
+            )
+        )
+        await chat_api.send_chat(
+            chat_api.ChatSendIn(
+                conversation_url="https://chatgpt.com/c/recovered-b",
+                text="b",
+            )
+        )
+        self.assertEqual(len(write_slots._registry.active_leases()), 2)
+        with self.assertRaises(HTTPException) as raised:
+            await chat_api.send_chat(
+                chat_api.ChatSendIn(
+                    conversation_url="https://chatgpt.com/c/recovered-c",
+                    text="c",
+                )
+            )
+        self.assertEqual(raised.exception.status_code, 409)
 
 
 class ConversationBindingPersistenceTest(unittest.TestCase):

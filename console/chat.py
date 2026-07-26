@@ -278,11 +278,12 @@ async def _ensure_view_transport(url: str) -> ChatGPTWebTransport:
 
 async def _run_chat(run: ChatRunRuntime) -> None:
     started = time.monotonic()
-    if run.lease is None:
-        raise RuntimeError("chat writer started without a conversation lease")
-    transport = _make_transport(run.lease.session_id)
-    run.transport = transport
+    transport: ChatGPTWebTransport | None = None
     try:
+        if run.lease is None:
+            raise RuntimeError("chat writer started without a conversation lease")
+        transport = _make_transport(run.lease.session_id)
+        run.transport = transport
         if run.cancelled:
             raise TransportError(GENERATION_CANCELLED, "cancelled before send")
         _set_state(run, "SELECTING_CONVERSATION")
@@ -386,10 +387,11 @@ async def _run_chat(run: ChatRunRuntime) -> None:
         _set_state(run, "FAILED")
         _emit(run, "error", {"error": run.error, "code": "CHAT_RUN_CRASHED"})
     finally:
-        try:
-            await transport.close()
-        except Exception:
-            pass
+        if transport is not None:
+            try:
+                await transport.close()
+            except Exception:
+                pass
         if run.lease is not None:
             await run.lease.release()
         _persist_runs()
