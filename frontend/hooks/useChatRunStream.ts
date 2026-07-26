@@ -91,7 +91,7 @@ export interface ChatRunSubscribeOptions {
 
 export interface ChatRunStreamController {
   subscribe(key: ConversationKey, run: ChatRun, options?: ChatRunSubscribeOptions): number;
-  close(key: ConversationKey): void;
+  close(key: ConversationKey): boolean;
   cancel(key: ConversationKey, runId: string, streamEpoch: number): boolean;
   retry(key: ConversationKey, runId: string, streamEpoch: number): boolean;
   rekey(
@@ -445,13 +445,13 @@ export function useChatRunStream({
     return true;
   }, [finishRecovery]);
 
-  const close = useCallback((key: ConversationKey) => {
-    cancelRecovery(key);
-    cancelCancellation(key);
+  const close = useCallback((key: ConversationKey): boolean => {
+    if (recoveriesRef.current.has(key) || cancellationsRef.current.has(key)) return false;
     epochsRef.current.set(key, (epochsRef.current.get(key) || 0) + 1);
     const binding = streamsRef.current.get(key);
     if (binding) closeBinding(binding);
-  }, [cancelCancellation, cancelRecovery, closeBinding]);
+    return true;
+  }, [closeBinding]);
 
   const rekey = useCallback((
     fromKey: ConversationKey,

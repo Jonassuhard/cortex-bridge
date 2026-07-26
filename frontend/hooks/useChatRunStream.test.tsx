@@ -194,32 +194,40 @@ describe("useChatRunStream", () => {
     expect(result.current.sources[0].close).toHaveBeenCalledTimes(1);
   });
 
-  it("ignores a late A1 cancel response after owned close and active A2 replacement", async () => {
+  it("refuses ordinary close during cancellation and applies the late terminal truth", async () => {
     let resolveCancel!: (value: unknown) => void;
+    let cancelSignal!: AbortSignal;
     const cancelResponse = new Promise<unknown>((resolve) => { resolveCancel = resolve; });
     const { result } = renderHook(() => useStreamHarness(
       [summary("a")],
       "a",
       undefined,
       undefined,
-      () => cancelResponse,
+      (_key, _runId, context) => {
+        cancelSignal = context.signal;
+        return cancelResponse;
+      },
     ));
+    let closed!: boolean;
     act(() => {
       result.current.streams.subscribe("a", run("a", "run-a-1"));
       result.current.streams.cancel("a", "run-a-1", 1);
-      result.current.streams.close("a");
-      result.current.streams.subscribe("a", run("a", "run-a-2"));
+      closed = result.current.streams.close("a");
     });
-    const sourceA2 = result.current.sources[1];
+    expect(closed).toBe(false);
+    expect(cancelSignal.aborted).toBe(false);
+    expect(result.current.sources[0].close).not.toHaveBeenCalled();
+
     await act(async () => resolveCancel({
       ...run("a", "run-a-1"),
       state: "COMPLETED",
       completed_at: "late",
     }));
 
-    expect(result.current.controller.state.entries.a.run?.id).toBe("run-a-2");
-    expect(result.current.controller.state.entries.a.run?.state).toBe("QUEUED");
-    expect(sourceA2.close).not.toHaveBeenCalled();
+    expect(result.current.controller.state.entries.a.run?.id).toBe("run-a-1");
+    expect(result.current.controller.state.entries.a.run?.state).toBe("COMPLETED");
+    expect(result.current.sources).toHaveLength(1);
+    expect(result.current.sources[0].close).toHaveBeenCalledTimes(1);
   });
 
   it.each(["COMPLETED", "FAILED", "CANCELLED"] as const)(
@@ -531,7 +539,7 @@ describe("useChatRunStream", () => {
     expect(result.current.controller.state.entries["canonical-recovered"].run?.state).toBe("COMPLETED");
   });
 
-  it("aborts and does not resurrect a run when explicit close happens during recovery", async () => {
+  it("refuses ordinary close during recovery and lets recovery truth resubscribe", async () => {
     let resolveRecovery!: (value: ChatRun) => void;
     let recoverySignal!: AbortSignal;
     const recovery = new Promise<ChatRun>((resolve) => { resolveRecovery = resolve; });
@@ -545,13 +553,17 @@ describe("useChatRunStream", () => {
     ));
     act(() => result.current.streams.subscribe("a", run("a")));
     act(() => result.current.sources[0].fail());
-    act(() => result.current.streams.close("a"));
-    expect(recoverySignal.aborted).toBe(true);
+    let closed!: boolean;
+    act(() => { closed = result.current.streams.close("a"); });
+    expect(closed).toBe(false);
+    expect(recoverySignal.aborted).toBe(false);
 
     await act(async () => resolveRecovery({ ...run("a"), state: "WAITING_FOR_CHATGPT" }));
 
-    expect(result.current.sources).toHaveLength(1);
+    expect(result.current.controller.state.entries.a.run?.state).toBe("WAITING_FOR_CHATGPT");
+    expect(result.current.sources).toHaveLength(2);
     expect(result.current.sources[0].close).toHaveBeenCalledTimes(1);
+    expect(result.current.sources[1].close).not.toHaveBeenCalled();
   });
 
   it("aborts a suspended GET, lets a later bounded attempt proceed, and keeps one absolute deadline", async () => {

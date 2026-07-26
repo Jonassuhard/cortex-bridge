@@ -509,7 +509,10 @@ export function CortexApp() {
       notify("Une réponse est déjà en cours pour cette conversation.");
       return false;
     }
-    chatStreams.close(key);
+    if (!chatStreams.close(key)) {
+      notify("Une opération est encore en cours pour cette conversation.");
+      return false;
+    }
     dispatchConversation({ type: "REQUEST_STARTED", request: "send", key });
     return true;
   }

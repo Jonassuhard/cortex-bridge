@@ -396,3 +396,30 @@ Generated `frontend/out/**`, `frontend/coverage/**` and
 - Generated `frontend/out/**`, `frontend/coverage/**` and
   `frontend/tsconfig.tsbuildinfo` remain intentionally unstaged.
 - Fresh independent review remains delegated to the parent.
+
+## Fix round 5 — close preserves pending owners
+
+**Starting commit:** `69e4c663ec934aabf229a67ed7c06c8e1cc10f88`
+
+### Correction
+
+- Public `close(key)` now returns `false` while cancellation or recovery owns
+  that key. It preserves the source, epoch and owner so late terminal or
+  recovery truth can still apply. Normal owner-free close remains successful;
+  unmount retains the explicit force-abort teardown path.
+- The defensive execution boundary also handles a refused close without
+  starting a request.
+
+### TDD and verification evidence
+
+- The two former abandonment tests now prove close refusal and late truth.
+- Focused new regressions: 2/2 green.
+- `git diff --check`: green.
+- Heavy gates were intentionally omitted at the hard commit cutoff; parent
+  retains final focused app/typecheck verification and independent review.
+
+### Scope
+
+- No dependency or lockfile changes.
+- Generated `frontend/out/**`, `frontend/coverage/**` and
+  `frontend/tsconfig.tsbuildinfo` remain intentionally unstaged.
