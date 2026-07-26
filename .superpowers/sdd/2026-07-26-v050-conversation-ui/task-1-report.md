@@ -391,3 +391,102 @@ registry with a clean dedicated cache. The endpoint again returned a gzip
 stream that npm treated as invalid JSON (`Unexpected token '\u001f'`), exit
 `1`. Audit status remains `[UNCLEAR]`; no forced remediation or safety claim
 was applied.
+
+## Fix round 3
+
+Date: 2026-07-26
+Starting commit: `c5262b77d3c86c876c942bb942519f4939816300`
+
+### Non-reversible privacy fingerprints
+
+The round 2 gate still embedded reversible byte-array reconstructions of the
+values it was meant to ban. Those reconstructions and the corresponding
+component-test assertions have been removed. The gate now commits only each
+marker's SHA-256 digest, normalized Unicode code-point length, and a generic
+finding category. It neither stores nor reconstructs the original marker.
+
+The scanner normalizes input with NFKC and locale-stable lowercase conversion.
+Before hashing candidate substrings, it decodes JavaScript Unicode escapes,
+JavaScript hexadecimal escapes, and contiguous URL percent escapes. Synthetic
+tests prove detection of raw, escaped, URL-encoded, JavaScript, and JSX forms.
+
+### Anti-obfuscation gate
+
+The source scan also rejects common dynamic string-assembly mechanisms:
+
+- `String.fromCharCode` and `String.fromCodePoint`;
+- `atob`;
+- `Buffer.from` with `base64` or `hex` encoding;
+- direct literal `split(...).join(...)` chains;
+- literal arrays joined into strings.
+
+The privacy test itself is excluded only from this anti-obfuscation rule so it
+can define detector examples and decode literal escapes. It remains included in
+the raw and fingerprint scans, preventing the test file from hiding a banned
+marker. The sidebar component test now asserts neutral labels only.
+
+The exact scanned extensions are `.cjs`, `.config`, `.css`, `.html`, `.js`,
+`.json`, `.jsx`, `.md`, `.mjs`, `.mts`, `.toml`, `.ts`, `.tsx`, `.txt`,
+`.yaml`, and `.yml`. Exact file exclusions are `package-lock.json` and
+`tsconfig.tsbuildinfo`; directory exclusions are `.next/`, `coverage/`,
+`node_modules/`, `out/`, `playwright-report/`, and `test-results/`.
+
+### TDD evidence
+
+First RED:
+
+- the raw JavaScript and JavaScript/JSX extension cases passed;
+- escaped and URL-encoded forms were not detected;
+- `atob`, `Buffer.from`, and join-based assembly were not rejected;
+- the real repository scan exposed the component test's dynamic reconstruction.
+
+Second RED, after implementing normalization and anti-obfuscation:
+
+- all synthetic detector cases passed;
+- only the repository scan still failed on the sidebar test reconstruction.
+
+GREEN, after reducing the component test to neutral labels:
+
+- six privacy runtime tests passed;
+- the sidebar component test passed;
+- the real frontend source scan returned zero findings.
+
+### Fresh verification
+
+```text
+npm test
+```
+
+Result: exit `0`; two Vitest tests and 24 runtime tests passed.
+
+```text
+npm run test:coverage
+```
+
+Result: exit `0`; the same 26 tests passed. Application coverage remained
+48.23% statements/lines, 38.21% branches, and 29.41% functions.
+
+```text
+npm run test:e2e
+npm run test:a11y
+npm run typecheck
+npm run lint
+```
+
+Results: E2E `2/2`, a11y `1/1`, TypeScript exit `0`, ESLint exit `0`.
+
+The full `npm test` command also passed under Node `20.9.0` with npm `10.9.4`:
+two Vitest tests and 24 runtime tests. Package and lockfile engine declarations
+remain aligned at `>=20.9.0`; the optional Darwin `fsevents@2.3.2` metadata is
+unchanged.
+
+No frontend build or export was run. Generated `frontend/out/**` and
+`frontend/tsconfig.tsbuildinfo` remain outside the scoped commit.
+
+### Audit status
+
+The frontend audit was rerun against the explicit official registry with a new
+dedicated cache. The endpoint again returned gzip bytes that npm treated as
+invalid JSON (`Unexpected token '\u001f'`), exit `1`. Audit status remains
+`[UNCLEAR]`; no vulnerability count, safety claim, or forced remediation was
+applied.
