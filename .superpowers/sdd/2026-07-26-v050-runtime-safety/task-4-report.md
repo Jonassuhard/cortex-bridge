@@ -449,3 +449,118 @@ Fresh full backend regression:
 Result: 200 tests passed in 188.209 s. Existing `ResourceWarning` noise remains,
 with zero failures/errors. No frontend or production source changed in this
 round, so frontend checks were not rerun.
+
+## Fix round 5/5 — fatal-worker lifecycle closure
+
+### Deterministic RED evidence
+
+The diagnosed startup failure was reproduced without external navigation by
+making `sync_playwright().start()` raise. After the worker had exited, both the
+direct bounded close and the registered-driver `asyncTearDown` close expired:
+
+```bash
+.venv/bin/python -m unittest \
+  tests.test_playwright_driver.PlaywrightDriverTest.test_close_completes_after_startup_worker_has_failed \
+  tests.test_playwright_driver.PlaywrightDriverTest.test_registered_startup_failure_is_not_masked_by_teardown_hang -v
+```
+
+Initial result: 2 errors in 1.510 s, both `TimeoutError` while awaiting the
+unresolved close Future. The original startup `DriverError` was observed before
+the teardown failure, proving that cleanup was masking a completed actionable
+error rather than blocking startup itself.
+
+The enqueue and publication audit then produced three additional REDs:
+
+- `Thread.start()` failure left a published non-running thread, pending startup
+  and close Futures: 1 error in 1.008 s;
+- `Timer.start()` failure escaped from `close()` after `close_page` admission
+  but before scheduling idle shutdown: 1 error in 1.323 s;
+- idle shutdown between runtime selection and `register(session)` rejected a
+  valid handoff: 1 error in 1.233 s.
+
+The first live full-suite run also caught the startup-publication race:
+18/19 tests passed, while immediate factory recovery returned the same poisoned
+driver because `_startup` had been settled before terminal state publication.
+
+### Lifecycle correction
+
+- `release()` now settles immediately while holding `_state_lock` when the
+  runtime is dead or no longer accepting. Calls admitted before `_mark_dead()`
+  are drained; none can be admitted after the drain.
+- Fatal worker order is now `close context -> mark dead -> drain calls ->
+  discard runtime -> settle startup`. A caller observing startup failure
+  therefore cannot recover through a still-live cached driver.
+- A worker thread is published only after `Thread.start()` succeeds. Start
+  failure atomically closes admission and settles both startup and call
+  Futures.
+- Idle-timer start failure falls back to an immediate queued shutdown sentinel
+  behind `close_page`; close remains bounded and the context cannot leak.
+- Runtime selection and `register(session)` now form one atomic claim. If idle
+  shutdown wins, the registry installs and registers a fresh runtime.
+- Futures are created only after admission guards. Every created call/shutdown
+  Future is either settled immediately or queued to a live/draining worker.
+- Test teardown bounds each driver close, waits for each unique runtime worker
+  to stop, then deletes its temporary profile. This preserves the production
+  warm-handoff window and removes the profile-deletion race exposed by repeated
+  execution.
+
+### Exact browser provisioning
+
+Before installation:
+
+```text
+Playwright: 1.61.0
+Required: chromium v1228 and chromium-headless-shell v1228
+Browser: Chrome for Testing 149.0.7827.55
+Cache present: chromium-1234 and chromium_headless_shell-1234 only
+```
+
+Provisioning command:
+
+```bash
+.venv/bin/python -m playwright install chromium
+```
+
+The command installed both revision-1228 directories. Direct executable
+verification returned `Google Chrome for Testing 149.0.7827.55`. Requirements
+were not broadened. All live browser tests used the loopback fixture; no
+external website was opened.
+
+### Final verification
+
+Focused lifecycle command covered fatal startup, teardown, thread/timer start,
+atomic handoff, recovery and close-admission ordering.
+
+Result: 7 tests passed in 4.211 s.
+
+Fresh verbose Playwright suite:
+
+```bash
+.venv/bin/python -m unittest tests.test_playwright_driver -v
+```
+
+Result: 22 tests passed in 17.027 s.
+
+Five additional sequential full-suite repetitions all passed 22/22:
+
+```text
+repeat 1: 16.777 s
+repeat 2: 17.276 s
+repeat 3: 17.327 s
+repeat 4: 16.643 s
+repeat 5: 18.009 s
+```
+
+Fresh backend discovery used the exact `.venv/bin/python` under a 360-second
+bash watchdog:
+
+```bash
+.venv/bin/python -m unittest discover -s tests -v
+```
+
+Result: 211 tests passed in 200.228 s; the watchdog did not fire. Existing
+`ResourceWarning` noise remains, with zero failures/errors.
+
+Targeted `py_compile` and `git diff --check` both exited 0. No frontend source
+or Task 5 file changed in this round. Final lifecycle audit found no remaining
+Critical or Important issue in the owned Playwright paths.

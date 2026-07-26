@@ -102,23 +102,35 @@ class _PlaywrightRuntime:
     def _start_locked(self) -> None:
         if self._thread is not None:
             return
-        self._thread = threading.Thread(
+        thread = threading.Thread(
             target=self._worker,
             name="cortex-playwright-runtime",
             daemon=True,
         )
-        self._thread.start()
+        try:
+            thread.start()
+        except BaseException as exc:
+            self._accepting = False
+            self._dead = True
+            self._logical_pages = 0
+            _settle(self._startup, error=exc)
+            raise
+        self._thread = thread
 
     def submit(
         self,
         session: str,
         callback: Callable[[BrowserContext, Page], Any],
     ) -> tuple[concurrent.futures.Future[None], concurrent.futures.Future[Any]]:
-        future: concurrent.futures.Future[Any] = concurrent.futures.Future()
         with self._state_lock:
             if not self._accepting or self._dead or not self._clients.get(session):
                 raise RuntimeError("browser driver is closed")
-            self._start_locked()
+            future: concurrent.futures.Future[Any] = concurrent.futures.Future()
+            try:
+                self._start_locked()
+            except BaseException as exc:
+                _settle(future, error=exc)
+                raise
             self._calls.put(_WorkerCall("call", session, callback, future))
         return self._startup, future
 
@@ -135,6 +147,11 @@ class _PlaywrightRuntime:
             if count == 1:
                 del self._clients[session]
             thread = self._thread
+            if self._dead or not self._accepting:
+                # The worker drains calls queued before _mark_dead() while this
+                # lock prevents any release from enqueueing after that drain.
+                _settle(future)
+                return future, thread
             if thread is None:
                 if not self._clients:
                     self._accepting = False
@@ -151,15 +168,24 @@ class _PlaywrightRuntime:
                     _IDLE_SHUTDOWN_SECONDS, self._shutdown_if_idle
                 )
                 self._idle_timer.daemon = True
-                self._idle_timer.start()
+                try:
+                    self._idle_timer.start()
+                except BaseException:
+                    self._idle_timer.cancel()
+                    self._idle_timer = None
+                    self._accepting = False
+                    shutdown: concurrent.futures.Future[None] = (
+                        concurrent.futures.Future()
+                    )
+                    self._calls.put(_WorkerCall("shutdown", None, None, shutdown))
         return future, thread
 
     def _shutdown_if_idle(self) -> None:
-        future: concurrent.futures.Future[None] = concurrent.futures.Future()
         with self._state_lock:
             self._idle_timer = None
             if self._clients or self._dead or not self._accepting:
                 return
+            future: concurrent.futures.Future[None] = concurrent.futures.Future()
             # Admission and the terminal sentinel share this lock. No call can
             # ever be queued behind shutdown.
             self._accepting = False
@@ -262,7 +288,6 @@ class _PlaywrightRuntime:
                     _settle(call.future, result=result)
         except BaseException as exc:
             terminal_error = exc
-            _settle(self._startup, error=exc)
         finally:
             terminal_error = terminal_error or close_context()
             self._mark_dead()
@@ -274,6 +299,7 @@ class _PlaywrightRuntime:
                     break
                 _settle(pending.future, error=failure)
             _discard_runtime(self)
+            _settle(self._startup, error=failure)
 
 
 _RUNTIMES: dict[tuple[str, bool], _PlaywrightRuntime] = {}
@@ -287,12 +313,22 @@ def _discard_runtime(runtime: _PlaywrightRuntime) -> None:
             _RUNTIMES.pop(key, None)
 
 
-def _shared_runtime(profile_root: Path, headless: bool) -> _PlaywrightRuntime:
+def _shared_runtime(
+    profile_root: Path,
+    headless: bool,
+    session: str,
+) -> _PlaywrightRuntime:
     key = (str(profile_root), headless)
     with _RUNTIMES_LOCK:
         runtime = _RUNTIMES.get(key)
-        if runtime is None or not runtime.live:
+        if runtime is not None:
+            try:
+                runtime.register(session)
+            except RuntimeError:
+                runtime = None
+        if runtime is None:
             runtime = _PlaywrightRuntime(profile_root, headless)
+            runtime.register(session)
             _RUNTIMES[key] = runtime
         return runtime
 
@@ -318,8 +354,7 @@ class PlaywrightBrowserDriver:
             if headless is None
             else bool(headless)
         )
-        self._runtime = _shared_runtime(self.profile_root, self.headless)
-        self._runtime.register(session)
+        self._runtime = _shared_runtime(self.profile_root, self.headless, session)
         self.profile_path = self._runtime.profile_path
         self.target_url: str | None = None
         self._state_lock = threading.Lock()

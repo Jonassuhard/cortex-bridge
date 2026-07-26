@@ -80,6 +80,11 @@ class _FixtureHandler(http.server.BaseHTTPRequestHandler):
         return
 
 
+class _BrokenPlaywright:
+    def start(self) -> None:
+        raise RuntimeError("browser executable missing")
+
+
 class PlaywrightDriverTest(unittest.IsolatedAsyncioTestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -101,7 +106,12 @@ class PlaywrightDriverTest(unittest.IsolatedAsyncioTestCase):
 
     async def asyncTearDown(self) -> None:
         for driver in reversed(self.drivers):
-            await driver.close()
+            await asyncio.wait_for(driver.close(), timeout=0.5)
+        for runtime in {driver._runtime for driver in self.drivers}:
+            thread = runtime._thread
+            if thread is not None:
+                await asyncio.to_thread(thread.join, 2)
+                self.assertFalse(thread.is_alive())
         self.tempdir.cleanup()
 
     def driver(self, session: str) -> PlaywrightBrowserDriver:
@@ -112,6 +122,12 @@ class PlaywrightDriverTest(unittest.IsolatedAsyncioTestCase):
         )
         self.drivers.append(driver)
         return driver
+
+    async def wait_for_worker_exit(self, driver: PlaywrightBrowserDriver) -> None:
+        thread = driver._runtime._thread
+        self.assertIsNotNone(thread)
+        await asyncio.to_thread(thread.join, 0.5)
+        self.assertFalse(thread.is_alive())
 
     async def test_navigation_evaluation_upload_screenshot_tabs_and_health(self) -> None:
         driver = self.driver("contract-a")
@@ -272,10 +288,6 @@ class PlaywrightDriverTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("meaningful playwright flow", sent["text"])
 
     async def test_startup_failure_is_evicted_and_factory_recovers(self) -> None:
-        class BrokenPlaywright:
-            def start(self):
-                raise RuntimeError("browser executable missing")
-
         settings = {
             "browser_transport": "playwright",
             "browser_profile_root": str(self.profile_root),
@@ -283,7 +295,7 @@ class PlaywrightDriverTest(unittest.IsolatedAsyncioTestCase):
         with mock.patch.object(
             playwright_driver_module,
             "sync_playwright",
-            return_value=BrokenPlaywright(),
+            return_value=_BrokenPlaywright(),
         ):
             broken = create_browser_driver(
                 session="startup-recovery",
@@ -301,6 +313,99 @@ class PlaywrightDriverTest(unittest.IsolatedAsyncioTestCase):
         self.drivers.append(recovered)
         await recovered.navigate(self.url)
         self.assertEqual(await recovered.evaluate("document.title"), "Cortex Playwright Fixture")
+
+    async def test_close_completes_after_startup_worker_has_failed(self) -> None:
+        driver = PlaywrightBrowserDriver(
+            session="startup-close",
+            profile_root=self.profile_root,
+            headless=True,
+        )
+        with mock.patch.object(
+            playwright_driver_module,
+            "sync_playwright",
+            return_value=_BrokenPlaywright(),
+        ):
+            with self.assertRaisesRegex(DriverError, "browser executable missing"):
+                await driver.navigate(self.url)
+        await self.wait_for_worker_exit(driver)
+
+        await asyncio.wait_for(driver.close(), timeout=0.5)
+        self.assertTrue(driver.closed)
+
+    async def test_registered_startup_failure_is_not_masked_by_teardown_hang(self) -> None:
+        driver = self.driver("startup-teardown")
+        with mock.patch.object(
+            playwright_driver_module,
+            "sync_playwright",
+            return_value=_BrokenPlaywright(),
+        ):
+            with self.assertRaisesRegex(DriverError, "browser executable missing"):
+                await driver.navigate(self.url)
+        await self.wait_for_worker_exit(driver)
+
+    async def test_thread_start_failure_does_not_leave_close_pending(self) -> None:
+        driver = PlaywrightBrowserDriver(
+            session="thread-start-close",
+            profile_root=self.profile_root,
+            headless=True,
+        )
+        with mock.patch.object(
+            playwright_driver_module.threading.Thread,
+            "start",
+            side_effect=RuntimeError("worker thread refused to start"),
+        ):
+            with self.assertRaisesRegex(DriverError, "worker thread refused to start"):
+                await driver.navigate(self.url)
+
+        await asyncio.wait_for(driver.close(), timeout=0.5)
+        self.assertFalse(driver.live)
+
+    async def test_idle_timer_start_failure_falls_back_to_worker_shutdown(self) -> None:
+        driver = PlaywrightBrowserDriver(
+            session="timer-start-close",
+            profile_root=self.profile_root,
+            headless=True,
+        )
+        await driver.navigate(self.url)
+        thread = driver._runtime._thread
+        self.assertIsNotNone(thread)
+
+        with mock.patch.object(
+            playwright_driver_module.threading.Timer,
+            "start",
+            side_effect=RuntimeError("idle timer refused to start"),
+        ):
+            await asyncio.wait_for(driver.close(), timeout=0.5)
+
+        await asyncio.to_thread(thread.join, 1)
+        self.assertFalse(thread.is_alive())
+        self.assertFalse(driver.live)
+
+    async def test_registration_claim_is_atomic_with_idle_shutdown(self) -> None:
+        seed = self.driver("handoff-seed")
+        await seed.navigate(self.url)
+        await seed.close()
+        original_shared_runtime = playwright_driver_module._shared_runtime
+
+        def run_idle_callback_after_selection(*args, **kwargs):
+            runtime = original_shared_runtime(*args, **kwargs)
+            runtime._shutdown_if_idle()
+            return runtime
+
+        with mock.patch.object(
+            playwright_driver_module,
+            "_shared_runtime",
+            side_effect=run_idle_callback_after_selection,
+        ):
+            handoff = PlaywrightBrowserDriver(
+                session="handoff-successor",
+                profile_root=self.profile_root,
+                headless=True,
+            )
+        self.drivers.append(handoff)
+
+        await handoff.navigate(self.url)
+        self.assertTrue(handoff.live)
 
     async def test_factory_selects_exact_backend_and_reuses_live_playwright_session(self) -> None:
         first = create_browser_driver(
