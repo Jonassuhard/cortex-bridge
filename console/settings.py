@@ -351,25 +351,38 @@ def _idle_runtime_truth() -> dict[str, Any]:
 
 
 _TERMINAL_MISSION_STATES = {"COMPLETED", "BLOCKED", "FAILED", "CANCELLED"}
+_OPAQUE_CONVERSATION_ID = re.compile(r"^[A-Za-z0-9_-]+$")
+_CANONICAL_CHATGPT_ORIGINS = {"chatgpt.com", "www.chatgpt.com"}
 
 
 def _canonical_conversation_identity(value: object) -> str | None:
     """Return the transport's exact opaque identity, never a title or prefix."""
     if not isinstance(value, str):
         return None
-    raw = value.strip().rstrip("/")
+    raw = value.strip()
     if not raw:
         return None
     if raw.startswith("provisional:"):
-        return raw
-    parsed = urlsplit(raw)
-    if parsed.scheme or parsed.netloc:
-        path = parsed.path.rstrip("/")
-        if not path.startswith("/c/"):
+        provisional_id = raw.removeprefix("provisional:")
+        try:
+            return raw if str(uuid.UUID(provisional_id)) == provisional_id else None
+        except (ValueError, AttributeError):
             return None
-        identity = path.removeprefix("/c/")
-        return identity if identity and "/" not in identity else None
-    return raw
+    if _OPAQUE_CONVERSATION_ID.fullmatch(raw):
+        return raw
+    try:
+        parsed = urlsplit(raw)
+    except ValueError:
+        return None
+    if (
+        parsed.scheme != "https"
+        or parsed.netloc not in _CANONICAL_CHATGPT_ORIGINS
+        or parsed.query
+        or parsed.fragment
+    ):
+        return None
+    match = re.fullmatch(r"/c/([A-Za-z0-9_-]+)", parsed.path)
+    return match.group(1) if match else None
 
 
 def _binding_conversation_identity(binding: dict[str, Any]) -> str | None:
@@ -504,9 +517,11 @@ async def pipeline_status(
                 connection.execute("SELECT 1").fetchone()
     except sqlite3.Error:
         db_ok = False
-    current_chat = _latest_chat_run_for_conversation(
-        normalized_identity if scoped else _mission_conversation_identity(mission)
-    )
+    if scoped:
+        current_chat = _latest_chat_run_for_conversation(normalized_identity)
+    else:
+        chat_runs = list(chat_api._runs.values())
+        current_chat = chat_runs[-1] if chat_runs else None
     transport_ms = current_chat.latency.get("delivery_ms") if current_chat else None
     total_ms = current_chat.latency.get("total_ms") if current_chat else None
     if mission and mission.get("state") not in _TERMINAL_MISSION_STATES:

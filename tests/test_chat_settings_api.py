@@ -566,12 +566,12 @@ class ChatSettingsApiTestCase(unittest.TestCase):
     def test_09e_pipeline_scope_normalizes_url_and_opaque_identity_exactly(self):
         mission_id = self.seed_pipeline_mission(
             "scope-url",
-            conversation_target=f"{self.fixture.base_url}/c/scope-url/",
-            conversation_url=f"{self.fixture.base_url}/c/scope-url/",
+            conversation_target="https://chatgpt.com/c/scope-url",
+            conversation_url="https://chatgpt.com/c/scope-url",
             updated_at=100.0,
         )
 
-        for identity in ("scope-url", f"{self.fixture.base_url}/c/scope-url/"):
+        for identity in ("scope-url", "https://chatgpt.com/c/scope-url"):
             with self.subTest(identity=identity):
                 status, body = self.get(
                     "/api/pipeline/status?" + urllib.parse.urlencode({
@@ -644,6 +644,75 @@ class ChatSettingsApiTestCase(unittest.TestCase):
         )
         self.assertEqual(status, 404)
         self.assertNotIn("active_mission_id", body)
+
+    def test_09i_global_legacy_uses_the_latest_global_chat_even_for_another_mission(self):
+        mission_a = self.seed_pipeline_mission("legacy-mission-a", updated_at=3_000_000.0)
+        self.seed_chat_run("legacy-chat-a", "legacy-mission-a", model="legacy-a")
+        self.seed_chat_run("legacy-chat-b", "legacy-chat-b", model="legacy-b")
+        chat_api._runs["legacy-chat-a"].latency.update({"delivery_ms": 11, "total_ms": 21})
+        chat_api._runs["legacy-chat-b"].latency.update({"delivery_ms": 71, "total_ms": 91})
+
+        status, body = self.get("/api/pipeline/status")
+
+        self.assertEqual(status, 200, body)
+        self.assertEqual(body["scope"]["mode"], "global_legacy")
+        self.assertEqual(body["active_mission_id"], mission_a)
+        self.assertEqual(body["events"][0]["id"], "chat-legacy-chat-b")
+        self.assertEqual(body["latency"]["transport_ms"], 71)
+        self.assertEqual(body["latency"]["total_iteration_ms"], 91)
+
+    def test_09j_global_legacy_keeps_the_latest_chat_when_there_is_no_mission(self):
+        store = missions_api.get_store()
+        with store._conn:
+            store._conn.execute("UPDATE missions SET state = 'COMPLETED'")
+        self.seed_chat_run("legacy-chat-only", "legacy-chat-only", model="legacy-only")
+        chat_api._runs["legacy-chat-only"].latency.update({
+            "delivery_ms": 37,
+            "total_ms": 73,
+        })
+
+        status, body = self.get("/api/pipeline/status")
+
+        self.assertEqual(status, 200, body)
+        self.assertIsNone(body["active_mission_id"])
+        self.assertEqual(body["events"][0]["id"], "chat-legacy-chat-only")
+        self.assertEqual(body["latency"]["transport_ms"], 37)
+        self.assertEqual(body["latency"]["total_iteration_ms"], 73)
+
+    def test_09k_pipeline_identity_normalization_is_fail_closed(self):
+        provisional = f"provisional:{uuid.uuid4()}"
+        valid = {
+            "opaque-ID_42": "opaque-ID_42",
+            provisional: provisional,
+            "https://chatgpt.com/c/opaque-ID_42": "opaque-ID_42",
+            "https://www.chatgpt.com/c/opaque-ID_42": "opaque-ID_42",
+        }
+        for raw, expected in valid.items():
+            with self.subTest(valid=raw):
+                self.assertEqual(
+                    settings_api._canonical_conversation_identity(raw),
+                    expected,
+                )
+
+        invalid = (
+            "file:///c/opaque-ID_42",
+            "http://chatgpt.com/c/opaque-ID_42",
+            "https://evil.example/c/opaque-ID_42",
+            "https://chatgpt.com.evil.example/c/opaque-ID_42",
+            "https://user@chatgpt.com/c/opaque-ID_42",
+            "https://chatgpt.com:443/c/opaque-ID_42",
+            "https://chatgpt.com/c/opaque-ID_42?shared=true",
+            "https://chatgpt.com/c/opaque-ID_42#fragment",
+            "https://chatgpt.com/c/",
+            "https://chatgpt.com/c/opaque-ID_42/",
+            "https://chatgpt.com/c/opaque-ID_42/messages",
+            "//chatgpt.com/c/opaque-ID_42",
+            "chatgpt.com/c/opaque-ID_42",
+            "provisional:not-a-uuid",
+        )
+        for raw in invalid:
+            with self.subTest(invalid=raw):
+                self.assertIsNone(settings_api._canonical_conversation_identity(raw))
 
     def test_10_onboarding_opens_dedicated_login_profile(self):
         status, body = self.post("/api/onboarding/browser/open", {})
