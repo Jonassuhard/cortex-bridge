@@ -10,6 +10,7 @@ import asyncio
 import json
 import os
 import socket
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -268,6 +269,74 @@ class ExecutorRuntimeTruthTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(persisted["executor_model_used"])
         self.assertEqual(persisted["runtime_mode"], "live")
         self.assertIs(persisted["release_eligible"], True)
+        self.assertIsInstance(persisted["runtime_observed_at"], float)
+        self.assertGreater(persisted["runtime_observed_at"], 0)
+        self.assertEqual(
+            persisted["runtime_observed_at"],
+            result["runtime_observed_at"],
+        )
+
+    def test_pre_v05_mission_schema_migrates_additively_and_reloads_runtime_truth(self) -> None:
+        database = self.workspace / "pre-v05.db"
+        with sqlite3.connect(database) as connection:
+            connection.executescript(
+                """
+                CREATE TABLE missions (
+                    id TEXT PRIMARY KEY,
+                    objective TEXT NOT NULL,
+                    workspace TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    pause_reason TEXT,
+                    iteration INTEGER NOT NULL DEFAULT 0,
+                    max_iterations INTEGER NOT NULL DEFAULT 25,
+                    max_duration_seconds INTEGER NOT NULL DEFAULT 3600,
+                    failure_counts TEXT NOT NULL DEFAULT '{}',
+                    created_at REAL NOT NULL,
+                    started_at REAL,
+                    updated_at REAL NOT NULL
+                );
+                INSERT INTO missions (
+                    id, objective, workspace, state, pause_reason, iteration,
+                    max_iterations, max_duration_seconds, failure_counts,
+                    created_at, started_at, updated_at
+                ) VALUES (
+                    'legacy-mission', 'preserve this objective', '/tmp/legacy',
+                    'COMPLETED', NULL, 3, 25, 3600, '{}', 10.0, 11.0, 12.0
+                );
+                """
+            )
+
+        migrated = Store(database)
+        legacy = migrated.get_mission("legacy-mission")
+        self.assertEqual(legacy["objective"], "preserve this objective")
+        self.assertEqual(legacy["state"], "COMPLETED")
+        self.assertEqual(legacy["iteration"], 3)
+        self.assertEqual(legacy["executor_kind"], "unavailable")
+        self.assertIsNone(legacy["executor_model_used"])
+        self.assertEqual(legacy["runtime_mode"], "live")
+        self.assertIs(legacy["release_eligible"], False)
+        self.assertIsNone(legacy["runtime_observed_at"])
+
+        updated = migrated.record_runtime_truth(
+            "legacy-mission",
+            executor_kind="deterministic",
+            executor_model_used=None,
+            runtime_mode="live",
+            release_eligible=True,
+        )
+        observed_at = updated["runtime_observed_at"]
+        self.assertIsInstance(observed_at, float)
+        migrated.close()
+
+        reloaded = Store(database)
+        self.addCleanup(reloaded.close)
+        persisted = reloaded.get_mission("legacy-mission")
+        self.assertEqual(persisted["objective"], "preserve this objective")
+        self.assertEqual(persisted["executor_kind"], "deterministic")
+        self.assertIsNone(persisted["executor_model_used"])
+        self.assertEqual(persisted["runtime_mode"], "live")
+        self.assertIs(persisted["release_eligible"], True)
+        self.assertEqual(persisted["runtime_observed_at"], observed_at)
 
     async def test_tasks_expose_model_only_after_successful_executor_call(self) -> None:
         original_store_file = server.STORE_FILE
@@ -563,6 +632,53 @@ context.saveSettings().then(() => {
     throw new Error('legacy fallback value was not preserved');
   }
 }).catch((error) => { console.error(error); process.exitCode = 1; });
+"""
+        completed = subprocess.run(
+            ["node", "-e", node_test, str(html_path)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_fallback_unknown_pipeline_is_not_rendered_online(self) -> None:
+        html_path = REPO_ROOT / "frontend" / "fallback" / "index.html"
+        node_test = r"""
+const fs = require('node:fs');
+const vm = require('node:vm');
+const html = fs.readFileSync(process.argv[1], 'utf8');
+const start = html.indexOf('function renderPipeline()');
+const end = html.indexOf('\nasync function refreshAll()', start);
+if (start < 0 || end < 0) throw new Error('renderPipeline function not found');
+const source = html.slice(start, end);
+const elements = new Map();
+for (const id of ['#pipelineCards', '#pipelineEvents', '#missionState', '#latency', '#onlineLabel', '#pipelineLiveLabel']) {
+  elements.set(id, { textContent: '', replaceChildren() {} });
+}
+const context = {
+  state: {
+    pipeline: {
+      overall: 'unknown',
+      components: [],
+      events: [],
+      active_mission_state: null,
+      latency: {},
+    },
+  },
+  $: (selector) => elements.get(selector),
+  document: { createElement() { throw new Error('no rows expected'); } },
+  fmt() { return '—'; },
+  tm() { return ''; },
+};
+vm.createContext(context);
+vm.runInContext(source + ';this.renderPipeline=renderPipeline', context);
+context.renderPipeline();
+if (elements.get('#onlineLabel').textContent !== 'État inconnu') {
+  throw new Error(`unexpected status: ${elements.get('#onlineLabel').textContent}`);
+}
+if (elements.get('#pipelineLiveLabel').textContent !== 'État inconnu') {
+  throw new Error(`unexpected pipeline label: ${elements.get('#pipelineLiveLabel').textContent}`);
+}
 """
         completed = subprocess.run(
             ["node", "-e", node_test, str(html_path)],

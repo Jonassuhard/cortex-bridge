@@ -27,6 +27,16 @@ export interface ConversationSummary {
   /** Known only after the conversation has been synced once (P1d). */
   message_count?: number | null;
   status?: "idle" | "generating" | "mission" | "approval" | "blocked" | "error";
+  sync_state?: "live" | "stale";
+  sync_error?: string | null;
+}
+
+export type SyncHealth = "unknown" | "live" | "stale" | "unavailable";
+
+export interface SyncStatus {
+  state: SyncHealth;
+  error: string | null;
+  updated_at: string | null;
 }
 
 export interface CodeBlock {

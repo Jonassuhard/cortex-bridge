@@ -10,7 +10,7 @@ import type {
   PipelineStatus,
 } from "@/lib/types";
 import { formatDuration, shortTime } from "@/lib/api";
-import { executorDisplay, isAvailableComponentState } from "@/lib/runtimeTruth";
+import { executorDisplay, statusPresentation } from "@/lib/runtimeTruth";
 import {
   ActivityIcon,
   BrowserIcon,
@@ -299,25 +299,23 @@ export function ChatWorkspace({
   }
 
   const title = conversation?.title || "Nouvelle conversation";
-  const online = pipeline.overall !== "failed" && pipeline.overall !== "disconnected";
   const latency = pipeline.latency?.transport_ms;
+  const transportComponent = pipeline.components?.find((component) => component.id === "transport");
+  const chatStatus = statusPresentation(transportComponent?.state || pipeline.overall);
   const activeLabel = chatRun?.state === "CHATGPT_STREAMING"
     ? "Réponse en cours"
     : chatActive
       ? "Message en cours"
-      : online
-        ? "Connecté"
-        : "Connexion dégradée";
-  // P1a: the agent executor status sits next to the ChatGPT status.
-  const ollamaComponent = pipeline.components?.find((component) => component.id === "ollama");
-  const agentUp = isAvailableComponentState(ollamaComponent?.state);
-  const agentLabel = missionRunning
-    ? "en cours"
-    : activeMissionState === "PAUSED" || activeMissionState === "PAUSED_RECOVERY_REQUIRED"
-      ? "en pause"
-      : agentUp
-        ? "prêt"
-        : "hors ligne";
+      : chatStatus.label;
+  const chatTone = chatActive ? "active" : chatStatus.tone;
+  const executorComponent = pipeline.components?.find((component) => component.id === "executor");
+  const agentStatus = statusPresentation(executorComponent?.state);
+  const agentLabel = activeMissionState === "PAUSED" || activeMissionState === "PAUSED_RECOVERY_REQUIRED"
+    ? "En pause"
+    : agentStatus.label;
+  const agentTone = activeMissionState === "PAUSED" || activeMissionState === "PAUSED_RECOVERY_REQUIRED"
+    ? "active"
+    : agentStatus.tone;
 
   return (
     <section className="chat-workspace">
@@ -331,19 +329,20 @@ export function ChatWorkspace({
               <span>{settings.planner_model}</span>
               <i />
               <span>{executorDisplay(mission?.mission || pipeline.runtime_execution)}</span>
+              {conversation?.sync_state === "stale" && <><i /><span className="warning-label" title={conversation.sync_error || undefined}>Cache obsolète · synchronisation en échec</span></>}
               <i />
               <span className={settings.never_delete_files ? "safe-label" : "warning-label"}><ShieldIcon size={12} /> {settings.never_delete_files ? "Aucune suppression" : "Suppression non protégée"}</span>
             </p>
           </div>
         </div>
         <div className="toolbar-center-status">
-          <span className={`status-pill ${online ? "is-online" : "is-offline"}`} title="Statut de la connexion ChatGPT">
-            <span className={`presence-dot ${online ? "is-online" : "is-offline"}`} />
+          <span className={`status-pill is-${chatTone}`} title="Statut de la connexion ChatGPT">
+            <span className={`presence-dot is-${chatTone}`} />
             <span>ChatGPT</span>
             <strong>{activeLabel}</strong>
           </span>
-          <span className={`status-pill ${agentUp ? "is-online" : "is-offline"}`} title="Statut de l'agent exécutif local">
-            <span className={`presence-dot ${agentUp ? "is-online" : "is-offline"}`} />
+          <span className={`status-pill is-${agentTone}`} title="Statut de l'agent exécutif local">
+            <span className={`presence-dot is-${agentTone}`} />
             <span>Exécuteur {mission?.mission.executor_kind || "indisponible"}</span>
             <strong>{agentLabel}</strong>
           </span>

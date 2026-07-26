@@ -2,7 +2,7 @@
 
 import type { MissionDetail, PipelineComponent, PipelineStatus, RuntimeStatus, TransportStatus } from "@/lib/types";
 import { formatDuration, shortTime } from "@/lib/api";
-import { executorDiagnosticsLabel } from "@/lib/runtimeTruth";
+import { executorDiagnosticsLabel, statusPresentation } from "@/lib/runtimeTruth";
 import {
   ActivityIcon,
   AlertIcon,
@@ -75,6 +75,7 @@ export function PipelineInspector({
   const missionState = mission?.mission.state || pipeline.active_mission_state;
   const running = !!missionState && !["COMPLETED", "BLOCKED", "FAILED", "CANCELLED", "PAUSED", "PAUSED_RECOVERY_REQUIRED"].includes(missionState);
   const paused = missionState === "PAUSED" || missionState === "PAUSED_RECOVERY_REQUIRED";
+  const pipelinePresentation = statusPresentation(pipeline.overall);
 
   return (
     <aside className={`pipeline-inspector ${open ? "is-open" : ""}`} aria-label="État de la pipeline">
@@ -84,7 +85,7 @@ export function PipelineInspector({
           <h2>État du bridge</h2>
         </div>
         <div className="inspector-head-actions">
-          <span className={`pipeline-live ${pipeline.overall === "failed" ? "is-error" : ""}`}><i /> {pipeline.overall === "failed" ? "Dégradé" : "Live"}</span>
+          <span className={`pipeline-live is-${pipelinePresentation.tone}`}><i /> {pipelinePresentation.label}</span>
           <button className="icon-button" onClick={onClose} aria-label="Fermer la pipeline"><XIcon /></button>
         </div>
       </div>

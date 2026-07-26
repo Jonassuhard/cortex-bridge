@@ -221,3 +221,95 @@ Result: all exited 0.
   a few unclosed SQLite/HTTP test resources. They do not affect Task 5 runtime
   truth, but should be cleaned in a dedicated lifecycle pass rather than
   disguised here.
+
+## Fix round 2/5
+
+### Review findings resolved
+
+- A failed conversation refresh keeps already synchronized content only as an
+  explicit stale cache: both the selected conversation and list entries carry
+  `sync_state=stale` plus the synchronization error. With no cache, the state
+  is unavailable. Development conversations still require the explicit
+  frontend fixture flag.
+- A failed mission-list or mission-detail refresh clears the selected mission,
+  detail, active mission id/state, events, current task, and current executor.
+  The remaining transport component stays independent; the pipeline and local
+  execution components become neutral instead of inheriting stale activity.
+- `ChatWorkspace` now derives ChatGPT and executor status independently from
+  their respective components. `PipelineInspector` uses the same presentation
+  helper. `unknown` is rendered as `État inconnu` with neutral styling, never
+  `Connecté` or `Live`; unavailable/error states render `Indisponible`.
+- The standalone fallback executes the same truth rule for its pipeline label;
+  a Node VM regression runs the real `renderPipeline` function and proves an
+  unknown pipeline is not rendered online.
+- Mode A coverage now starts from a genuine pre-v0.5 `missions` table. The
+  additive migration preserves the legacy row and defaults, then persists and
+  reloads updated runtime truth. A completed mission's non-empty
+  `runtime_observed_at` is also proven stable across close/reopen.
+
+### TDD evidence
+
+Frontend RED command:
+
+```text
+node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON \
+  --experimental-strip-types --test frontend/lib/runtimeTruth.test.mts
+```
+
+Observed: `7 tests`; 4 passed and 3 failed because
+`reduceConversationRefreshFailure`, `reduceMissionRefreshFailure`, and
+`statusPresentation` did not exist. A focused follow-up RED proved `error` was
+mislabelled as `État inconnu`. The fallback VM regression separately failed
+with actual `En ligne` versus expected `État inconnu`.
+
+Frontend GREEN result for the same Node command: `7 tests`, all pass in
+`164.261ms`. These tests drive the pure reducers and presentation helper
+imported by `CortexApp`, including the success-then-failure transition.
+
+Backend focused command:
+
+```text
+.venv/bin/python -m unittest tests.test_executor_runtime_truth -v
+```
+
+Result: `Ran 11 tests in 7.390s ... OK`. The new genuine-schema migration and
+timestamp-stability assertions passed against the existing additive persistence
+implementation; no compensating backend production change was required.
+
+Affected command under a 240-second process-group watchdog:
+
+```text
+.venv/bin/python -m unittest \
+  tests.test_executor_runtime_truth tests.test_chat_settings_api \
+  tests.test_missions_api tests.test_runner_mode_a \
+  tests.test_protocol_state_store tests.test_process_policy \
+  tests.test_transport_session_isolation -q
+```
+
+Result: `Ran 108 tests in 69.349s ... OK`, watchdog exit 0.
+
+### Full and static verification
+
+The exact discovery command ran inside a 300-second process-group watchdog:
+
+```text
+.venv/bin/python -m unittest discover -s tests -v
+```
+
+Result: `Ran 216 tests in 199.177s ... OK`, watchdog exit 0.
+
+```text
+.venv/bin/python -m py_compile $(rg --files -g '*.py' -g '!frontend/**')
+git diff --check
+npm --prefix frontend run typecheck
+npm --prefix frontend run lint
+```
+
+Result: all exited 0 after the final source changes.
+
+### Preserved external dirt and concern
+
+- Known generated changes under `frontend/out/**` and
+  `frontend/tsconfig.tsbuildinfo` remain unstaged and uncommitted.
+- The green backend runs still emit existing `ResourceWarning` lines for a few
+  unclosed SQLite/HTTP test resources. They remain a separate lifecycle debt.

@@ -29,7 +29,12 @@ import type {
   TransportStatus,
 } from "@/lib/types";
 import { useInterval } from "@/hooks/useInterval";
-import { createUnavailableClientState } from "@/lib/runtimeTruth";
+import {
+  createUnavailableClientState,
+  reduceConversationRefreshFailure,
+  reduceMissionRefreshFailure,
+  type ConversationRefreshState,
+} from "@/lib/runtimeTruth";
 import { ConversationSidebar } from "./ConversationSidebar";
 import { ChatWorkspace } from "./ChatWorkspace";
 import { PipelineInspector } from "./PipelineInspector";
@@ -56,6 +61,8 @@ function normalizeConversation(raw: Partial<ConversationSummary> & { url: string
     archived: !!raw.archived,
     message_count: typeof raw.message_count === "number" ? raw.message_count : null,
     status: raw.status || "idle",
+    sync_state: raw.sync_state || "live",
+    sync_error: raw.sync_error || null,
   };
 }
 
@@ -64,8 +71,12 @@ function nonTerminal(state?: string) {
 }
 
 export function CortexApp() {
-  const [conversations, setConversations] = useState<ConversationSummary[]>([]);
-  const [selectedConversation, setSelectedConversation] = useState<ConversationSummary | null>(null);
+  const [conversationState, setConversationState] = useState<ConversationRefreshState>({
+    conversations: [],
+    selectedConversation: null,
+    sync: { state: "unknown", error: null, updated_at: null },
+  });
+  const { conversations, selectedConversation } = conversationState;
   const [messages, setMessages] = useState<ConversationMessage[]>([]);
   const [loadingConversations, setLoadingConversations] = useState(true);
   const [loadingMessages, setLoadingMessages] = useState(false);
@@ -150,27 +161,43 @@ export function CortexApp() {
       // 50 most recent max (Jonas spec P1d); the backend already caps, this
       // is a second belt for demo/fallback data.
       const normalized = data.map(normalizeConversation).slice(0, 50);
-      setConversations(normalized);
       setDemoMode(false);
-      setSelectedConversation((current) => {
-        if (current) {
-          const stillThere = normalized.find((item) => item.url === current.url);
-          if (stillThere) return stillThere;
+      setConversationState((current) => {
+        let selected: ConversationSummary | null;
+        const currentSelection = current.selectedConversation;
+        if (currentSelection) {
+          const stillThere = normalized.find((item) => item.url === currentSelection.url);
+          if (stillThere) selected = stillThere;
           // Deletion sync: the conversation vanished from ChatGPT — drop it
           // from Cortex too, unless a chat run is actively writing into it.
-          const runActive = chatRun && !["COMPLETED", "FAILED", "CANCELLED"].includes(chatRun.state);
-          if (current.identity === "__new__" || runActive) return current;
-          return normalized[0] || null;
+          else {
+            const runActive = chatRun && !["COMPLETED", "FAILED", "CANCELLED"].includes(chatRun.state);
+            selected = currentSelection.identity === "__new__" || runActive
+              ? { ...currentSelection, sync_state: "live", sync_error: null }
+              : normalized[0] || null;
+          }
+        } else {
+          selected = normalized[0] || null;
         }
-        return normalized[0] || null;
+        return {
+          conversations: normalized,
+          selectedConversation: selected,
+          sync: { state: "live", error: null, updated_at: new Date().toISOString() },
+        };
       });
     } catch {
       if (DEVELOPMENT_FIXTURES_ENABLED) {
-        setConversations(demoConversations);
-        setSelectedConversation((current) => current || demoConversations[0]);
+        setConversationState((current) => ({
+          conversations: demoConversations.map(normalizeConversation),
+          selectedConversation: current.selectedConversation || normalizeConversation(demoConversations[0]),
+          sync: { state: "live", error: null, updated_at: new Date().toISOString() },
+        }));
         setDemoMode(true);
       } else {
-        setConversations([]);
+        setConversationState((current) => reduceConversationRefreshFailure(
+          current,
+          "Synchronisation ChatGPT impossible",
+        ));
         setDemoMode(false);
       }
     } finally {
@@ -188,6 +215,15 @@ export function CortexApp() {
       if (DEVELOPMENT_FIXTURES_ENABLED) {
         setMissions(demoMissions);
         setSelectedMissionId((current) => current || demoMissions[0].id);
+      } else {
+        setMissions([]);
+        setSelectedMissionId(null);
+        setMissionDetail(null);
+        setPipeline((current) => reduceMissionRefreshFailure({
+          selectedMissionId: null,
+          missionDetail: null,
+          pipeline: current,
+        }, new Date().toISOString()).pipeline);
       }
     }
   }, [selectedMissionId]);
@@ -203,6 +239,14 @@ export function CortexApp() {
     } catch {
       if (DEVELOPMENT_FIXTURES_ENABLED && selectedMissionId === demoMissionDetail.mission.id) {
         setMissionDetail(demoMissionDetail);
+      } else if (!DEVELOPMENT_FIXTURES_ENABLED) {
+        setSelectedMissionId(null);
+        setMissionDetail(null);
+        setPipeline((current) => reduceMissionRefreshFailure({
+          selectedMissionId: null,
+          missionDetail: null,
+          pipeline: current,
+        }, new Date().toISOString()).pipeline);
       }
     }
   }, [selectedMissionId]);
@@ -235,7 +279,7 @@ export function CortexApp() {
   }, []);
 
   const loadConversation = useCallback(async (conversation: ConversationSummary) => {
-    setSelectedConversation(conversation);
+    setConversationState((current) => ({ ...current, selectedConversation: conversation }));
     setLoadingMessages(true);
     setMessages([]);
     setLastLightSig(null);
@@ -245,9 +289,17 @@ export function CortexApp() {
       setMessages(snapshot.messages || []);
       // P1d: remember the synced message count for the sidebar sub-line.
       const count = (snapshot.messages || []).length;
-      setConversations((current) =>
-        current.map((item) => (item.url === conversation.url ? { ...item, message_count: count } : item)),
-      );
+      setConversationState((current) => ({
+        conversations: current.conversations.map((item) => (
+          item.url === conversation.url
+            ? { ...item, message_count: count, sync_state: "live", sync_error: null }
+            : item
+        )),
+        selectedConversation: current.selectedConversation?.url === conversation.url
+          ? { ...current.selectedConversation, message_count: count, sync_state: "live", sync_error: null }
+          : current.selectedConversation,
+        sync: { state: "live", error: null, updated_at: new Date().toISOString() },
+      }));
       if (snapshot.model_label) {
         setSettings((current) => ({ ...current, planner_model: snapshot.model_label || current.planner_model }));
       }
@@ -271,9 +323,17 @@ export function CortexApp() {
         `/api/conversations/snapshot?url=${encodeURIComponent(selectedConversation.url)}&light=1`,
       );
       const sig = `${light.message_count}|${light.last_id}|${light.streaming}`;
-      setConversations((current) =>
-        current.map((item) => (item.url === selectedConversation.url ? { ...item, message_count: light.message_count } : item)),
-      );
+      setConversationState((current) => ({
+        conversations: current.conversations.map((item) => (
+          item.url === selectedConversation.url
+            ? { ...item, message_count: light.message_count, sync_state: "live", sync_error: null }
+            : item
+        )),
+        selectedConversation: current.selectedConversation?.url === selectedConversation.url
+          ? { ...current.selectedConversation, message_count: light.message_count, sync_state: "live", sync_error: null }
+          : current.selectedConversation,
+        sync: { state: "live", error: null, updated_at: new Date().toISOString() },
+      }));
       if (sig === lastLightSig) return;
       setLastLightSig(sig);
       if (!chatRun || ["COMPLETED", "FAILED", "CANCELLED"].includes(chatRun.state)) {
@@ -300,7 +360,7 @@ export function CortexApp() {
   }, [refreshConversations, refreshMissions, refreshPipeline, refreshRuntime, refreshSettings]);
 
   useEffect(() => {
-    if (selectedConversation && messages.length === 0 && !loadingMessages) void loadConversation(selectedConversation);
+    if (selectedConversation && selectedConversation.sync_state !== "stale" && messages.length === 0 && !loadingMessages) void loadConversation(selectedConversation);
   }, [loadConversation, loadingMessages, messages.length, selectedConversation]);
 
   useEffect(() => {
@@ -576,12 +636,12 @@ export function CortexApp() {
         onRefresh={() => void refreshConversations()}
         onNewConversation={() => {
           const fresh: ConversationSummary = { url: "https://chatgpt.com/", identity: "__new__", title: "Nouvelle conversation", preview: "Le chat sera créé au premier envoi", status: "idle" };
-          setSelectedConversation(fresh);
+          setConversationState((current) => ({ ...current, selectedConversation: fresh }));
           setMessages([]);
         }}
         onNewMission={() => {
           const fresh: ConversationSummary = { url: "https://chatgpt.com/", identity: "__new__", title: "Nouvelle mission", preview: "ChatGPT orchestrera la mission", status: "mission" };
-          setSelectedConversation(fresh);
+          setConversationState((current) => ({ ...current, selectedConversation: fresh }));
           setMessages([]);
           notify("Décris la mission dans le composer central.");
         }}
