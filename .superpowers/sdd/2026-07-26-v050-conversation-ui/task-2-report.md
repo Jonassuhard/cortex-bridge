@@ -355,3 +355,44 @@ Generated `frontend/out/**`, `frontend/coverage/**` and
 - `frontend/out/**`, `frontend/coverage/**` and
   `frontend/tsconfig.tsbuildinfo` remain intentionally unstaged.
 - The parent will assign the fresh independent review after this commit.
+
+## Fix round 4 — pending-operation guards and rekeyed owners
+
+**Starting commit:** `751ca8aae6f9c378d194b45a1a28892ed246a9f4`
+
+### Corrections
+
+1. Recovery and cancellation pending state now blocks every new chat,
+   attachment, screenshot and mission execution in both the workspace UI and
+   the defensive `beginExecution` boundary. Draft editing remains available;
+   Enter cannot abandon A1 or create an A2 POST.
+2. A delivery canonical rekey transfers the in-flight cancellation map entry
+   and mutable task key with the stream binding. Terminal cancel responses use
+   that current canonical identity for validation, reducer dispatch, binding
+   lookup, cleanup and terminal callback. `COMPLETED`, `FAILED` and `CANCELLED`
+   each apply once under the canonical key; unmount still aborts the owner.
+3. Synchronous `EventSource` construction failure returns a rejected
+   subscription without mutating run state. Recovery then creates the next
+   bounded owner with the same absolute deadline and incremented attempt; one
+   factory failure can recover, while repeated failures exhaust truthfully to
+   `DELIVERY_UNCERTAIN` with no source or phantom pending flag.
+
+### TDD and verification evidence
+
+- Initial selected RED: 6/7 failed for the expected causes: A2 send remained
+  enabled, three canonical cancel responses left `VISIBLE_IN_CHATGPT`, and
+  factory throws stopped recovery after one GET.
+- Selected GREEN for the new regressions: 7/7.
+- Final focused reducer/hook/workspace/app suite: 85/85.
+- `corepack npm run lint`: green, zero warnings and 6/6 contract families.
+- `corepack npm run typecheck`: green.
+- `git diff --check`: green.
+- Full release gates were not rerun under the explicit 16:30 hard cutoff; the
+  immediately preceding round-3 full gates remain recorded above.
+
+### Scope
+
+- No dependency or lockfile changes.
+- Generated `frontend/out/**`, `frontend/coverage/**` and
+  `frontend/tsconfig.tsbuildinfo` remain intentionally unstaged.
+- Fresh independent review remains delegated to the parent.

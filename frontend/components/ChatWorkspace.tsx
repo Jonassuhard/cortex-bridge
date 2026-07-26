@@ -261,7 +261,11 @@ export function ChatWorkspace({
   const chatActive = !!chatRun && !["COMPLETED", "FAILED", "CANCELLED", "DELIVERY_UNCERTAIN"].includes(chatRun.state);
   const ambiguousProvisional = !!conversationKey && rekeyConflict?.fromKey === conversationKey;
   const composerBlocked = sending || ambiguousProvisional;
-  const executionBlocked = composerBlocked || missionRunning || chatActive;
+  const executionBlocked = composerBlocked
+    || missionRunning
+    || chatActive
+    || cancelPending
+    || recoveryPending;
   const busy = missionRunning || chatActive || sending;
 
   const mergedMessages = useMemo(() => {

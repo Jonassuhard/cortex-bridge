@@ -48,15 +48,19 @@ function useStreamHarness(
     runId: string,
     context: { signal: AbortSignal; deadlineAt: number; remainingMs: number },
   ) => Promise<unknown>,
+  sourceFailures: ReadonlySet<number> = new Set(),
 ) {
   const controller = useConversationController({
     initialState: createConversationState(summaries, selectedKey),
     fetchSnapshot: () => new Promise(() => undefined),
   });
   const sources = useRef<FakeEventSource[]>([]);
+  const sourceAttempt = useRef(0);
   const streams = useChatRunStream({
     dispatch: controller.dispatch,
     createEventSource: () => {
+      sourceAttempt.current += 1;
+      if (sourceFailures.has(sourceAttempt.current)) throw new Error("EventSource factory unavailable");
       const source = new FakeEventSource();
       sources.current.push(source);
       return source;
@@ -218,6 +222,98 @@ describe("useChatRunStream", () => {
     expect(sourceA2.close).not.toHaveBeenCalled();
   });
 
+  it.each(["COMPLETED", "FAILED", "CANCELLED"] as const)(
+    "transfers a provisional cancel owner on delivery and applies %s once under the canonical key",
+    async (state) => {
+      const provisionalKey = `provisional:cancel-${state.toLowerCase()}`;
+      const canonicalKey = `canonical-cancel-${state.toLowerCase()}`;
+      const provisional: ConversationSummary = {
+        url: "https://chatgpt.com/",
+        identity: provisionalKey,
+        title: "Nouvelle conversation",
+      };
+      let resolveCancel!: (value: unknown) => void;
+      let cancelSignal: AbortSignal | undefined;
+      const cancelResponse = new Promise<unknown>((resolve) => { resolveCancel = resolve; });
+      const cancelRun = (_key: string, _runId: string, context: { signal: AbortSignal }) => {
+        cancelSignal = context.signal;
+        return cancelResponse;
+      };
+      const { result } = renderHook(() => useStreamHarness(
+        [provisional],
+        provisionalKey,
+        undefined,
+        undefined,
+        cancelRun,
+      ));
+      act(() => result.current.streams.subscribe(
+        provisionalKey,
+        run(provisionalKey, "run-cancel-rekey"),
+      ));
+      const source = result.current.sources[0];
+      act(() => {
+        result.current.streams.cancel(provisionalKey, "run-cancel-rekey", 1);
+        source.emit({
+          seq: 1,
+          ts: "now",
+          type: "delivery",
+          payload: { canonical_url: `https://chatgpt.com/c/${canonicalKey}` },
+        });
+      });
+      expect(result.current.controller.state.entries[provisionalKey]).toBeUndefined();
+      expect(result.current.controller.state.entries[canonicalKey].cancelPending).toBe(true);
+
+      await act(async () => resolveCancel({
+        ...run(provisionalKey, "run-cancel-rekey"),
+        state,
+        canonical_url: `https://chatgpt.com/c/${canonicalKey}`,
+        delivered_at: "now",
+        completed_at: "terminal",
+        error: state === "FAILED" ? "échec réel" : null,
+      }));
+
+      expect(result.current.controller.state.entries[canonicalKey].run?.state).toBe(state);
+      expect(result.current.controller.state.entries[canonicalKey].cancelPending).toBe(false);
+      expect(result.current.controller.state.order).toEqual([canonicalKey]);
+      expect(source.close).toHaveBeenCalledTimes(1);
+      expect(cancelSignal?.aborted).toBe(true);
+    },
+  );
+
+  it("aborts a cancel owner transferred by delivery when unmounted", () => {
+    const provisionalKey = "provisional:cancel-unmount";
+    const canonicalKey = "canonical-cancel-unmount";
+    let cancelSignal: AbortSignal | undefined;
+    const rendered = renderHook(() => useStreamHarness(
+      [{ url: "https://chatgpt.com/", identity: provisionalKey, title: "Nouvelle conversation" }],
+      provisionalKey,
+      undefined,
+      undefined,
+      (_key, _runId, context) => {
+        cancelSignal = context.signal;
+        return new Promise(() => undefined);
+      },
+    ));
+    act(() => rendered.result.current.streams.subscribe(
+      provisionalKey,
+      run(provisionalKey, "run-cancel-unmount"),
+    ));
+    const source = rendered.result.current.sources[0];
+    act(() => {
+      rendered.result.current.streams.cancel(provisionalKey, "run-cancel-unmount", 1);
+      source.emit({
+        seq: 1,
+        ts: "now",
+        type: "delivery",
+        payload: { canonical_url: `https://chatgpt.com/c/${canonicalKey}` },
+      });
+    });
+    rendered.unmount();
+
+    expect(cancelSignal?.aborted).toBe(true);
+    expect(source.close).toHaveBeenCalledTimes(1);
+  });
+
   it("does not close a stream on state rerender and closes every remaining source once on unmount", () => {
     const { result, rerender, unmount } = renderHook(() => useStreamHarness([summary("a"), summary("b")], "a"));
     act(() => {
@@ -302,6 +398,52 @@ describe("useChatRunStream", () => {
     }));
     expect(recovered.close).toHaveBeenCalledTimes(1);
     expect(result.current.controller.state.entries.a.run?.state).toBe("COMPLETED");
+  });
+
+  it("continues bounded recovery when EventSource construction throws once after a valid GET", async () => {
+    const recoverRun = vi.fn<() => Promise<ChatRun>>(async () => ({
+      ...run("a"),
+      state: "WAITING_FOR_CHATGPT",
+    }));
+    const { result } = renderHook(() => useStreamHarness(
+      [summary("a")],
+      "a",
+      recoverRun,
+      { baseDelayMs: 0, maxAttempts: 2, deadlineMs: 300 },
+      undefined,
+      new Set([2]),
+    ));
+    act(() => result.current.streams.subscribe("a", run("a")));
+    act(() => result.current.sources[0].fail());
+    await act(async () => Promise.resolve());
+
+    expect(recoverRun).toHaveBeenCalledTimes(2);
+    expect(result.current.sources).toHaveLength(2);
+    expect(result.current.controller.state.entries.a.run?.state).toBe("WAITING_FOR_CHATGPT");
+    expect(result.current.controller.state.entries.a.recoveryPending).toBe(false);
+  });
+
+  it("exhausts truthfully when EventSource construction throws through the recovery budget", async () => {
+    const recoverRun = vi.fn<() => Promise<ChatRun>>(async () => ({
+      ...run("a"),
+      state: "WAITING_FOR_CHATGPT",
+    }));
+    const { result } = renderHook(() => useStreamHarness(
+      [summary("a")],
+      "a",
+      recoverRun,
+      { baseDelayMs: 0, maxAttempts: 2, deadlineMs: 300 },
+      undefined,
+      new Set([2, 3]),
+    ));
+    act(() => result.current.streams.subscribe("a", run("a")));
+    act(() => result.current.sources[0].fail());
+    await act(async () => Promise.resolve());
+
+    expect(recoverRun).toHaveBeenCalledTimes(2);
+    expect(result.current.sources).toHaveLength(1);
+    expect(result.current.controller.state.entries.a.run?.state).toBe("DELIVERY_UNCERTAIN");
+    expect(result.current.controller.state.entries.a.recoveryPending).toBe(false);
   });
 
   it("rejects A2 while non-terminal A1 recovery remains owned", async () => {

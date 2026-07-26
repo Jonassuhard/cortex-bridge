@@ -416,11 +416,20 @@ export function useChatRunStream({
             return;
           }
           finishRecovery(task);
-          subscribeRef.current(task.key, nextRun, {
+          const subscribedEpoch = subscribeRef.current(task.key, nextRun, {
             accepted: false,
             recoveryAttempt: attempt + 1,
             recoveryDeadlineAt: task.deadlineAt,
           });
+          if (!subscribedEpoch) {
+            startRecovery(
+              task.key,
+              task.runId,
+              task.streamEpoch,
+              attempt + 1,
+              task.deadlineAt,
+            );
+          }
         }).catch(() => {
           if (isCurrent()) schedule(attempt + 1);
         }).finally(() => {
@@ -487,7 +496,12 @@ export function useChatRunStream({
       || recoveriesRef.current.has(key)
       || cancellationsRef.current.has(key)) return 0;
     const streamEpoch = (epochsRef.current.get(key) || 0) + 1;
-    const source = factoryRef.current(apiUrl(`/api/chat/runs/${run.id}/events`));
+    let source: ChatEventSource;
+    try {
+      source = factoryRef.current(apiUrl(`/api/chat/runs/${run.id}/events`));
+    } catch {
+      return 0;
+    }
     const binding: StreamBinding = {
       key,
       runId: run.id,
@@ -548,6 +562,12 @@ export function useChatRunStream({
           });
           const moved = !rekeyed.entries[previousKey] && !!rekeyed.entries[canonicalKey];
           if (moved && !streamsRef.current.has(canonicalKey)) {
+            const cancellation = cancellationsRef.current.get(previousKey);
+            if (cancellation && !cancellationsRef.current.has(canonicalKey)) {
+              cancellationsRef.current.delete(previousKey);
+              cancellation.key = canonicalKey;
+              cancellationsRef.current.set(canonicalKey, cancellation);
+            }
             streamsRef.current.delete(previousKey);
             binding.key = canonicalKey;
             streamsRef.current.set(canonicalKey, binding);
@@ -610,15 +630,16 @@ export function useChatRunStream({
     });
     const cancelRequest = cancelRunRef.current;
     const fail = (error: unknown) => {
-      if (disposedRef.current || cancellationsRef.current.get(key) !== task) return;
+      const currentKey = task.key;
+      if (disposedRef.current || cancellationsRef.current.get(currentKey) !== task) return;
       finishCancellation(task);
-      cancelFailureRef.current?.(key, runId, error);
-      const binding = streamsRef.current.get(key);
+      cancelFailureRef.current?.(currentKey, runId, error);
+      const binding = streamsRef.current.get(currentKey);
       if (!binding || binding.runId !== runId || binding.streamEpoch !== streamEpoch) {
-        if (!startRecovery(key, runId, streamEpoch, 0, Date.now() + recoveryDeadlineRef.current, true)) {
+        if (!startRecovery(currentKey, runId, streamEpoch, 0, Date.now() + recoveryDeadlineRef.current, true)) {
           dispatchRef.current({
             type: "RUN_RECOVERY_EXHAUSTED",
-            key,
+            key: currentKey,
             runId,
             streamEpoch,
             error: "Annulation incertaine : impossible de confirmer l'état de la réponse.",
@@ -641,7 +662,8 @@ export function useChatRunStream({
       request = Promise.reject(error);
     }
     void request.then((payload) => {
-      if (disposedRef.current || cancellationsRef.current.get(key) !== task) return;
+      const currentKey = task.key;
+      if (disposedRef.current || cancellationsRef.current.get(currentKey) !== task) return;
       const terminalRun = validatedChatRun(payload, runId);
       if (!terminalRun || !["COMPLETED", "FAILED", "CANCELLED"].includes(terminalRun.state)) {
         fail(new Error("Réponse d'annulation invalide : état terminal non confirmé."));
@@ -649,30 +671,30 @@ export function useChatRunStream({
       }
       finishCancellation(task);
       cancelRecovery(key);
-      let terminalKey = key;
+      let terminalKey = currentKey;
       let next = dispatchRef.current({
         type: "RUN_EVENT",
-        key,
+        key: currentKey,
         runId,
         streamEpoch,
         run: terminalRun,
       });
       const canonicalUrl = terminalRun.canonical_url;
-      if (canonicalUrl && next.entries[key]?.run?.id === runId) {
+      if (canonicalUrl && next.entries[currentKey]?.run?.id === runId) {
         const canonicalKey = conversationKeyFromUrl(canonicalUrl);
         const rekeyed = dispatchRef.current({
           type: "REKEY_CANONICAL",
-          key,
+          key: currentKey,
           canonicalKey,
           canonicalUrl,
         });
-        if (!rekeyed.entries[key] && rekeyed.entries[canonicalKey]) {
-          rekey(key, canonicalKey, "source", streamEpoch);
+        if (!rekeyed.entries[currentKey] && rekeyed.entries[canonicalKey]) {
+          rekey(currentKey, canonicalKey, "source", streamEpoch);
           terminalKey = canonicalKey;
           next = rekeyed;
         }
       }
-      const binding = streamsRef.current.get(terminalKey) || streamsRef.current.get(key);
+      const binding = streamsRef.current.get(terminalKey) || streamsRef.current.get(currentKey);
       if (next.entries[terminalKey]?.run?.id === runId
         && binding?.runId === runId
         && binding.streamEpoch === streamEpoch) {

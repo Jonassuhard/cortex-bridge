@@ -544,7 +544,7 @@ describe("CortexApp conversation integration", () => {
     });
   });
 
-  it("ignores a stale manual A1 retry after A2 starts and leaves the A2 stream followed", async () => {
+  it("keeps A1 recovery owned and blocks A2 Enter without closing or posting", async () => {
     const retryA1 = deferred<unknown>();
     let retryA1Signal: AbortSignal | null | undefined;
     let sendCount = 0;
@@ -580,16 +580,20 @@ describe("CortexApp conversation integration", () => {
 
     await user.clear(composer());
     await user.type(composer(), "A2");
-    await user.click(screen.getByTitle("Envoyer"));
-    await waitFor(() => expect(AppEventSource.instances).toHaveLength(2));
-    const sourceA2 = AppEventSource.instances[1];
-    expect(retryA1Signal?.aborted).toBe(true);
+    expect(composer()).not.toBeDisabled();
+    expect(screen.getByTitle("Envoyer")).toBeDisabled();
+    fireEvent.keyDown(composer(), { key: "Enter" });
+    expect(network.postJson.mock.calls.filter(([path]) => path === "/api/chat/send")).toHaveLength(1);
+    expect(AppEventSource.instances).toHaveLength(1);
+    expect(retryA1Signal?.aborted).toBe(false);
     await act(async () => retryA1.resolve({ ...run("a", "run-a-1"), state: "WAITING_FOR_CHATGPT" }));
 
-    expect(sourceA2.close).not.toHaveBeenCalled();
     expect(AppEventSource.instances).toHaveLength(2);
-    act(() => sourceA2.emit({ seq: 2, ts: "now", type: "stream", payload: { text: "A2 reste suivi" } }));
-    expect(await screen.findByText("A2 reste suivi")).toBeInTheDocument();
+    const recoveredA1 = AppEventSource.instances[1];
+    expect(recoveredA1.close).not.toHaveBeenCalled();
+    act(() => recoveredA1.emit({ seq: 2, ts: "now", type: "stream", payload: { text: "A1 reste suivi" } }));
+    expect(await screen.findByText("A1 reste suivi")).toBeInTheDocument();
+    expect(composer()).toHaveValue("A2");
   });
 
   it("rekeys a provisional chat when manual terminal recovery proves its canonical URL", async () => {

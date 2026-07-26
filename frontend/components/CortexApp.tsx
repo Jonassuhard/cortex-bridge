@@ -498,7 +498,14 @@ export function CortexApp() {
       notify("L'identité de cette conversation doit être résolue avant tout nouvel envoi.");
       return false;
     }
-    if (entry.sendPending || runActive || missionActive || initialRequestsRef.current.has(key)) {
+    if (
+      entry.sendPending
+      || entry.cancelPending
+      || entry.recoveryPending
+      || runActive
+      || missionActive
+      || initialRequestsRef.current.has(key)
+    ) {
       notify("Une réponse est déjà en cours pour cette conversation.");
       return false;
     }
