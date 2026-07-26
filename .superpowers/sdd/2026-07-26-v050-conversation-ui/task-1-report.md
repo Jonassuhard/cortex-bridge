@@ -1,6 +1,6 @@
 # Task 1 report: frontend test harness
 
-Date: 2026-07-26  
+Date: 2026-07-26
 Scope: frontend test dependencies, Vitest/jsdom setup, one semantic smoke test,
 Playwright/axe tooling, and deterministic local browser fixtures.
 
@@ -142,3 +142,144 @@ upgrade, forced remediation, or lockfile rewrite was applied in response.
 - Traces and screenshots must remain disabled until the legacy account identity
   is removed or replaced by a synthetic fixture in the later navigation task.
 - The only unresolved Task 1 concern is the unavailable npm audit summary.
+
+## Fix round 1
+
+Date: 2026-07-26
+Starting commit: `38403edaf9dcf414d1daae63ab928ba2345c4249`
+
+### Combined unit and runtime contract
+
+The original `npm test` ran Vitest only. A temporary deliberately failing
+`node:test` case proved the gap:
+
+- old `npm test`: exit `0`, two Vitest tests passed while the runtime failure
+  was ignored;
+- after adding `test:unit`, `test:runtime`, and chaining them from `test`:
+  exit `1`, the temporary runtime failure was reported after 18 runtime passes;
+- after removing the temporary case: exit `0`, two Vitest tests and all 18
+  runtime tests passed.
+
+`test:coverage` now runs V8 coverage for the Vitest suite and then runs the
+runtime suite explicitly. Runtime tests are not misrepresented as V8-covered
+Vitest tests. Coverage includes application source only and excludes tests,
+generated output, and `.next` artifacts.
+
+### Committed browser coverage
+
+Two browser specs now import the deterministic fixture:
+
+- `e2e/smoke.spec.ts` verifies the named main region, synthetic conversation
+  data, and loopback page origin;
+- `e2e/accessibility.spec.ts` is tagged `@a11y`, verifies the named main
+  landmark, and runs the axe `landmark-one-main` rule.
+
+All fixture requests remain limited to `127.0.0.1:3420` and
+`127.0.0.1:8420`. Every other origin is aborted. Traces, screenshots, and
+videos remain disabled.
+
+```text
+npm run test:e2e   # 2 passed
+npm run test:a11y  # 1 passed
+```
+
+### Node 20 dependency correction
+
+The harness is pinned to versions whose published engines support Node 20:
+
+- Vitest and coverage `3.2.4`: `^18.0.0 || ^20.0.0 || >=22.0.0`
+- Vite `6.4.1`: `^18.0.0 || ^20.0.0 || >=22.0.0`
+- jsdom `26.1.0`: `>=18`
+- jest-dom `6.9.1`: `>=14`
+- Testing Library React `16.3.0`: `>=18`
+- Testing Library User Event `14.6.1`: `>=12`
+- Playwright `1.62.0`: `>=20`
+- tsx `4.20.6`: `>=18.0.0`
+- axe-core and its Playwright integration `4.12.1`
+
+The package declares `engines.node: >=20`. Vite is pinned directly so the
+Vitest dependency range cannot resolve back to Vite 8 and its Node 20.19
+minimum.
+
+The historical runtime command used `--experimental-strip-types`, which does
+not exist in early Node 20. It now uses `tsx --test`. Declaring the package as
+ESM keeps `.mts`, `.ts`, and the existing VM-loaded component checks on one
+module model.
+
+Compatibility proof used the minimum Node 20 revision declared by the current
+Next dependency:
+
+```text
+Node 20.9.0 + npm 10.9.4: npm test
+```
+
+Result: two Vitest tests and 18 runtime tests passed. The same combined command
+also passed under Node `20.19.5`.
+
+### Privacy correction
+
+The sidebar now renders the neutral labels `CL`, `Compte local`, and
+`Session locale`. A component test failed before the change because the
+neutral identity was absent, then passed after the three-label replacement.
+
+A case-insensitive exact-name repository scan returned no matches in committed
+frontend source or the synthetic fixture. The broader fixture scan also found
+no personal home path, unrelated project name, or non-loopback URL.
+
+### Lockfile review
+
+The lockfile was regenerated from the pre-harness `ecd28e8` lock plus the
+corrected package manifest, rather than accepting npm's first-round full
+normalization.
+
+- existing package version changes: `0`;
+- removed package entries: only `@vercel/analytics`;
+- `@vercel/analytics` was absent from direct dependencies and had no frontend
+  source import, so it was an orphaned lock entry rather than a removed product
+  dependency;
+- `nanoid` remains `3.3.12`;
+- `@napi-rs/wasm-runtime` remains `1.1.5`;
+- `@tybys/wasm-util` remains `0.10.2`;
+- platform-specific WASM entries were preserved at their historical versions.
+
+`npm ci --ignore-scripts --no-audit --no-fund` completed from the regenerated
+lock. npm emitted deprecation notices for transitive `glob@10.5.0` and
+`whatwg-encoding@3.1.1`; neither is a direct production dependency.
+
+### Fresh verification
+
+```text
+npm test
+```
+
+Result: exit `0`; two Vitest tests and 18 runtime tests passed.
+
+```text
+npm run test:coverage
+```
+
+Result: exit `0`; two Vitest tests plus 18 runtime tests passed. Application
+coverage: 48.23% statements/lines, 38.21% branches, and 29.41% functions.
+
+```text
+npm run test:e2e
+npm run test:a11y
+npm run typecheck
+npm run lint
+```
+
+Results: E2E `2/2`, a11y `1/1`, TypeScript exit `0`, ESLint exit `0`.
+
+No frontend build or export was run. Generated `frontend/out/**` and
+`frontend/tsconfig.tsbuildinfo` remain outside the staged scope.
+
+### Audit status and concerns
+
+`npm audit --json --registry=https://registry.npmjs.org` was rerun with an
+explicit clean cache. The official endpoint again returned gzip bytes that npm
+treated as invalid JSON (`Unexpected token '\u001f'`). Audit status remains
+`[UNCLEAR]`; no vulnerability count or safety claim is available, and no
+forced remediation was applied.
+
+Open concerns are limited to the unavailable registry audit result and the two
+transitive deprecation notices reported during clean installation.

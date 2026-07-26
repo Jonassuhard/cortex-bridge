@@ -203,8 +203,8 @@ export function ConversationSidebar({
           <ChevronDownIcon size={15} />
         </button>
         <div className="account-row">
-          <span className="account-avatar">JS</span>
-          <span><strong>Jonas Suhard</strong><small>Local · ChatGPT Pro</small></span>
+          <span className="account-avatar">CL</span>
+          <span><strong>Compte local</strong><small>Session locale</small></span>
         </div>
       </div>
     </aside>

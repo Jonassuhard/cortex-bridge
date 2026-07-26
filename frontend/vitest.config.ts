@@ -13,12 +13,24 @@ export default defineConfig({
     environment: "jsdom",
     setupFiles: ["./test/setup.ts"],
     include: ["**/*.{test,spec}.{ts,tsx}"],
-    exclude: ["e2e/**", "node_modules/**", "out/**"],
+    exclude: [".next/**", "e2e/**", "node_modules/**", "out/**"],
     coverage: {
       provider: "v8",
       reporter: ["text", "json", "html"],
       reportsDirectory: "coverage",
-      exclude: ["e2e/**", "test/**", "out/**"],
+      include: [
+        "app/**/*.{ts,tsx}",
+        "components/**/*.{ts,tsx}",
+        "hooks/**/*.{ts,tsx}",
+        "lib/**/*.{ts,tsx}",
+      ],
+      exclude: [
+        "**/*.{test,spec}.{ts,tsx,mts}",
+        ".next/**",
+        "e2e/**",
+        "test/**",
+        "out/**",
+      ],
     },
   },
 });
