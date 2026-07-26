@@ -14,9 +14,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 from urllib.error import URLError
+from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 import chat as chat_api
@@ -329,7 +330,7 @@ def _mission_runtime_truth(mission: dict[str, Any]) -> dict[str, Any]:
         "runtime_mode": mission.get("runtime_mode", "live"),
         "release_eligible": bool(mission.get("release_eligible", False)),
         "state": mission.get("state", "unknown"),
-        "active": True,
+        "active": mission.get("state") not in {"COMPLETED", "BLOCKED", "FAILED", "CANCELLED"},
         "observed_at": _iso_timestamp(
             mission.get("runtime_observed_at") or mission.get("updated_at")
         ),
@@ -349,15 +350,145 @@ def _idle_runtime_truth() -> dict[str, Any]:
     }
 
 
+_TERMINAL_MISSION_STATES = {"COMPLETED", "BLOCKED", "FAILED", "CANCELLED"}
+
+
+def _canonical_conversation_identity(value: object) -> str | None:
+    """Return the transport's exact opaque identity, never a title or prefix."""
+    if not isinstance(value, str):
+        return None
+    raw = value.strip().rstrip("/")
+    if not raw:
+        return None
+    if raw.startswith("provisional:"):
+        return raw
+    parsed = urlsplit(raw)
+    if parsed.scheme or parsed.netloc:
+        path = parsed.path.rstrip("/")
+        if not path.startswith("/c/"):
+            return None
+        identity = path.removeprefix("/c/")
+        return identity if identity and "/" not in identity else None
+    return raw
+
+
+def _binding_conversation_identity(binding: dict[str, Any]) -> str | None:
+    """Use the persisted target first; URL is only the durable fallback."""
+    target = _canonical_conversation_identity(binding.get("conversation_target"))
+    if target is not None:
+        return target
+    return _canonical_conversation_identity(binding.get("conversation_url"))
+
+
+def _mission_matches_conversation(mission_id: str, identity: str) -> bool:
+    try:
+        bindings = missions_api.get_store().rows(
+            "conversation_bindings", mission_id, order_by="rowid DESC"
+        )
+    except Exception:
+        return False
+    return bool(bindings) and _binding_conversation_identity(bindings[0]) == identity
+
+
+def _scoped_mission(
+    identity: str,
+    requested_mission_id: str | None,
+) -> tuple[dict[str, Any] | None, int]:
+    """Resolve one mission only through its latest persisted conversation binding."""
+    store = missions_api.get_store()
+    if requested_mission_id is not None:
+        try:
+            mission_id = str(uuid.UUID(requested_mission_id))
+            mission = store.get_mission(mission_id)
+        except Exception:
+            raise HTTPException(
+                status_code=404,
+                detail="mission is not bound to the selected conversation",
+            ) from None
+        if not _mission_matches_conversation(mission_id, identity):
+            raise HTTPException(
+                status_code=404,
+                detail="mission is not bound to the selected conversation",
+            )
+        active_count = int(mission.get("state") not in _TERMINAL_MISSION_STATES)
+        return mission, active_count
+
+    try:
+        active = [
+            mission for mission in store.rows("missions", order_by="updated_at DESC, rowid DESC")
+            if mission.get("state") not in _TERMINAL_MISSION_STATES
+        ]
+    except Exception:
+        return None, 0
+    matches = [
+        mission for mission in active
+        if _mission_matches_conversation(str(mission.get("id") or ""), identity)
+    ]
+    return (matches[0] if matches else None), len(matches)
+
+
+def _mission_conversation_identity(mission: dict[str, Any] | None) -> str | None:
+    if mission is None:
+        return None
+    try:
+        bindings = missions_api.get_store().rows(
+            "conversation_bindings", str(mission.get("id") or ""), order_by="rowid DESC"
+        )
+    except Exception:
+        return None
+    return _binding_conversation_identity(bindings[0]) if bindings else None
+
+
+def _chat_run_conversation_identity(run: Any) -> str | None:
+    """Prefer proven canonical identity; incomplete runs may only use their key."""
+    for attribute in ("canonical_url", "conversation_key", "conversation_url"):
+        value = getattr(run, attribute, None)
+        if isinstance(value, str) and value.strip():
+            return _canonical_conversation_identity(value)
+    return None
+
+
+def _latest_chat_run_for_conversation(identity: str | None) -> Any | None:
+    if identity is None:
+        return None
+    for run in reversed(list(chat_api._runs.values())):
+        if _chat_run_conversation_identity(run) == identity:
+            return run
+    return None
+
+
 @router.get("/pipeline/status")
-async def pipeline_status() -> dict[str, Any]:
+async def pipeline_status(
+    conversation_identity: str | None = Query(default=None),
+    mission_id: str | None = Query(default=None),
+) -> dict[str, Any]:
+    scoped = conversation_identity is not None or mission_id is not None
+    normalized_identity: str | None = None
+    scoped_active_count = 0
+    if scoped:
+        normalized_identity = _canonical_conversation_identity(conversation_identity)
+        if normalized_identity is None:
+            raise HTTPException(status_code=404, detail="conversation was not found")
+        mission, scoped_active_count = _scoped_mission(normalized_identity, mission_id)
+        scope = {
+            "mode": "conversation",
+            "conversation_identity": normalized_identity,
+            "mission_id": mission.get("id") if mission else None,
+        }
+    else:
+        active = _active_missions()
+        mission = active[0] if active else None
+        scope = {
+            "mode": "global_legacy",
+            "conversation_identity": None,
+            "mission_id": None,
+        }
+
     rt = runtime_status()
-    active = _active_missions()
-    mission = active[0] if active else None
     runtime_execution = (
         _mission_runtime_truth(mission)
         if mission
-        else _latest_local_task_runtime_truth() or _idle_runtime_truth()
+        else (_idle_runtime_truth() if scoped else _latest_local_task_runtime_truth() or _idle_runtime_truth())
     )
     try:
         bridge_health = await browser_driver_factory(
@@ -373,16 +504,19 @@ async def pipeline_status() -> dict[str, Any]:
                 connection.execute("SELECT 1").fetchone()
     except sqlite3.Error:
         db_ok = False
-    chat_runs = list(chat_api._runs.values())
-    current_chat = chat_runs[-1] if chat_runs else None
+    current_chat = _latest_chat_run_for_conversation(
+        normalized_identity if scoped else _mission_conversation_identity(mission)
+    )
     transport_ms = current_chat.latency.get("delivery_ms") if current_chat else None
     total_ms = current_chat.latency.get("total_ms") if current_chat else None
-    if mission:
+    if mission and mission.get("state") not in _TERMINAL_MISSION_STATES:
         overall = "running" if mission.get("state") not in {"PAUSED", "PAUSED_RECOVERY_REQUIRED"} else "waiting"
     elif not bridge_health.get("connected") or not rt.get("ollama_up"):
         overall = "degraded"
     else:
         overall = "healthy"
+    queue_pending = max(0, (scoped_active_count if scoped else len(active)) - 1)
+    mission_is_active = bool(mission) and mission.get("state") not in _TERMINAL_MISSION_STATES
     components = [
         {
             "id": "transport",
@@ -406,7 +540,7 @@ async def pipeline_status() -> dict[str, Any]:
         {
             "id": "task",
             "label": "Tâche courante",
-            "state": "running" if mission else "idle",
+            "state": "running" if mission_is_active else "idle",
             "detail": mission.get("state") if mission else "Aucune mission active",
             "latency_ms": None,
             "heartbeat_at": _now(),
@@ -473,16 +607,16 @@ async def pipeline_status() -> dict[str, Any]:
         {
             "id": "approvals",
             "label": "Approbations",
-            "state": "waiting" if mission and mission.get("state") == "WAITING_FOR_APPROVAL" else "idle",
-            "detail": "Action en attente" if mission and mission.get("state") == "WAITING_FOR_APPROVAL" else "Aucune en attente",
+            "state": "waiting" if mission_is_active and mission.get("state") == "WAITING_FOR_APPROVAL" else "idle",
+            "detail": "Action en attente" if mission_is_active and mission.get("state") == "WAITING_FOR_APPROVAL" else "Aucune en attente",
             "latency_ms": None,
             "heartbeat_at": _now(),
         },
         {
             "id": "queue",
             "label": "File d'attente",
-            "state": "idle" if len(active) <= 1 else "waiting",
-            "detail": f"{max(0, len(active) - 1)} mission(s) en attente",
+            "state": "idle" if queue_pending == 0 else "waiting",
+            "detail": f"{queue_pending} mission(s) en attente",
             "latency_ms": None,
             "heartbeat_at": _now(),
         },
@@ -508,11 +642,12 @@ async def pipeline_status() -> dict[str, Any]:
     return {
         "overall": overall,
         "updated_at": _now(),
+        "scope": scope,
         "components": components,
         "active_mission_id": mission.get("id") if mission else None,
         "active_mission_state": mission.get("state") if mission else None,
         "runtime_execution": runtime_execution,
-        "queue_pending": max(0, len(active) - 1),
+        "queue_pending": queue_pending,
         "events": events[:10],
         "latency": {
             "transport_ms": transport_ms,

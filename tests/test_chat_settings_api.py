@@ -185,11 +185,14 @@ class ChatSettingsApiTestCase(unittest.TestCase):
                 raw = response.read().decode("utf-8")
                 return response.status, json.loads(raw) if raw else None
         except urllib.error.HTTPError as exc:
-            raw = exc.read().decode("utf-8")
             try:
-                return exc.code, json.loads(raw)
-            except json.JSONDecodeError:
-                return exc.code, {"detail": raw}
+                raw = exc.read().decode("utf-8")
+                try:
+                    return exc.code, json.loads(raw)
+                except json.JSONDecodeError:
+                    return exc.code, {"detail": raw}
+            finally:
+                exc.close()
 
     @classmethod
     def get(cls, path: str):
@@ -216,6 +219,63 @@ class ChatSettingsApiTestCase(unittest.TestCase):
                 return last
             time.sleep(0.05)
         self.fail(f"chat run did not finish: {last}")
+
+    def seed_pipeline_mission(
+        self,
+        identity: str,
+        *,
+        conversation_target: str | None = None,
+        conversation_url: str | None = None,
+        model: str | None = None,
+        event_type: str | None = None,
+        updated_at: float = 0.0,
+    ) -> str:
+        """Persist one non-terminal mission with a literal conversation binding."""
+        mission_id = str(uuid.uuid4())
+        store = missions_api.get_store()
+        store.create_mission(
+            mission_id,
+            f"mission for {identity}",
+            str(Path(self._tmp.name)),
+        )
+        store.bind_conversation(
+            str(uuid.uuid4()),
+            mission_id,
+            conversation_url or f"{self.fixture.base_url}/c/{identity}",
+            conversation_target=conversation_target or identity,
+        )
+        store.record_runtime_truth(
+            mission_id,
+            executor_kind="ollama",
+            executor_model_used=model or f"model-{identity}",
+            runtime_mode="live",
+            release_eligible=True,
+        )
+        store.record_transport_event(
+            str(uuid.uuid4()),
+            mission_id,
+            event_type or f"event-{identity}",
+        )
+        with store._conn:
+            store._conn.execute(
+                "UPDATE missions SET updated_at = ? WHERE id = ?",
+                (updated_at, mission_id),
+            )
+        return mission_id
+
+    @staticmethod
+    def seed_chat_run(run_id: str, identity: str, *, model: str) -> None:
+        run = chat_api.ChatRunRuntime(
+            id=run_id,
+            conversation_url=f"https://chatgpt.com/c/{identity}",
+            canonical_url=f"https://chatgpt.com/c/{identity}",
+            text=f"message-{model}",
+            new_conversation=False,
+            state="COMPLETED",
+            response_text=f"response-{model}",
+        )
+        run.latency = {"delivery_ms": 17, "first_response_ms": 23, "total_ms": 41}
+        chat_api._runs[run.id] = run
 
     def test_01_chat_send_requires_transport_optin(self):
         status, body = self.post("/api/chat/send", {
@@ -358,6 +418,11 @@ class ChatSettingsApiTestCase(unittest.TestCase):
     def test_09_pipeline_status_has_required_components(self):
         status, body = self.get("/api/pipeline/status")
         self.assertEqual(status, 200, body)
+        self.assertEqual(body["scope"], {
+            "mode": "global_legacy",
+            "conversation_identity": None,
+            "mission_id": None,
+        })
         ids = {row["id"] for row in body["components"]}
         self.assertTrue({
             "transport", "validator", "task", "ollama", "executor",
@@ -384,6 +449,201 @@ class ChatSettingsApiTestCase(unittest.TestCase):
                 "observed_at": None,
             },
         )
+
+    def test_09a_pipeline_scope_filters_every_mission_and_chat_payload_to_identity(self):
+        """A global latest-mission or chat-run fallback would leak Alpha into Beta."""
+        mission_b = self.seed_pipeline_mission(
+            "scope-beta",
+            model="model-beta",
+            event_type="event-beta",
+            updated_at=100.0,
+        )
+        mission_a = self.seed_pipeline_mission(
+            "scope-alpha",
+            model="model-alpha",
+            event_type="event-alpha",
+            updated_at=200.0,
+        )
+        self.seed_chat_run("chat-beta", "scope-beta", model="beta")
+        self.seed_chat_run("chat-alpha", "scope-alpha", model="alpha")
+
+        status, body = self.get(
+            "/api/pipeline/status?" + urllib.parse.urlencode({
+                "conversation_identity": "scope-beta",
+            })
+        )
+
+        self.assertEqual(status, 200, body)
+        self.assertEqual(body["scope"], {
+            "mode": "conversation",
+            "conversation_identity": "scope-beta",
+            "mission_id": mission_b,
+        })
+        self.assertEqual(body["active_mission_id"], mission_b)
+        self.assertEqual(body["runtime_execution"]["task_id"], mission_b)
+        self.assertEqual(body["runtime_execution"]["executor_model_used"], "model-beta")
+        self.assertEqual(body["latency"], {
+            "transport_ms": 17,
+            "local_model_ms": None,
+            "total_iteration_ms": 41,
+        })
+        self.assertEqual(body["queue_pending"], 0)
+        serialized = json.dumps(body, sort_keys=True)
+        self.assertIn("event-beta", serialized)
+        self.assertIn("chat-beta", serialized)
+        for forbidden in (mission_a, "event-alpha", "chat-alpha", "model-alpha", "message-alpha"):
+            self.assertNotIn(forbidden, serialized)
+
+    def test_09b_pipeline_scope_rejects_mission_bound_to_another_conversation(self):
+        mission_a = self.seed_pipeline_mission("scope-alpha", updated_at=200.0)
+        self.seed_pipeline_mission("scope-beta", updated_at=100.0)
+
+        status, body = self.get(
+            "/api/pipeline/status?" + urllib.parse.urlencode({
+                "conversation_identity": "scope-beta",
+                "mission_id": mission_a,
+            })
+        )
+
+        self.assertEqual(status, 404)
+        self.assertNotIn("active_mission_id", body)
+        self.assertNotIn(mission_a, json.dumps(body, sort_keys=True))
+
+    def test_09c_pipeline_scope_has_a_neutral_view_when_no_mission_matches(self):
+        self.seed_pipeline_mission("scope-alpha", updated_at=200.0)
+        self.seed_chat_run("chat-alpha", "scope-alpha", model="alpha")
+
+        status, body = self.get(
+            "/api/pipeline/status?" + urllib.parse.urlencode({
+                "conversation_identity": "scope-missing",
+            })
+        )
+
+        self.assertEqual(status, 200, body)
+        self.assertEqual(body["scope"], {
+            "mode": "conversation",
+            "conversation_identity": "scope-missing",
+            "mission_id": None,
+        })
+        self.assertIsNone(body["active_mission_id"])
+        self.assertIsNone(body["active_mission_state"])
+        self.assertEqual(body["runtime_execution"]["state"], "idle")
+        self.assertEqual(body["events"], [])
+        self.assertEqual(body["latency"], {
+            "transport_ms": None,
+            "local_model_ms": None,
+            "total_iteration_ms": None,
+        })
+        self.assertEqual(body["queue_pending"], 0)
+        component_states = {row["id"]: row["state"] for row in body["components"]}
+        self.assertEqual(component_states["task"], "idle")
+        self.assertEqual(component_states["approvals"], "idle")
+        self.assertEqual(component_states["executor"], "idle")
+
+    def test_09d_pipeline_scope_preserves_provisional_identity_without_guessing_a_url(self):
+        provisional = f"provisional:{uuid.uuid4()}"
+        mission_id = self.seed_pipeline_mission(
+            provisional,
+            conversation_target=provisional,
+            conversation_url="https://chatgpt.com",
+            updated_at=100.0,
+        )
+
+        status, body = self.get(
+            "/api/pipeline/status?" + urllib.parse.urlencode({
+                "conversation_identity": provisional,
+            })
+        )
+
+        self.assertEqual(status, 200, body)
+        self.assertEqual(body["scope"], {
+            "mode": "conversation",
+            "conversation_identity": provisional,
+            "mission_id": mission_id,
+        })
+        self.assertEqual(body["active_mission_id"], mission_id)
+
+    def test_09e_pipeline_scope_normalizes_url_and_opaque_identity_exactly(self):
+        mission_id = self.seed_pipeline_mission(
+            "scope-url",
+            conversation_target=f"{self.fixture.base_url}/c/scope-url/",
+            conversation_url=f"{self.fixture.base_url}/c/scope-url/",
+            updated_at=100.0,
+        )
+
+        for identity in ("scope-url", f"{self.fixture.base_url}/c/scope-url/"):
+            with self.subTest(identity=identity):
+                status, body = self.get(
+                    "/api/pipeline/status?" + urllib.parse.urlencode({
+                        "conversation_identity": identity,
+                    })
+                )
+                self.assertEqual(status, 200, body)
+                self.assertEqual(body["scope"]["conversation_identity"], "scope-url")
+                self.assertEqual(body["active_mission_id"], mission_id)
+
+    def test_09f_pipeline_scope_selects_the_stable_newest_matching_mission(self):
+        older = self.seed_pipeline_mission(
+            "scope-shared",
+            model="model-older",
+            event_type="event-older",
+            updated_at=100.0,
+        )
+        newer = self.seed_pipeline_mission(
+            "scope-shared",
+            model="model-newer",
+            event_type="event-newer",
+            updated_at=200.0,
+        )
+
+        status, body = self.get(
+            "/api/pipeline/status?" + urllib.parse.urlencode({
+                "conversation_identity": "scope-shared",
+            })
+        )
+
+        self.assertEqual(status, 200, body)
+        self.assertEqual(body["active_mission_id"], newer)
+        self.assertEqual(body["scope"]["mission_id"], newer)
+        self.assertEqual(body["runtime_execution"]["executor_model_used"], "model-newer")
+        self.assertIn("event-newer", json.dumps(body, sort_keys=True))
+        self.assertNotIn(older, json.dumps(body, sort_keys=True))
+
+    def test_09g_pipeline_status_without_scope_keeps_the_global_legacy_selection(self):
+        self.seed_pipeline_mission("scope-alpha", updated_at=1_000_000.0)
+        mission_b = self.seed_pipeline_mission("scope-beta", updated_at=2_000_000.0)
+        expected_queue = max(0, len([
+            row for row in missions_api.get_store().rows("missions")
+            if row["state"] not in {"COMPLETED", "BLOCKED", "FAILED", "CANCELLED"}
+        ]) - 1)
+
+        status, body = self.get("/api/pipeline/status")
+
+        self.assertEqual(status, 200, body)
+        self.assertEqual(body["scope"]["mode"], "global_legacy")
+        self.assertEqual(body["active_mission_id"], mission_b)
+        self.assertEqual(body["queue_pending"], expected_queue)
+
+    def test_09h_pipeline_scope_does_not_match_prefixes_or_malformed_conversations(self):
+        identity = f"scope-prefix-{uuid.uuid4().hex}"
+        self.seed_pipeline_mission(f"{identity}-other", updated_at=100.0)
+
+        status, body = self.get(
+            "/api/pipeline/status?" + urllib.parse.urlencode({
+                "conversation_identity": identity,
+            })
+        )
+        self.assertEqual(status, 200, body)
+        self.assertIsNone(body["active_mission_id"])
+        self.assertEqual(body["events"], [])
+
+        status, body = self.get(
+            "/api/pipeline/status?" + urllib.parse.urlencode({
+                "conversation_identity": "https://chatgpt.com",
+            })
+        )
+        self.assertEqual(status, 404)
+        self.assertNotIn("active_mission_id", body)
 
     def test_10_onboarding_opens_dedicated_login_profile(self):
         status, body = self.post("/api/onboarding/browser/open", {})
