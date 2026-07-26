@@ -79,6 +79,7 @@ export function OnboardingPanel({ onOpenSettings }: { onOpenSettings: () => void
   };
 
   return (
+    // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role -- This styled overlay is controlled by React and does not use the native dialog lifecycle.
     <div className="settings-overlay" role="dialog" aria-modal="true" aria-label="Bienvenue dans Cortex Bridge">
       <div className="settings-backdrop" />
       <section className="settings-panel onboarding-panel">

@@ -801,7 +801,7 @@ export function CortexApp() {
       {!settingsOpen && <OnboardingPanel onOpenSettings={() => setSettingsOpen(true)} />}
 
       {demoMode && <div className="demo-mode-badge">development_fixture · aucune preuve de release</div>}
-      {toast && <div className="app-toast" role="status">{toast}</div>}
+      {toast && <output className="app-toast">{toast}</output>}
     </main>
   );
 }

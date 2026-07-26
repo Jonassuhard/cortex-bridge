@@ -318,7 +318,7 @@ export function ChatWorkspace({
           {!sidebarCollapsed && <button className="toolbar-icon-button mobile-only" onClick={onToggleSidebar}><MenuIcon /></button>}
           {sidebarCollapsed && <button className="toolbar-icon-button" onClick={onToggleSidebar} title="Afficher les conversations"><MenuIcon /></button>}
           <div className="conversation-title-block">
-            <div><h2>{title}</h2><button aria-label="Options de conversation"><MoreIcon size={17} /></button></div>
+            <div><h1>{title}</h1><button aria-label="Options de conversation"><MoreIcon size={17} /></button></div>
             <p>
               <span>{settings.planner_model}</span>
               <i />
@@ -394,8 +394,8 @@ export function ChatWorkspace({
 
       <div className="composer-shell">
         <div className="composer-mode-tabs" role="tablist">
-          <button className={mode === "mission" ? "is-active" : ""} onClick={() => setMode("mission")}><SparkIcon size={14} /> Mission autonome</button>
-          <button className={mode === "chat" ? "is-active" : ""} onClick={() => setMode("chat")}><EyeIcon size={14} /> Message simple</button>
+          <button role="tab" aria-selected={mode === "mission"} className={mode === "mission" ? "is-active" : ""} onClick={() => setMode("mission")}><SparkIcon size={14} /> Mission autonome</button>
+          <button role="tab" aria-selected={mode === "chat"} className={mode === "chat" ? "is-active" : ""} onClick={() => setMode("chat")}><EyeIcon size={14} /> Message simple</button>
         </div>
         <div className={`composer-box ${busy ? "is-busy" : ""}`}>
           <textarea

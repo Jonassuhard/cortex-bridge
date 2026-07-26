@@ -342,7 +342,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .toolbar-icon-button.is-active { color: var(--blue-light); background: var(--blue-soft); border-color: rgba(96,165,250,.2); }
 .conversation-title-block { min-width: 0; }
 .conversation-title-block > div { display: flex; align-items: center; gap: 5px; min-width: 0; }
-.conversation-title-block h2 { margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #fff; font-size: 15px; letter-spacing: -.015em; font-weight: 620; }
+.conversation-title-block h1 { margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #fff; font-size: 15px; letter-spacing: -.015em; font-weight: 620; }
 .conversation-title-block button { width: 28px; height: 25px; display: grid; place-items: center; border: 0; border-radius: 7px; color: var(--muted); background: transparent; cursor: pointer; }
 .conversation-title-block button:hover { color: #fff; background: rgba(255,255,255,.055); }
 .conversation-title-block p { display: flex; align-items: center; gap: 7px; margin: 5px 0 0; min-width: 0; color: var(--muted); font-size: 9px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

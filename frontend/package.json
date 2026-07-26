@@ -5,18 +5,32 @@
   "packageManager": "npm@11.18.0",
   "type": "module",
   "engines": {
-    "node": ">=20.19.0"
+    "node": "^20.19.0 || >=22.12.0",
+    "npm": "11.18.0"
+  },
+  "devEngines": {
+    "runtime": {
+      "name": "node",
+      "version": "^20.19.0 || >=22.12.0",
+      "onFail": "error"
+    },
+    "packageManager": {
+      "name": "npm",
+      "version": "11.18.0",
+      "onFail": "error"
+    }
   },
   "scripts": {
     "dev": "next dev --hostname 127.0.0.1 --port 3420",
     "build": "next build",
     "start": "next start --hostname 127.0.0.1 --port 3420",
-    "lint": "oxlint --deny-warnings .",
+    "lint": "oxlint --deny-warnings . && node test/lint-contract.mjs",
+    "lint:contract": "node test/lint-contract.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "npm run test:unit && npm run test:runtime",
+    "test": "vitest run && tsx --test lib/runtimeTruth.test.mts test/privacy.test.mts test/next-image-optimizer.test.mts",
     "test:unit": "vitest run",
-    "test:runtime": "tsx --test lib/runtimeTruth.test.mts test/privacy.test.mts",
-    "test:coverage": "vitest run --coverage && npm run test:runtime",
+    "test:runtime": "tsx --test lib/runtimeTruth.test.mts test/privacy.test.mts test/next-image-optimizer.test.mts",
+    "test:coverage": "vitest run --coverage && tsx --test lib/runtimeTruth.test.mts test/privacy.test.mts test/next-image-optimizer.test.mts",
     "test:e2e": "playwright test",
     "test:a11y": "playwright test --grep @a11y"
   },

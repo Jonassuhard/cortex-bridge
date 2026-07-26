@@ -7,8 +7,11 @@
  */
 export function BridgeDiagram() {
   return (
-    <div className="bridge-diagram" role="img" aria-label="Schéma de fonctionnement de Cortex Bridge">
-      <svg viewBox="0 0 720 300" width="100%">
+    <div className="bridge-diagram">
+      {/* oxlint-disable-next-line jsx-a11y/prefer-tag-over-role -- SVG diagrams use role=img with title and description; an img cannot expose this structure. */}
+      <svg viewBox="0 0 720 300" width="100%" role="img" aria-labelledby="bridge-diagram-title bridge-diagram-description">
+        <title id="bridge-diagram-title">Schéma de fonctionnement de Cortex Bridge</title>
+        <desc id="bridge-diagram-description">ChatGPT planifie, Cortex Bridge applique les garde-fous, puis Ollama agit sur le workspace local.</desc>
         <defs>
           <linearGradient id="bd-cloud" x1="0" y1="0" x2="1" y2="1">
             <stop offset="0%" stopColor="rgba(129,140,248,0.16)" />

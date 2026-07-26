@@ -9,8 +9,18 @@ Baseline commit: `e3f7a8c8146c3c4ea21a1251ae8b3c51e0b19cbb`
 - `npm audit --json`: **0** vulnerabilities.
 - `npm audit --omit=dev --json`: **0** vulnerabilities.
 - The full graph fell from 632 to 296 packages.
-- The supported runtime contract is Node `>=20.19.0`; every final gate below ran on exactly Node `20.19.0` with npm `11.18.0`.
-- npm is pinned through `packageManager` because npm `11.18.0` correctly materializes the scoped Next/Sharp override and produces `npm ls` with no graph problems.
+- The supported runtime contract is Node `^20.19.0 || >=22.12.0`; every final gate below ran on exactly Node `20.19.0` with npm `11.18.0`.
+- npm `11.18.0` is enforced by exact `engines.npm` and error-level `devEngines`, with `engine-strict=true`. `packageManager` supplies Corepack metadata; it does not enforce the version by itself.
+
+## Fix round 1
+
+- Added `.node-version`, `.npmrc`, exact README/Corepack commands, and hard Node/npm contracts. Node `20.19.0` with npm `10.9.2` now exits `EBADDEVENGINES` before creating `node_modules`; Node `20.19.0` with npm `11.18.0` completes a clean install.
+- Enabled npm's `strict-allow-scripts` gate. The exact positive install reports `No packages with unreviewed install scripts.` A mutation that removed the Sharp override was independently rejected because `sharp@0.34.5` had an unapproved install script.
+- Added a committed `lint:contract` gate with six neutral temporary fixtures and exact diagnostic-code assertions for conditional hooks, TypeScript correctness, bad imports, accessibility, raw Next images, and focused Vitest tests. Its `finally` cleanup is also asserted.
+- Removed global accessibility disables. Valid custom semantics now use local, reasoned Oxlint suppressions; the composer tabs, page heading, status output, and SVG accessible name were fixed in markup.
+- Expanded Playwright/Axe from one selected rule to the complete Axe ruleset. The first full run caught `aria-required-children` and `page-has-heading-one`; the corrected UI passes with zero violations.
+- Deleted `eslint.config.mjs`. The privacy gate now skips tracked paths that were intentionally deleted and still scans the remaining committed/untracked source set.
+- Kept the scoped Sharp override because the reviewed [GHSA-f88m-g3jw-g9cj](https://github.com/advisories/GHSA-f88m-g3jw-g9cj), published in 2026, affects Sharp `<0.35.0` through libvips vulnerabilities CVE-2026-33327, CVE-2026-33328, CVE-2026-35590, and CVE-2026-35591. A direct test imports Next's real `optimizeImage` module, verifies Sharp `0.35.0`, and converts/resizes PNG, JPEG, and WebP buffers. Without the override, Next resolves Sharp `0.34.5` and the regression test fails.
 
 ## Security-driven red/green evidence
 
@@ -51,26 +61,24 @@ The following were explicitly rejected:
 
 ### Green remediation
 
-ESLint and `eslint-config-next` were replaced with `oxlint@1.75.0`. The committed `.oxlintrc.json` enables built-in ESLint, TypeScript, import, React, JSX accessibility, Next.js, Vitest, Unicorn, and Oxc rules, with correctness diagnostics treated as errors. `npm run lint` is deterministic and warning-intolerant.
+ESLint and `eslint-config-next` were replaced with `oxlint@1.75.0`. The committed `.oxlintrc.json` enables built-in ESLint, TypeScript, import, React, JSX accessibility, Next.js, Vitest, Unicorn, and Oxc rules, with correctness diagnostics treated as errors. Hooks, unescaped entities, TypeScript correctness, import validity, accessibility, raw Next images, and focused Vitest tests are explicit error-level rules. `npm run lint` is deterministic, warning-intolerant, and includes `lint:contract`.
 
-A temporary TSX fixture containing a raw `<img>` was added before the green lint run. `npm run lint` exited 1 with:
+The lint contract writes fixtures under a temporary frontend directory, invokes the installed Oxlint binary with the committed config, and asserts these exact codes:
 
-```text
-next(no-img-element): Using `<img>` could result in slower LCP and higher bandwidth.
-```
+- `react-hooks(rules-of-hooks)`
+- `typescript(no-duplicate-enum-values)`
+- `import(default)`
+- `jsx-a11y(anchor-has-content)`
+- `next(no-img-element)`
+- `vitest(no-focused-tests)`
 
-The fixture was then removed and the real tree passed. Two Oxlint accessibility rules are disabled because they produced false positives for existing valid patterns:
-
-- `jsx-a11y/prefer-tag-over-role` on the diagram SVG and custom dialog surface;
-- `jsx-a11y/label-has-associated-control` on a label that contains both dynamic text and its checkbox.
-
-The Playwright/axe accessibility gate remains enabled. `eslint.config.mjs` is now a dependency-free compatibility marker because the privacy gate expects every previously tracked frontend source path to remain readable.
+There are no global accessibility rule disables. The few valid custom widgets that cannot use the suggested native tag have adjacent, reasoned suppressions. Full Axe analysis and TypeScript remain independent gates. The obsolete `eslint.config.mjs` compatibility stub was deleted; the privacy test intentionally tolerates tracked deletions.
 
 ## Dependency diff
 
 | Package / contract | Before (`e3f7a8c`) | After |
 | --- | --- | --- |
-| Node engine | `>=20.9.0` | `>=20.19.0` |
+| Node engine | `>=20.9.0` | `^20.19.0 || >=22.12.0` |
 | Package manager | unspecified | `npm@11.18.0` |
 | Next | `16.2.9` | `16.2.12` |
 | React / React DOM | `19.2.4` | `19.2.4` |
@@ -88,7 +96,7 @@ The Playwright/axe accessibility gate remains enabled. `eslint.config.mjs` is no
 Overrides are intentionally narrow:
 
 - `postcss@8.5.23` keeps the shared PostCSS graph on the audited patch.
-- `next > sharp@0.35.0` is scoped to Next. Next `16.2.12` declares `sharp ^0.34.5`, which cannot select the patched `0.35.x` line. Next build and the Sharp runtime were both exercised after the override.
+- `next > sharp@0.35.0` is scoped to Next. Next `16.2.12` declares `sharp ^0.34.5`, which cannot select the patched `0.35.x` line. The override is tied to the 2026 libvips advisory above and exercised through Next's actual image optimizer, not only by requiring Sharp directly.
 
 npm install scripts are explicit: reviewed `esbuild@0.25.12` is allowed, while optional `fsevents` build scripts are denied. A clean install reports no unreviewed scripts.
 
@@ -100,19 +108,23 @@ All commands ran after the final clean install under Node `20.19.0` and npm `11.
 | --- | --- |
 | `npm ci --no-audit --no-fund` | exit 0; 176 packages installed |
 | `npm install-scripts ls` | no unreviewed install scripts |
+| Node `20.19.0` + npm `10.9.2` negative contract | exit 1 `EBADDEVENGINES`; no `node_modules` created |
+| Node `20.19.0` + npm `11.18.0` positive contract | exit 0; clean install and install-script review passed |
 | `npm audit --json` | 0 total |
 | `npm audit --omit=dev --json` | 0 total |
 | `npm ls --all --json` | exit 0; `problems=[]` |
 | lock consistency | SHA-256 unchanged after `npm install --package-lock-only` |
-| `npm test` | 2 Vitest + 28 runtime/privacy tests passed |
+| `npm test` | 2 Vitest tests + 32 Node/TAP tests passed |
 | `npm run test:coverage` | passed; 30.03% statements, 19.5% branches, 27.64% functions, 33.21% lines |
-| `npm run lint` | passed |
-| synthetic lint negative test | exit 1 on `next/no-img-element` |
+| `npm run lint` | passed, including six-family fixture contract |
+| Sharp optimizer integration | Sharp `0.35.0`; PNG/JPEG/WebP conversions and resize passed |
+| Sharp override mutation | resolved `0.34.5`; optimizer regression test failed as required |
 | `npm run typecheck` | passed |
 | `npm run build` | Next `16.2.12` compiled; 3 static pages generated |
 | `npm run test:e2e` | 2/2 passed |
-| `npm run test:a11y` | 1/1 passed |
+| `npm run test:a11y` | 1/1 passed with the complete Axe ruleset |
 | privacy gate only | 10/10 passed |
+| source-only Gitleaks scan | no leaks found |
 | external network in browser tests | blocked; loopback origins only |
 
 Additional compatibility proof:
@@ -123,8 +135,8 @@ Additional compatibility proof:
 
 ## Compatibility notes and rollback
 
-- Oxlint is not a byte-for-byte implementation of `eslint-config-next`; it replaces the vulnerable plugin graph with native TS/React/a11y/Next/Vitest correctness rules. The synthetic negative test and retained typecheck/axe gates cover the intended contract.
-- npm `11.18.0` is part of the reproducibility contract. npm `11.11.1` installed stale optional Sharp nodes under the scoped override; `11.18.0` resolves the graph with `problems=[]`.
+- Oxlint is not a byte-for-byte implementation of `eslint-config-next`; it replaces the vulnerable plugin graph with native TS/React/a11y/Next/Vitest correctness rules. The six-family lint contract and retained typecheck/full-Axe gates cover the intended contract.
+- npm `11.18.0` is part of the reproducibility contract. `packageManager` lets Corepack select it, while exact `engines`, error-level `devEngines`, and `.npmrc` provide the actual install-time rejection. npm `11.11.1` previously installed stale optional Sharp nodes under the scoped override; `11.18.0` resolves the graph with `problems=[]`.
 - The clean install still prints the upstream `whatwg-encoding@3.1.1` deprecation notice. It is not an audit finding.
 - Coverage percentages are unchanged in intent and remain below comprehensive application coverage; no threshold existed before this remediation.
 

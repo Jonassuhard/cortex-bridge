@@ -12,12 +12,24 @@ This directory contains the conversation-first frontend for Cortex Bridge.
 - Tailwind CSS 4 / PostCSS
 - static export consumed by FastAPI from `frontend/out/`
 
+Required toolchain:
+
+- Node `20.19.0` (the `.node-version` baseline), or Node `>=22.12.0`
+- npm `11.18.0` exactly
+
+Corepack can run the npm version declared by `packageManager` without relying
+on a globally installed npm:
+
 ```bash
-npm install
-npm run typecheck
-npm run lint
-npm run build
+corepack npm --version # must print 11.18.0
+corepack npm ci
+corepack npm run typecheck
+corepack npm run lint
+corepack npm run build
 ```
+
+The repository rejects unsupported Node/npm versions and unreviewed dependency
+install scripts before installation. Do not bypass these checks with `--force`.
 
 ### Standalone fallback
 

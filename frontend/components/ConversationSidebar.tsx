@@ -124,6 +124,7 @@ export function ConversationSidebar({
         <span className="sidebar-count">{conversations.length}</span>
       </div>
 
+      {/* oxlint-disable-next-line jsx-a11y/prefer-tag-over-role -- Rich conversation rows require a custom listbox instead of native select options. */}
       <div className="conversation-list" role="listbox" aria-label="Liste des conversations">
         {loading && conversations.length === 0 && (
           <div className="conversation-skeletons" aria-label="Chargement des conversations">
@@ -146,11 +147,11 @@ export function ConversationSidebar({
         {filtered.map((conversation) => {
           const selected = selectedUrl === conversation.url;
           return (
-            <button
+            // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role -- Interactive rich rows are keyboard-focusable listbox options.
+            <button role="option"
               key={conversation.identity || conversation.url}
               className={`conversation-row ${selected ? "is-selected" : ""}`}
               onClick={() => onSelect(conversation)}
-              role="option"
               aria-selected={selected}
             >
               <span className={`conversation-status ${statusClass(conversation.status)}`} />

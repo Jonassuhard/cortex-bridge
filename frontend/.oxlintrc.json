@@ -15,8 +15,14 @@
     "correctness": "error"
   },
   "rules": {
-    "jsx-a11y/label-has-associated-control": "off",
-    "jsx-a11y/prefer-tag-over-role": "off"
+    "import/default": "error",
+    "jsx-a11y/anchor-has-content": "error",
+    "nextjs/no-img-element": "error",
+    "react/exhaustive-deps": "error",
+    "react/no-unescaped-entities": "error",
+    "react/rules-of-hooks": "error",
+    "typescript/no-duplicate-enum-values": "error",
+    "vitest/no-focused-tests": "error"
   },
   "env": {
     "builtin": true,

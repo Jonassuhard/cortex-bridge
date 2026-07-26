@@ -55,6 +55,7 @@ function Toggle({ checked, onChange, label, description, danger = false, disable
   disabled?: boolean;
 }) {
   return (
+    // oxlint-disable-next-line jsx-a11y/label-has-associated-control -- The checkbox is nested in its native label and the text is supplied by props.
     <label className={`settings-toggle-row ${danger ? "is-danger" : ""} ${disabled ? "is-disabled" : ""}`}>
       <span><strong>{label}</strong><small>{description}</small></span>
       <input type="checkbox" checked={checked} disabled={disabled} onChange={(event) => onChange(event.target.checked)} />
@@ -128,6 +129,7 @@ export function SettingsPanel({
   };
 
   return (
+    // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role -- This styled overlay is controlled by React and does not use the native dialog lifecycle.
     <div className="settings-overlay" role="dialog" aria-modal="true" aria-label="Paramètres Cortex Bridge">
       <button className="settings-backdrop" onClick={onClose} aria-label="Fermer les paramètres" />
       <section className="settings-panel">

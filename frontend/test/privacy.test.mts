@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { extname } from "node:path";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import test from "node:test";
 import ts from "typescript";
 
@@ -220,6 +220,7 @@ function trackedFrontendSources(): SourceSnippet[] {
     .filter((file) => isScannableSource(file))
     .filter((file) => !excludedFiles.has(file))
     .filter((file) => excludedDirectories.every((directory) => !file.startsWith(directory)))
+    .filter((path) => existsSync(path))
     .map((path) => ({ path, content: readFileSync(path, "utf8") }));
 }
 
