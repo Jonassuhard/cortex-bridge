@@ -217,6 +217,18 @@ type ConversationLoadFactory = (effects: {
   ): Promise<void>;
 };
 
+type ConversationSelectionCoordinatorFactory = (
+  loader: { invalidate(): void },
+) => {
+  reconcile(
+    conversation: Record<string, unknown> | null,
+    effects: {
+      reset(): void;
+      load(conversation: Record<string, unknown>): Promise<void>;
+    },
+  ): Promise<void> | null;
+};
+
 function createConversationLoadHarness(factory: ConversationLoadFactory) {
   const view = {
     conversationState: {
@@ -275,6 +287,26 @@ function conversationView(view: ReturnType<typeof createConversationLoadHarness>
     selectedUrl,
     staleError: selectedRow?.sync_error || null,
     staleState: selectedRow?.sync_state || null,
+  };
+}
+
+function selectionEffects(
+  harness: ReturnType<typeof createConversationLoadHarness>,
+  requests: Map<string, Deferred<ReturnType<typeof conversationSnapshot>>>,
+  fetchCounts: Map<string, number>,
+) {
+  return {
+    reset() {
+      harness.view.loading = false;
+      harness.view.messages = [];
+    },
+    load(conversation: Record<string, unknown>) {
+      const identity = String(conversation.identity);
+      fetchCounts.set(identity, (fetchCounts.get(identity) || 0) + 1);
+      const request = requests.get(identity);
+      assert.ok(request, `missing deferred request for ${identity}`);
+      return harness.controller.load(conversation, () => request!.promise);
+    },
   };
 }
 
@@ -575,6 +607,96 @@ test("conversation loader reset invalidates every late mutation", async () => {
     staleError: null,
     staleState: null,
   });
+});
+
+test("selection reconciliation replaces A with B once and rejects every late A outcome", async () => {
+  const runtimeTruth = await import("./runtimeTruth.ts") as Record<string, unknown>;
+  const loaderFactory = runtimeTruth.createConversationLoadController as ConversationLoadFactory | undefined;
+  const coordinatorFactory = runtimeTruth.createConversationSelectionCoordinator as ConversationSelectionCoordinatorFactory | undefined;
+  assert.equal(typeof loaderFactory, "function");
+  assert.equal(typeof coordinatorFactory, "function");
+
+  for (const lateA of ["success", "failure"] as const) {
+    const harness = createConversationLoadHarness(loaderFactory!);
+    const coordinator = coordinatorFactory!(harness.controller);
+    const requestA = deferred<ReturnType<typeof conversationSnapshot>>();
+    const requestB = deferred<ReturnType<typeof conversationSnapshot>>();
+    const requests = new Map([
+      [loadConversationA.identity, requestA],
+      [loadConversationB.identity, requestB],
+    ]);
+    const fetchCounts = new Map<string, number>();
+    const effects = selectionEffects(harness, requests, fetchCounts);
+
+    harness.view.conversationState.selectedConversation = loadConversationA;
+    const loadingA = coordinator.reconcile(loadConversationA, effects);
+    assert.ok(loadingA);
+    assert.equal(harness.view.loading, true);
+
+    harness.view.conversationState.selectedConversation = loadConversationB;
+    const loadingB = coordinator.reconcile(loadConversationB, effects);
+    assert.ok(loadingB);
+    assert.equal(harness.view.loading, true);
+    requestB.resolve(conversationSnapshot(loadConversationB.url, ["B après réconciliation"]));
+    await loadingB;
+
+    if (lateA === "success") {
+      requestA.resolve(conversationSnapshot(loadConversationA.url, ["A trop tardive"]));
+    } else {
+      requestA.reject(new Error("A échoue trop tard"));
+    }
+    await loadingA;
+
+    assert.deepEqual(conversationView(harness.view), {
+      loading: false,
+      messages: ["B après réconciliation"],
+      selectedUrl: loadConversationB.url,
+      staleError: null,
+      staleState: "live",
+    });
+    assert.deepEqual(Object.fromEntries(fetchCounts), { "load-a": 1, "load-b": 1 });
+  }
+});
+
+test("selection reconciliation clears loading when A disappears without replacement", async () => {
+  const runtimeTruth = await import("./runtimeTruth.ts") as Record<string, unknown>;
+  const loaderFactory = runtimeTruth.createConversationLoadController as ConversationLoadFactory | undefined;
+  const coordinatorFactory = runtimeTruth.createConversationSelectionCoordinator as ConversationSelectionCoordinatorFactory | undefined;
+  assert.equal(typeof loaderFactory, "function");
+  assert.equal(typeof coordinatorFactory, "function");
+  const harness = createConversationLoadHarness(loaderFactory!);
+  const coordinator = coordinatorFactory!(harness.controller);
+  const requestA = deferred<ReturnType<typeof conversationSnapshot>>();
+  const requests = new Map([[loadConversationA.identity, requestA]]);
+  const fetchCounts = new Map<string, number>();
+  const effects = selectionEffects(harness, requests, fetchCounts);
+
+  harness.view.conversationState.selectedConversation = loadConversationA;
+  const loadingA = coordinator.reconcile(loadConversationA, effects);
+  assert.ok(loadingA);
+  assert.equal(harness.view.loading, true);
+
+  harness.view.conversationState.selectedConversation = null;
+  const noLoad = coordinator.reconcile(null, effects);
+  assert.equal(noLoad, null);
+  assert.deepEqual(conversationView(harness.view), {
+    loading: false,
+    messages: [],
+    selectedUrl: "",
+    staleError: null,
+    staleState: null,
+  });
+  requestA.resolve(conversationSnapshot(loadConversationA.url, ["A après suppression"]));
+  await loadingA;
+
+  assert.deepEqual(conversationView(harness.view), {
+    loading: false,
+    messages: [],
+    selectedUrl: "",
+    staleError: null,
+    staleState: null,
+  });
+  assert.deepEqual(Object.fromEntries(fetchCounts), { "load-a": 1 });
 });
 
 test("mission refresh failure clears current execution while preserving independent transport", async () => {

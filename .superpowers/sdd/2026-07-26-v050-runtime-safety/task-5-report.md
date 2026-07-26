@@ -502,3 +502,103 @@ Result: all exited 0; the final ESLint run emitted no warning.
   `frontend/tsconfig.tsbuildinfo` remain unstaged and uncommitted.
 - Existing SQLite/HTTP `ResourceWarning` lines remain visible in otherwise
   green backend runs.
+
+## Fix round 5/5
+
+### Final review finding resolved
+
+- List-driven conversation selection now goes through the exported
+  `createConversationSelectionCoordinator`, paired with the exact guarded load
+  controller introduced in round 4. The coordinator keys transitions by
+  conversation identity and performs one ordered boundary: invalidate the old
+  loader, reset the mounted view, then start at most one replacement load.
+- `CortexApp` runs that boundary in `useLayoutEffect`, before paint. When list
+  reconciliation replaces A with B, A is invalidated, `loadingMessages` and
+  messages reset immediately, and B starts exactly once. B's guarded start
+  restores loading while its guarded finish clears it.
+- A late A success, failure, or `finally` remains rejected by the load epoch and
+  cannot mutate B. The coordinator's identity memory also absorbs React effect
+  replays without issuing a second fetch.
+- When A disappears with no replacement, the same boundary invalidates A,
+  clears messages, and leaves loading false without starting any request.
+- Manual selection now changes selection only; the coordinator owns its first
+  load. Clicking the already-selected row still performs one intentional manual
+  reload and does not trigger reconciliation.
+
+### Invalidation audit
+
+- Reconciliation while mounted: coordinator invalidation plus immediate reset
+  of poll epoch, messages, loading, and light-signature state.
+- New chat / new mission while mounted: explicit loader and poll invalidation,
+  messages cleared, loading false.
+- Component teardown: loader invalidation only, because the view no longer
+  exists and must not receive a state repair.
+- No remaining mounted call site abandons a guarded `finally` while depending
+  on that ignored `finally` to clear the spinner.
+
+### TDD evidence
+
+RED command:
+
+```text
+node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON \
+  --experimental-strip-types --test --test-name-pattern="selection reconciliation" \
+  frontend/lib/runtimeTruth.test.mts
+```
+
+Observed: 2 tests, 2 expected failures because
+`createConversationSelectionCoordinator` did not exist. The cases were A in
+flight replaced by B (with both late A success and late A failure variants),
+and A removed with no replacement.
+
+Focused GREEN for the same command: 2 tests pass in `298.634ms`.
+
+Final frontend command:
+
+```text
+node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON \
+  --experimental-strip-types --test frontend/lib/runtimeTruth.test.mts
+```
+
+Result: `18 tests`, all pass in `881.090ms`. The integration harness combines
+the exact coordinator and exact loader used by `CortexApp`, asserts selected
+URL, messages, stale/error state, loading state, and literal fetch counts
+`A=1`, `B=1`; the no-replacement path asserts no extra fetch and no spinner.
+
+Focused backend truth command:
+
+```text
+.venv/bin/python -m unittest tests.test_executor_runtime_truth -v
+```
+
+Result: `Ran 11 tests in 8.291s ... OK`. No backend production or backend test
+file changed in this round.
+
+### Full and static verification
+
+The exact backend discovery command ran inside a 300-second process-group
+watchdog:
+
+```text
+.venv/bin/python -m unittest discover -s tests -v
+```
+
+Result: `Ran 216 tests in 198.193s ... OK`, watchdog exit 0.
+
+```text
+npm --prefix frontend run typecheck
+npm --prefix frontend run lint
+.venv/bin/python -m py_compile $(rg --files -g '*.py' -g '!frontend/**')
+git diff --check
+```
+
+Result: all exited 0 after the final source change; ESLint emitted no warning.
+
+### Preserved external dirt and concern
+
+- Known generated changes under `frontend/out/**` and
+  `frontend/tsconfig.tsbuildinfo` remain unstaged and uncommitted.
+- The standalone fallback loader race remains explicitly assigned to UI Task 7
+  as recorded in round 4; it is not claimed fixed here.
+- Existing SQLite/HTTP `ResourceWarning` lines remain visible in otherwise
+  green backend runs.

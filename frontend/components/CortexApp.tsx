@@ -1,7 +1,7 @@
 "use client";
 /* eslint-disable react-hooks/set-state-in-effect */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, apiUrl, postJson, putJson } from "@/lib/api";
 import {
   demoConversations,
@@ -31,6 +31,7 @@ import type {
 import { useInterval } from "@/hooks/useInterval";
 import {
   createConversationLoadController,
+  createConversationSelectionCoordinator,
   createRequestEpoch,
   createUnavailableClientState,
   reduceConversationRefreshFailure,
@@ -109,6 +110,7 @@ export function CortexApp() {
   const [demoMode, setDemoMode] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const chatEventSource = useRef<EventSource | null>(null);
+  const selectedConversationRef = useRef<ConversationSummary | null>(selectedConversation);
   const missionDetailRequestEpoch = useRef(createRequestEpoch());
   const conversationPollRequestEpoch = useRef(createRequestEpoch());
   const [conversationLoadController] = useState(() => createConversationLoadController({
@@ -147,6 +149,9 @@ export function CortexApp() {
       setLoadingMessages(false);
     },
   }));
+  const [conversationSelectionCoordinator] = useState(() => (
+    createConversationSelectionCoordinator(conversationLoadController)
+  ));
 
   const activeMission = useMemo(() => {
     if (missionDetail && nonTerminal(missionDetail.mission.state)) return missionDetail;
@@ -219,10 +224,7 @@ export function CortexApp() {
         } else {
           selected = normalized[0] || null;
         }
-        if (selected?.url !== current.selectedConversation?.url) {
-          conversationPollRequestEpoch.current.invalidate();
-          conversationLoadController.invalidate();
-        }
+        selectedConversationRef.current = selected;
         return {
           conversations: normalized,
           selectedConversation: selected,
@@ -231,11 +233,15 @@ export function CortexApp() {
       });
     } catch {
       if (DEVELOPMENT_FIXTURES_ENABLED) {
-        setConversationState((current) => ({
-          conversations: demoConversations.map(normalizeConversation),
-          selectedConversation: current.selectedConversation || normalizeConversation(demoConversations[0]),
-          sync: { state: "live", error: null, updated_at: new Date().toISOString() },
-        }));
+        setConversationState((current) => {
+          const selected = current.selectedConversation || normalizeConversation(demoConversations[0]);
+          selectedConversationRef.current = selected;
+          return {
+            conversations: demoConversations.map(normalizeConversation),
+            selectedConversation: selected,
+            sync: { state: "live", error: null, updated_at: new Date().toISOString() },
+          };
+        });
         setDemoMode(true);
       } else {
         setConversationState((current) => reduceConversationRefreshFailure(
@@ -247,7 +253,7 @@ export function CortexApp() {
     } finally {
       setLoadingConversations(false);
     }
-  }, [chatRun, conversationLoadController]);
+  }, [chatRun]);
 
   const refreshMissions = useCallback(async () => {
     try {
@@ -417,9 +423,24 @@ export function CortexApp() {
     };
   }, [conversationLoadController, refreshConversations, refreshMissions, refreshPipeline, refreshRuntime, refreshSettings]);
 
-  useEffect(() => {
-    if (selectedConversation && selectedConversation.sync_state !== "stale" && messages.length === 0 && !loadingMessages) void loadConversation(selectedConversation);
-  }, [loadConversation, loadingMessages, messages.length, selectedConversation]);
+  const selectedConversationIdentity = selectedConversation?.identity || null;
+  useLayoutEffect(() => {
+    const selected = selectedConversationRef.current;
+    const loadable = selected && selected.identity !== "__new__" && selected.sync_state !== "stale"
+      ? selected
+      : null;
+    conversationSelectionCoordinator.reconcile(loadable, {
+      reset() {
+        conversationPollRequestEpoch.current.invalidate();
+        setMessages([]);
+        setLoadingMessages(false);
+        setLastLightSig(null);
+      },
+      load(conversation) {
+        return loadConversation(conversation);
+      },
+    });
+  }, [conversationSelectionCoordinator, loadConversation, selectedConversationIdentity]);
 
   useEffect(() => {
     void refreshMissionDetail();
@@ -692,12 +713,20 @@ export function CortexApp() {
         loading={loadingConversations}
         collapsed={sidebarCollapsed}
         onCollapse={() => setSidebarCollapsed((value) => !value)}
-        onSelect={(conversation) => void loadConversation(conversation)}
+        onSelect={(conversation) => {
+          if (selectedConversation?.identity === conversation.identity) {
+            void loadConversation(conversation);
+            return;
+          }
+          selectedConversationRef.current = conversation;
+          setConversationState((current) => ({ ...current, selectedConversation: conversation }));
+        }}
         onRefresh={() => void refreshConversations()}
         onNewConversation={() => {
           const fresh: ConversationSummary = { url: "https://chatgpt.com/", identity: "__new__", title: "Nouvelle conversation", preview: "Le chat sera créé au premier envoi", status: "idle" };
           conversationPollRequestEpoch.current.invalidate();
           conversationLoadController.invalidate();
+          selectedConversationRef.current = fresh;
           setConversationState((current) => ({ ...current, selectedConversation: fresh }));
           setMessages([]);
           setLoadingMessages(false);
@@ -706,6 +735,7 @@ export function CortexApp() {
           const fresh: ConversationSummary = { url: "https://chatgpt.com/", identity: "__new__", title: "Nouvelle mission", preview: "ChatGPT orchestrera la mission", status: "mission" };
           conversationPollRequestEpoch.current.invalidate();
           conversationLoadController.invalidate();
+          selectedConversationRef.current = fresh;
           setConversationState((current) => ({ ...current, selectedConversation: fresh }));
           setMessages([]);
           setLoadingMessages(false);

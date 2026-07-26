@@ -57,6 +57,18 @@ export interface ConversationLoadController {
   ): Promise<void>;
 }
 
+export interface ConversationSelectionEffects {
+  reset(): void;
+  load(conversation: ConversationSummary): Promise<void>;
+}
+
+export interface ConversationSelectionCoordinator {
+  reconcile(
+    conversation: ConversationSummary | null,
+    effects: ConversationSelectionEffects,
+  ): Promise<void> | null;
+}
+
 export function createUnavailableClientState(updatedAt: string): {
   runtime: RuntimeStatus;
   transport: TransportStatus;
@@ -240,6 +252,22 @@ export function createConversationLoadController(
       } finally {
         if (requests.isCurrent(ticket, conversation.url)) effects.onFinish(conversation);
       }
+    },
+  };
+}
+
+export function createConversationSelectionCoordinator(
+  loader: Pick<ConversationLoadController, "invalidate">,
+): ConversationSelectionCoordinator {
+  let currentIdentity: string | null = null;
+  return {
+    reconcile(conversation, effects) {
+      const nextIdentity = conversation?.identity || null;
+      if (nextIdentity === currentIdentity) return null;
+      currentIdentity = nextIdentity;
+      loader.invalidate();
+      effects.reset();
+      return conversation ? effects.load(conversation) : null;
     },
   };
 }
