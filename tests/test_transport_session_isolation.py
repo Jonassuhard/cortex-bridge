@@ -440,6 +440,48 @@ class ChatRouteSessionIsolationTest(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(raised.exception.status_code, 409)
 
+    async def test_selected_transport_constructor_failure_is_persisted_and_releases_writer(self) -> None:
+        observed_leases = []
+
+        def fail_selected_transport(_session_id: str | None = None):
+            observed_leases.extend(write_slots._registry.active_leases())
+            raise RuntimeError("selected browser transport constructor failed")
+
+        chat_api.ui_transport_factory = fail_selected_transport
+        submitted = await chat_api.send_chat(
+            chat_api.ChatSendIn(
+                conversation_url="https://chatgpt.com/c/factory-failure",
+                text="constructor failure must be compensated",
+            )
+        )
+        failed = chat_api._runs[submitted["id"]]
+        task_result = await asyncio.gather(failed.task, return_exceptions=True)
+
+        self.assertEqual(task_result, [None])
+        self.assertEqual(len(observed_leases), 1)
+        self.assertEqual(observed_leases[0].session_id, failed.session_id)
+        self.assertEqual(failed.state, "FAILED")
+        self.assertEqual(
+            failed.error,
+            "CHAT_RUN_CRASHED: selected browser transport constructor failed",
+        )
+        persisted = {
+            item["id"]: item
+            for item in json.loads(
+                chat_api.CHAT_RUNS_FILE.read_text(encoding="utf-8")
+            )
+        }
+        self.assertEqual(persisted[failed.id]["state"], "FAILED")
+        self.assertEqual(persisted[failed.id]["error"], failed.error)
+        self.assertEqual(write_slots._registry.active_leases(), ())
+
+        first = await write_slots.acquire_writer("https://chatgpt.com/c/recovered-1")
+        second = await write_slots.acquire_writer("https://chatgpt.com/c/recovered-2")
+        with self.assertRaises(conversation_sessions.SessionCapacityError):
+            await write_slots.acquire_writer("https://chatgpt.com/c/recovered-3")
+        await first.release()
+        await second.release()
+
 
 class ConversationBindingPersistenceTest(unittest.TestCase):
     def test_session_id_and_target_survive_store_restart(self) -> None:
@@ -752,6 +794,101 @@ class MissionRouteSessionIsolationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(raised.exception.status_code, 503)
         self.assertEqual(store.get_mission(body.mission_id)["state"], "FAILED")
         self.assertEqual(write_slots._registry.active_leases(), ())
+
+    async def test_runtime_construction_failure_fails_creation_and_releases_lease(self) -> None:
+        mission_id = str(__import__("uuid").uuid4())
+        body = missions_api.MissionIn(
+            objective="runtime construction must be compensated",
+            workspace=str(self.workspace),
+            conversation_url="https://chatgpt.com/c/create-runtime-failure",
+            mission_id=mission_id,
+        )
+        original_build_runtime = missions_api._build_runtime
+        observed_leases = []
+
+        def fail_build_runtime(*args, **kwargs):
+            observed_leases.extend(write_slots._registry.active_leases())
+            raise RuntimeError("selected mission transport constructor failed")
+
+        missions_api._build_runtime = fail_build_runtime
+        try:
+            with self.assertRaises(HTTPException) as raised:
+                await missions_api.create_mission(body)
+        finally:
+            missions_api._build_runtime = original_build_runtime
+
+        self.assertEqual(raised.exception.status_code, 503)
+        self.assertEqual(
+            raised.exception.detail,
+            "cannot create mission: selected mission transport constructor failed",
+        )
+        self.assertEqual(len(observed_leases), 1)
+        mission = missions_api.get_store().get_mission(mission_id)
+        self.assertEqual(mission["state"], "FAILED")
+        self.assertEqual(
+            mission["pause_reason"],
+            "mission creation failed: selected mission transport constructor failed",
+        )
+        self.assertEqual(write_slots._registry.active_leases(), ())
+
+        first = await write_slots.acquire_writer("https://chatgpt.com/c/create-recovered-1")
+        second = await write_slots.acquire_writer("https://chatgpt.com/c/create-recovered-2")
+        with self.assertRaises(conversation_sessions.SessionCapacityError):
+            await write_slots.acquire_writer("https://chatgpt.com/c/create-recovered-3")
+        await first.release()
+        await second.release()
+
+    async def test_resume_transport_construction_failure_is_terminal_and_releases_restored_lease(self) -> None:
+        mission_id = str(__import__("uuid").uuid4())
+        conversation = "https://chatgpt.com/c/resume-runtime-failure"
+        store = missions_api.get_store()
+        store.create_mission(mission_id, "resume safely", str(self.workspace))
+        store.bind_conversation(
+            str(__import__("uuid").uuid4()),
+            mission_id,
+            conversation,
+            browser_target_id="resume-runtime-failure",
+            session_id="cortex-conv-resume-runtime-failure",
+            conversation_target=conversation,
+        )
+        for state in (
+            "INITIALIZING_MISSION",
+            "SENDING_OBJECTIVE",
+            "WAITING_FOR_CHATGPT",
+            "PAUSED",
+        ):
+            store.transition(mission_id, state, pause_reason="test pause")
+        observed_leases = []
+
+        def fail_transport_factory(_session_id: str | None = None):
+            observed_leases.extend(write_slots._registry.active_leases())
+            raise RuntimeError("resume browser transport constructor failed")
+
+        missions_api.transport_factory = fail_transport_factory
+        with self.assertRaises(HTTPException) as raised:
+            await missions_api.resume_mission(mission_id)
+
+        self.assertEqual(raised.exception.status_code, 503)
+        self.assertEqual(
+            raised.exception.detail,
+            "cannot resume mission: resume browser transport constructor failed",
+        )
+        self.assertEqual(len(observed_leases), 1)
+        mission = store.get_mission(mission_id)
+        self.assertEqual(mission["state"], "FAILED")
+        self.assertEqual(
+            mission["pause_reason"],
+            "mission resume failed: resume browser transport constructor failed",
+        )
+        self.assertNotIn(mission_id, missions_api._mission_leases)
+        self.assertEqual(write_slots._registry.active_leases(), ())
+
+        first = await write_slots.acquire_writer("https://chatgpt.com/c/resume-recovered-1")
+        second = await write_slots.acquire_writer("https://chatgpt.com/c/resume-recovered-2")
+        with self.assertRaises(conversation_sessions.SessionCapacityError):
+            await write_slots.acquire_writer("https://chatgpt.com/c/resume-recovered-3")
+        await first.release()
+        await second.release()
 
 
 class MissionRestartPersistenceTest(unittest.IsolatedAsyncioTestCase):

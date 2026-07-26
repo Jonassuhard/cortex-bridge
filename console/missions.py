@@ -725,7 +725,7 @@ async def create_mission(body: MissionIn) -> dict:
         )
     except Exception as exc:
         try:
-            _fail_mission(store, mission_id, f"mission binding failed: {exc}")
+            _fail_mission(store, mission_id, f"mission creation failed: {exc}")
         except Exception:
             pass
         await lease.release()
@@ -733,7 +733,7 @@ async def create_mission(body: MissionIn) -> dict:
         _mission_write_urls.pop(mission_id, None)
         if isinstance(exc, HTTPException):
             raise
-        raise HTTPException(status_code=503, detail=f"cannot persist mission binding: {exc}")
+        raise HTTPException(status_code=503, detail=f"cannot create mission: {exc}")
     _mission_leases[mission_id] = lease
     _mission_write_urls[mission_id] = body.conversation_url
     rt.task = asyncio.create_task(
@@ -859,15 +859,16 @@ async def resume_mission(mission_id: str) -> dict:
         _mission_leases[mission_id] = lease
     if lease is None:
         raise HTTPException(status_code=409, detail="mission has no durable writer lease")
-    rt = _build_runtime(
-        mission_id, mission["workspace"], WRITE_WITH_APPROVALS,
-        "orchestra-executor", "orchestra-executor-fallback",
-        mission["max_iterations"], mission["max_duration_seconds"],
-        lease=lease,
-    )
-    if bindings:
-        b = bindings[0]
-        try:
+    rt: MissionRuntime | None = None
+    try:
+        rt = _build_runtime(
+            mission_id, mission["workspace"], WRITE_WITH_APPROVALS,
+            "orchestra-executor", "orchestra-executor-fallback",
+            mission["max_iterations"], mission["max_duration_seconds"],
+            lease=lease,
+        )
+        if bindings:
+            b = bindings[0]
             if "/c/" in b["conversation_url"]:
                 await rt.transport.attach(ConversationLock(
                     url=b["conversation_url"],
@@ -880,10 +881,27 @@ async def resume_mission(mission_id: str) -> dict:
                 # conversation, so there is no identity to attach to. Re-open
                 # the fresh chat surface; the lock is captured on next send.
                 await rt.transport.start_new_conversation(b["conversation_url"])
-        except Exception as exc:
-            raise HTTPException(status_code=503, detail=f"cannot re-attach conversation: {exc}")
-    store.resume(mission_id, "WAITING_FOR_CHATGPT")
-    rt.task = asyncio.create_task(_resume_mission_task(rt))
+        store.resume(mission_id, "WAITING_FOR_CHATGPT")
+        rt.task = asyncio.create_task(_resume_mission_task(rt))
+    except Exception as exc:
+        if store.get_mission(mission_id)["state"] in {
+            "PAUSED",
+            "PAUSED_RECOVERY_REQUIRED",
+        }:
+            try:
+                store.resume(mission_id, "TRANSPORT_ERROR")
+            except StoreError:
+                pass
+        _fail_mission(store, mission_id, f"mission resume failed: {exc}")
+        rt = rt or _runtimes.get(mission_id)
+        if rt is not None:
+            await _release_terminal_mission(rt)
+        else:
+            await lease.release()
+            _mission_leases.pop(mission_id, None)
+            _mission_write_urls.pop(mission_id, None)
+        _runtimes.pop(mission_id, None)
+        raise HTTPException(status_code=503, detail=f"cannot resume mission: {exc}") from exc
     return {"state": "WAITING_FOR_CHATGPT"}
 
 

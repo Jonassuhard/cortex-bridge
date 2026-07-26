@@ -299,11 +299,13 @@ Initial result: 2 failures.
 - Chat transport construction now occurs inside the run lifecycle boundary.
   Every post-acquisition failure records `FAILED`, persists the error, releases
   the exact lease and restores normal two-writer capacity.
-- The analogous mission path was inspected and not changed: acquisition is
-  already followed by a compensating block covering persistence and
-  `_build_runtime()`. Its existing
+- The analogous mission-create path was inspected and not changed in round 2:
+  acquisition appeared to be followed by a compensating block covering
+  persistence and `_build_runtime()`. The existing
   `test_synchronous_binding_failure_fails_mission_and_releases_lease`
-  regression proves terminal state and lease release.
+  exercised only a SQLite binding failure; it did **not** directly prove
+  runtime construction or mission resume. Those distinct boundaries are
+  covered in round 3 below.
 
 ### GREEN evidence
 
@@ -327,6 +329,75 @@ Fresh full backend regression:
 
 Result: 196 tests passed in 188.442 s. Existing `ResourceWarning` noise remains
 unchanged, with zero failures/errors.
+
+Targeted `py_compile` and `git diff --check` both exited 0. No frontend source
+changed in this round, so frontend checks were not rerun.
+
+## Fix round 3/5 — direct factory proofs and resume compensation
+
+### Three distinct boundaries
+
+The new tests deliberately avoid treating one failure as evidence for another:
+
+1. `test_selected_transport_constructor_failure_is_persisted_and_releases_writer`
+   injects a direct chat transport-constructor failure after acquisition. It
+   asserts no task exception escapes, in-memory and JSON-persisted `FAILED`
+   state/error match, the exact observed lease is released, and capacity again
+   admits two writers while refusing a third.
+2. `test_runtime_construction_failure_fails_creation_and_releases_lease`
+   injects `_build_runtime()` failure after mission persistence/binding. It
+   asserts structured HTTP 503, persisted mission `FAILED` detail, exact lease
+   release and recovered capacity.
+3. `test_resume_transport_construction_failure_is_terminal_and_releases_restored_lease`
+   restores a durable paused-mission lease, then injects transport construction
+   failure during resume. It asserts structured HTTP 503, persisted terminal
+   `FAILED` detail, runtime/lease cleanup and recovered capacity.
+
+### RED/GREEN evidence
+
+Initial focused result:
+
+- direct chat constructor proof: passed immediately, confirming the round 2
+  lifecycle boundary also covers arbitrary selected factories;
+- mission create: failed because the HTTP/persisted detail incorrectly called
+  every runtime failure a “binding” failure;
+- mission resume: escaped a raw `RuntimeError` and retained ownership.
+
+After the first resume compensation, the resume test correctly stopped the raw
+exception but exposed a state-machine issue: `_fail_mission()` converted
+`PAUSED` to `CANCELLED`, not `FAILED`. The final path explicitly resumes into
+`TRANSPORT_ERROR`, then transitions to `FAILED`, closes any constructed
+runtime, releases the exact restored lease and removes ownership maps.
+
+Final focused command:
+
+```bash
+.venv/bin/python -m unittest \
+  tests.test_transport_session_isolation.ChatRouteSessionIsolationTest.test_selected_transport_constructor_failure_is_persisted_and_releases_writer \
+  tests.test_transport_session_isolation.MissionRouteSessionIsolationTest.test_runtime_construction_failure_fails_creation_and_releases_lease \
+  tests.test_transport_session_isolation.MissionRouteSessionIsolationTest.test_resume_transport_construction_failure_is_terminal_and_releases_restored_lease -v
+```
+
+Result: 3 tests passed in 0.031 s.
+
+Affected chat/mission/session/settings suites:
+
+```bash
+.venv/bin/python -m unittest tests.test_chat_settings_api \
+  tests.test_transport_session_isolation tests.test_missions_api \
+  tests.test_write_slots -v
+```
+
+Result: 62 tests passed in 52.337 s.
+
+Fresh full backend regression:
+
+```bash
+.venv/bin/python -m unittest discover -s tests -v
+```
+
+Result: 199 tests passed in 185.761 s. Existing `ResourceWarning` noise remains,
+with zero failures/errors.
 
 Targeted `py_compile` and `git diff --check` both exited 0. No frontend source
 changed in this round, so frontend checks were not rerun.
