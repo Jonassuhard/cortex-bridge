@@ -23,6 +23,7 @@ py-modules = [
   "chat",
   "conversation_sessions",
   "cortex_paths",
+  "installer",
   "local_executor",
   "missions",
   "onboarding",

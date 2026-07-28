@@ -141,11 +141,19 @@ case "$COMMAND" in
     [ "$state" = "owned" ]
     ;;
 
+  doctor)
+    export PYTHONPATH="$ROOT/console:$ROOT${PYTHONPATH:+:$PYTHONPATH}"
+    if [ -n "$OUTPUT_MODE" ]; then
+      exec "$PYTHON" "$ROOT/console/installer.py" doctor "$OUTPUT_MODE"
+    fi
+    exec "$PYTHON" "$ROOT/console/installer.py" doctor
+    ;;
+
   logs)
     exec tail -f "$LOG_FILE"
     ;;
 
   help|--help|-h|*)
-    echo "Usage: scripts/cortex.sh {start|stop|status [--json]|logs}"
+    echo "Usage: scripts/cortex.sh {start|stop|status [--json]|doctor [--json]|logs}"
     ;;
 esac
