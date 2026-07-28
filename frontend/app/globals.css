@@ -319,6 +319,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .collapsed-conversations { display: flex; flex-direction: column; align-items: center; }
 .open-chatgpt-link { flex: 0 0 auto; color: var(--blue-light); font-size: 12px; text-decoration: none; }
 .open-chatgpt-link:hover { text-decoration: underline; }
+.reload-conversation-button { flex: 0 0 auto; min-height: 44px; padding: 0 12px; color: var(--amber); border: 1px solid color-mix(in srgb, var(--amber) 38%, transparent); border-radius: 9px; background: transparent; cursor: pointer; font-size: 12px; }
+.reload-conversation-button:hover { background: color-mix(in srgb, var(--amber) 10%, transparent); }
 
 /* ---- Chat workspace ------------------------------------------------------- */
 .chat-workspace {

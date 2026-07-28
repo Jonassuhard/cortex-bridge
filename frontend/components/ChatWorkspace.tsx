@@ -73,6 +73,7 @@ interface ChatWorkspaceProps {
   onStartMission: (key: ConversationKey, text: string, preflight: ExecutionPreflight) => Promise<boolean>;
   onCancelChat: (key: ConversationKey) => void;
   onRetryChatRecovery: (key: ConversationKey) => void;
+  onReloadConversation: (key: ConversationKey) => void;
   onResolveRekeyConflict: (
     fromKey: ConversationKey,
     toKey: ConversationKey,
@@ -247,6 +248,7 @@ export function ChatWorkspace({
   onStartMission,
   onCancelChat,
   onRetryChatRecovery,
+  onReloadConversation,
   onResolveRekeyConflict,
   onResumeMission,
   onCancelMission,
@@ -366,6 +368,11 @@ export function ChatWorkspace({
               <span className={settings.never_delete_files ? "safe-label" : "warning-label"}><ShieldIcon size={12} /> {settings.never_delete_files ? "Aucune suppression" : "Suppression non protégée"}</span>
             </p>
           </div>
+          {conversation?.sync_state === "stale" && conversationKey && (
+            <button className="reload-conversation-button" onClick={() => onReloadConversation(conversationKey)}>
+              Recharger la conversation
+            </button>
+          )}
           {conversation?.url && <a className="open-chatgpt-link" href={conversation.url} target="_blank" rel="noreferrer">Ouvrir dans ChatGPT</a>}
         </div>
         <StatusRail transport={chatActive ? "running" : availability.chatState} executor={availability.agentState} execution={mission?.mission.state || null} latencyMs={availability.transportLatencyMs} />

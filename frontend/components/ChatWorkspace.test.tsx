@@ -32,6 +32,7 @@ function ControlledWorkspace({
   refusedKeys = new Set<string>(),
   pendingKeys = new Map<string, Promise<void>>(),
   onRetryRecovery = () => undefined,
+  onReloadConversation = () => undefined,
   onChatSend = () => undefined,
   onMissionStart = () => undefined,
   transportLatencyMs = 128,
@@ -40,6 +41,7 @@ function ControlledWorkspace({
   refusedKeys?: Set<string>;
   pendingKeys?: Map<string, Promise<void>>;
   onRetryRecovery?: (key: string) => void;
+  onReloadConversation?: (key: string) => void;
   onChatSend?: (key: string, text: string) => void;
   onMissionStart?: (key: string, text: string) => void;
   transportLatencyMs?: number | null;
@@ -123,6 +125,7 @@ function ControlledWorkspace({
         }}
         onCancelChat={() => undefined}
         onRetryChatRecovery={onRetryRecovery}
+        onReloadConversation={onReloadConversation}
         onResolveRekeyConflict={(fromKey, toKey, choice) => dispatch({
           type: "RESOLVE_REKEY_CONFLICT",
           fromKey,
@@ -146,6 +149,24 @@ function fileInput(container: HTMLElement): HTMLInputElement {
 }
 
 describe("ChatWorkspace controlled composer", () => {
+  it("offers one explicit reload after a conversation deadline", async () => {
+    const stale = {
+      ...summary("a"),
+      sync_state: "stale" as const,
+      sync_error: "Le chargement a dépassé la limite de 10 secondes.",
+    };
+    const onReloadConversation = vi.fn<(key: string) => void>();
+    const user = userEvent.setup();
+    render(<ControlledWorkspace
+      initialState={createConversationState([stale], "a")}
+      onReloadConversation={onReloadConversation}
+    />);
+
+    await user.click(screen.getByRole("button", { name: "Recharger la conversation" }));
+    expect(onReloadConversation).toHaveBeenCalledOnce();
+    expect(onReloadConversation).toHaveBeenCalledWith("a");
+  });
+
   it("does not invent a latency value when none was measured", () => {
     render(<ControlledWorkspace transportLatencyMs={null} />);
     expect(screen.queryByText("Latence")).not.toBeInTheDocument();

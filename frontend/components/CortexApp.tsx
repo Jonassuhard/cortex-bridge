@@ -871,6 +871,7 @@ export function CortexApp() {
         onStartMission={startMission}
         onCancelChat={(key) => void cancelChat(key)}
         onRetryChatRecovery={(key) => void retryChatRecovery(key)}
+        onReloadConversation={() => reloadSelected()}
         onResolveRekeyConflict={resolveRekeyConflict}
         onPauseMission={(key) => void missionAction(key, "pause")}
         onResumeMission={(key) => void missionAction(key, "resume")}
