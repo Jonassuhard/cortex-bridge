@@ -45,7 +45,39 @@ function loadTsxExport(path: URL, exportName: string): React.ComponentType<Recor
         shortTime: () => "",
       };
     }
+    if (specifier === "@/lib/conversations") {
+      return {
+        groupConversations: (conversations: Record<string, unknown>[]) => ({
+          pinned: [],
+          projects: [],
+          recent: conversations,
+        }),
+      };
+    }
     if (specifier === "./Icons" || specifier === "./CortexLogo") return iconModules;
+    if (specifier === "./Composer" || specifier === "./ExecutionPreflightDialog") {
+      return new Proxy({}, {
+        get: (_target, property) => {
+          if (property === "__esModule") return true;
+          return () => null;
+        },
+      });
+    }
+    if (specifier === "./StatusRail") {
+      return {
+        StatusRail: ({ executor, execution }: { executor: string; execution?: string | null }) => {
+          const status = runtimeTruthModule.statusPresentation(executor);
+          const label = execution === "PAUSED" && status.tone !== "unknown" && status.tone !== "offline"
+            ? "En pause"
+            : status.label;
+          return React.createElement("span", { className: `status-pill is-${status.tone}`, title: "Statut de l'agent exécutif local" },
+            React.createElement("span", { className: `presence-dot is-${status.tone}` }),
+            React.createElement("span", null, "Exécuteur"),
+            React.createElement("strong", null, label),
+          );
+        },
+      };
+    }
     if (specifier === "./ExecutionCard") {
       return { ExecutionCard: () => React.createElement("div", { "data-execution-card": true }) };
     }
