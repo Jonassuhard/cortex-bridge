@@ -55,6 +55,12 @@ GENERATION_CANCELLED = "GENERATION_CANCELLED"
 STATE_UNREADABLE = "STATE_UNREADABLE"
 SEND_REJECTED = "SEND_REJECTED"
 STREAM_TIMEOUT = "STREAM_TIMEOUT"
+SELECTION_TIMEOUT = "SELECTION_TIMEOUT"
+SELECTION_FAILED = "SELECTION_FAILED"
+SELECTION_SUPERSEDED = "SELECTION_SUPERSEDED"
+
+DEFAULT_SELECTION_BUDGET = 10.0
+MAX_CONVERSATIONS = 50
 
 BLOCKER_CODES = {"login": LOGIN_REQUIRED, "captcha": CAPTCHA, "rate_limit": RATE_LIMIT}
 
@@ -216,10 +222,77 @@ def perf_stats(limit: int = 200) -> dict:
 
 
 class TransportError(Exception):
-    def __init__(self, code: str, message: str):
+    def __init__(self, code: str, message: str, *, details: dict | None = None):
         super().__init__(f"{code}: {message}")
         self.code = code
         self.message = message
+        self.details = dict(details or {})
+
+
+class SelectionTimeoutError(TransportError):
+    def __init__(self, message: str):
+        super().__init__(
+            SELECTION_TIMEOUT,
+            message,
+            details={"reload_required": True},
+        )
+
+
+def _clean_text(value: Any) -> str | None:
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _conversation_identity(item: dict) -> str | None:
+    identity = _clean_text(item.get("identity"))
+    if identity:
+        return identity
+    url = _clean_text(item.get("url"))
+    if not url or "/c/" not in url:
+        return None
+    identity = url.rsplit("/c/", 1)[-1].split("?", 1)[0].split("#", 1)[0].strip("/")
+    return identity or None
+
+
+def normalize_conversations(
+    items: list[dict] | None,
+    limit: int = MAX_CONVERSATIONS,
+) -> list[dict]:
+    """Return stable, truthful, deduplicated conversation metadata."""
+    normalized: list[dict] = []
+    seen: set[str] = set()
+    for raw in items or []:
+        if not isinstance(raw, dict):
+            continue
+        identity = _conversation_identity(raw)
+        if not identity or identity in seen:
+            continue
+        seen.add(identity)
+        project_id = _clean_text(raw.get("project_id"))
+        project_title = _clean_text(raw.get("project_title"))
+        message_count = raw.get("message_count")
+        if isinstance(message_count, bool) or not isinstance(message_count, int) or message_count < 0:
+            message_count = None
+        updated_at = _clean_text(raw.get("updated_at")) or _clean_text(raw.get("timestamp"))
+        url = _clean_text(raw.get("url")) or f"https://chatgpt.com/c/{identity}"
+        normalized.append({
+            "identity": identity,
+            "url": url,
+            "title": _clean_text(raw.get("title")) or "Conversation",
+            "pinned": bool(raw.get("pinned")),
+            "project": bool(project_id or project_title),
+            "project_id": project_id,
+            "project_title": project_title,
+            "updated_at": updated_at,
+            "timestamp": updated_at,
+            "preview": _clean_text(raw.get("preview")),
+            "message_count": message_count,
+            "unread": raw.get("unread") if isinstance(raw.get("unread"), int) else 0,
+            "archived": bool(raw.get("archived")),
+            "status": _clean_text(raw.get("status")) or "idle",
+        })
+        if len(normalized) >= max(0, limit):
+            break
+    return normalized
 
 
 class ConversationMismatch(TransportError):
@@ -289,12 +362,14 @@ class ChatGPTWebTransport:
         max_wait: float = DEFAULT_MAX_WAIT,
         poll_interval: float = DEFAULT_POLL_INTERVAL,
         empty_reply_grace: float = DEFAULT_EMPTY_REPLY_GRACE,
+        selection_budget: float = DEFAULT_SELECTION_BUDGET,
     ):
         self.driver = driver
         self.stability_interval = stability_interval
         self.max_wait = max_wait
         self.poll_interval = poll_interval
         self.empty_reply_grace = empty_reply_grace
+        self.selection_budget = selection_budget
         self.lock: ConversationLock | None = None
         self.paused = False
         self.pause_reason: str | None = None
@@ -304,6 +379,7 @@ class ChatGPTWebTransport:
         self._baseline: set[str] = set()
         self._cancel_requested = False
         self._pending_new_chat = False
+        self._selection_generation = 0
 
     async def close(self) -> None:
         """Release the logical browser page owned by this transport."""
@@ -326,7 +402,7 @@ class ChatGPTWebTransport:
     async def list_conversations(self) -> list[dict]:
         """Candidate conversations (title + /c/<uuid> identity) for the user
         to pick from. Sidebar DOM on real ChatGPT; registry on the fixture."""
-        return await self.driver.list_conversations()
+        return normalize_conversations(await self.driver.list_conversations())
 
     async def probe(self) -> dict:
         """Read-only DOM health check: which adaptive selector currently
@@ -338,48 +414,114 @@ class ChatGPTWebTransport:
                     "failures": ["unsupported-driver"], "warnings": []}
         return await probe()
 
-    async def _await_conversation(self, want_identity: str | None, timeout: float = 25.0) -> dict:
+    @staticmethod
+    def _remaining(deadline: float) -> float:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise SelectionTimeoutError("conversation selection exceeded its absolute budget")
+        return remaining
+
+    async def _selection_await(self, awaitable, deadline: float):
+        try:
+            return await asyncio.wait_for(awaitable, timeout=self._remaining(deadline))
+        except asyncio.TimeoutError as exc:
+            raise SelectionTimeoutError(
+                "conversation selection exceeded its absolute budget"
+            ) from exc
+
+    def _assert_current_selection(self, generation: int) -> None:
+        if generation != self._selection_generation:
+            raise TransportError(
+                SELECTION_SUPERSEDED,
+                "a newer conversation selection superseded this one",
+                details={"reload_required": False},
+            )
+
+    async def _await_conversation(
+        self,
+        want_identity: str | None,
+        timeout: float = 25.0,
+        *,
+        deadline: float | None = None,
+    ) -> dict:
         """Poll until the SPA actually shows the requested conversation.
 
         Navigation resolves before chatgpt.com finishes its client-side
         route change — a single immediate state read can still show the
         PREVIOUS conversation and cause a false CONVERSATION_MISMATCH."""
-        deadline = time.monotonic() + timeout
+        poll_deadline = deadline if deadline is not None else time.monotonic() + timeout
         state: dict = {}
-        while time.monotonic() < deadline:
-            state = await self._state()
+        while time.monotonic() < poll_deadline:
+            state = await self._state(deadline=deadline)
             identity = state.get("conversation_id")
             if want_identity is None:
                 if identity:
                     return state
             elif identity == want_identity:
                 return state
-            await asyncio.sleep(self.poll_interval)
+            if deadline is not None:
+                await self._selection_await(
+                    asyncio.sleep(min(self.poll_interval, self._remaining(deadline))),
+                    deadline,
+                )
+            else:
+                await asyncio.sleep(self.poll_interval)
         return state
 
-    async def select_conversation(self, url: str) -> ConversationLock:
+    async def select_conversation(
+        self,
+        url: str,
+        *,
+        budget: float | None = None,
+        _force_reload: bool = False,
+    ) -> ConversationLock:
         """Navigate to a user-chosen conversation and lock the mission to it.
 
         P0: prefer an in-app SPA switch (sidebar link click, no page reload)
         when the driver supports it; fall back to full navigation."""
+        selection_budget = self.selection_budget if budget is None else budget
+        if selection_budget <= 0:
+            raise SelectionTimeoutError("conversation selection budget must be positive")
+        deadline = time.monotonic() + selection_budget
+        self._selection_generation += 1
+        generation = self._selection_generation
         want = url.rsplit("/c/", 1)[-1] if "/c/" in url else None
         spa_nav = getattr(self.driver, "spa_navigate", None)
         spa_done = False
-        if want and spa_nav is not None:
+        if want and spa_nav is not None and not _force_reload:
             try:
-                spa_done = bool(await spa_nav(url))
-            except Exception:
-                spa_done = False  # any SPA failure → full navigation below
+                spa_done = bool(await self._selection_await(spa_nav(url), deadline))
+            except SelectionTimeoutError:
+                raise
+            except Exception as exc:
+                raise TransportError(
+                    SELECTION_FAILED,
+                    f"in-app conversation selection failed: {exc}",
+                    details={"reload_required": True},
+                ) from exc
+            if not spa_done:
+                raise TransportError(
+                    SELECTION_FAILED,
+                    "in-app conversation selection failed",
+                    details={"reload_required": True},
+                )
+        self._assert_current_selection(generation)
         if not spa_done:
-            await self.driver.navigate(url)
-        state = await self._await_conversation(want)
+            await self._selection_await(self.driver.navigate(url), deadline)
+        self._assert_current_selection(generation)
+        state = await self._await_conversation(want, deadline=deadline)
+        self._assert_current_selection(generation)
         # SPA route change updates the URL BEFORE the message DOM is replaced:
         # identity already matches while the old conversation's messages are
         # still painted, and a stable empty skeleton appears while the new one
         # loads (both observed live 2026-07-25). An existing /c/ conversation
         # always has >= 1 message, so require: identity match AND messages
         # present AND two identical consecutive LIGHT reads — before locking.
-        if want and state.get("conversation_id") == want:
+        if (
+            want
+            and state.get("conversation_id") == want
+            and getattr(self.driver, "requires_content_stability", True)
+        ):
             def _sig(s: dict) -> tuple:
                 return (
                     s.get("conversation_id"),
@@ -388,12 +530,12 @@ class ChatGPTWebTransport:
                     s.get("first_id"),
                 )
 
-            stable_deadline = time.monotonic() + 3.0
+            stable_deadline = min(deadline, time.monotonic() + 3.0)
             loaded_since: float | None = None
-            previous = _sig(await self._light_state())
+            previous = _sig(await self._light_state(deadline=deadline))
             while time.monotonic() < stable_deadline:
-                await asyncio.sleep(0.4)
-                light = await self._light_state()
+                await self._selection_await(asyncio.sleep(0.4), deadline)
+                light = await self._light_state(deadline=deadline)
                 current = _sig(light)
                 loaded = (
                     current[0] == want
@@ -407,13 +549,28 @@ class ChatGPTWebTransport:
                 if loaded_since is not None and time.monotonic() - loaded_since > 1.2:
                     break  # clearly loaded; virtualized threads never fully stabilize
                 previous = current
-            state = await self._state()  # full read once stable, for the lock baseline
+            state = await self._state(deadline=deadline)
+        self._remaining(deadline)
+        self._assert_current_selection(generation)
         identity = state.get("conversation_id")
         if not identity:
             raise TransportError(NO_CONVERSATION, f"no conversation at {url}")
         self.lock = ConversationLock(url, identity, state.get("title"), time.time())
         self._baseline = {m["id"] for m in state.get("messages", []) if m["role"] == "assistant"}
         return self.lock
+
+    async def recover_selection_with_reload(
+        self,
+        url: str,
+        *,
+        budget: float | None = None,
+    ) -> ConversationLock:
+        """Explicit operator-approved recovery path using full navigation."""
+        return await self.select_conversation(
+            url,
+            budget=self.selection_budget if budget is None else budget,
+            _force_reload=True,
+        )
 
     async def attach(self, lock: ConversationLock) -> None:
         """Re-attach to a previously locked conversation (e.g. after a
@@ -494,9 +651,12 @@ class ChatGPTWebTransport:
 
     # -- internal state access with blocker/tab handling --------------------------------
 
-    async def _state(self) -> dict:
+    async def _state(self, *, deadline: float | None = None) -> dict:
         try:
-            state = await self.driver.get_state()
+            if deadline is None:
+                state = await self.driver.get_state()
+            else:
+                state = await self._selection_await(self.driver.get_state(), deadline)
         except TabClosedError as exc:
             self.pause(TAB_CLOSED)
             raise TransportError(TAB_CLOSED, "browser tab was closed") from exc
@@ -506,17 +666,19 @@ class ChatGPTWebTransport:
             raise BlockerDetected(blocker)
         return state
 
-    async def _light_state(self) -> dict:
+    async def _light_state(self, *, deadline: float | None = None) -> dict:
         """Cheap poll read when the driver supports it (P0c); fixture drivers
         fall back to a full state mapped onto the light shape."""
         getter = getattr(self.driver, "get_light_state", None)
         if getter is not None:
             try:
-                return await getter()
+                if deadline is None:
+                    return await getter()
+                return await self._selection_await(getter(), deadline)
             except TabClosedError as exc:
                 self.pause(TAB_CLOSED)
                 raise TransportError(TAB_CLOSED, "browser tab was closed") from exc
-        s = await self._state()
+        s = await self._state(deadline=deadline)
         msgs = s.get("messages") or []
         return {
             "url": s.get("url"),
@@ -531,7 +693,16 @@ class ChatGPTWebTransport:
 
     # -- sending (§7.1) ----------------------------------------------------------------------
 
-    async def send_with_attachment(self, text: str | None, path: str, *, image: bool, raw_url: str | None = None) -> dict:
+    async def send_with_attachment(
+        self,
+        text: str | None,
+        path: str,
+        *,
+        image: bool,
+        raw_url: str | None = None,
+        mime: str | None = None,
+        name: str | None = None,
+    ) -> dict:
         """Attach a local file/image to the composer, then send (P3).
 
         Flow: verify lock → attach (CDP upload first, fetch+DataTransfer
@@ -563,14 +734,15 @@ class ChatGPTWebTransport:
             import base64
             import mimetypes
             import os
-            mime = mimetypes.guess_type(path)[0] or "application/octet-stream"
+            effective_mime = mime or mimetypes.guess_type(path)[0] or "application/octet-stream"
+            effective_name = name or os.path.basename(path)
             size = os.path.getsize(path)
             if size <= INJECT_MAX_BYTES:
                 with open(path, "rb") as fh:
                     b64 = base64.b64encode(fh.read()).decode("ascii")
-                code = f"{_ATTACH_B64_JS}({json.dumps(b64)}, {json.dumps(os.path.basename(path))}, {json.dumps(mime)})"
+                code = f"{_ATTACH_B64_JS}({json.dumps(b64)}, {json.dumps(effective_name)}, {json.dumps(effective_mime)})"
             elif raw_url:
-                code = f"{_ATTACH_FETCH_JS}({json.dumps(raw_url)}, {json.dumps(os.path.basename(path))}, {json.dumps(mime)})"
+                code = f"{_ATTACH_FETCH_JS}({json.dumps(raw_url)}, {json.dumps(effective_name)}, {json.dumps(effective_mime)})"
             else:
                 raise TransportError("ATTACHMENT_FAILED", f"upload rejected: {cdp_exc}") from cdp_exc
             raw = await self.driver.evaluate(code, timeout=90)
@@ -848,6 +1020,8 @@ class ChatGPTWebTransport:
 class LocalFixtureDriver:
     """Drives the §22 local fixture over HTTP (mirrors WebBridge semantics:
     navigating makes a conversation the 'current tab')."""
+
+    requires_content_stability = False
 
     def __init__(self, base_url: str):
         self.base_url = base_url.rstrip("/")

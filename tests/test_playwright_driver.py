@@ -263,7 +263,7 @@ class PlaywrightDriverTest(unittest.IsolatedAsyncioTestCase):
             poll_interval=0.01,
             max_wait=1,
         )
-        await transport.select_conversation(
+        await transport.recover_selection_with_reload(
             f"http://127.0.0.1:{self.server.server_port}/c/post-click"
         )
         await driver.evaluate("window.breakAfterClick = true")
@@ -280,7 +280,7 @@ class PlaywrightDriverTest(unittest.IsolatedAsyncioTestCase):
             poll_interval=0.01,
             max_wait=2,
         )
-        await transport.select_conversation(
+        await transport.recover_selection_with_reload(
             f"http://127.0.0.1:{self.server.server_port}/c/playwright-flow"
         )
         sent = await transport.send_message("meaningful playwright flow")
@@ -461,6 +461,7 @@ class _AttachmentFallbackDriver:
 
     async def evaluate(self, _code: str, timeout: float = 30) -> dict:
         self.evaluate_calls += 1
+        self.code = _code
         self.timeout = timeout
         return {"ok": True}
 
@@ -488,6 +489,23 @@ class AdapterPublicDriverContractTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["sent"])
         self.assertEqual(driver.evaluate_calls, 1)
         self.assertEqual(driver.timeout, 90)
+
+    async def test_attachment_fallback_uses_validated_mime_and_name(self) -> None:
+        driver = _AttachmentFallbackDriver()
+        transport = ChatGPTWebTransport(driver)
+        transport.lock = ConversationLock(driver.url, "local-fixture", "Fixture", 0)
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "misleading.bin"
+            path.write_bytes(b"fixture")
+            await transport.send_with_attachment(
+                None,
+                str(path),
+                image=True,
+                mime="image/png",
+                name="validated.png",
+            )
+        self.assertIn("image/png", driver.code)
+        self.assertIn("validated.png", driver.code)
 
 
 class _CountingWebBridgeDriver(WebBridgeDriver):
@@ -553,7 +571,11 @@ class _WebBridgeContractDaemon:
                     data = {}
                 else:
                     code = str(args.get("code") or "")
-                    if "composer not cleared after click" in code:
+                    if "not_in_sidebar" in code:
+                        match = code.rsplit("(", 1)[-1].rsplit(")", 1)[0]
+                        owner.url = json.loads(match)
+                        data = {"value": json.dumps({"ok": True, "clicked": True})}
+                    elif "composer not cleared after click" in code:
                         match = code.rsplit("(", 1)[-1].rsplit(")", 1)[0]
                         text = json.loads(match)
                         owner.messages.append({
