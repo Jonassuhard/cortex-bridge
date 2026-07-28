@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "release": "0.5.0",
+  "commit": "REPLACE_WITH_FULL_RELEASE_COMMIT",
+  "generatedAt": "REPLACE_WITH_UTC_TIMESTAMP",
+  "environment": {
+    "os": "NOT_RUN",
+    "python": "NOT_RUN",
+    "node": "NOT_RUN",
+    "browserDriver": "NOT_RUN",
+    "executorKind": "NOT_RUN",
+    "simulation": true
+  },
+  "suites": {
+    "backend": {"passed": 0, "failed": 0, "skipped": 0},
+    "frontendUnit": {"passed": 0, "failed": 0, "skipped": 0},
+    "e2e": {"passed": 0, "failed": 0, "skipped": 0},
+    "a11y": {"passed": 0, "failed": 0, "skipped": 0}
+  },
+  "performance": {
+    "cachedUsabilityMs": null,
+    "switchP95Ms": null,
+    "switchMaxMs": null
+  },
+  "dualConversations": {
+    "runs": 0,
+    "crossovers": null,
+    "thirdWriterDraftPreserved": false
+  },
+  "acceptance": {
+    "fixtureMissions": {"runs": 0, "passed": 0},
+    "coldDualRuns": {"runs": 0, "passed": 0},
+    "crashPoints": {"runs": 0, "passed": 0},
+    "miniSites": {
+      "runs": 0,
+      "passed": 0,
+      "status": "PENDING_OWNER_APPROVAL"
+    }
+  },
+  "gates": {
+    "privacy": "NOT_RUN",
+    "links": "NOT_RUN",
+    "secrets": "NOT_RUN",
+    "dependencies": "NOT_RUN",
+    "install": "NOT_RUN",
+    "doctor": "NOT_RUN",
+    "uninstall": "NOT_RUN",
+    "build": "NOT_RUN",
+    "e2e": "NOT_RUN",
+    "a11y": "NOT_RUN",
+    "consoleErrors": null
+  },
+  "artifacts": {},
+  "verdict": "PENDING_OWNER_APPROVAL_FOR_LIVE_GATES"
+}
