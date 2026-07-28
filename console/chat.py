@@ -33,10 +33,12 @@ from transport.chatgpt_web.adapter import (
     TransportError,
 )
 from transport.browser import create_transport
+from cortex_paths import build_paths
 
 router = APIRouter(prefix="/api")
-DATA_DIR = Path(__file__).resolve().parent / "data"
-CHAT_RUNS_FILE = DATA_DIR / "chat-runs.json"
+RUNTIME_PATHS = build_paths()
+DATA_DIR = RUNTIME_PATHS.home
+CHAT_RUNS_FILE = RUNTIME_PATHS.chat_runs
 
 
 def _now() -> str:

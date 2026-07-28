@@ -25,12 +25,14 @@ import missions as missions_api
 from executor.tools import ProcessCapabilities
 from local_executor import OLLAMA_ENDPOINT, runtime_status
 from transport.browser import create_browser_driver, load_browser_settings
+from cortex_paths import build_paths
 
 router = APIRouter(prefix="/api")
-DATA_DIR = Path(__file__).resolve().parent / "data"
-SETTINGS_FILE = DATA_DIR / "settings.json"
-DB_PATH = DATA_DIR / "cortex.db"
-TASK_STORE_FILE = DATA_DIR / "iterations.json"
+RUNTIME_PATHS = build_paths()
+DATA_DIR = RUNTIME_PATHS.home
+SETTINGS_FILE = RUNTIME_PATHS.settings
+DB_PATH = RUNTIME_PATHS.database
+TASK_STORE_FILE = RUNTIME_PATHS.iterations
 browser_driver_factory = create_browser_driver
 
 
@@ -59,7 +61,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "response_stability_seconds": 2.0,
     "chat_timeout_seconds": 300,
     "browser_transport": "playwright",
-    "browser_profile_root": "console/data/browser-profiles",
+    "browser_profile_root": str(RUNTIME_PATHS.browser_profiles),
 }
 
 
@@ -83,7 +85,7 @@ class SettingsIn(BaseModel):
     response_stability_seconds: float = Field(default=2.0, ge=1.0, le=10.0)
     chat_timeout_seconds: int = Field(default=300, ge=30, le=900)
     browser_transport: Literal["playwright", "webbridge"] = "playwright"
-    browser_profile_root: str = "console/data/browser-profiles"
+    browser_profile_root: str = str(RUNTIME_PATHS.browser_profiles)
 
 
 class ChatGPTModelSelectIn(BaseModel):
@@ -472,8 +474,8 @@ def _latest_chat_run_for_conversation(identity: str | None) -> Any | None:
 
 @router.get("/pipeline/status")
 async def pipeline_status(
-    conversation_identity: str | None = Query(default=None),
-    mission_id: str | None = Query(default=None),
+    conversation_identity: str | None = None,
+    mission_id: str | None = None,
 ) -> dict[str, Any]:
     scoped = conversation_identity is not None or mission_id is not None
     normalized_identity: str | None = None

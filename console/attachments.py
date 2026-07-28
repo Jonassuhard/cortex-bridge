@@ -14,9 +14,11 @@ import zipfile
 from pathlib import Path
 
 from transport.chatgpt_web.adapter import MAX_FILE_BYTES, MAX_IMAGE_BYTES
+from cortex_paths import build_paths
 
-DATA_DIR = Path(__file__).resolve().parent / "data"
-ATTACHMENTS_DIR = DATA_DIR / "attachments"
+RUNTIME_PATHS = build_paths()
+DATA_DIR = RUNTIME_PATHS.home
+ATTACHMENTS_DIR = RUNTIME_PATHS.attachments
 TOKEN_TTL_SECONDS = 15 * 60
 OWNER = "cortex-bridge"
 

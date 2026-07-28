@@ -25,11 +25,14 @@ from missions import router as missions_router
 from chat import router as chat_router
 from settings import router as settings_router
 from onboarding import router as onboarding_router
+from cortex_paths import build_paths, migrate_legacy_state
+from version import current_version
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
-DATA_DIR = BASE_DIR / "data"
-STORE_FILE = DATA_DIR / "iterations.json"
+RUNTIME_PATHS = build_paths()
+DATA_DIR = RUNTIME_PATHS.home
+STORE_FILE = RUNTIME_PATHS.iterations
 REPO_ROOT = BASE_DIR.parent
 FRONTEND_OUT = REPO_ROOT / "frontend" / "out"
 FRONTEND_FALLBACK = REPO_ROOT / "frontend" / "fallback"
@@ -53,6 +56,10 @@ if (FRONTEND_OUT / "_next").is_dir():
 # ------------------------------------------------------------- persistence
 
 _iterations: list[dict] = []
+
+
+def _migrate_legacy_runtime() -> None:
+    migrate_legacy_state(BASE_DIR / "data", RUNTIME_PATHS)
 
 
 def _load_store() -> None:
@@ -79,6 +86,7 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+_migrate_legacy_runtime()
 _load_store()
 
 # ----------------------------------------------------------------- schemas
@@ -149,7 +157,7 @@ async def index() -> FileResponse:
 
 @app.get("/api/status")
 async def status() -> dict:
-    return runtime_status()
+    return {**runtime_status(), "version": current_version()}
 
 
 @app.post("/api/tasks", status_code=201)
@@ -287,5 +295,9 @@ async def frontend_fallback(full_path: str) -> FileResponse:
     raise HTTPException(status_code=404, detail="asset not found")
 
 
-if __name__ == "__main__":
+def main() -> None:
     uvicorn.run(app, host="127.0.0.1", port=int(os.environ.get("PORT", 8420)), log_level="info")
+
+
+if __name__ == "__main__":
+    main()

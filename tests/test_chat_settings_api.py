@@ -358,7 +358,10 @@ class ChatSettingsApiTestCase(unittest.TestCase):
             {"allowed": False, "allow_network": False, "allow_deletions": False},
         )
         self.assertEqual(defaults["browser_transport"], "playwright")
-        self.assertEqual(defaults["browser_profile_root"], "console/data/browser-profiles")
+        self.assertEqual(
+            Path(defaults["browser_profile_root"]),
+            settings_api.RUNTIME_PATHS.browser_profiles,
+        )
         payload = {
             **defaults,
             "theme": "light",

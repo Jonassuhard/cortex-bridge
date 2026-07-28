@@ -9,13 +9,18 @@ from typing import Any, Protocol, runtime_checkable
 
 from transport.browser_playwright import PlaywrightBrowserDriver
 from transport.chatgpt_web.adapter import WebBridgeDriver
+try:
+    from cortex_paths import build_paths
+except ModuleNotFoundError:  # imported as a package from the repository root
+    from console.cortex_paths import build_paths
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SETTINGS_FILE = REPO_ROOT / "console" / "data" / "settings.json"
+RUNTIME_PATHS = build_paths()
+SETTINGS_FILE = RUNTIME_PATHS.settings
 DEFAULT_BROWSER_SETTINGS = {
     "browser_transport": "playwright",
-    "browser_profile_root": "console/data/browser-profiles",
+    "browser_profile_root": str(RUNTIME_PATHS.browser_profiles),
 }
 ALLOWED_BROWSER_TRANSPORTS = frozenset({"playwright", "webbridge"})
 
@@ -76,27 +81,12 @@ def _profile_root(value: str | Path) -> Path:
         raise ValueError("browser_profile_root must not be empty")
     root = Path(raw).expanduser()
     if not root.is_absolute():
-        if ".." in root.parts:
-            raise ValueError("browser_profile_root must not traverse outside the repository")
-        root = REPO_ROOT / root
+        raise ValueError("browser_profile_root must be absolute")
     absolute = root.absolute()
     configured = Path(raw).expanduser()
     if configured.is_symlink():
         raise ValueError("browser_profile_root must not contain symlinks")
-    if not configured.is_absolute():
-        current = REPO_ROOT
-        for part in configured.parts:
-            current /= part
-            if current.is_symlink():
-                raise ValueError("browser_profile_root must not contain symlinks")
     resolved = absolute.resolve()
-    if not Path(raw).expanduser().is_absolute():
-        try:
-            resolved.relative_to(REPO_ROOT.resolve())
-        except ValueError as exc:
-            raise ValueError(
-                "browser_profile_root must stay inside the repository"
-            ) from exc
     return resolved
 
 

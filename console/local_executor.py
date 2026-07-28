@@ -29,14 +29,11 @@ from urllib.request import Request, urlopen
 
 from executor.tools import ToolDenied, ToolError, ToolExecutor
 from executor.policy import PolicyEngine
+from cortex_paths import model_directory
 
 OLLAMA_ENDPOINT = "http://127.0.0.1:11434"
 OLLAMA_TAGS_URL = f"{OLLAMA_ENDPOINT}/api/tags"
 OLLAMA_CHAT_URL = f"{OLLAMA_ENDPOINT}/api/chat"
-# Local model storage lives on the external DJO volume; override with
-# CORTEX_STORAGE_PATH to test the disk-missing code path.
-DEFAULT_STORAGE_PATH = "/Volumes/DJO/AI/Ollama/models"
-VOLUME_ROOT = "/Volumes/DJO"
 STORAGE_UNAVAILABLE = "LOCAL_MODEL_STORAGE_UNAVAILABLE"
 
 PRIMARY_EXECUTOR = "orchestra-executor"
@@ -69,14 +66,14 @@ def detect_mode() -> str:
 # ------------------------------------------------------ local runtime status
 
 def storage_path() -> str:
-    """Model storage path; CORTEX_STORAGE_PATH overrides the DJO default."""
-    return os.environ.get("CORTEX_STORAGE_PATH", DEFAULT_STORAGE_PATH)
+    """Model storage path with v0.5 precedence and legacy compatibility."""
+    return str(model_directory())
 
 
 def volume_mounted() -> bool:
-    """True only if the DJO volume exists AND the storage path is accessible."""
+    """True when the selected model directory exists and is readable."""
     try:
-        return Path(VOLUME_ROOT).exists() and os.access(storage_path(), os.R_OK)
+        return Path(storage_path()).is_dir() and os.access(storage_path(), os.R_OK)
     except OSError:
         return False
 
