@@ -3,6 +3,7 @@
 import type { MissionDetail, PipelineComponent, PipelineStatus, RuntimeStatus, TransportStatus } from "@/lib/types";
 import { formatDuration, shortTime } from "@/lib/api";
 import { executorDiagnosticsLabel, statusPresentation } from "@/lib/runtimeTruth";
+import { useAccessibleDialog } from "@/hooks/useAccessibleDialog";
 import {
   ActivityIcon,
   AlertIcon,
@@ -76,9 +77,10 @@ export function PipelineInspector({
   const running = !!missionState && !["COMPLETED", "BLOCKED", "FAILED", "CANCELLED", "PAUSED", "PAUSED_RECOVERY_REQUIRED"].includes(missionState);
   const paused = missionState === "PAUSED" || missionState === "PAUSED_RECOVERY_REQUIRED";
   const pipelinePresentation = statusPresentation(pipeline.overall);
+  const inspectorRef = useAccessibleDialog<HTMLElement>({ open, onClose });
 
   return (
-    <aside className={`pipeline-inspector ${open ? "is-open" : ""}`} aria-label="État de la pipeline">
+    <aside ref={inspectorRef} className={`pipeline-inspector ${open ? "is-open" : ""}`} aria-label="État de la pipeline" aria-hidden={!open} inert={open ? undefined : true}>
       <div className="inspector-head">
         <div>
           <span className="panel-eyebrow">Pipeline</span>

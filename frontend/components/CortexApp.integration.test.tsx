@@ -419,6 +419,7 @@ describe("CortexApp conversation integration", () => {
     await user.click(screen.getByRole("button", { name: "Exécuter…" }));
     await user.click(screen.getByRole("button", { name: "Démarrer en lecture seule" }));
     await screen.findByText("Mission A isolée");
+    await user.click(screen.getByTitle("Détails du bridge (pipeline, logs, transport)"));
     const inspector = within(screen.getByLabelText("État de la pipeline"));
     expect(inspector.getByText("Composant mission A")).toBeInTheDocument();
     expect(inspector.getByText("Événement mission A")).toBeInTheDocument();
@@ -426,7 +427,7 @@ describe("CortexApp conversation integration", () => {
     expect(screen.getAllByText(/14m 37s/).length).toBeGreaterThan(0);
     expect(inspector.getByRole("button", { name: "Pause" })).toBeEnabled();
 
-    await user.click(screen.getByRole("option", { name: /Conversation B/ }));
+    await user.click(screen.getByRole("button", { name: /Conversation B/ }));
     expect(inspector.queryByText("Composant mission A")).not.toBeInTheDocument();
     expect(inspector.queryByText("Événement mission A")).not.toBeInTheDocument();
     expect(screen.queryAllByText("MISSION_A_MODEL_SECRET")).toHaveLength(0);
@@ -441,7 +442,7 @@ describe("CortexApp conversation integration", () => {
     expect(screen.getByTitle("Statut de la connexion ChatGPT")).toHaveTextContent("Connecté");
     expect(screen.getByTitle("Statut de l'agent exécutif local")).toHaveTextContent("Disponible");
 
-    await user.click(screen.getByRole("option", { name: /Conversation A/ }));
+    await user.click(screen.getByRole("button", { name: /Conversation A/ }));
     expect(inspector.getByText("Composant mission A")).toBeInTheDocument();
     expect(inspector.getByText("Événement mission A")).toBeInTheDocument();
     expect(inspector.getByText("MISSION_A_MODEL_SECRET")).toBeInTheDocument();
@@ -575,7 +576,7 @@ describe("CortexApp conversation integration", () => {
     act(() => AppEventSource.instances[0].fail());
     await act(async () => vi.advanceTimersByTimeAsync(2_000));
     vi.useRealTimers();
-    await screen.findByText("Livraison incertaine");
+    await screen.findAllByText("Livraison incertaine");
     await user.click(screen.getByRole("button", { name: "Réessayer la synchronisation" }));
     await waitFor(() => expect(network.api.mock.calls.some(([path]) => path === "/api/chat/runs/run-a-1")).toBe(true));
 
@@ -635,7 +636,7 @@ describe("CortexApp conversation integration", () => {
     act(() => AppEventSource.instances.at(-1)?.fail());
     await act(async () => vi.advanceTimersByTimeAsync(2_000));
     vi.useRealTimers();
-    await screen.findByText("Livraison incertaine");
+    await screen.findAllByText("Livraison incertaine");
     await user.click(screen.getByRole("button", { name: "Réessayer la synchronisation" }));
     await waitFor(() => expect(screen.queryByText("Livraison incertaine")).not.toBeInTheDocument());
 
@@ -664,7 +665,7 @@ describe("CortexApp conversation integration", () => {
 
     await user.type(composer(), "A");
     await user.click(screen.getByTitle("Envoyer"));
-    await user.click(screen.getByRole("option", { name: /Conversation B/ }));
+    await user.click(screen.getByRole("button", { name: /Conversation B/ }));
     await user.type(composer(), "B");
     await user.click(screen.getByTitle("Envoyer"));
     await waitFor(() => expect(AppEventSource.instances).toHaveLength(2));

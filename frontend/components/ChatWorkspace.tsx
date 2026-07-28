@@ -13,7 +13,7 @@ import type {
   PipelineStatus,
 } from "@/lib/types";
 import { formatDuration, shortTime } from "@/lib/api";
-import { executorDisplay, statusPresentation } from "@/lib/runtimeTruth";
+import { executorDisplay } from "@/lib/runtimeTruth";
 import {
   ActivityIcon,
   BrowserIcon,
@@ -34,6 +34,7 @@ import {
 import { ExecutionCard } from "./ExecutionCard";
 import { Composer } from "./Composer";
 import { ExecutionPreflightDialog } from "./ExecutionPreflightDialog";
+import { StatusRail } from "./StatusRail";
 import type { RekeyConflict } from "@/lib/conversation-state";
 
 export interface WorkspaceAvailability {
@@ -134,19 +135,23 @@ function CodeBlock({ language, text }: { language?: string; text: string }) {
 }
 
 function UserMessage({ message }: { message: ConversationMessage }) {
+  const deliveryLabel: Record<NonNullable<ConversationMessage["delivery"]>, string> = {
+    queued: "En attente locale",
+    sending: "Envoi à ChatGPT",
+    sent: "Envoyé",
+    visible: "Visible dans ChatGPT",
+    waiting: "En attente de réponse",
+    received: "Réponse reçue",
+    uncertain: "Livraison incertaine",
+    failed: "Échec de l’envoi",
+  };
   return (
     <article className="message-row message-user">
       <div className="user-bubble">
         <p>{cleanMessageText(message.text)}</p>
         <div className="user-message-meta">
           <span>
-            {message.delivery === "failed"
-              ? "Échec de l'envoi"
-              : message.delivery === "queued"
-                ? "Envoi en cours…"
-                : message.delivery === "sending"
-                  ? "Envoi en cours…"
-                  : "Envoyé ✓"}
+            {deliveryLabel[message.delivery || "sent"]}
           </span>
           <time>{shortTime(message.created_at)}</time>
           {message.delivery === "received" || message.delivery === "visible" ? <DoubleCheckIcon size={14} /> : <CheckIcon size={14} />}
@@ -277,10 +282,16 @@ export function ChatWorkspace({
           text: chatRun.text,
           created_at: chatRun.created_at,
           delivery:
-            chatRun.state === "FAILED" || chatRun.state === "DELIVERY_UNCERTAIN"
+            chatRun.state === "FAILED"
               ? "failed"
-              : ["VISIBLE_IN_CHATGPT", "WAITING_FOR_CHATGPT", "CHATGPT_STREAMING", "COMPLETED"].includes(chatRun.state)
-                ? "visible"
+              : chatRun.state === "DELIVERY_UNCERTAIN"
+                ? "uncertain"
+                : chatRun.state === "COMPLETED"
+                  ? "received"
+                  : ["WAITING_FOR_CHATGPT", "CHATGPT_STREAMING"].includes(chatRun.state)
+                    ? "waiting"
+                    : chatRun.state === "VISIBLE_IN_CHATGPT"
+                      ? "visible"
                 : chatRun.state === "SENDING_TO_CHATGPT"
                   ? "sending"
                   : "queued",
@@ -338,16 +349,6 @@ export function ChatWorkspace({
   }
 
   const title = conversation?.title || "Nouvelle conversation";
-  const latency = availability.transportLatencyMs;
-  const chatStatus = statusPresentation(availability.chatState);
-  const activeLabel = chatRun?.state === "CHATGPT_STREAMING"
-    ? "Réponse en cours"
-    : chatActive
-      ? "Message en cours"
-      : chatStatus.label;
-  const chatTone = chatActive ? "active" : chatStatus.tone;
-  const agentStatus = statusPresentation(availability.agentState);
-
   return (
     <section className="chat-workspace">
       <div className="conversation-toolbar">
@@ -367,20 +368,8 @@ export function ChatWorkspace({
           </div>
           {conversation?.url && <a className="open-chatgpt-link" href={conversation.url} target="_blank" rel="noreferrer">Ouvrir dans ChatGPT</a>}
         </div>
-        <div className="toolbar-center-status">
-          <span className={`status-pill is-${chatTone}`} title="Statut de la connexion ChatGPT">
-            <span className={`presence-dot is-${chatTone}`} />
-            <span>ChatGPT</span>
-            <strong>{activeLabel}</strong>
-          </span>
-          <span className={`status-pill is-${agentStatus.tone}`} title="Statut de l'agent exécutif local">
-            <span className={`presence-dot is-${agentStatus.tone}`} />
-            <span>Exécuteur</span>
-            <strong>{agentStatus.label}</strong>
-          </span>
-        </div>
+        <StatusRail transport={chatActive ? "running" : availability.chatState} executor={availability.agentState} execution={mission?.mission.state || null} latencyMs={availability.transportLatencyMs} />
         <div className="toolbar-right">
-          <span className="latency-badge"><ActivityIcon size={14} /><span>Latence</span><strong>{latency == null ? "—" : formatDuration(latency)}</strong></span>
           <button className={`toolbar-icon-button ${inspectorOpen ? "is-active" : ""}`} onClick={onToggleInspector} title="Détails du bridge (pipeline, logs, transport)"><PanelIcon /></button>
         </div>
       </div>

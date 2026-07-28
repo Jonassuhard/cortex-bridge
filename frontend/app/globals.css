@@ -3,11 +3,11 @@
 :root {
   --font-sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-mono: "SFMono-Regular", "Cascadia Code", Consolas, monospace;
-  --bg: #050708;
+  --bg: #07090b;
   --bg-deep: #020304;
   --panel: rgba(10, 13, 16, 0.92);
-  --panel-solid: #0a0d10;
-  --panel-raised: #10151a;
+  --panel-solid: #101419;
+  --panel-raised: #1a2027;
   --panel-soft: #14191e;
   --surface: #f4f5f5;
   --surface-2: #ffffff;
@@ -18,14 +18,14 @@
   --muted-2: #5f6a70;
   --line: rgba(255, 255, 255, 0.09);
   --line-strong: rgba(255, 255, 255, 0.16);
-  --blue: #2563eb;
-  --blue-light: #60a5fa;
+  --blue: #4f8cff;
+  --blue-light: #4f8cff;
   --blue-soft: rgba(37, 99, 235, 0.14);
-  --green: #22c55e;
+  --green: #36c98f;
   --green-soft: rgba(34, 197, 94, 0.12);
-  --amber: #f59e0b;
+  --amber: #f2b84b;
   --amber-soft: rgba(245, 158, 11, 0.13);
-  --red: #ef4444;
+  --red: #f06a6a;
   --red-soft: rgba(239, 68, 68, 0.13);
   --sidebar-width: 322px;
   --sidebar-collapsed: 74px;
@@ -46,6 +46,8 @@ body {
   background: var(--bg);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  font-size: 14px;
+  line-height: 1.4;
 }
 button, input, textarea, select { font: inherit; }
 button { color: inherit; }
@@ -355,7 +357,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .safe-label, .warning-label { display: inline-flex; align-items: center; gap: 4px; }
 .safe-label { color: #91e4b0; }
 .warning-label { color: var(--amber); }
-.toolbar-center-status { display: flex; align-items: center; gap: 8px; color: var(--green); font-size: 11px; white-space: nowrap; }
+.toolbar-center-status, .status-rail { display: flex; align-items: center; gap: 8px; color: var(--green); font-size: 12px; white-space: nowrap; }
 .toolbar-center-status strong { font-weight: 650; }
 .status-pill { display: inline-flex; align-items: center; gap: 7px; padding: 5px 11px; border: 1px solid var(--line); border-radius: 999px; background: rgba(255,255,255,.02); color: var(--muted); }
 .status-pill strong { color: var(--text); }
@@ -696,7 +698,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   :root { --sidebar-width: 285px; --inspector-width: 330px; }
   .pipeline-component-grid { grid-template-columns: 1fr; }
   .conversation-toolbar { grid-template-columns: minmax(0,1fr) auto; }
-  .toolbar-center-status { display: none; }
+  .conversation-toolbar { grid-template-columns: minmax(0,1fr) auto; grid-template-areas: "title actions" "status status"; }
+  .toolbar-left { grid-area: title; }
+  .toolbar-right { grid-area: actions; }
+  .status-rail { grid-area: status; }
   .empty-examples { grid-template-columns: 1fr; max-width: 520px; }
 }
 @media (max-width: 1050px) {
@@ -715,6 +720,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .conversation-toolbar { grid-template-columns: minmax(0,1fr) auto; padding-inline: 10px; }
   .conversation-title-block p { display: none; }
   .latency-badge span { display: none; }
+  .status-rail { width: 100%; overflow-x: auto; }
+  .status-pill { min-height: 32px; padding-inline: 8px; }
+  .toolbar-icon-button, .sidebar-icon-button, .icon-button, .composer-left-actions > button, .send-button { min-width: 44px; min-height: 44px; }
   .message-column { width: calc(100% - 24px); padding-bottom: 176px; }
   .user-bubble { max-width: 91%; }
   .message-assistant, .message-cortex { gap: 8px; }
@@ -733,6 +741,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .settings-grid.two { grid-template-columns: 1fr; }
   .settings-footer > span { display: none; }
 }
+
+.conversation-subline, .assistant-message-head, .user-message-meta, .panel-eyebrow, .settings-entry-copy small, .preflight-facts dt, .preflight-facts dd { font-size: 12px; line-height: 1.4; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }

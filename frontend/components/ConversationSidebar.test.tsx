@@ -41,7 +41,7 @@ describe("ConversationSidebar", () => {
       />,
     );
 
-    const selected = screen.getAllByRole("option").filter((row) => row.getAttribute("aria-selected") === "true");
+    const selected = screen.getAllByRole("button").filter((row) => row.getAttribute("aria-current") === "page");
     expect(selected).toHaveLength(1);
     expect(selected[0]).toHaveTextContent("Nouveau B");
   });

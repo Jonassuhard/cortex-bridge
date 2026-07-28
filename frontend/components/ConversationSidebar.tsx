@@ -1,5 +1,4 @@
 "use client";
-/* oxlint-disable jsx-a11y/prefer-tag-over-role -- Rich conversation navigation cannot use native select/option semantics. */
 
 import { useMemo, useState } from "react";
 import type { ConversationSummary } from "@/lib/types";
@@ -38,10 +37,9 @@ function ConversationRow({ conversation, selectedKey, onSelect }: {
   const selected = selectedKey === conversation.identity;
   return (
     <button
-      role="option"
       className={`conversation-row ${selected ? "is-selected" : ""}`}
       onClick={() => onSelect(conversation)}
-      aria-selected={selected}
+      aria-current={selected ? "page" : undefined}
     >
       <span className={`conversation-status ${conversation.status === "error" || conversation.status === "blocked" ? "is-error" : conversation.status && conversation.status !== "idle" ? "is-active" : "is-idle"}`} />
       <span className="conversation-copy">
@@ -107,13 +105,13 @@ export function ConversationSidebar({ conversations, selectedKey, loading, colla
         <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Rechercher dans les conversations" aria-label="Rechercher dans les conversations" />
         {query && <button onClick={() => setQuery("")} aria-label="Effacer la recherche">×</button>}
       </div>
-      <div className="conversation-list" role="listbox" aria-label="Liste des conversations">
+      <nav className="conversation-list" aria-label="Liste des conversations">
         {loading && conversations.length === 0 && <div className="conversation-skeletons" aria-label="Chargement des conversations">{Array.from({ length: 7 }).map((_, index) => <div className="conversation-skeleton" key={index} />)}</div>}
         {!loading && filtered.length === 0 && <div className="sidebar-empty-state"><GlobeIcon size={19} /><p>{query ? "Aucune conversation trouvée." : "Aucune conversation synchronisée."}</p></div>}
         {renderGroup("Épinglées", groups.pinned)}
         {groups.projects.map((group) => renderGroup(group.title, group.items))}
         {renderGroup("Récentes", groups.recent)}
-      </div>
+      </nav>
       <button className="archived-button"><ArchiveIcon size={16} /><span>Conversations archivées</span></button>
       <div className="sidebar-bottom">
         <button className="settings-entry" onClick={onOpenSettings}><span className="settings-entry-icon"><SettingsIcon /></span><span className="settings-entry-copy"><strong>Paramètres</strong><small>Modèles, permissions, transport</small></span><ChevronDownIcon size={15} /></button>

@@ -5,6 +5,7 @@ import { useMemo, useState } from "react";
 import type { ChatGPTModelInfo, CortexSettings, OllamaModelInfo, RuntimeTruth } from "@/lib/types";
 import { formatBytes } from "@/lib/api";
 import { executorDiagnosticsLabel, isAvailableComponentState } from "@/lib/runtimeTruth";
+import { useAccessibleDialog } from "@/hooks/useAccessibleDialog";
 import {
   AlertIcon,
   BrowserIcon,
@@ -80,6 +81,7 @@ export function SettingsPanel({
   const [labConfirmation, setLabConfirmation] = useState("");
   const [diagTesting, setDiagTesting] = useState<string | null>(null);
   const [diagResult, setDiagResult] = useState<{ label: string; state: string; detail: string } | null>(null);
+  const dialogRef = useAccessibleDialog<HTMLDivElement>({ open, onClose });
 
   const runDiagnostic = async (componentId: string, label: string) => {
     setDiagTesting(componentId);
@@ -130,12 +132,12 @@ export function SettingsPanel({
 
   return (
     // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role -- This styled overlay is controlled by React and does not use the native dialog lifecycle.
-    <div className="settings-overlay" role="dialog" aria-modal="true" aria-label="Paramètres Cortex Bridge">
+    <div ref={dialogRef} className="settings-overlay" role="dialog" aria-modal="true" aria-label="Paramètres Cortex Bridge">
       <button className="settings-backdrop" onClick={onClose} aria-label="Fermer les paramètres" />
       <section className="settings-panel">
         <header className="settings-head">
           <div><span className="panel-eyebrow">Cortex Bridge</span><h2>Paramètres</h2><p>Configure les modèles, le transport et les limites d'accès sans exposer les identifiants.</p></div>
-          <button className="icon-button" onClick={onClose}><XIcon /></button>
+          <button className="icon-button" onClick={onClose} aria-label="Fermer les paramètres"><XIcon /></button>
         </header>
         <div className="settings-layout">
           <nav className="settings-tabs">

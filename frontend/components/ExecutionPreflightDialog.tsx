@@ -1,6 +1,7 @@
 "use client";
 
 import type { ExecutionPreflight } from "@/lib/types";
+import { useAccessibleDialog } from "@/hooks/useAccessibleDialog";
 import { ShieldIcon } from "./Icons";
 
 interface ExecutionPreflightDialogProps {
@@ -22,6 +23,7 @@ export function ExecutionPreflightDialog({
   onClose,
   onConfirm,
 }: ExecutionPreflightDialogProps) {
+  const dialogRef = useAccessibleDialog<HTMLDialogElement>({ open, onClose });
   if (!open) return null;
   const setCapability = (key: "write" | "processes" | "network", enabled: boolean) => {
     onChange({
@@ -37,7 +39,7 @@ export function ExecutionPreflightDialog({
     <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => {
       if (event.target === event.currentTarget) onClose();
     }}>
-      <dialog open className="execution-preflight-dialog" aria-modal="true" aria-labelledby="execution-preflight-title">
+      <dialog ref={dialogRef} open className="execution-preflight-dialog" aria-modal="true" aria-labelledby="execution-preflight-title">
         <header>
           <span><ShieldIcon size={18} /></span>
           <div>

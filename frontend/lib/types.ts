@@ -58,7 +58,7 @@ export interface ConversationMessage {
   code_blocks?: CodeBlock[];
   images?: MessageImage[];
   created_at?: string;
-  delivery?: "queued" | "sending" | "sent" | "visible" | "received" | "failed";
+  delivery?: "queued" | "sending" | "sent" | "visible" | "waiting" | "received" | "uncertain" | "failed";
   latency_ms?: number;
   streaming?: boolean;
 }

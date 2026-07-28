@@ -34,6 +34,7 @@ function ControlledWorkspace({
   onRetryRecovery = () => undefined,
   onChatSend = () => undefined,
   onMissionStart = () => undefined,
+  transportLatencyMs = 128,
 }: {
   initialState?: ConversationState;
   refusedKeys?: Set<string>;
@@ -41,6 +42,7 @@ function ControlledWorkspace({
   onRetryRecovery?: (key: string) => void;
   onChatSend?: (key: string, text: string) => void;
   onMissionStart?: (key: string, text: string) => void;
+  transportLatencyMs?: number | null;
 }) {
   const [state, setState] = useState(initialState);
   const dispatch = (event: ConversationEvent) => setState((current) => conversationReducer(current, event));
@@ -98,7 +100,7 @@ function ControlledWorkspace({
         chatRun={entry?.run || null}
         mission={entry?.mission || null}
         pipeline={demoPipeline}
-        availability={{ chatState: "connected", agentState: "available", transportLatencyMs: 128 }}
+        availability={{ chatState: "connected", agentState: "available", transportLatencyMs }}
         settings={demoSettings}
         inspectorOpen={false}
         sidebarCollapsed={false}
@@ -144,6 +146,23 @@ function fileInput(container: HTMLElement): HTMLInputElement {
 }
 
 describe("ChatWorkspace controlled composer", () => {
+  it("does not invent a latency value when none was measured", () => {
+    render(<ControlledWorkspace transportLatencyMs={null} />);
+    expect(screen.queryByText("Latence")).not.toBeInTheDocument();
+  });
+
+  it("closes the execution preflight with Escape and returns focus", async () => {
+    const user = userEvent.setup();
+    render(<ControlledWorkspace />);
+    await user.type(screen.getByRole("textbox", { name: "Message à envoyer" }), "Inspecter");
+    const trigger = screen.getByRole("button", { name: "Exécuter…" });
+    await user.click(trigger);
+    expect(screen.getByRole("dialog", { name: "Vérifier l’exécution locale" })).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "Vérifier l’exécution locale" })).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
+
   it("sends Enter's exact draft only to ChatGPT", async () => {
     const onChatSend = vi.fn<(key: string, text: string) => void>();
     const onMissionStart = vi.fn<(key: string, text: string) => void>();
@@ -300,7 +319,7 @@ describe("ChatWorkspace controlled composer", () => {
     const user = userEvent.setup();
     render(<ControlledWorkspace initialState={initial} onRetryRecovery={retry} />);
 
-    expect(screen.getByText("Livraison incertaine")).toBeInTheDocument();
+    expect(screen.getAllByText("Livraison incertaine")).toHaveLength(2);
     expect(screen.queryByTitle("Arrêter la réponse")).not.toBeInTheDocument();
     expect(screen.getByRole("textbox")).toHaveValue("à préserver");
     await user.click(screen.getByRole("button", { name: "Réessayer la synchronisation" }));
