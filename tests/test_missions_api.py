@@ -33,6 +33,8 @@ import uvicorn  # noqa: E402
 
 import missions as missions_api  # noqa: E402  (console/missions.py)
 import server as console_server  # noqa: E402  (console/server.py)
+import write_slots  # noqa: E402
+from conversation_sessions import ConversationSessionRegistry  # noqa: E402
 from orchestration.store import Store  # noqa: E402
 from transport.chatgpt_web.adapter import (  # noqa: E402
     ChatGPTWebTransport,
@@ -76,6 +78,12 @@ class MissionsApiTestCase(unittest.TestCase):
         cls.original_store = missions_api._store
         cls.original_optin_file = missions_api.OPTIN_FILE
         cls.original_transport_factory = missions_api.transport_factory
+        cls.original_writer_registry = write_slots._registry
+        cls.original_mission_leases = dict(missions_api._mission_leases)
+        cls.original_mission_write_urls = dict(missions_api._mission_write_urls)
+        write_slots._registry = ConversationSessionRegistry(capacity=2)
+        missions_api._mission_leases.clear()
+        missions_api._mission_write_urls.clear()
         missions_api._store = Store(cls.store_path)
         missions_api.OPTIN_FILE = tmp / "transport-optin.json"
         missions_api.transport_factory = lambda: ChatGPTWebTransport(
@@ -109,6 +117,11 @@ class MissionsApiTestCase(unittest.TestCase):
         missions_api._store = cls.original_store
         missions_api.OPTIN_FILE = cls.original_optin_file
         missions_api.transport_factory = cls.original_transport_factory
+        missions_api._mission_leases.clear()
+        missions_api._mission_leases.update(cls.original_mission_leases)
+        missions_api._mission_write_urls.clear()
+        missions_api._mission_write_urls.update(cls.original_mission_write_urls)
+        write_slots._registry = cls.original_writer_registry
         cls._tmp.cleanup()
 
     def setUp(self):

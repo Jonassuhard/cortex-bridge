@@ -33,6 +33,8 @@ import missions as missions_api  # noqa: E402
 import onboarding as onboarding_api  # noqa: E402
 import server as console_server  # noqa: E402
 import settings as settings_api  # noqa: E402
+import write_slots  # noqa: E402
+from conversation_sessions import ConversationSessionRegistry  # noqa: E402
 from orchestration.store import Store  # noqa: E402
 from transport.chatgpt_web.adapter import ChatGPTWebTransport, LocalFixtureDriver  # noqa: E402
 from transport.chatgpt_web.fixture import FixtureServer  # noqa: E402
@@ -96,6 +98,12 @@ class ChatSettingsApiTestCase(unittest.TestCase):
         cls.original_chat_runs_file = chat_api.CHAT_RUNS_FILE
         cls.original_store = missions_api._store
         cls.original_optin = missions_api.OPTIN_FILE
+        cls.original_writer_registry = write_slots._registry
+        cls.original_mission_leases = dict(missions_api._mission_leases)
+        cls.original_mission_write_urls = dict(missions_api._mission_write_urls)
+        write_slots._registry = ConversationSessionRegistry(capacity=2)
+        missions_api._mission_leases.clear()
+        missions_api._mission_write_urls.clear()
 
         # Fixture URLs are loopback HTTP; production validation remains strict.
         chat_api._validate_chatgpt_url = lambda url: url.strip()
@@ -156,6 +164,11 @@ class ChatSettingsApiTestCase(unittest.TestCase):
         onboarding_api.browser_driver_factory = cls.original_onboarding_driver_factory
         chat_api.CHAT_RUNS_FILE = cls.original_chat_runs_file
         chat_api._validate_chatgpt_url = cls.original_validate_url
+        missions_api._mission_leases.clear()
+        missions_api._mission_leases.update(cls.original_mission_leases)
+        missions_api._mission_write_urls.clear()
+        missions_api._mission_write_urls.update(cls.original_mission_write_urls)
+        write_slots._registry = cls.original_writer_registry
         cls._tmp.cleanup()
 
     def setUp(self):
