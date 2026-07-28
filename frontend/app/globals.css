@@ -502,6 +502,27 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .send-button:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 11px 26px rgba(37,99,235,.38); }
 .send-button:disabled { opacity: .32; cursor: not-allowed; box-shadow: none; }
 .send-button.is-stop { background: linear-gradient(145deg, #ef4444, #b91c1c); box-shadow: 0 8px 20px rgba(239,68,68,.22); }
+.visually-hidden-file { display: none; }
+.execution-preflight-button { min-height: 34px; display: inline-flex; align-items: center; gap: 6px; padding: 0 11px; color: var(--ink-soft); border: 1px solid var(--line-strong); border-radius: 10px; background: rgba(255,255,255,.04); font-size: 12px; cursor: pointer; }
+.execution-preflight-button:hover:not(:disabled) { color: #fff; border-color: rgba(79,140,255,.55); background: rgba(79,140,255,.12); }
+.execution-preflight-button:disabled { opacity: .38; cursor: not-allowed; }
+.dialog-backdrop { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; padding: 20px; background: rgba(2,3,4,.76); backdrop-filter: blur(10px); }
+.execution-preflight-dialog { width: min(610px, 100%); max-height: min(760px, calc(100vh - 32px)); overflow-y: auto; color: var(--ink); border: 1px solid var(--line-strong); border-radius: var(--radius-md); background: #101419; box-shadow: var(--shadow-lg); }
+.execution-preflight-dialog > header { display: grid; grid-template-columns: 36px 1fr 36px; gap: 12px; align-items: start; padding: 20px; border-bottom: 1px solid var(--line); }
+.execution-preflight-dialog > header > span { width: 36px; height: 36px; display: grid; place-items: center; color: #4f8cff; border-radius: 10px; background: rgba(79,140,255,.12); }
+.execution-preflight-dialog h2 { margin: 0; font-size: 18px; }
+.execution-preflight-dialog p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+.execution-preflight-dialog > header > button { width: 36px; height: 36px; color: var(--muted); border: 0; border-radius: 9px; background: transparent; font-size: 24px; cursor: pointer; }
+.preflight-facts { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 0; padding: 18px 20px; }
+.preflight-facts div { min-width: 0; padding: 11px; border: 1px solid var(--line); border-radius: 10px; background: rgba(255,255,255,.025); }
+.preflight-facts dt { color: var(--muted); font-size: 12px; }
+.preflight-facts dd { margin: 4px 0 0; overflow-wrap: anywhere; font-family: var(--font-mono); font-size: 12px; }
+.execution-preflight-dialog fieldset { display: grid; gap: 9px; margin: 0 20px 18px; padding: 14px; border: 1px solid var(--line); border-radius: 10px; }
+.execution-preflight-dialog legend { padding: 0 6px; color: var(--ink-soft); font-size: 13px; }
+.execution-preflight-dialog label { display: flex; align-items: center; gap: 9px; min-height: 30px; font-size: 14px; }
+.execution-preflight-dialog > footer { display: flex; justify-content: flex-end; gap: 9px; padding: 16px 20px; border-top: 1px solid var(--line); }
+.execution-preflight-dialog > footer button { min-height: 44px; padding: 0 14px; border: 1px solid var(--line-strong); border-radius: 10px; background: rgba(255,255,255,.04); cursor: pointer; }
+.execution-preflight-dialog > footer .approve-button { color: #fff; border-color: #4f8cff; background: #2563eb; }
 .composer-footer { min-height: 27px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 5px 8px 0; color: var(--muted-2); font-size: 8px; }
 .composer-footer > span { display: flex; align-items: center; gap: 5px; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .composer-footer > div { display: flex; align-items: center; gap: 10px; }

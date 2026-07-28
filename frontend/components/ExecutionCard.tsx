@@ -3,7 +3,7 @@
 
 import { useMemo } from "react";
 import type { MissionDetail, PipelineStatus } from "@/lib/types";
-import { formatDuration, shortTime } from "@/lib/api";
+import { formatDuration } from "@/lib/api";
 import { executionStateLabel } from "@/lib/runtimeTruth";
 import {
   ActivityIcon,
@@ -140,7 +140,7 @@ export function ExecutionCard({ mission, pipeline, expanded, onToggle, onApprove
         {(evidence.length ? evidence : stageOrder.slice(0, 4).map((label, index) => ({
           icon: index === 3 ? "terminal" : "check",
           label,
-          detail: index < 2 ? shortTime(new Date(Date.now() - (4 - index) * 1500).toISOString()) : index === 2 ? "cortex.v1" : "Exécuteur déterministe",
+          detail: index < 2 ? "Étape enregistrée" : index === 2 ? "cortex.v1" : "Exécuteur déterministe",
           done: index < 3,
         }))).map((step, index) => (
           <div className={`execution-step ${step.done ? "is-done" : index === evidence.length - 1 ? "is-current" : ""}`} key={`${step.label}-${index}`}>

@@ -245,6 +245,23 @@ export interface MissionDetail {
   stopped: boolean;
 }
 
+export interface ExecutionPreflight {
+  conversationKey: string;
+  workspace: string;
+  executorKind: "deterministic" | "ollama";
+  capabilities: {
+    read: true;
+    write: boolean;
+    processes: boolean;
+    network: boolean;
+    delete: false;
+  };
+  approvalPolicy: "read-only" | "write-with-approvals" | "reviewed-processes";
+  maxIterations: number;
+  maxDurationMinutes: number;
+  attachmentTokens: string[];
+}
+
 export type ApprovalPolicy =
   | "read-only-automatic"
   | "workspace-write-with-approvals"

@@ -32,11 +32,15 @@ function ControlledWorkspace({
   refusedKeys = new Set<string>(),
   pendingKeys = new Map<string, Promise<void>>(),
   onRetryRecovery = () => undefined,
+  onChatSend = () => undefined,
+  onMissionStart = () => undefined,
 }: {
   initialState?: ConversationState;
   refusedKeys?: Set<string>;
   pendingKeys?: Map<string, Promise<void>>;
   onRetryRecovery?: (key: string) => void;
+  onChatSend?: (key: string, text: string) => void;
+  onMissionStart?: (key: string, text: string) => void;
 }) {
   const [state, setState] = useState(initialState);
   const dispatch = (event: ConversationEvent) => setState((current) => conversationReducer(current, event));
@@ -105,10 +109,16 @@ function ControlledWorkspace({
         onAttachmentStaged={(key, attachment) => dispatch({ type: "ATTACHMENT_STAGED", key, attachment })}
         onToggleSidebar={() => undefined}
         onToggleInspector={() => undefined}
-        onSendChat={(key) => send(key)}
+        onSendChat={(key, text) => {
+          onChatSend(key, text);
+          return send(key);
+        }}
         onSendAttachment={(key) => send(key)}
         onSendScreenshot={(key) => send(key, false)}
-        onStartMission={(key) => send(key)}
+        onStartMission={(key, text) => {
+          onMissionStart(key, text);
+          return send(key);
+        }}
         onCancelChat={() => undefined}
         onRetryChatRecovery={onRetryRecovery}
         onResolveRekeyConflict={(fromKey, toKey, choice) => dispatch({
@@ -134,12 +144,23 @@ function fileInput(container: HTMLElement): HTMLInputElement {
 }
 
 describe("ChatWorkspace controlled composer", () => {
+  it("sends Enter's exact draft only to ChatGPT", async () => {
+    const onChatSend = vi.fn<(key: string, text: string) => void>();
+    const onMissionStart = vi.fn<(key: string, text: string) => void>();
+    const user = userEvent.setup();
+    render(<ControlledWorkspace onChatSend={onChatSend} onMissionStart={onMissionStart} />);
+
+    await user.type(screen.getByRole("textbox"), "Texte exact, sans classification{enter}");
+
+    expect(onChatSend).toHaveBeenCalledWith("a", "Texte exact, sans classification");
+    expect(onMissionStart).not.toHaveBeenCalled();
+  });
+
   it("allows B to submit while A's POST is still pending", async () => {
     let resolveA!: () => void;
     const pendingA = new Promise<void>((resolve) => { resolveA = resolve; });
     const user = userEvent.setup();
     render(<ControlledWorkspace pendingKeys={new Map([["a", pendingA]])} />);
-    await user.click(screen.getByRole("tab", { name: "Message simple" }));
     await user.type(screen.getByRole("textbox"), "A en attente");
     await user.click(screen.getByTitle("Envoyer"));
 
@@ -184,7 +205,6 @@ describe("ChatWorkspace controlled composer", () => {
     const user = userEvent.setup();
     const { container } = render(<ControlledWorkspace refusedKeys={new Set(["a"])} />);
     const attachment = new File(["preuve"], "preuve.txt", { type: "text/plain" });
-    await user.click(screen.getByRole("tab", { name: "Message simple" }));
     await user.type(screen.getByRole("textbox"), "message à conserver");
     await user.upload(fileInput(container), attachment);
 
@@ -207,8 +227,6 @@ describe("ChatWorkspace controlled composer", () => {
     ].reduce((state, event) => conversationReducer(state, event as ConversationEvent), initial);
     const user = userEvent.setup();
     render(<ControlledWorkspace initialState={initial} />);
-    await user.click(screen.getByRole("tab", { name: "Message simple" }));
-
     await user.click(screen.getByTitle("Envoyer"));
     await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue(""));
     expect(screen.queryByText("a.txt")).not.toBeInTheDocument();

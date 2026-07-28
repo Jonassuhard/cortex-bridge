@@ -102,7 +102,7 @@ async function readyApp() {
 }
 
 function composer(): HTMLTextAreaElement {
-  return screen.getByRole("textbox", { name: "" }) as HTMLTextAreaElement;
+  return screen.getByRole("textbox", { name: "Message à envoyer" }) as HTMLTextAreaElement;
 }
 
 beforeEach(() => {
@@ -171,7 +171,7 @@ describe("CortexApp conversation integration", () => {
     });
     const user = userEvent.setup();
     await readyApp();
-    await user.click(screen.getByRole("tab", { name: "Message simple" }));
+
     await user.type(composer(), "A1");
     await user.click(screen.getByTitle("Envoyer"));
     await waitFor(() => expect(AppEventSource.instances).toHaveLength(1));
@@ -203,7 +203,7 @@ describe("CortexApp conversation integration", () => {
     });
     const user = userEvent.setup();
     await readyApp();
-    await user.click(screen.getByRole("tab", { name: "Message simple" }));
+
     await user.type(composer(), "A active");
     await user.click(screen.getByTitle("Envoyer"));
     const source = AppEventSource.instances[0];
@@ -235,7 +235,7 @@ describe("CortexApp conversation integration", () => {
     });
     const user = userEvent.setup();
     const rendered = await readyApp();
-    await user.click(screen.getByRole("tab", { name: "Message simple" }));
+
     await user.type(composer(), "A active");
     await user.click(screen.getByTitle("Envoyer"));
     await user.click(await screen.findByTitle("Arrêter la réponse"));
@@ -257,7 +257,7 @@ describe("CortexApp conversation integration", () => {
     });
     const user = userEvent.setup();
     await readyApp();
-    await user.click(screen.getByRole("tab", { name: "Message simple" }));
+
     await user.type(composer(), "A active");
     await user.click(screen.getByTitle("Envoyer"));
     const source = AppEventSource.instances[0];
@@ -292,7 +292,7 @@ describe("CortexApp conversation integration", () => {
     });
     const user = userEvent.setup();
     const rendered = await readyApp();
-    await user.click(screen.getByRole("tab", { name: "Message simple" }));
+
     await user.type(composer(), "A incertaine");
     await user.click(screen.getByTitle("Envoyer"));
     vi.useFakeTimers();
@@ -325,7 +325,7 @@ describe("CortexApp conversation integration", () => {
     });
     const user = userEvent.setup();
     const rendered = await readyApp();
-    await user.click(screen.getByRole("tab", { name: "Message simple" }));
+
     await user.type(composer(), "preuve exacte");
     const file = new File(["preuve"], "preuve.txt", { type: "text/plain" });
     const input = rendered.container.querySelector<HTMLInputElement>('input[type="file"]');
@@ -416,7 +416,8 @@ describe("CortexApp conversation integration", () => {
     const user = userEvent.setup();
     await readyApp();
     await user.type(composer(), "Mission A isolée");
-    await user.click(screen.getByTitle("Envoyer"));
+    await user.click(screen.getByRole("button", { name: "Exécuter…" }));
+    await user.click(screen.getByRole("button", { name: "Démarrer en lecture seule" }));
     await screen.findByText("Mission A isolée");
     const inspector = within(screen.getByLabelText("État de la pipeline"));
     expect(inspector.getByText("Composant mission A")).toBeInTheDocument();
@@ -465,7 +466,7 @@ describe("CortexApp conversation integration", () => {
     });
     const user = userEvent.setup();
     await readyApp();
-    await user.click(screen.getByRole("tab", { name: "Message simple" }));
+
     await user.type(composer(), "message exact");
     await user.click(screen.getByTitle("Envoyer"));
     await waitFor(() => expect(AppEventSource.instances).toHaveLength(1));
@@ -529,10 +530,10 @@ describe("CortexApp conversation integration", () => {
     await readyApp();
     await user.click(screen.getByRole("button", { name: "Nouvelle mission" }));
     await user.type(composer(), "Mission canonique");
-    await user.click(screen.getByTitle("Envoyer"));
+    await user.click(screen.getByRole("button", { name: "Exécuter…" }));
+    await user.click(screen.getByRole("button", { name: "Démarrer en lecture seule" }));
     await screen.findByText("Mission terminée");
 
-    await user.click(screen.getByRole("tab", { name: "Message simple" }));
     await user.type(composer(), "suite");
     await user.click(screen.getByTitle("Envoyer"));
     await waitFor(() => {
@@ -567,7 +568,7 @@ describe("CortexApp conversation integration", () => {
     });
     const user = userEvent.setup();
     await readyApp();
-    await user.click(screen.getByRole("tab", { name: "Message simple" }));
+
     await user.type(composer(), "A1");
     await user.click(screen.getByTitle("Envoyer"));
     vi.useFakeTimers();
@@ -627,7 +628,7 @@ describe("CortexApp conversation integration", () => {
     const user = userEvent.setup();
     await readyApp();
     await user.click(screen.getByRole("button", { name: /Nouveau chat/ }));
-    await user.click(screen.getByRole("tab", { name: "Message simple" }));
+
     await user.type(composer(), "premier");
     await user.click(screen.getByTitle("Envoyer"));
     vi.useFakeTimers();
@@ -660,7 +661,7 @@ describe("CortexApp conversation integration", () => {
     });
     const user = userEvent.setup();
     await readyApp();
-    await user.click(screen.getByRole("tab", { name: "Message simple" }));
+
     await user.type(composer(), "A");
     await user.click(screen.getByTitle("Envoyer"));
     await user.click(screen.getByRole("option", { name: /Conversation B/ }));
@@ -687,7 +688,7 @@ describe("CortexApp conversation integration", () => {
     const user = userEvent.setup();
     const rendered = render(<CortexApp />);
     await screen.findByRole("heading", { name: "Conversation A" });
-    await user.click(screen.getByRole("tab", { name: "Message simple" }));
+
     await user.type(composer(), "A");
     await user.click(screen.getByTitle("Envoyer"));
     await waitFor(() => expect(AppEventSource.instances).toHaveLength(1));

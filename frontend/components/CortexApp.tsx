@@ -19,6 +19,7 @@ import type {
   ConversationSnapshot,
   ConversationSummary,
   CortexSettings,
+  ExecutionPreflight,
   MissionDetail,
   OllamaModelInfo,
   PipelineStatus,
@@ -609,20 +610,31 @@ export function CortexApp() {
     }
   }
 
-  async function startMission(key: ConversationKey, text: string): Promise<boolean> {
+  async function startMission(
+    key: ConversationKey,
+    text: string,
+    preflight: ExecutionPreflight,
+  ): Promise<boolean> {
     const conversation = conversationForKey(key);
     if (!conversation) return false;
     if (!beginExecution(key)) return false;
     try {
       const response = await runInitialRequest(key, (signal) => postJson<{ id: string; state: string }>("/api/missions", {
         objective: text,
-        workspace: settings.default_workspace,
+        workspace: preflight.workspace,
         constraints: ["Ne jamais supprimer définitivement un fichier", "Rester dans les racines autorisées"],
         conversation_url: conversation.url,
         new_conversation: isProvisional(key, conversation),
-        max_iterations: settings.max_iterations,
-        max_duration_minutes: settings.max_duration_minutes,
-        approval_policy: settings.approval_policy,
+        max_iterations: preflight.maxIterations,
+        max_duration_minutes: preflight.maxDurationMinutes,
+        approval_policy: preflight.approvalPolicy === "read-only"
+          ? "read-only-automatic"
+          : "workspace-write-with-approvals",
+        allow_processes: preflight.capabilities.processes,
+        allow_network: preflight.capabilities.network,
+        allow_write: preflight.capabilities.write,
+        attachment_tokens: preflight.attachmentTokens,
+        executor_kind: preflight.executorKind,
       }, { signal }));
       missionDetailRequestEpoch.current.invalidate();
       dispatchConversation({

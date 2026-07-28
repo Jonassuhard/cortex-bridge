@@ -7,6 +7,7 @@ import type {
   ConversationMessage,
   ConversationSummary,
   CortexSettings,
+  ExecutionPreflight,
   HealthState,
   MissionDetail,
   PipelineStatus,
@@ -20,21 +21,19 @@ import {
   ClockIcon,
   CopyIcon,
   DoubleCheckIcon,
-  EyeIcon,
   FolderIcon,
   MenuIcon,
   MoreIcon,
   PanelIcon,
-  PaperclipIcon,
-  PauseIcon,
   PlayIcon,
-  SendIcon,
   ShieldIcon,
   SparkIcon,
   StopIcon,
   TerminalIcon,
 } from "./Icons";
 import { ExecutionCard } from "./ExecutionCard";
+import { Composer } from "./Composer";
+import { ExecutionPreflightDialog } from "./ExecutionPreflightDialog";
 import type { RekeyConflict } from "@/lib/conversation-state";
 
 export interface WorkspaceAvailability {
@@ -70,7 +69,7 @@ interface ChatWorkspaceProps {
   onSendChat: (key: ConversationKey, text: string) => Promise<boolean>;
   onSendAttachment: (key: ConversationKey, text: string, file: File) => Promise<boolean>;
   onSendScreenshot: (key: ConversationKey, text: string) => Promise<boolean>;
-  onStartMission: (key: ConversationKey, text: string) => Promise<boolean>;
+  onStartMission: (key: ConversationKey, text: string, preflight: ExecutionPreflight) => Promise<boolean>;
   onCancelChat: (key: ConversationKey) => void;
   onRetryChatRecovery: (key: ConversationKey) => void;
   onResolveRekeyConflict: (
@@ -244,16 +243,16 @@ export function ChatWorkspace({
   onCancelChat,
   onRetryChatRecovery,
   onResolveRekeyConflict,
-  onPauseMission,
   onResumeMission,
   onCancelMission,
   onApprove,
   onReject,
 }: ChatWorkspaceProps) {
-  const [mode, setMode] = useState<"chat" | "mission">("mission");
-  const [executionExpanded, setExecutionExpanded] = useState(true);
+  const [executionExpanded, setExecutionExpanded] = useState(false);
+  const [preflightOpen, setPreflightOpen] = useState(false);
+  const [preflightConfirming, setPreflightConfirming] = useState(false);
+  const [preflight, setPreflight] = useState<ExecutionPreflight | null>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const nearBottomRef = useRef(true);
 
   const activeMissionState = mission?.mission.state;
@@ -266,7 +265,6 @@ export function ChatWorkspace({
     || chatActive
     || cancelPending
     || recoveryPending;
-  const busy = missionRunning || chatActive || sending;
 
   const mergedMessages = useMemo(() => {
     const source = [...messages];
@@ -314,19 +312,29 @@ export function ChatWorkspace({
     const text = draft;
     const stagedFile = attachment;
     if (!key || (!text.trim() && !stagedFile) || executionBlocked) return;
-    if (stagedFile) {
-      await onSendAttachment(key, text, stagedFile);
-    } else if (mode === "mission") {
-      await onStartMission(key, text);
-    } else {
-      await onSendChat(key, text);
-    }
+    if (stagedFile) await onSendAttachment(key, text, stagedFile);
+    else await onSendChat(key, text);
   }
 
   async function submitScreenshot() {
     const key = conversationKey;
     if (!key || executionBlocked) return;
     await onSendScreenshot(key, draft);
+  }
+
+  function prepareExecution() {
+    if (!conversationKey || (!draft.trim() && !attachment) || executionBlocked) return;
+    setPreflight({
+      conversationKey,
+      workspace: settings.default_workspace,
+      executorKind: settings.primary_executor.toLowerCase().includes("ollama") ? "ollama" : "deterministic",
+      capabilities: { read: true, write: false, processes: false, network: false, delete: false },
+      approvalPolicy: "read-only",
+      maxIterations: settings.max_iterations,
+      maxDurationMinutes: settings.max_duration_minutes,
+      attachmentTokens: [],
+    });
+    setPreflightOpen(true);
   }
 
   const title = conversation?.title || "Nouvelle conversation";
@@ -483,90 +491,22 @@ export function ChatWorkspace({
       </div>
 
       <div className="composer-shell">
-        <div className="composer-mode-tabs" role="tablist">
-          <button role="tab" aria-selected={mode === "mission"} className={mode === "mission" ? "is-active" : ""} disabled={ambiguousProvisional} onClick={() => setMode("mission")}><SparkIcon size={14} /> Mission autonome</button>
-          <button role="tab" aria-selected={mode === "chat"} className={mode === "chat" ? "is-active" : ""} disabled={ambiguousProvisional} onClick={() => setMode("chat")}><EyeIcon size={14} /> Message simple</button>
-        </div>
-        <div className={`composer-box ${busy ? "is-busy" : ""}`}>
-          <textarea
-            value={draft}
-            onChange={(event) => {
-              if (conversationKey) onDraftChange(conversationKey, event.target.value);
-            }}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey && !event.metaKey) {
-                event.preventDefault();
-                void submit();
-              }
-            }}
-            placeholder={mode === "mission" ? "Décris l'objectif. Cortex planifie, exécute et valide automatiquement…" : "Écrire dans la conversation ChatGPT sélectionnée…"}
-            rows={1}
-            disabled={composerBlocked}
-          />
-          <div className="composer-controls">
-            <div className="composer-left-actions">
-              <input
-                ref={fileInputRef}
-                type="file"
-                disabled={composerBlocked}
-                style={{ display: "none" }}
-                onChange={(event) => {
-                  const file = event.target.files?.[0] || null;
-                  if (conversationKey) onAttachmentStaged(conversationKey, file);
-                  event.target.value = "";
-                }}
-              />
-              <button
-                title={capabilities.upload_file ? "Joindre un fichier ou une image (512 Mo / 20 Mo max)" : "Pièces jointes non confirmées par ce transport"}
-                disabled={!capabilities.upload_file || composerBlocked}
-                onClick={() => fileInputRef.current?.click()}
-              >
-                <PaperclipIcon size={18} />
-              </button>
-              {capabilities.take_screenshot && (
-                <button title="Capturer l'onglet ChatGPT et l'envoyer" onClick={() => void submitScreenshot()} disabled={executionBlocked}>
-                  <BrowserIcon size={17} />
-                </button>
-              )}
-              {attachment && (
-                <span className="staged-file-pill">
-                  <PaperclipIcon size={12} /> {attachment.name}
-                  <button
-                    onClick={() => {
-                      if (conversationKey) onAttachmentStaged(conversationKey, null);
-                    }}
-                    disabled={composerBlocked}
-                    aria-label="Retirer la pièce jointe"
-                  >×</button>
-                </span>
-              )}
-              <span className="workspace-pill"><FolderIcon size={13} /> {settings.default_workspace.split("/").filter(Boolean).at(-1) || "workspace"}</span>
-            </div>
-            <div className="composer-right-actions">
-              <span className="composer-shortcut">Entrée pour envoyer · ⇧ Entrée pour une ligne</span>
-              {chatActive ? (
-                <button
-                  className="send-button is-stop"
-                  onClick={() => {
-                    if (conversationKey) onCancelChat(conversationKey);
-                  }}
-                  disabled={cancelPending}
-                  title="Arrêter la réponse"
-                ><StopIcon size={17} /></button>
-              ) : missionRunning ? (
-                <button
-                  className="send-button is-stop"
-                  onClick={() => {
-                    if (conversationKey) onPauseMission(conversationKey);
-                  }}
-                  title="Mettre la mission en pause"
-                ><PauseIcon size={17} /></button>
-              ) : (
-                <button className="send-button" onClick={() => void submit()} disabled={(!draft.trim() && !attachment) || executionBlocked} title="Envoyer"><SendIcon size={17} /></button>
-              )}
-            </div>
-          </div>
-        </div>
+        <Composer
+          value={draft}
+          attachment={attachment}
+          blocked={composerBlocked}
+          executionBlocked={executionBlocked}
+          chatActive={chatActive}
+          cancelPending={cancelPending}
+          capabilities={capabilities}
+          workspaceLabel={settings.default_workspace.split("/").filter(Boolean).at(-1) || "workspace"}
+          onChange={(value) => conversationKey && onDraftChange(conversationKey, value)}
+          onAttachmentStaged={(file) => conversationKey && onAttachmentStaged(conversationKey, file)}
+          onSend={() => void submit()}
+          onScreenshot={() => void submitScreenshot()}
+          onPrepareExecution={prepareExecution}
+          onCancelChat={() => conversationKey && onCancelChat(conversationKey)}
+        />
         <div className="composer-footer">
           <span><ShieldIcon size={12} /> Profil {settings.access_profile} · suppression remplacée par archivage</span>
           <div>
@@ -583,6 +523,23 @@ export function ChatWorkspace({
           </div>
         </div>
       </div>
+      {preflight && (
+        <ExecutionPreflightDialog
+          open={preflightOpen}
+          value={preflight}
+          attachmentName={attachment?.name || null}
+          confirming={preflightConfirming}
+          onChange={setPreflight}
+          onClose={() => setPreflightOpen(false)}
+          onConfirm={() => {
+            if (!conversationKey) return;
+            setPreflightConfirming(true);
+            void onStartMission(conversationKey, draft, preflight).then((accepted) => {
+              if (accepted) setPreflightOpen(false);
+            }).finally(() => setPreflightConfirming(false));
+          }}
+        />
+      )}
     </section>
   );
 }
