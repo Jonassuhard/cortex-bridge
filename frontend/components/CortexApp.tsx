@@ -69,6 +69,8 @@ function normalizeConversation(raw: Partial<ConversationSummary> & { url: string
     unread: raw.unread || 0,
     pinned: !!raw.pinned,
     project: !!raw.project,
+    project_id: raw.project_id || null,
+    project_title: raw.project_title || null,
     archived: !!raw.archived,
     message_count: typeof raw.message_count === "number" ? raw.message_count : null,
     status: raw.status || "idle",
@@ -221,6 +223,7 @@ export function CortexApp() {
   const [demoMode, setDemoMode] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const missionDetailRequestEpoch = useRef(createRequestEpoch());
+  const pipelineRequestRef = useRef<{ controller: AbortController; key: ConversationKey } | null>(null);
   const terminalRefreshTimer = useRef<number | null>(null);
   const initialRequestsRef = useRef(new Map<ConversationKey, InitialRequestTask>());
 
@@ -270,10 +273,21 @@ export function CortexApp() {
   }, []);
 
   const refreshPipeline = useCallback(async () => {
+    const key = conversationStateRef.current.selectedKey;
+    const entry = key ? conversationStateRef.current.entries[key] : null;
+    if (!key || !entry) return;
+    pipelineRequestRef.current?.controller.abort();
+    const controller = new AbortController();
+    pipelineRequestRef.current = { controller, key };
+    const params = new URLSearchParams({ conversation_identity: entry.summary.identity });
+    if (entry.missionId) params.set("mission_id", entry.missionId);
     try {
-      const data = await api<PipelineStatus>("/api/pipeline/status");
+      const data = await api<PipelineStatus>(`/api/pipeline/status?${params}`, { signal: controller.signal });
+      if (controller.signal.aborted || conversationStateRef.current.selectedKey !== key) return;
+      if (data.conversation_identity && data.conversation_identity !== entry.summary.identity) return;
       setPipeline(data);
     } catch {
+      if (controller.signal.aborted || conversationStateRef.current.selectedKey !== key) return;
       setPipeline(
         DEVELOPMENT_FIXTURES_ENABLED
           ? demoPipeline
@@ -645,6 +659,7 @@ export function CortexApp() {
       });
       void api<MissionDetail>(`/api/missions/${response.id}`).then((mission) => {
         applyMissionDetail(key, response.id, mission);
+        void refreshPipeline();
       }).catch(() => undefined);
       notify("Mission autonome lancée.");
       return true;
@@ -815,20 +830,6 @@ export function CortexApp() {
         }}
         onRefresh={() => void refreshConversations()}
         onNewConversation={() => newConversation()}
-        onNewMission={() => {
-          const fresh = newConversation();
-          dispatchConversation({
-            type: "SELECT",
-            key: fresh.identity,
-            summary: {
-              ...fresh,
-              title: "Nouvelle mission",
-              preview: "ChatGPT orchestrera la mission",
-              status: "mission",
-            },
-          });
-          notify("Décris la mission dans le composer central.");
-        }}
         onOpenSettings={() => setSettingsOpen(true)}
       />
 

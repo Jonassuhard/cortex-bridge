@@ -365,6 +365,7 @@ export function ChatWorkspace({
               <span className={settings.never_delete_files ? "safe-label" : "warning-label"}><ShieldIcon size={12} /> {settings.never_delete_files ? "Aucune suppression" : "Suppression non protégée"}</span>
             </p>
           </div>
+          {conversation?.url && <a className="open-chatgpt-link" href={conversation.url} target="_blank" rel="noreferrer">Ouvrir dans ChatGPT</a>}
         </div>
         <div className="toolbar-center-status">
           <span className={`status-pill is-${chatTone}`} title="Statut de la connexion ChatGPT">

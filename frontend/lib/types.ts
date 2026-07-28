@@ -23,6 +23,8 @@ export interface ConversationSummary {
   unread?: number;
   pinned?: boolean;
   project?: boolean;
+  project_id?: string | null;
+  project_title?: string | null;
   archived?: boolean;
   /** Known only after the conversation has been synced once (P1d). */
   message_count?: number | null;
@@ -202,6 +204,7 @@ export interface PipelineEvent {
 }
 
 export interface PipelineStatus {
+  conversation_identity?: string | null;
   overall: HealthState;
   updated_at: string;
   components: PipelineComponent[];

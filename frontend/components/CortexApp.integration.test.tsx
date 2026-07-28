@@ -85,7 +85,7 @@ function defaultApi(path: string) {
   }
   if (path === "/api/status") return Promise.resolve(demoRuntime);
   if (path === "/api/transport/status") return Promise.resolve({ ...demoTransport, opt_in_accepted: true });
-  if (path === "/api/pipeline/status") return Promise.resolve(demoPipeline);
+  if (path.startsWith("/api/pipeline/status")) return Promise.resolve(demoPipeline);
   if (path === "/api/settings") return Promise.resolve(demoSettings);
   if (path === "/api/models/ollama") return Promise.resolve({ models: [] });
   if (path === "/api/models/chatgpt") return Promise.resolve({ models: [] });
@@ -376,7 +376,7 @@ describe("CortexApp conversation integration", () => {
       stopped: false,
     };
     network.api.mockImplementation((path: string) => {
-      if (path === "/api/pipeline/status") {
+      if (path.startsWith("/api/pipeline/status")) {
         return Promise.resolve({
           ...demoPipeline,
           active_mission_id: "mission-a",
@@ -528,7 +528,7 @@ describe("CortexApp conversation integration", () => {
     });
     const user = userEvent.setup();
     await readyApp();
-    await user.click(screen.getByRole("button", { name: "Nouvelle mission" }));
+    await user.click(screen.getByRole("button", { name: /Nouvelle conversation/ }));
     await user.type(composer(), "Mission canonique");
     await user.click(screen.getByRole("button", { name: "Exécuter…" }));
     await user.click(screen.getByRole("button", { name: "Démarrer en lecture seule" }));
@@ -627,7 +627,7 @@ describe("CortexApp conversation integration", () => {
     });
     const user = userEvent.setup();
     await readyApp();
-    await user.click(screen.getByRole("button", { name: /Nouveau chat/ }));
+    await user.click(screen.getByRole("button", { name: /Nouvelle conversation/ }));
 
     await user.type(composer(), "premier");
     await user.click(screen.getByTitle("Envoyer"));
