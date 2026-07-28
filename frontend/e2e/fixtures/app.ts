@@ -130,6 +130,7 @@ function apiResponse(pathname: string, searchParams: URLSearchParams, method: st
   }
   if (method === "GET" && pathname === "/api/pipeline/status") {
     return {
+      conversation_identity: searchParams.get("conversation_identity"),
       overall: "idle",
       updated_at: fixedTime,
       active_mission_id: null,
@@ -185,6 +186,8 @@ function apiResponse(pathname: string, searchParams: URLSearchParams, method: st
 }
 
 export async function installAppFixtureRoutes(page: Page): Promise<void> {
+  const activeWriters = new Map<string, string>();
+  const runs = new Map<string, { conversation_url: string; text: string; created_at: string }>();
   await page.route("**/*", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -197,12 +200,66 @@ export async function installAppFixtureRoutes(page: Page): Promise<void> {
       return;
     }
 
-    const body = apiResponse(url.pathname, url.searchParams, request.method());
-    const unhandled = typeof body === "object" && body !== null && "detail" in body;
+    const method = request.method();
+    const body = request.postDataJSON?.() as Record<string, unknown> | null;
+    const sendPaths = new Set(["/api/chat/send", "/api/chat/send-with-attachment", "/api/chat/send-screenshot"]);
+    if (method === "POST" && sendPaths.has(url.pathname)) {
+      const conversationUrl = String(body?.conversation_url || appFixtureData.conversations[0].url);
+      const identity = conversationUrl.split("/").filter(Boolean).at(-1) || "new";
+      if (!activeWriters.has(identity) && activeWriters.size >= 2) {
+        await route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ detail: "Deux conversations écrivent déjà. Votre brouillon et votre fichier sont conservés." }) });
+        return;
+      }
+      const runId = `fixture-run-${identity}-${runs.size + 1}`;
+      activeWriters.set(identity, runId);
+      runs.set(runId, { conversation_url: conversationUrl, text: String(body?.text || ""), created_at: fixedTime });
+      await route.fulfill({ status: 202, contentType: "application/json", body: JSON.stringify({ id: runId, state: "QUEUED", conversation_url: conversationUrl, text: String(body?.text || ""), created_at: fixedTime }) });
+      return;
+    }
+    if (method === "POST" && url.pathname === "/api/chat/attachments") {
+      await route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify({ token: "fixture-attachment-token", name: String(body?.name || "preuve.txt"), mime: "text/plain", kind: "file", size_bytes: 6 }) });
+      return;
+    }
+    if (method === "POST" && url.pathname === "/api/missions") {
+      await route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify({ id: "fixture-mission", state: "INITIALIZING_MISSION" }) });
+      return;
+    }
+    if (method === "POST" && (url.pathname.endsWith("/cancel") || url.pathname.includes("/approve") || url.pathname.includes("/reject"))) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ state: "CANCELLED" }) });
+      return;
+    }
+    const eventMatch = url.pathname.match(/^\/api\/chat\/runs\/([^/]+)\/events$/);
+    if (method === "GET" && eventMatch) {
+      const runId = eventMatch[1];
+      const run = runs.get(runId);
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+      const events = [
+        { seq: 1, ts: fixedTime, type: "status", payload: { state: "SENDING_TO_CHATGPT" } },
+        { seq: 2, ts: fixedTime, type: "delivery", payload: { delivered_at: fixedTime, canonical_url: run?.conversation_url } },
+        { seq: 3, ts: fixedTime, type: "stream", payload: { text: "Réponse fixture", first_response_at: fixedTime } },
+        { seq: 4, ts: fixedTime, type: "complete", payload: { text: "Réponse fixture", completed_at: fixedTime, latency: { total_ms: 240 } } },
+      ].map((event) => `data: ${JSON.stringify(event)}\n\n`).join("");
+      for (const [identity, activeRun] of activeWriters) if (activeRun === runId) activeWriters.delete(identity);
+      await route.fulfill({ status: 200, contentType: "text/event-stream", headers: { "cache-control": "no-cache" }, body: events });
+      return;
+    }
+    const runMatch = url.pathname.match(/^\/api\/chat\/runs\/([^/]+)$/);
+    if (method === "GET" && runMatch && runs.has(runMatch[1])) {
+      const run = runs.get(runMatch[1])!;
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ id: runMatch[1], ...run, state: "COMPLETED", response_text: "Réponse fixture" }) });
+      return;
+    }
+    if (method === "GET" && url.pathname === "/api/missions/fixture-mission") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ mission: { id: "fixture-mission", objective: String(body?.objective || "Exécution fixture"), workspace: appFixtureData.workspace, state: "COMPLETED", created_at: 1, executor_kind: "deterministic", executor_model_used: null, runtime_mode: "fixture", release_eligible: false }, timeline: {}, awaiting_approval: false, stopped: false }) });
+      return;
+    }
+
+    const responseBody = apiResponse(url.pathname, url.searchParams, method);
+    const unhandled = typeof responseBody === "object" && responseBody !== null && "detail" in responseBody;
     await route.fulfill({
       status: unhandled ? 404 : 200,
       contentType: "application/json",
-      body: JSON.stringify(body),
+      body: JSON.stringify(responseBody),
     });
   });
 }
@@ -211,6 +268,8 @@ export const test = base.extend<{ appPage: Page }>({
   appPage: async ({ page }, provide) => {
     await installAppFixtureRoutes(page);
     await page.goto("/");
+    await expect(page.getByRole("heading", { name: "Release checklist" })).toBeVisible();
+    await expect(page.locator(".message-assistant")).toBeVisible();
     await provide(page);
   },
 });

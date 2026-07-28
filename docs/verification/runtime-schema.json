@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cortex-bridge.local/schemas/runtime-verification.json",
+  "title": "Cortex Bridge runtime verification",
+  "type": "object",
+  "required": ["ok", "checks"],
+  "properties": {
+    "ok": { "type": "boolean" },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "ok", "detail"],
+        "properties": {
+          "name": { "type": "string" },
+          "ok": { "type": "boolean" },
+          "detail": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

@@ -227,6 +227,10 @@ export function CortexApp() {
   const terminalRefreshTimer = useRef<number | null>(null);
   const initialRequestsRef = useRef(new Map<ConversationKey, InitialRequestTask>());
 
+  useEffect(() => {
+    if (window.matchMedia?.("(max-width: 760px)").matches) setSidebarCollapsed(true);
+  }, []);
+
   const activeMission = useMemo(() => {
     if (missionDetail && nonTerminal(missionDetail.mission.state)) return missionDetail;
     return null;

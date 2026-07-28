@@ -18,13 +18,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import sys
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, field_validator
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
@@ -57,6 +58,7 @@ from transport.chatgpt_web.adapter import (  # noqa: E402
 )
 from transport.browser import create_transport  # noqa: E402
 import write_slots  # noqa: E402
+import attachments  # noqa: E402
 
 CONSOLE_DIR = Path(__file__).resolve().parent
 DATA_DIR = CONSOLE_DIR / "data"
@@ -316,6 +318,8 @@ async def _release_terminal_mission(rt: MissionRuntime) -> None:
 
 
 class MissionIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     objective: str
     workspace: str
     constraints: list[str] = []
@@ -329,7 +333,22 @@ class MissionIn(BaseModel):
     primary_executor: str | None = None
     fallback_executor: str | None = None
     allow_processes: bool = False
+    allow_write: bool = False
+    allow_network: bool = False
+    executor_kind: str = "deterministic"
+    attachment_tokens: list[str] = []
     mission_id: str = ""  # optional client-supplied UUID (idempotent submission)
+
+    @field_validator("attachment_tokens")
+    @classmethod
+    def validate_attachment_tokens(cls, tokens: list[str]) -> list[str]:
+        if len(tokens) > 20:
+            raise ValueError("at most 20 attachment tokens are allowed")
+        if any(not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", token) for token in tokens):
+            raise ValueError("attachment token is malformed")
+        if len(set(tokens)) != len(tokens):
+            raise ValueError("attachment tokens must be unique")
+        return tokens
 
 
 class ApprovalIn(BaseModel):
@@ -339,6 +358,23 @@ class ApprovalIn(BaseModel):
 
 class OptInIn(BaseModel):
     accepted: bool
+
+
+def resolve_attachment_token(token: str) -> dict:
+    resolver = getattr(attachments, "resolve_token", None)
+    if not callable(resolver):
+        raise ValueError("attachment token resolver is unavailable")
+    descriptor = resolver(token)
+    if not isinstance(descriptor, dict) or descriptor.get("token") != token:
+        raise ValueError("attachment token did not resolve to its descriptor")
+    required = {"token", "name", "mime", "kind", "size_bytes", "path"}
+    if not required.issubset(descriptor):
+        raise ValueError("attachment descriptor is incomplete")
+    return descriptor
+
+
+def resolve_mission_attachments(tokens: list[str]) -> list[dict]:
+    return [resolve_attachment_token(token) for token in tokens]
 
 
 # ------------------------------------------------------------------- helpers
@@ -682,6 +718,14 @@ async def create_mission(body: MissionIn) -> dict:
         raise HTTPException(status_code=422, detail="conversation_url must not be empty")
     if body.approval_policy not in _POLICY_MODES:
         raise HTTPException(status_code=422, detail=f"unknown approval policy {body.approval_policy}")
+    if body.executor_kind != "deterministic":
+        raise HTTPException(status_code=422, detail="only the proven deterministic executor is available")
+    if body.allow_network:
+        raise HTTPException(status_code=422, detail="network execution is not available in v0.5")
+    try:
+        attachment_descriptors = resolve_mission_attachments(body.attachment_tokens)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     mission_id = body.mission_id.strip() or str(uuid.uuid4())
     try:
@@ -705,6 +749,9 @@ async def create_mission(body: MissionIn) -> dict:
     except write_slots.SessionCapacityError:
         raise HTTPException(status_code=409, detail=write_slots.REFUSAL_MESSAGE)
     objective = _objective_with_constraints(body)
+    if attachment_descriptors:
+        names = ", ".join(str(descriptor["name"]) for descriptor in attachment_descriptors)
+        objective = f"{objective}\nServer-resolved attachments: {names}"
     try:
         store.create_mission(
             mission_id,
