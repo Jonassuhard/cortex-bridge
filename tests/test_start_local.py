@@ -19,7 +19,7 @@ class StartLocalTest(unittest.TestCase):
             fake_python = root_path / "python"
             fake_python.write_text(
                 "#!/usr/bin/env bash\n"
-                f"printf '%s\\n' \"$*\" >> {str(log)!r}\n",
+                f"printf '%s|%s\\n' \"$PLAYWRIGHT_BROWSERS_PATH\" \"$*\" >> {str(log)!r}\n",
                 encoding="utf-8",
             )
             fake_python.chmod(0o755)
@@ -39,8 +39,9 @@ class StartLocalTest(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             calls = log.read_text(encoding="utf-8").splitlines()
             self.assertEqual(len(calls), 2)
-            self.assertTrue(calls[0].startswith("-c "))
-            self.assertEqual(calls[1], "server.py")
+            expected_cache = str(root_path / "state" / "browser-cache")
+            self.assertTrue(calls[0].startswith(f"{expected_cache}|-c "))
+            self.assertEqual(calls[1], f"{expected_cache}|server.py")
             self.assertNotIn("pip install", "\n".join(calls))
             self.assertNotIn("playwright install", "\n".join(calls))
 

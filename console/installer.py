@@ -44,16 +44,20 @@ def _command(
     official_url: str,
     disk_bytes: int,
     rollback: str,
+    environment: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     if not argv or "sudo" in argv:
         raise ValueError("unsafe installer command")
-    return {
+    command = {
         "id": command_id,
         "argv": argv,
         "official_url": official_url,
         "disk_bytes": disk_bytes,
         "rollback": rollback,
     }
+    if environment:
+        command["environment"] = environment
+    return command
 
 
 def _owned_manifest_path() -> Path:
@@ -93,6 +97,7 @@ def build_install_plan(*, rebuild_ui: bool = False, ollama_model: str | None = N
                 "https://playwright.dev/python/docs/browsers",
                 500 * 1024 * 1024,
                 f"remove owned staging directory {staging}",
+                {"PLAYWRIGHT_BROWSERS_PATH": str(staging / "browser-cache")},
             ),
         ])
     if rebuild_ui:
@@ -142,7 +147,8 @@ def _run_command(command: dict[str, Any]) -> None:
     else:
         argv = command["argv"]
         cwd = ROOT / "frontend" if command["id"] in {"npm_ci", "build_ui"} else ROOT
-    subprocess.run(argv, cwd=cwd, check=True)
+    environment = {**os.environ, **command.get("environment", {})}
+    subprocess.run(argv, cwd=cwd, env=environment, check=True)
 
 
 def apply_install(plan: dict[str, Any], approved_hash: str) -> dict[str, Any]:
@@ -155,17 +161,30 @@ def apply_install(plan: dict[str, Any], approved_hash: str) -> dict[str, Any]:
     if staging.exists():
         raise RuntimeError(f"owned staging path already exists: {staging}")
     staging.mkdir(parents=True)
+    moved_resources: list[Path] = []
     try:
         for command in plan["commands"]:
             _run_command(command)
         staged_venv = staging / "venv"
         target_venv = paths.home / "venv"
+        staged_browser_cache = staging / "browser-cache"
+        target_browser_cache = paths.home / "browser-cache"
         if any(command["id"] == "create_venv" for command in plan["commands"]):
             if not staged_venv.is_dir():
                 raise RuntimeError("venv command did not produce the staged venv")
             if target_venv.exists():
                 raise RuntimeError("target venv appeared during installation")
+        if any(command["id"] == "install_browser" for command in plan["commands"]):
+            if not staged_browser_cache.is_dir():
+                raise RuntimeError("browser command did not produce the staged browser cache")
+            if target_browser_cache.exists():
+                raise RuntimeError("target browser cache appeared during installation")
+        if any(command["id"] == "create_venv" for command in plan["commands"]):
             staged_venv.replace(target_venv)
+            moved_resources.append(target_venv)
+        if any(command["id"] == "install_browser" for command in plan["commands"]):
+            staged_browser_cache.replace(target_browser_cache)
+            moved_resources.append(target_browser_cache)
         install_dir = paths.home / "install"
         install_dir.mkdir(parents=True, exist_ok=True)
         manifest_path = install_dir / "owned.json"
@@ -174,7 +193,11 @@ def apply_install(plan: dict[str, Any], approved_hash: str) -> dict[str, Any]:
             "owner": "cortex-bridge",
             "version": current_version(),
             "plan_hash": approved_hash,
-            "resources": [str(target_venv), str(manifest_path)],
+            "resources": [
+                str(target_venv),
+                str(target_browser_cache),
+                str(manifest_path),
+            ],
         }
         temporary = manifest_path.with_suffix(".tmp")
         temporary.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
@@ -183,6 +206,11 @@ def apply_install(plan: dict[str, Any], approved_hash: str) -> dict[str, Any]:
     except BaseException:
         if staging.is_dir() and not staging.is_symlink():
             shutil.rmtree(staging)
+        for resource in reversed(moved_resources):
+            if resource.is_dir() and not resource.is_symlink():
+                shutil.rmtree(resource)
+            elif resource.exists() or resource.is_symlink():
+                resource.unlink(missing_ok=True)
         raise
     return {"schema_version": 1, "status": "installed", "plan_hash": approved_hash, "manifest": str(manifest_path)}
 

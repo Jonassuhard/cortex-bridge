@@ -9,6 +9,7 @@ case "$CORTEX_HOME" in
   /*) ;;
   *) echo "CORTEX_HOME must be absolute" >&2; exit 2 ;;
 esac
+export PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-$CORTEX_HOME/browser-cache}"
 
 if [ -n "${PYTHON_BIN:-}" ]; then
   PYTHON="$PYTHON_BIN"

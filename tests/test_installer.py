@@ -27,7 +27,11 @@ class InstallerTest(unittest.TestCase):
             "with open(os.environ['RUNNER_LOG'], 'a', encoding='utf-8') as f: f.write(json.dumps(command, sort_keys=True)+'\\n')\n"
             "if os.environ.get('FAIL_STEP') == command['id']: raise SystemExit(9)\n"
             "if command['id'] == 'create_venv':\n"
-            " p=pathlib.Path(command['argv'][-1]); (p/'bin').mkdir(parents=True, exist_ok=True); (p/'bin'/'python').write_text('fixture', encoding='utf-8')\n",
+            " p=pathlib.Path(command['argv'][-1]); (p/'bin').mkdir(parents=True, exist_ok=True); (p/'bin'/'python').write_text('fixture', encoding='utf-8')\n"
+            "if command['id'] == 'install_browser':\n"
+            " p=command.get('environment', {}).get('PLAYWRIGHT_BROWSERS_PATH')\n"
+            " if p:\n"
+            "  cache=pathlib.Path(p); cache.mkdir(parents=True, exist_ok=True); (cache/'browser-fixture').write_text('fixture', encoding='utf-8')\n",
             encoding="utf-8",
         )
         self.runner.chmod(0o755)
@@ -84,6 +88,38 @@ class InstallerTest(unittest.TestCase):
         rebuild = self.dry_plan("--rebuild-ui")
         self.assertNotEqual(normal["plan_hash"], rebuild["plan_hash"])
         self.assertNotEqual(normal["commands"], rebuild["commands"])
+
+    def test_browser_download_is_declared_inside_owned_staging(self):
+        plan = self.dry_plan()
+        browser = next(command for command in plan["commands"] if command["id"] == "install_browser")
+
+        self.assertEqual(
+            browser.get("environment"),
+            {
+                "PLAYWRIGHT_BROWSERS_PATH": str(
+                    (self.cortex_home / ".install-staging" / "browser-cache").resolve()
+                )
+            },
+        )
+
+    def test_browser_runtime_is_moved_owned_and_removed(self):
+        self.approved_install()
+        browser_cache = (self.cortex_home / "browser-cache").resolve()
+        manifest = json.loads(
+            (self.cortex_home / "install" / "owned.json").read_text(encoding="utf-8")
+        )
+
+        self.assertTrue((browser_cache / "browser-fixture").is_file())
+        self.assertIn(str(browser_cache), manifest["resources"])
+
+        dry = self.run_script("uninstall.sh", "--dry-run", "--json")
+        self.assertEqual(dry.returncode, 0, dry.stderr)
+        plan = json.loads(dry.stdout)
+        applied = self.run_script(
+            "uninstall.sh", "--approve-plan", plan["plan_hash"], "--json"
+        )
+        self.assertEqual(applied.returncode, 0, applied.stderr)
+        self.assertFalse(browser_cache.exists())
 
     def test_ui_rebuild_uses_the_repository_npm_wrapper(self):
         rebuild = self.dry_plan("--rebuild-ui")
