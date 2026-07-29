@@ -1,6 +1,7 @@
 import { expect, test } from "./fixtures/app";
 
 test("two writers stay isolated and a third preserves its draft and file", async ({ appPage }) => {
+  test.setTimeout(90_000); // Ten cold reload cycles; product-level deadlines remain unchanged.
   const composer = appPage.getByRole("textbox", { name: "Message à envoyer" });
   for (let run = 0; run < 10; run += 1) {
     if (run > 0) await appPage.reload();
