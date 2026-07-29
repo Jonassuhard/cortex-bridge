@@ -538,6 +538,20 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .execution-preflight-dialog > footer { display: flex; justify-content: flex-end; gap: 9px; padding: 16px 20px; border-top: 1px solid var(--line); }
 .execution-preflight-dialog > footer button { min-height: 44px; padding: 0 14px; border: 1px solid var(--line-strong); border-radius: 10px; background: rgba(255,255,255,.04); cursor: pointer; }
 .execution-preflight-dialog > footer .approve-button { color: #fff; border-color: #4f8cff; background: #2563eb; }
+.chatgpt-connection-dialog { position: relative; inset: auto; width: min(520px, 100%); margin: 0; padding: 0; color: var(--ink); border: 1px solid var(--line-strong); border-radius: var(--radius-md); background: #101419; box-shadow: var(--shadow-lg); }
+.chatgpt-connection-dialog > header { display: grid; grid-template-columns: 38px 1fr 36px; gap: 12px; align-items: center; padding: 19px 20px; border-bottom: 1px solid var(--line); }
+.chatgpt-connection-dialog > header > span { display: grid; width: 38px; height: 38px; place-items: center; color: var(--blue-light); border-radius: 11px; background: var(--blue-soft); }
+.chatgpt-connection-dialog h2 { margin: 2px 0 0; font-size: 18px; }
+.connection-eyebrow { margin: 0; color: var(--muted); font: 10px var(--font-mono); text-transform: uppercase; letter-spacing: .08em; }
+.chatgpt-connection-dialog > header > button { width: 36px; height: 36px; color: var(--muted); border: 0; border-radius: 9px; background: transparent; font-size: 24px; cursor: pointer; }
+.connection-dialog-body { display: grid; grid-template-columns: auto minmax(0,1fr); gap: 11px; align-items: start; min-height: 100px; padding: 20px; }
+.connection-dialog-body p { margin: 0; color: var(--ink-soft); font-size: 14px; line-height: 1.55; }
+.connection-dialog-body small { grid-column: 2; color: var(--muted); font: 11px var(--font-mono); }
+.connection-spinner { width: 17px; height: 17px; margin-top: 2px; border: 2px solid rgba(79,140,255,.22); border-top-color: var(--blue-light); border-radius: 50%; animation: spin .7s linear infinite; }
+.chatgpt-connection-dialog > footer { display: flex; justify-content: flex-end; gap: 9px; padding: 15px 20px; border-top: 1px solid var(--line); }
+.chatgpt-connection-dialog > footer button { min-height: 44px; padding: 0 15px; color: var(--ink-soft); border: 1px solid var(--line-strong); border-radius: 10px; background: rgba(255,255,255,.04); cursor: pointer; }
+.chatgpt-connection-dialog > footer .approve-button { color: #fff; border-color: var(--blue); background: var(--blue); }
+.chatgpt-connection-dialog button:disabled, .status-profile-action:disabled { cursor: wait; opacity: .6; }
 .composer-footer { min-height: 27px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 5px 8px 0; color: var(--muted-2); font-size: 8px; }
 .composer-footer > span { display: flex; align-items: center; gap: 5px; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .composer-footer > div { display: flex; align-items: center; gap: 10px; }

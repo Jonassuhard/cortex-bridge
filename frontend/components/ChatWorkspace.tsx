@@ -68,6 +68,7 @@ interface ChatWorkspaceProps {
   onToggleSidebar: () => void;
   onToggleInspector: () => void;
   onOpenChatGPTProfile?: () => void;
+  chatGPTConnecting?: boolean;
   onSendChat: (key: ConversationKey, text: string) => Promise<boolean>;
   onSendAttachment: (key: ConversationKey, text: string, file: File) => Promise<boolean>;
   onSendScreenshot: (key: ConversationKey, text: string) => Promise<boolean>;
@@ -244,6 +245,7 @@ export function ChatWorkspace({
   onToggleSidebar,
   onToggleInspector,
   onOpenChatGPTProfile,
+  chatGPTConnecting = false,
   onSendChat,
   onSendAttachment,
   onSendScreenshot,
@@ -377,7 +379,7 @@ export function ChatWorkspace({
           )}
           {conversation?.url && <a className="open-chatgpt-link" href={conversation.url} target="_blank" rel="noreferrer">Ouvrir dans ChatGPT</a>}
         </div>
-        <StatusRail transport={chatActive ? "running" : availability.chatState} executor={availability.agentState} execution={mission?.mission.state || null} latencyMs={availability.transportLatencyMs} onOpenChatGPTProfile={onOpenChatGPTProfile} />
+        <StatusRail transport={chatActive ? "running" : availability.chatState} executor={availability.agentState} execution={mission?.mission.state || null} latencyMs={availability.transportLatencyMs} onOpenChatGPTProfile={onOpenChatGPTProfile} connecting={chatGPTConnecting} />
         <div className="toolbar-right">
           <button className={`toolbar-icon-button ${inspectorOpen ? "is-active" : ""}`} onClick={onToggleInspector} title="Détails du bridge (pipeline, logs, transport)"><PanelIcon /></button>
         </div>

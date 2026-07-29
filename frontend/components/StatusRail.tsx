@@ -9,6 +9,7 @@ interface StatusRailProps {
   execution?: string | null;
   latencyMs?: number | null;
   onOpenChatGPTProfile?: () => void;
+  connecting?: boolean;
 }
 
 const executionLabels: Record<string, string> = {
@@ -24,7 +25,7 @@ const executionLabels: Record<string, string> = {
   CANCELLED: "Annulé",
 };
 
-export function StatusRail({ transport, executor, execution, latencyMs, onOpenChatGPTProfile }: StatusRailProps) {
+export function StatusRail({ transport, executor, execution, latencyMs, onOpenChatGPTProfile, connecting = false }: StatusRailProps) {
   const chat = statusPresentation(transport);
   const local = statusPresentation(executor);
   const localLabel = execution ? executionLabels[execution] || local.label : local.label;
@@ -33,9 +34,9 @@ export function StatusRail({ transport, executor, execution, latencyMs, onOpenCh
       <span className={`status-pill is-${chat.tone}`} title="Statut de la connexion ChatGPT"><span className={`presence-dot is-${chat.tone}`} /><span>ChatGPT</span><strong>{chat.label}</strong></span>
       <span className={`status-pill is-${local.tone}`} title="Statut de l'agent exécutif local"><span className={`presence-dot is-${local.tone}`} /><span>Exécuteur</span><strong>{localLabel}</strong></span>
       {onOpenChatGPTProfile && (
-        <button className="status-profile-action" onClick={onOpenChatGPTProfile}>
+        <button type="button" className="status-profile-action" onClick={onOpenChatGPTProfile} disabled={connecting}>
           <BrowserIcon size={14} />
-          <span>Ouvrir le profil ChatGPT</span>
+          <span>{connecting ? "Vérification de ChatGPT…" : "Ouvrir et connecter ChatGPT"}</span>
         </button>
       )}
       {latencyMs != null && <span className="latency-badge"><ActivityIcon size={14} /><span>Latence</span><strong>{formatDuration(latencyMs)}</strong></span>}

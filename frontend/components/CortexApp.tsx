@@ -14,6 +14,9 @@ import {
 } from "@/lib/demo";
 import type {
   ChatGPTModelInfo,
+  ChromeConnectionResult,
+  ChromeExtensionPairing,
+  ChromeExtensionStatus,
   ChatRun,
   ConversationKey,
   ConversationSnapshot,
@@ -42,6 +45,7 @@ import { ChatWorkspace, type WorkspaceAvailability } from "./ChatWorkspace";
 import { PipelineInspector } from "./PipelineInspector";
 import { SettingsPanel } from "./SettingsPanel";
 import { OnboardingPanel } from "./OnboardingPanel";
+import { ChatGPTConnectionDialog } from "./ChatGPTConnectionDialog";
 
 const DEVELOPMENT_FIXTURES_ENABLED =
   process.env.NEXT_PUBLIC_CORTEX_DEVELOPMENT_FIXTURES === "1";
@@ -51,6 +55,17 @@ const INITIAL_UNAVAILABLE_STATE = createUnavailableClientState(
 const INITIAL_POST_DEADLINE_MS = 10_000;
 const INITIAL_POST_TIMEOUT_MESSAGE =
   "Envoi incertain : le délai de 10 secondes a expiré. Le brouillon et la pièce jointe sont conservés.";
+const INITIAL_CHROME_CONNECTION: ChromeConnectionResult = {
+  code: "CHECKING_CONNECTION",
+  state: "checking",
+  title: "Vérification de la connexion…",
+  message: "Cortex cherche l’extension puis vérifie l’onglet ChatGPT dans cette fenêtre Chrome.",
+  recoverable: false,
+  driver: "chrome_extension",
+  url: null,
+  tab_id: null,
+  window_id: null,
+};
 
 interface InitialRequestTask {
   token: symbol;
@@ -226,6 +241,9 @@ export function CortexApp() {
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [demoMode, setDemoMode] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [chatGPTConnection, setChatGPTConnection] = useState<ChromeConnectionResult | null>(null);
+  const [connectionDialogOpen, setConnectionDialogOpen] = useState(false);
+  const [connectionBusy, setConnectionBusy] = useState(false);
   const missionDetailRequestEpoch = useRef(createRequestEpoch());
   const pipelineRequestRef = useRef<{ controller: AbortController; key: ConversationKey } | null>(null);
   const terminalRefreshTimer = useRef<number | null>(null);
@@ -247,11 +265,19 @@ export function CortexApp() {
     const transportComponent = pipeline.components.find((component) => component.id === "transport");
     const pipelineState = transportComponent?.state || pipeline.overall;
     return {
-      chatState: pipelineState === "unknown" ? transportHealth : pipelineState,
+      chatState: chatGPTConnection
+        ? chatGPTConnection.state === "connected"
+          ? "connected"
+          : chatGPTConnection.state === "manual_action"
+            ? "manual_action"
+            : chatGPTConnection.state === "checking"
+              ? "waiting"
+              : "disconnected"
+        : pipelineState === "unknown" ? transportHealth : pipelineState,
       agentState: runtime.executor_available ? "available" : "unavailable",
       transportLatencyMs: transportComponent?.latency_ms ?? null,
     };
-  }, [pipeline, runtime.executor_available, transportHealth]);
+  }, [chatGPTConnection, pipeline, runtime.executor_available, transportHealth]);
 
   const notify = useCallback((message: string) => {
     setToast(message);
@@ -284,15 +310,90 @@ export function CortexApp() {
     }
   }, []);
 
+  const applyConnectionResult = useCallback((result: ChromeConnectionResult) => {
+    setChatGPTConnection(result);
+    if (result.code === "CONNECTED") {
+      setConnectionDialogOpen(false);
+      notify("ChatGPT connecté dans cette fenêtre Chrome.");
+    } else {
+      setConnectionDialogOpen(true);
+    }
+  }, [notify]);
+
+  const waitForExtensionPairing = useCallback(async () => {
+    const deadline = Date.now() + 2_000;
+    while (Date.now() < deadline) {
+      const status = await api<ChromeExtensionStatus>("/api/chrome-extension/status");
+      if (status.paired) return true;
+      await new Promise((resolve) => window.setTimeout(resolve, 120));
+    }
+    return false;
+  }, []);
+
   const openChatGPTProfile = useCallback(async () => {
+    setConnectionBusy(true);
+    setChatGPTConnection(INITIAL_CHROME_CONNECTION);
+    setConnectionDialogOpen(true);
     try {
-      await postJson("/api/onboarding/browser/open", {});
-      notify("Profil ChatGPT ouvert. Termine la connexion dans cette fenêtre.");
+      const pairing = await postJson<ChromeExtensionPairing>(
+        "/api/chrome-extension/pairing",
+        {},
+      );
+      window.postMessage(
+        {
+          source: "cortex-bridge-ui",
+          type: "CORTEX_PAIR_EXTENSION",
+          token: pairing.token,
+        },
+        window.location.origin,
+      );
+      await waitForExtensionPairing();
+      const result = await postJson<ChromeConnectionResult>(
+        "/api/chrome-extension/open",
+        {},
+      );
+      applyConnectionResult(result);
       await refreshRuntime();
     } catch (error) {
-      notify(error instanceof Error ? error.message : "Impossible d’ouvrir le profil ChatGPT.");
+      applyConnectionResult({
+        ...INITIAL_CHROME_CONNECTION,
+        code: "CONNECTION_FAILED",
+        state: "disconnected",
+        title: "Connexion Chrome impossible",
+        message: error instanceof Error ? error.message : "Cortex ne peut pas joindre l’extension Chrome.",
+        recoverable: true,
+      });
+    } finally {
+      setConnectionBusy(false);
     }
-  }, [notify, refreshRuntime]);
+  }, [applyConnectionResult, refreshRuntime, waitForExtensionPairing]);
+
+  const retryChatGPTConnection = useCallback(async () => {
+    if (["EXTENSION_MISSING", "EXTENSION_UNPAIRED", "CONNECTION_FAILED"].includes(chatGPTConnection?.code || "")) {
+      await openChatGPTProfile();
+      return;
+    }
+    setConnectionBusy(true);
+    try {
+      const result = await postJson<ChromeConnectionResult>(
+        "/api/chrome-extension/retry",
+        {},
+      );
+      applyConnectionResult(result);
+      await refreshRuntime();
+    } catch (error) {
+      applyConnectionResult({
+        ...INITIAL_CHROME_CONNECTION,
+        code: "CONNECTION_FAILED",
+        state: "disconnected",
+        title: "Vérification Chrome impossible",
+        message: error instanceof Error ? error.message : "La vérification de ChatGPT a échoué.",
+        recoverable: true,
+      });
+    } finally {
+      setConnectionBusy(false);
+    }
+  }, [applyConnectionResult, chatGPTConnection?.code, openChatGPTProfile, refreshRuntime]);
 
   const refreshPipeline = useCallback(async () => {
     const key = conversationStateRef.current.selectedKey;
@@ -884,6 +985,7 @@ export function CortexApp() {
         onToggleSidebar={() => setSidebarCollapsed((value) => !value)}
         onToggleInspector={() => setInspectorOpen((value) => !value)}
         onOpenChatGPTProfile={() => void openChatGPTProfile()}
+        chatGPTConnecting={connectionBusy}
         onSendChat={sendChat}
         onSendAttachment={sendAttachment}
         onSendScreenshot={sendScreenshot}
@@ -932,6 +1034,16 @@ export function CortexApp() {
       />
 
       {!settingsOpen && <OnboardingPanel onOpenSettings={() => setSettingsOpen(true)} />}
+
+      {chatGPTConnection && (
+        <ChatGPTConnectionDialog
+          open={connectionDialogOpen}
+          result={chatGPTConnection}
+          busy={connectionBusy}
+          onRetry={() => void retryChatGPTConnection()}
+          onClose={() => setConnectionDialogOpen(false)}
+        />
+      )}
 
       {demoMode && <div className="demo-mode-badge">development_fixture · aucune preuve de release</div>}
       {toast && <output className="app-toast">{toast}</output>}

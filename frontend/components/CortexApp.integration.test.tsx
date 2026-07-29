@@ -90,6 +90,9 @@ function defaultApi(path: string) {
   if (path === "/api/models/ollama") return Promise.resolve({ models: [] });
   if (path === "/api/models/chatgpt") return Promise.resolve({ models: [] });
   if (path === "/api/transport/capabilities") return Promise.resolve({ upload_file: true, take_screenshot: true });
+  if (path === "/api/chrome-extension/status") {
+    return Promise.resolve({ state: "paired", extension_connected: true, paired: true, pending_commands: 0 });
+  }
   if (path === "/api/onboarding") return Promise.resolve({ completed: true, ready: true, checks: [] });
   return Promise.reject(new Error(`Unexpected GET ${path}`));
 }
@@ -119,6 +122,60 @@ afterEach(() => {
 });
 
 describe("CortexApp conversation integration", () => {
+  it("pairs Chrome, opens ChatGPT, explains login, and retries the existing tab", async () => {
+    const token = "a".repeat(43);
+    const postMessage = vi.spyOn(window, "postMessage").mockImplementation(() => undefined);
+    network.postJson.mockImplementation((path: string) => {
+      if (path === "/api/chrome-extension/pairing") {
+        return Promise.resolve({ token, expires_in_seconds: 60 });
+      }
+      if (path === "/api/chrome-extension/open") {
+        return Promise.resolve({
+          code: "LOGIN_REQUIRED",
+          state: "manual_action",
+          title: "Connexion à ChatGPT requise",
+          message: "ChatGPT est ouvert dans Chrome, mais tu n’es pas connecté. Connecte-toi dans l’onglet ChatGPT, puis réessaie.",
+          recoverable: true,
+          driver: "chrome_extension",
+          url: "https://chatgpt.com/auth/login",
+          tab_id: 42,
+          window_id: 7,
+        });
+      }
+      if (path === "/api/chrome-extension/retry") {
+        return Promise.resolve({
+          code: "CONNECTED",
+          state: "connected",
+          title: "ChatGPT connecté",
+          message: "Cortex est lié à cet onglet Chrome.",
+          recoverable: false,
+          driver: "chrome_extension",
+          url: "https://chatgpt.com/c/abc",
+          tab_id: 42,
+          window_id: 7,
+        });
+      }
+      return Promise.reject(new Error(`Unexpected POST ${path}`));
+    });
+    const user = userEvent.setup();
+    await readyApp();
+
+    await user.click(screen.getByRole("button", { name: "Ouvrir et connecter ChatGPT" }));
+
+    expect(await screen.findByRole("heading", { name: "Connexion à ChatGPT requise" })).toBeInTheDocument();
+    expect(postMessage).toHaveBeenCalledWith(
+      { source: "cortex-bridge-ui", type: "CORTEX_PAIR_EXTENSION", token },
+      window.location.origin,
+    );
+    expect(network.postJson.mock.calls.map(([path]) => path)).toContain("/api/chrome-extension/open");
+
+    await user.click(screen.getByRole("button", { name: "Réessayer" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("heading", { name: "Connexion à ChatGPT requise" })).not.toBeInTheDocument();
+    });
+    expect(network.postJson.mock.calls.map(([path]) => path)).toContain("/api/chrome-extension/retry");
+  });
+
   it("neutralizes every mission-specific pipeline field when no selected mission matches", () => {
     const projected = projectPipelineForConversation({
       ...demoPipeline,

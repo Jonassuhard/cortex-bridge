@@ -153,6 +153,9 @@ function apiResponse(pathname: string, searchParams: URLSearchParams, method: st
   if (method === "GET" && pathname === "/api/transport/capabilities") {
     return { upload_file: true, take_screenshot: true };
   }
+  if (method === "GET" && pathname === "/api/chrome-extension/status") {
+    return { state: "paired", extension_connected: true, paired: true, pending_commands: 0 };
+  }
   if (method === "GET" && pathname === "/api/pipeline/status") {
     return {
       conversation_identity: searchParams.get("conversation_identity"),
@@ -199,7 +202,7 @@ function apiResponse(pathname: string, searchParams: URLSearchParams, method: st
       persist_conversation_history: false,
       response_stability_seconds: 2,
       chat_timeout_seconds: 10,
-      browser_transport: "playwright",
+      browser_transport: "chrome_extension",
       browser_profile_root: appFixtureData.workspace,
     };
   }
@@ -228,6 +231,38 @@ export async function installAppFixtureRoutes(page: Page): Promise<void> {
     const method = request.method();
     const body = request.postDataJSON?.() as Record<string, unknown> | null;
     const sendPaths = new Set(["/api/chat/send", "/api/chat/send-with-attachment", "/api/chat/send-screenshot"]);
+    if (method === "POST" && url.pathname === "/api/chrome-extension/pairing") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ token: "a".repeat(43), expires_in_seconds: 60 }) });
+      return;
+    }
+    if (method === "POST" && url.pathname === "/api/chrome-extension/open") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+        code: "LOGIN_REQUIRED",
+        state: "manual_action",
+        title: "Connexion à ChatGPT requise",
+        message: "ChatGPT est ouvert dans Chrome, mais tu n’es pas connecté. Connecte-toi dans l’onglet ChatGPT, puis réessaie.",
+        recoverable: true,
+        driver: "chrome_extension",
+        url: "https://chatgpt.com/auth/login",
+        tab_id: 42,
+        window_id: 7,
+      }) });
+      return;
+    }
+    if (method === "POST" && url.pathname === "/api/chrome-extension/retry") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+        code: "CONNECTED",
+        state: "connected",
+        title: "ChatGPT connecté",
+        message: "Cortex est lié à cet onglet Chrome.",
+        recoverable: false,
+        driver: "chrome_extension",
+        url: "https://chatgpt.com/c/release-checklist",
+        tab_id: 42,
+        window_id: 7,
+      }) });
+      return;
+    }
     if (method === "POST" && sendPaths.has(url.pathname)) {
       const conversationUrl = String(body?.conversation_url || appFixtureData.conversations[0].url);
       const identity = conversationUrl.split("/").filter(Boolean).at(-1) || "new";

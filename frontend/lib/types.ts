@@ -192,6 +192,30 @@ export interface TransportProbeStatus {
   failures?: string[];
 }
 
+export interface ChromeExtensionPairing {
+  token: string;
+  expires_in_seconds: number;
+}
+
+export interface ChromeExtensionStatus {
+  state: "disconnected" | "awaiting_extension" | "extension_detected" | "paired";
+  extension_connected: boolean;
+  paired: boolean;
+  pending_commands: number;
+}
+
+export interface ChromeConnectionResult {
+  code: string;
+  state: "disconnected" | "checking" | "manual_action" | "connected";
+  title: string;
+  message: string;
+  recoverable: boolean;
+  driver: string;
+  url: string | null;
+  tab_id: number | null;
+  window_id: number | null;
+}
+
 export interface PipelineComponent {
   id: string;
   label: string;
