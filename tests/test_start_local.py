@@ -19,19 +19,22 @@ class StartLocalTest(unittest.TestCase):
             fake_python = root_path / "python"
             fake_python.write_text(
                 "#!/usr/bin/env bash\n"
-                f"printf '%s|%s\\n' \"$PLAYWRIGHT_BROWSERS_PATH\" \"$*\" >> {str(log)!r}\n",
+                f"printf '%s|%s|%s\\n' \"$PLAYWRIGHT_BROWSERS_PATH\" \"$PYTHONPATH\" \"$*\" >> {str(log)!r}\n",
                 encoding="utf-8",
             )
             fake_python.chmod(0o755)
+            environment = {
+                **os.environ,
+                "PYTHON_BIN": str(fake_python),
+                "CORTEX_HOME": str(root_path / "state"),
+                "PORT": "18420",
+            }
+            environment.pop("PYTHONPATH", None)
+            environment.pop("PLAYWRIGHT_BROWSERS_PATH", None)
             result = subprocess.run(
                 ["bash", str(REPO_ROOT / "scripts" / "start-local.sh")],
                 cwd=REPO_ROOT,
-                env={
-                    **os.environ,
-                    "PYTHON_BIN": str(fake_python),
-                    "CORTEX_HOME": str(root_path / "state"),
-                    "PORT": "18420",
-                },
+                env=environment,
                 text=True,
                 capture_output=True,
                 timeout=5,
@@ -40,8 +43,9 @@ class StartLocalTest(unittest.TestCase):
             calls = log.read_text(encoding="utf-8").splitlines()
             self.assertEqual(len(calls), 2)
             expected_cache = str(root_path / "state" / "browser-cache")
-            self.assertTrue(calls[0].startswith(f"{expected_cache}|-c "))
-            self.assertEqual(calls[1], f"{expected_cache}|server.py")
+            expected_pythonpath = f"{REPO_ROOT / 'console'}:{REPO_ROOT}"
+            self.assertTrue(calls[0].startswith(f"{expected_cache}|{expected_pythonpath}|-c "))
+            self.assertEqual(calls[1], f"{expected_cache}|{expected_pythonpath}|server.py")
             self.assertNotIn("pip install", "\n".join(calls))
             self.assertNotIn("playwright install", "\n".join(calls))
 

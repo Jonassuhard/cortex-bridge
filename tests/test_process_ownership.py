@@ -87,6 +87,69 @@ class ProcessOwnershipTest(unittest.TestCase):
 
 
 class CortexScriptOwnershipTest(unittest.TestCase):
+    def test_clean_environment_propagates_pythonpath_through_lifecycle(self):
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            probe = socket.socket()
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+            probe.close()
+            server_environment = root_path / "server-pythonpath.txt"
+            fake_server = root_path / "fake_server.py"
+            fake_server.write_text(
+                "from http.server import BaseHTTPRequestHandler, HTTPServer\n"
+                "import os\n"
+                "from pathlib import Path\n"
+                f"Path({str(server_environment)!r}).write_text("
+                "os.environ.get('PYTHONPATH', ''), encoding='utf-8')\n"
+                "class Handler(BaseHTTPRequestHandler):\n"
+                " def do_GET(self):\n"
+                "  self.send_response(200); self.send_header('Content-Type', 'application/json'); self.end_headers(); self.wfile.write(b'{}')\n"
+                " def log_message(self, *_args): pass\n"
+                "HTTPServer(('127.0.0.1', int(os.environ['PORT'])), Handler).serve_forever()\n",
+                encoding="utf-8",
+            )
+            python_wrapper = root_path / "python"
+            python_wrapper.write_text(
+                "#!/bin/sh\n"
+                f"if [ \"$1\" = server.py ]; then exec {sys.executable!r} "
+                f"{str(fake_server)!r}; fi\n"
+                f"exec {sys.executable!r} \"$@\"\n",
+                encoding="utf-8",
+            )
+            python_wrapper.chmod(0o755)
+            environment = {
+                **os.environ,
+                "CORTEX_HOME": str(root_path / "cortex-home"),
+                "PYTHON_BIN": str(python_wrapper),
+                "PORT": str(port),
+            }
+            environment.pop("PYTHONPATH", None)
+
+            started = subprocess.run(
+                ["bash", str(ROOT / "scripts" / "cortex.sh"), "start"],
+                cwd=ROOT,
+                env=environment,
+                capture_output=True,
+                text=True,
+                timeout=20,
+            )
+            try:
+                self.assertEqual(started.returncode, 0, started.stdout + started.stderr)
+                self.assertEqual(
+                    server_environment.read_text(encoding="utf-8"),
+                    f"{ROOT / 'console'}:{ROOT}",
+                )
+            finally:
+                subprocess.run(
+                    ["bash", str(ROOT / "scripts" / "cortex.sh"), "stop"],
+                    cwd=ROOT,
+                    env=environment,
+                    capture_output=True,
+                    text=True,
+                    timeout=20,
+                )
+
     def _foreign_environment(self, root: Path) -> tuple[dict[str, str], Path]:
         bin_dir = root / "bin"
         bin_dir.mkdir()

@@ -10,6 +10,7 @@ case "$CORTEX_HOME" in
   *) echo "CORTEX_HOME must be absolute" >&2; exit 2 ;;
 esac
 export PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-$CORTEX_HOME/browser-cache}"
+export PYTHONPATH="$ROOT/console:$ROOT${PYTHONPATH:+:$PYTHONPATH}"
 
 if [ -n "${PYTHON_BIN:-}" ]; then
   PYTHON="$PYTHON_BIN"
@@ -29,7 +30,7 @@ COMMAND="${1:-help}"
 OUTPUT_MODE="${2:-}"
 
 _ownership_status() {
-  PYTHONPATH="$ROOT/console:$ROOT" "$PYTHON" "$OWNERSHIP" status \
+  "$PYTHON" "$OWNERSHIP" status \
     --record "$PID_RECORD" --port "$PORT"
 }
 
@@ -87,7 +88,7 @@ case "$COMMAND" in
     for _attempt in $(seq 1 40); do
       if curl -sf --max-time 1 "http://127.0.0.1:$PORT/api/status" >/dev/null 2>&1 \
         && [ "$(_port_pid)" = "$pid" ]; then
-        PYTHONPATH="$ROOT/console:$ROOT" "$PYTHON" "$OWNERSHIP" capture \
+        "$PYTHON" "$OWNERSHIP" capture \
           --record "$PID_RECORD" --pid "$pid" --port "$PORT" --token "$instance_token" >/dev/null
         rm -f "$PIDS_DIR/launch.pid"
         echo "Cortex Bridge ready: http://127.0.0.1:$PORT"
@@ -143,7 +144,6 @@ case "$COMMAND" in
     ;;
 
   doctor)
-    export PYTHONPATH="$ROOT/console:$ROOT${PYTHONPATH:+:$PYTHONPATH}"
     if [ -n "$OUTPUT_MODE" ]; then
       exec "$PYTHON" "$ROOT/console/installer.py" doctor "$OUTPUT_MODE"
     fi
