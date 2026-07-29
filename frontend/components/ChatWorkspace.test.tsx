@@ -149,6 +149,13 @@ function fileInput(container: HTMLElement): HTMLInputElement {
 }
 
 describe("ChatWorkspace controlled composer", () => {
+  it("keeps the composer disabled until a conversation is selected", () => {
+    render(<ControlledWorkspace initialState={createConversationState([summary("a")])} />);
+
+    expect(screen.getByRole("textbox", { name: "Message à envoyer" })).toBeDisabled();
+    expect(screen.getByTitle("Envoyer")).toBeDisabled();
+  });
+
   it("offers one explicit reload after a conversation deadline", async () => {
     const stale = {
       ...summary("a"),

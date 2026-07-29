@@ -266,7 +266,7 @@ export function ChatWorkspace({
   const missionRunning = !!activeMissionState && !["COMPLETED", "FAILED", "BLOCKED", "CANCELLED"].includes(activeMissionState);
   const chatActive = !!chatRun && !["COMPLETED", "FAILED", "CANCELLED", "DELIVERY_UNCERTAIN"].includes(chatRun.state);
   const ambiguousProvisional = !!conversationKey && rekeyConflict?.fromKey === conversationKey;
-  const composerBlocked = sending || ambiguousProvisional;
+  const composerBlocked = !conversationKey || sending || ambiguousProvisional;
   const executionBlocked = composerBlocked
     || missionRunning
     || chatActive

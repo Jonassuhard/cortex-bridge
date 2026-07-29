@@ -1,7 +1,4 @@
 import { defineConfig } from "@playwright/test";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-
 export default defineConfig({
   testDir: "./e2e",
   testMatch: "**/*.spec.ts",
@@ -10,12 +7,12 @@ export default defineConfig({
   forbidOnly: true,
   retries: process.env.CI ? 2 : 0,
   reporter: [["list"]],
-  outputDir: join(tmpdir(), "cortex-bridge-playwright", "artifacts"),
+  outputDir: "test-results",
   use: {
     baseURL: "http://127.0.0.1:3420",
     browserName: "chromium",
-    trace: "off",
-    screenshot: "off",
+    trace: "retain-on-failure",
+    screenshot: "only-on-failure",
     video: "off",
   },
   webServer: {
