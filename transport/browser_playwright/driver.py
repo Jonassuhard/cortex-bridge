@@ -21,6 +21,7 @@ _SESSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _MAX_LOGICAL_PAGES = 8
 _PROFILE_NAME = "cortex-bridge-ui"
 _IDLE_SHUTDOWN_SECONDS = 0.5
+_CHATGPT_HOME_URL = "https://chatgpt.com/"
 
 
 def _driver_error(message: str, exc: BaseException | None = None) -> Exception:
@@ -178,6 +179,7 @@ class _PlaywrightRuntime:
                         concurrent.futures.Future()
                     )
                     self._calls.put(_WorkerCall("shutdown", None, None, shutdown))
+                    future = shutdown
         return future, thread
 
     def _shutdown_if_idle(self) -> None:
@@ -505,7 +507,7 @@ class PlaywrightBrowserDriver:
             }
 
     async def open_login(self) -> dict[str, Any]:
-        await self.navigate("https://chatgpt.com/")
+        await self.navigate(_CHATGPT_HOME_URL)
         return await self.health()
 
     @staticmethod
@@ -589,6 +591,9 @@ class PlaywrightBrowserDriver:
     async def probe(self) -> dict[str, Any]:
         from transport.chatgpt_web.adapter import _PROBE_JS, _summarize_probe
 
+        tabs = await self.list_tabs()
+        if not tabs or tabs[-1]["url"] == "about:blank":
+            await self.navigate(_CHATGPT_HOME_URL)
         return _summarize_probe(
             self._decode_json(await self.evaluate(_PROBE_JS), "probe result")
         )
@@ -598,7 +603,7 @@ class PlaywrightBrowserDriver:
 
         tabs = await self.list_tabs()
         if not tabs or tabs[-1]["url"] == "about:blank":
-            await self.navigate("https://chatgpt.com/")
+            await self.navigate(_CHATGPT_HOME_URL)
         raw = await self.evaluate(_CONVERSATIONS_JS)
         try:
             return json.loads(raw) if isinstance(raw, str) else list(raw or [])

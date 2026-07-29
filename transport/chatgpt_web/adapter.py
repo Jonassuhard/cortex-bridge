@@ -33,6 +33,7 @@ import inspect
 import json
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
 from typing import Any
@@ -1117,9 +1118,17 @@ _STATE_JS = r"""
   const text = document.body ? document.body.innerText.slice(0, 8000) : '';
   const composerSel = first(COMPOSER_CANDIDATES);
   const composer = composerSel ? q(composerSel) : null;
+  const isLoginControl = (el) => {
+    const testid = (el.getAttribute('data-testid') || '').trim();
+    const label = ((el.getAttribute('aria-label') || '') + ' ' + (el.textContent || ''))
+      .replace(/\s+/g, ' ').trim();
+    return /(^|[-_])(login|sign[-_]?up)([-_]|$)/i.test(testid)
+      || /^(login|log in|sign up|se connecter|connexion|s['’]inscrire|créer un compte)$/i.test(label);
+  };
+  const loginControl = qAll('a, button').find(isLoginControl);
   // Blockers (conservative; see docs/phase5-dom-contract.md §f):
   let blocker = null;
-  if (!composer && /log in|sign up|se connecter|inscrivez-vous/i.test(text)) blocker = 'login';
+  if (loginControl || (!composer && /log in|sign up|se connecter|inscrivez-vous/i.test(text))) blocker = 'login';
   if (/verify you are human|v\u00e9rifiez que vous \u00eates humain|cf-chl|challenge-platform/i.test(text)
       || q('#cf-chl-widget, .cf-turnstile')) blocker = 'captcha';
   if (/rate limit|too many requests|limite de requ\u00eates/i.test(text)) blocker = 'rate_limit';
@@ -1482,6 +1491,20 @@ _PROBE_JS = r"""
     type: b.getAttribute('type'),
     disabled: !!b.disabled,
   }));
+  const controls = Array.from(document.querySelectorAll('a, button'));
+  const isLoginControl = (el) => {
+    const testid = (el.getAttribute('data-testid') || '').trim();
+    const label = ((el.getAttribute('aria-label') || '') + ' ' + (el.textContent || ''))
+      .replace(/\s+/g, ' ').trim();
+    return /(^|[-_])(login|sign[-_]?up)([-_]|$)/i.test(testid)
+      || /^(login|log in|sign up|se connecter|connexion|s['’]inscrire|créer un compte)$/i.test(label);
+  };
+  const loginControls = controls.filter(isLoginControl).length;
+  const accountControls = controls.filter((el) =>
+    /profile|profil|account|compte/i.test(
+      [el.getAttribute('data-testid') || '', el.getAttribute('aria-label') || ''].join(' ')
+    )
+  ).length;
   return JSON.stringify({
     url: location.href,
     title: document.title,
@@ -1491,6 +1514,10 @@ _PROBE_JS = r"""
       contenteditables: qCount('[contenteditable="true"]'),
       textareas: qCount('textarea'),
       message_nodes: qCount('[data-message-author-role]'),
+      conversation_links: qCount('a[href^="/c/"]'),
+      sidebar_conversation_links: qCount('nav a[href^="/c/"], aside a[href^="/c/"]'),
+      login_controls: loginControls,
+      account_controls: accountControls,
     },
   });
 })()
@@ -1500,14 +1527,28 @@ _PROBE_JS = r"""
 def _summarize_probe(result: dict) -> dict:
     """Add the top-level ok/failures/warnings summary to a raw probe payload.
 
-    The transport is considered healthy when the composer and message list
-    resolve. Send/stop buttons are contextual — the send button only exists
-    once the composer holds text (a read-only probe cannot type), and stop
-    only while streaming — so they are reported as warnings, never failures.
+    The transport is considered healthy when the composer resolves. Message
+    nodes are also required inside an existing ``/c/`` conversation, but not
+    on the valid ChatGPT home/new-chat page. Send/stop buttons are contextual
+    and therefore remain warnings.
     """
     roles = result.get("roles") or {}
-    failures = [name for name in ("composer", "messages") if not (roles.get(name) or {}).get("ok")]
+    parsed_url = urllib.parse.urlparse(str(result.get("url") or ""))
+    on_chatgpt_home = (
+        (parsed_url.hostname or "").lower() in {"chatgpt.com", "www.chatgpt.com"}
+        and parsed_url.path in {"", "/"}
+    )
+    failures = []
+    if not (roles.get("composer") or {}).get("ok"):
+        failures.append("composer")
+    if not on_chatgpt_home and not (roles.get("messages") or {}).get("ok"):
+        failures.append("messages")
     warnings = [name for name in ("send", "stop") if not (roles.get(name) or {}).get("ok")]
+    if on_chatgpt_home and not (roles.get("messages") or {}).get("ok"):
+        warnings.insert(0, "messages")
+    if int((result.get("diagnostics") or {}).get("login_controls") or 0) > 0:
+        result["blocker"] = "login"
+        failures.append("login")
     result["failures"] = failures
     result["warnings"] = warnings
     result["ok"] = not failures

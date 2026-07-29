@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, HTTPException
 
@@ -78,11 +79,13 @@ async def run_checks() -> list[dict[str, Any]]:
     ))
 
     # 3. Configured browser driver
+    driver = None
     try:
-        health = await browser_driver_factory(
+        driver = browser_driver_factory(
             session="cortex-bridge-ui",
             settings=settings,
-        ).health()
+        )
+        health = await driver.health()
     except Exception:
         health = {
             "connected": False,
@@ -98,13 +101,27 @@ async def run_checks() -> list[dict[str, Any]]:
         "Ouvre le profil navigateur dédié puis connecte-toi manuellement à ChatGPT.",
     ))
 
-    # 4. ChatGPT tab open
+    # 4. ChatGPT page usable
     tabs = int(health.get("tabs") or 0)
+    probe: dict[str, Any] = {}
+    if bridge_ok and tabs > 0 and driver is not None:
+        try:
+            probe = await driver.probe()
+        except Exception as exc:
+            probe = {"ok": False, "error": str(exc)}
+    probe_url = str(probe.get("url") or "")
+    probe_host = (urlparse(probe_url).hostname or "").lower()
+    chatgpt_ok = (
+        bridge_ok
+        and tabs > 0
+        and bool(probe.get("ok"))
+        and probe_host in {"chatgpt.com", "www.chatgpt.com"}
+    )
     checks.append(_check(
-        "chatgpt-tab", "Un onglet ChatGPT est ouvert",
-        bridge_ok and tabs > 0,
-        f"{tabs} onglet(s) pilotable(s)" if bridge_ok and tabs > 0 else "Aucun onglet pilotable",
-        "Ouvre chatgpt.com dans Chrome et connecte-toi à ton compte.",
+        "chatgpt-tab", "ChatGPT est prêt",
+        chatgpt_ok,
+        "Composeur ChatGPT détecté" if chatgpt_ok else "La page ChatGPT n'est pas encore utilisable",
+        "Ouvre le profil ChatGPT, termine la connexion ou la vérification affichée, puis réessaie.",
     ))
 
     # 5. Default workspace exists

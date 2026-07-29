@@ -111,8 +111,9 @@ class PlaywrightDriverTest(unittest.IsolatedAsyncioTestCase):
             thread = runtime._thread
             if thread is not None:
                 # join() returns as soon as the condition is met. The bound
-                # covers the 0.5 s warm-handoff window plus Chromium teardown.
-                await asyncio.to_thread(thread.join, 5)
+                # covers the 0.5 s warm-handoff window plus loaded-macOS
+                # Chromium teardown while remaining strictly bounded.
+                await asyncio.to_thread(thread.join, 15)
                 self.assertFalse(thread.is_alive())
         self.tempdir.cleanup()
 
@@ -181,6 +182,56 @@ class PlaywrightDriverTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(login.profile_path, writer.profile_path)
         self.assertEqual(writer.profile_path, reader.profile_path)
         self.assertEqual(len(list(self.profile_root.iterdir())), 1)
+
+    async def test_probe_navigates_a_new_logical_page_before_checking_the_dom(self) -> None:
+        login = self.driver("cortex-bridge-ui")
+        reader = self.driver("cortex-view-read-only")
+        await login.navigate(f"{self.url}?page=login")
+
+        with mock.patch.object(
+            playwright_driver_module,
+            "_CHATGPT_HOME_URL",
+            self.url,
+            create=True,
+        ):
+            result = await reader.probe()
+
+        self.assertEqual(result["url"], self.url)
+        self.assertTrue(result["ok"])
+
+    async def test_probe_reports_anonymous_auth_and_conversation_signals(self) -> None:
+        driver = self.driver("probe-signals")
+        await driver.navigate(self.url)
+        await driver.evaluate("""
+          document.body.insertAdjacentHTML('beforeend', `
+            <nav><a href="/c/private-conversation">Private title</a></nav>
+            <button data-testid="login-button">Se connecter</button>
+            <button aria-label="Profil utilisateur">Private name</button>
+          `)
+        """)
+
+        result = await driver.probe()
+
+        self.assertEqual(result["diagnostics"]["conversation_links"], 1)
+        self.assertEqual(result["diagnostics"]["sidebar_conversation_links"], 1)
+        self.assertEqual(result["diagnostics"]["login_controls"], 1)
+        self.assertEqual(result["diagnostics"]["account_controls"], 1)
+        self.assertNotIn("Private", json.dumps(result))
+
+    async def test_state_reports_login_blocker_with_a_public_composer(self) -> None:
+        driver = self.driver("public-login-state")
+        await driver.navigate(self.url)
+        await driver.evaluate("""
+          document.body.insertAdjacentHTML(
+            'beforeend',
+            '<button data-testid="login-button">Se connecter</button>'
+          )
+        """)
+
+        state = await driver.get_state()
+
+        self.assertTrue(state["composer_present"])
+        self.assertEqual(state["blocker"], "login")
 
     async def test_terminal_sessions_do_not_create_unbounded_profiles_or_pages(self) -> None:
         for index in range(20):
@@ -377,9 +428,8 @@ class PlaywrightDriverTest(unittest.IsolatedAsyncioTestCase):
             "start",
             side_effect=RuntimeError("idle timer refused to start"),
         ):
-            await asyncio.wait_for(driver.close(), timeout=0.5)
+            await asyncio.wait_for(driver.close(), timeout=5)
 
-        await asyncio.to_thread(thread.join, 1)
         self.assertFalse(thread.is_alive())
         self.assertFalse(driver.live)
 

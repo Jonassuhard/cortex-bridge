@@ -125,6 +125,31 @@ function apiResponse(pathname: string, searchParams: URLSearchParams, method: st
   if (method === "GET" && pathname === "/api/transport/status") {
     return { experimental_warning: "", opt_in_accepted: true, global_stop: false };
   }
+  if (method === "GET" && pathname === "/api/transport/probe") {
+    return {
+      url: `${localOrigin}/c/release-checklist`,
+      title: "Release checklist",
+      roles: {
+        composer: { ok: true, selector: "#prompt-textarea", count: 1 },
+        messages: { ok: true, selector: "[data-message-author-role]", count: 2 },
+        send: { ok: false, selector: null, count: 0 },
+        stop: { ok: false, selector: null, count: 0 },
+      },
+      diagnostics: {
+        buttons: [],
+        contenteditables: 1,
+        textareas: 0,
+        message_nodes: 2,
+        conversation_links: 3,
+        sidebar_conversation_links: 3,
+        login_controls: 0,
+        account_controls: 1,
+      },
+      failures: [],
+      warnings: ["send", "stop"],
+      ok: true,
+    };
+  }
   if (method === "GET" && pathname === "/api/transport/capabilities") {
     return { upload_file: true, take_screenshot: true };
   }

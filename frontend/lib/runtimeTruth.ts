@@ -347,6 +347,6 @@ export function transportHealthFromProbe(
   if (!probe) return "unknown";
   if (probe.ok) return "connected";
   const failures = new Set(probe.failures || []);
-  if (failures.has("composer") || failures.has("messages")) return "manual_action";
+  if (failures.has("login") || failures.has("composer") || failures.has("messages")) return "manual_action";
   return "degraded";
 }

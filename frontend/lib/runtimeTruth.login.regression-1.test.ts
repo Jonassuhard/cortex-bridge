@@ -16,4 +16,10 @@ it("requires an explicit manual action for a ChatGPT verification page", () => {
     title: "Conversation de validation",
     failures: [],
   })).toBe("connected");
+
+  expect(transportHealthFromProbe({
+    ok: false,
+    title: "ChatGPT",
+    failures: ["login"],
+  })).toBe("manual_action");
 });

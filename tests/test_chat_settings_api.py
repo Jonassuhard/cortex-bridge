@@ -53,6 +53,25 @@ class FakeBrowserDriver:
     open_login_calls = 0
     fail_login = False
     driver_name = "playwright"
+    probe_payload = {
+        "url": "https://chatgpt.com/",
+        "title": "ChatGPT",
+        "roles": {
+            "composer": {"ok": True, "selector": "#prompt-textarea", "count": 1},
+            "messages": {"ok": False, "selector": None, "count": 0},
+            "send": {"ok": False, "selector": None, "count": 0},
+            "stop": {"ok": False, "selector": None, "count": 0},
+        },
+        "diagnostics": {
+            "buttons": [],
+            "contenteditables": 1,
+            "textareas": 0,
+            "message_nodes": 0,
+        },
+        "failures": [],
+        "warnings": ["messages", "send", "stop"],
+        "ok": True,
+    }
 
     def __init__(self, *args, **kwargs):
         pass
@@ -68,6 +87,9 @@ class FakeBrowserDriver:
         if type(self).fail_login:
             raise RuntimeError("browser launch failed")
         return await self.health()
+
+    async def probe(self) -> dict:
+        return type(self).probe_payload
 
     async def list_models(self) -> dict:
         return {
@@ -174,6 +196,25 @@ class ChatSettingsApiTestCase(unittest.TestCase):
     def setUp(self):
         FakeBrowserDriver.open_login_calls = 0
         FakeBrowserDriver.fail_login = False
+        FakeBrowserDriver.probe_payload = {
+            "url": "https://chatgpt.com/",
+            "title": "ChatGPT",
+            "roles": {
+                "composer": {"ok": True, "selector": "#prompt-textarea", "count": 1},
+                "messages": {"ok": False, "selector": None, "count": 0},
+                "send": {"ok": False, "selector": None, "count": 0},
+                "stop": {"ok": False, "selector": None, "count": 0},
+            },
+            "diagnostics": {
+                "buttons": [],
+                "contenteditables": 1,
+                "textareas": 0,
+                "message_nodes": 0,
+            },
+            "failures": [],
+            "warnings": ["messages", "send", "stop"],
+            "ok": True,
+        }
         missions_api._global_stop = False
         missions_api.OPTIN_FILE.unlink(missing_ok=True)
         settings_api.SETTINGS_FILE.unlink(missing_ok=True)
@@ -747,6 +788,34 @@ class ChatSettingsApiTestCase(unittest.TestCase):
         self.assertEqual(body["driver"], "playwright")
         self.assertTrue(body["connected"])
         self.assertEqual(FakeBrowserDriver.open_login_calls, 1)
+
+    def test_10a_onboarding_rejects_a_connected_blank_browser_page(self):
+        FakeBrowserDriver.probe_payload = {
+            "url": "about:blank",
+            "title": "",
+            "roles": {
+                "composer": {"ok": False, "selector": None, "count": 0},
+                "messages": {"ok": False, "selector": None, "count": 0},
+                "send": {"ok": False, "selector": None, "count": 0},
+                "stop": {"ok": False, "selector": None, "count": 0},
+            },
+            "diagnostics": {
+                "buttons": [],
+                "contenteditables": 0,
+                "textareas": 0,
+                "message_nodes": 0,
+            },
+            "failures": ["composer", "messages"],
+            "warnings": ["send", "stop"],
+            "ok": False,
+        }
+
+        status, body = self.get("/api/onboarding")
+
+        self.assertEqual(status, 200, body)
+        chatgpt = next(check for check in body["checks"] if check["id"] == "chatgpt-tab")
+        self.assertEqual(chatgpt["state"], "missing")
+        self.assertFalse(body["ready"])
 
     def test_10b_onboarding_browser_failure_is_structured_non_2xx(self):
         FakeBrowserDriver.fail_login = True
