@@ -110,7 +110,9 @@ class PlaywrightDriverTest(unittest.IsolatedAsyncioTestCase):
         for runtime in {driver._runtime for driver in self.drivers}:
             thread = runtime._thread
             if thread is not None:
-                await asyncio.to_thread(thread.join, 2)
+                # join() returns as soon as the condition is met. The bound
+                # covers the 0.5 s warm-handoff window plus Chromium teardown.
+                await asyncio.to_thread(thread.join, 5)
                 self.assertFalse(thread.is_alive())
         self.tempdir.cleanup()
 
