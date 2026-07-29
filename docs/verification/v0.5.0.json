@@ -1,18 +1,18 @@
 {
   "schemaVersion": 1,
   "release": "0.5.0",
-  "commit": "4f7f02b68bfa8a3725b40654850d365ed3b91e11",
-  "generatedAt": "2026-07-29T16:16:30Z",
+  "commit": "a3f7d5d7347a9e56f9022ce844664e992daa00c6",
+  "generatedAt": "2026-07-29T16:29:51Z",
   "environment": {
     "os": "macOS 26.5.1",
-    "python": "3.14.5",
+    "python": "3.12.1",
     "node": "25.8.2",
     "browserDriver": "Playwright 1.62.0 (frontend) and 1.61.0 (Python transport)",
     "executorKind": "deterministic fixture",
     "simulation": true
   },
   "suites": {
-    "backend": {"passed": 336, "failed": 0, "skipped": 0},
+    "backend": {"passed": 337, "failed": 0, "skipped": 0},
     "frontendUnit": {"passed": 145, "failed": 0, "skipped": 0},
     "e2e": {"passed": 11, "failed": 0, "skipped": 1},
     "a11y": {"passed": 4, "failed": 0, "skipped": 0}
