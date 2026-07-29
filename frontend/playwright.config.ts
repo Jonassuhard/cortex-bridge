@@ -16,7 +16,7 @@ export default defineConfig({
     video: "off",
   },
   webServer: {
-    command: "node node_modules/next/dist/bin/next dev --hostname 127.0.0.1 --port 3420",
+    command: "python3 -m http.server 3420 --bind 127.0.0.1 --directory out",
     url: "http://127.0.0.1:3420",
     reuseExistingServer: false,
     timeout: 120_000,

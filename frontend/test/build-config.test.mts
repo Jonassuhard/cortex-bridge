@@ -16,3 +16,9 @@ test("every CSS custom property used by the product is declared", () => {
   const missing = [...used].filter((token) => !declared.has(token)).sort();
   assert.deepEqual(missing, []);
 });
+
+test("browser gates serve the audited static output without rewriting Next files", () => {
+  const source = readFileSync(new URL("../playwright.config.ts", import.meta.url), "utf8");
+  assert.match(source, /python3 -m http\.server 3420 --bind 127\.0\.0\.1 --directory out/u);
+  assert.doesNotMatch(source, /next dev/u);
+});
