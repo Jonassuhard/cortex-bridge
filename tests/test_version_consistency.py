@@ -40,7 +40,8 @@ class VersionConsistencyTest(unittest.TestCase):
             corepack = root / "corepack"
             corepack.write_text(
                 "#!/usr/bin/env bash\n"
-                f"printf '%s\\n' \"$*\" >> {str(log)!r}\n",
+                f"printf 'cwd=%s\\n' \"$PWD\" >> {str(log)!r}\n"
+                f"printf 'args=%s\\n' \"$*\" >> {str(log)!r}\n",
                 encoding="utf-8",
             )
             corepack.chmod(0o755)
@@ -59,7 +60,10 @@ class VersionConsistencyTest(unittest.TestCase):
             calls = log.read_text(encoding="utf-8").splitlines()
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(calls, ["npm run build"])
+        self.assertEqual(
+            calls,
+            [f"cwd={ROOT / 'frontend'}", "args=npm run build"],
+        )
 
     def test_python_lock_is_exact_and_hashed(self):
         lines = [
