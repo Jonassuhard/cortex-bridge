@@ -28,6 +28,7 @@ REQUIRED_GATES = (
 )
 READY = "RELEASE_CANDIDATE_READY_FOR_OWNER_APPROVAL"
 PENDING = "PENDING_OWNER_APPROVAL_FOR_LIVE_GATES"
+PROVIDER_BLOCKED = "RELEASE_BLOCKED_BY_PROVIDER_TERMS"
 
 
 class EvidenceValidator:
@@ -235,17 +236,24 @@ class EvidenceValidator:
                     "clean_macos_lifecycle",
                     "acceptance.cleanMacosLifecycle",
                 )
-        elif verdict == PENDING:
+        elif verdict in {PENDING, PROVIDER_BLOCKED}:
+            expected_mini_status = (
+                "BLOCKED_BY_PROVIDER_TERMS"
+                if verdict == PROVIDER_BLOCKED
+                else "PENDING_OWNER_APPROVAL"
+            )
             if not (
                 valid_mini_counts
                 and
-                mini_status == "PENDING_OWNER_APPROVAL"
+                mini_status == expected_mini_status
                 and mini_runs == 0
                 and mini_passed == 0
             ):
                 self.report("live_gate_verdict", "acceptance.miniSites")
             if not live_honestly_blocked:
                 self.report("live_chatgpt_evidence", "acceptance.liveChatGPT")
+            if verdict == PROVIDER_BLOCKED and live_status != "BLOCKED_BY_PROVIDER_TERMS":
+                self.report("live_chatgpt_evidence", "acceptance.liveChatGPT.status")
             if not (clean_lifecycle_pass or clean_lifecycle_not_run):
                 self.report(
                     "clean_macos_lifecycle",

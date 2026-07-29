@@ -236,6 +236,30 @@ class ReleaseManifestTest(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_provider_terms_blocker_is_not_relabelled_as_owner_approval(self) -> None:
+        payload = valid_payload()
+        acceptance = payload["acceptance"]
+        assert isinstance(acceptance, dict)
+        acceptance["miniSites"] = {
+            "runs": 0,
+            "passed": 0,
+            "status": "BLOCKED_BY_PROVIDER_TERMS",
+        }
+        acceptance["liveChatGPT"] = {
+            "status": "BLOCKED_BY_PROVIDER_TERMS",
+            "singleConversation": {"runs": 0, "passed": 0},
+            "dualConversations": {"runs": 0, "passed": 0, "crossovers": None},
+            "thirdWriterRefused": False,
+            "fileUpload": False,
+            "screenshotUpload": False,
+            "personalDataRecorded": False,
+        }
+        payload["verdict"] = "RELEASE_BLOCKED_BY_PROVIDER_TERMS"
+
+        result = self.run_validation(payload)
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_pending_live_gate_cannot_claim_unobserved_success(self) -> None:
         payload = valid_payload()
         acceptance = payload["acceptance"]
