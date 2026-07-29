@@ -121,11 +121,27 @@ class CortexScriptOwnershipTest(unittest.TestCase):
                 encoding="utf-8",
             )
             python_wrapper.chmod(0o755)
+            bin_dir = root_path / "bin"
+            bin_dir.mkdir()
+            lsof_wrapper = bin_dir / "lsof"
+            lsof_wrapper.write_text(
+                "#!/bin/sh\n"
+                "pid=''\n"
+                "if [ -f \"$CORTEX_HOME/pids/launch.pid\" ]; then\n"
+                " pid=\"$(tr -cd '0-9' < \"$CORTEX_HOME/pids/launch.pid\")\"\n"
+                "elif [ -f \"$CORTEX_HOME/pids/console.json\" ]; then\n"
+                " pid=\"$(sed -E 's/.*\"pid\": ([0-9]+).*/\\1/' \"$CORTEX_HOME/pids/console.json\")\"\n"
+                "fi\n"
+                "if [ -n \"$pid\" ] && kill -0 \"$pid\" 2>/dev/null; then printf '%s\\n' \"$pid\"; fi\n",
+                encoding="utf-8",
+            )
+            lsof_wrapper.chmod(0o755)
             environment = {
                 **os.environ,
                 "CORTEX_HOME": str(root_path / "cortex-home"),
                 "PYTHON_BIN": str(python_wrapper),
                 "PORT": str(port),
+                "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
             }
             environment.pop("PYTHONPATH", None)
 
