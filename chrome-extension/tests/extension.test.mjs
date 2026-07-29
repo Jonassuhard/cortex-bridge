@@ -35,6 +35,11 @@ function chromeWithTabs(initialTabs = []) {
           calls.update.push({ tabId, options });
           return tabs.find((tab) => tab.id === tabId);
         },
+        async get(tabId) {
+          const tab = tabs.find((candidate) => candidate.id === tabId);
+          if (!tab) throw new Error("tab missing");
+          return tab;
+        },
         async sendMessage(tabId, message) {
           calls.sendMessage.push({ tabId, message });
           return { ok: true };
@@ -105,6 +110,76 @@ test("routes only allowlisted structured commands", async () => {
   assert.equal(ALLOWED_COMMANDS.has("raw_evaluate"), false);
 });
 
+test("gives each writer session a different ChatGPT tab", async () => {
+  const chrome = chromeWithTabs([
+    { id: 31, windowId: 7, index: 0, url: "http://127.0.0.1:8420/" },
+    { id: 32, windowId: 7, index: 1, url: "https://chatgpt.com/c/a" },
+  ]);
+  const context = {
+    chrome: chrome.api,
+    cortexTab: { id: 31, windowId: 7, index: 0 },
+    sessionTabs: new Map([["cortex-conv-writer-a", 32]]),
+  };
+
+  const opened = await routeCommand(context, {
+    session: "cortex-conv-writer-b",
+    action: "open_chatgpt",
+    payload: {},
+  });
+
+  assert.notEqual(opened.tab_id, 32);
+  assert.equal(opened.window_id, 7);
+  assert.equal(context.sessionTabs.get("cortex-conv-writer-a"), 32);
+  assert.equal(context.sessionTabs.get("cortex-conv-writer-b"), opened.tab_id);
+});
+
+test("read-only sessions share the primary tab but never claim a writer tab", async () => {
+  const chrome = chromeWithTabs([
+    { id: 31, windowId: 7, index: 0, url: "http://127.0.0.1:8420/" },
+    { id: 32, windowId: 7, index: 1, url: "https://chatgpt.com/c/primary" },
+    { id: 33, windowId: 7, index: 2, url: "https://chatgpt.com/c/writer" },
+  ]);
+  const context = {
+    chrome: chrome.api,
+    cortexTab: { id: 31, windowId: 7, index: 0 },
+    sessionTabs: new Map([
+      ["cortex-bridge-ui", 32],
+      ["cortex-conv-writer-a", 33],
+    ]),
+  };
+
+  const opened = await routeCommand(context, {
+    session: "cortex-missions-read-only",
+    action: "open_chatgpt",
+    payload: {},
+  });
+
+  assert.equal(opened.tab_id, 32);
+  assert.equal(context.sessionTabs.get("cortex-conv-writer-a"), 33);
+});
+
+test("a read-only page command automatically reuses the paired primary tab", async () => {
+  const chrome = chromeWithTabs([
+    { id: 31, windowId: 7, index: 0, url: "http://127.0.0.1:8420/" },
+    { id: 32, windowId: 7, index: 1, url: "https://chatgpt.com/c/primary" },
+  ]);
+  const context = {
+    chrome: chrome.api,
+    cortexTab: { id: 31, windowId: 7, index: 0 },
+    sessionTabs: new Map([["cortex-bridge-ui", 32]]),
+  };
+
+  const result = await routeCommand(context, {
+    session: "cortex-missions-read-only",
+    action: "probe",
+    payload: {},
+  });
+
+  assert.deepEqual(result, undefined);
+  assert.equal(context.sessionTabs.get("cortex-missions-read-only"), 32);
+  assert.equal(chrome.calls.sendMessage[0].tabId, 32);
+});
+
 test("uses a 20 second WebSocket heartbeat", () => {
   assert.equal(HEARTBEAT_INTERVAL_MS, 20_000);
 });
@@ -137,4 +212,13 @@ test("extension source never creates a Chrome window or evaluates remote code", 
   assert.equal(source.includes("chrome.windows.create"), false);
   assert.equal(source.includes("eval("), false);
   assert.equal(source.includes("new Function"), false);
+});
+
+test("conversation discovery is sidebar-scoped, scrolls lazily, and caps at 50", async () => {
+  const source = await readFile(join(EXTENSION_ROOT, "chatgpt-content.js"), "utf8");
+
+  assert.equal(source.includes("nav a[href^='/c/'], aside a[href^='/c/']"), true);
+  assert.equal(source.includes("parentList && parentList.closest('li')"), true);
+  assert.equal(source.includes("for (let pass = 0; pass < 40"), true);
+  assert.equal(source.includes("slice(0, MAX_CONVERSATIONS)"), true);
 });

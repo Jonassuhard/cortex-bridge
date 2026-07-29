@@ -33,6 +33,7 @@ describe("ChatGPTConnectionDialog", () => {
 
     expect(screen.getByRole("heading", { name: "Connexion à ChatGPT requise" })).toBeInTheDocument();
     expect(screen.getByText(/Connecte-toi dans l’onglet ChatGPT/)).toBeInTheDocument();
+    expect(screen.getByText("Onglet vérifié : chatgpt.com").parentElement).toHaveClass("connection-copy");
     await userEvent.setup().click(screen.getByRole("button", { name: "Réessayer" }));
     expect(onRetry).toHaveBeenCalledTimes(1);
     await userEvent.setup().click(screen.getByRole("button", { name: "Fermer" }));

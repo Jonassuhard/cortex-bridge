@@ -43,8 +43,10 @@ export function ChatGPTConnectionDialog({
         </header>
         <div className="connection-dialog-body">
           {busy && <span className="connection-spinner" aria-hidden="true" />}
-          <p id="chatgpt-connection-message">{result.message}</p>
-          {result.url && <small>Onglet vérifié : {new URL(result.url).hostname}</small>}
+          <div className="connection-copy">
+            <p id="chatgpt-connection-message">{result.message}</p>
+            {result.url && <small>Onglet vérifié : {new URL(result.url).hostname}</small>}
+          </div>
         </div>
         <footer>
           <button type="button" onClick={onClose} disabled={busy}>Fermer</button>

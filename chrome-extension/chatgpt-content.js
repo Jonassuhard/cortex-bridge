@@ -122,33 +122,76 @@
       link.click();
       return { handled: true };
     },
-    list_conversations() {
-      const seen = new Set();
-      const result = [];
-      for (const link of document.querySelectorAll("a[href*='/c/']")) {
-        const url = new URL(link.href, location.origin);
-        const identity = url.pathname.match(/\/c\/([^/?#]+)/)?.[1];
-        if (!identity || seen.has(identity)) continue;
-        seen.add(identity);
-        const region = link.closest("nav, aside, [data-testid*='sidebar']") || link.parentElement;
-        const context = (region?.innerText || "").toLowerCase();
-        result.push({
-          url: url.href,
-          identity,
-          title: (link.innerText || link.textContent || "Conversation").trim(),
-          preview: "",
-          timestamp: "",
-          unread: 0,
-          pinned: /pinned|épingl/.test(context),
-          project: /project|projet/.test(context),
-          project_id: null,
-          project_title: null,
-          archived: false,
-          message_count: null,
-        });
-        if (result.length === MAX_CONVERSATIONS) break;
+    async list_conversations() {
+      const normalize = (value) => (value || "").replace(/\s+/g, " ").trim();
+      const sidebarSelector = "nav a[href^='/c/'], aside a[href^='/c/']";
+      const seen = new Map();
+      const collect = () => {
+        for (const link of document.querySelectorAll(sidebarSelector)) {
+          const href = link.getAttribute("href") || "";
+          const identity = href.match(/\/c\/([^/?#]+)/)?.[1];
+          if (!identity || seen.has(identity)) continue;
+          const row = link.closest("li, [data-testid*='conversation'], [class*='group']")
+            || link.parentElement
+            || link;
+          const lines = (link.innerText || link.textContent || "")
+            .split(/\n+/)
+            .map(normalize)
+            .filter(Boolean);
+          const title = normalize(link.getAttribute("title")) || lines[0] || "Conversation";
+          const timeNode = row.querySelector?.("time");
+          const timestamp = normalize(timeNode?.getAttribute("datetime") || timeNode?.textContent);
+          const rowLabels = `${normalize(row.getAttribute?.("aria-label"))} ${normalize(row.textContent)}`;
+          const unreadNode = Array.from(row.querySelectorAll?.("[aria-label], [data-testid], span") || [])
+            .find((node) => (
+              /^\d+$/.test(normalize(node.textContent))
+              && /unread|non lu|new|nouveau/i.test(
+                `${node.getAttribute("aria-label") || ""} ${node.getAttribute("data-testid") || ""}`,
+              )
+            ));
+          const parentList = link.closest("ul");
+          const projectRow = parentList && parentList.closest('li');
+          const projectLink = projectRow?.querySelector?.("a[href*='/project'], a[href^='/g/']");
+          const projectTitleNode = projectRow?.querySelector?.(":scope > button, :scope > a, :scope > div");
+          const projectTitle = projectRow ? normalize(projectTitleNode?.textContent) || null : null;
+          const projectHref = projectLink?.getAttribute("href") || "";
+          const projectId = projectHref.match(/\/(?:g|project)\/([^/?#]+)/)?.[1] || null;
+          seen.set(identity, {
+            url: `https://chatgpt.com${href}`,
+            identity,
+            title,
+            preview: lines.find((line, index) => index > 0 && line !== timestamp) || title,
+            timestamp,
+            unread: unreadNode ? Number(normalize(unreadNode.textContent)) : 0,
+            pinned: /pinned|épingl|epingle/i.test(rowLabels),
+            project: Boolean(projectRow),
+            project_id: projectId,
+            project_title: projectTitle,
+            archived: false,
+            message_count: null,
+          });
+        }
+      };
+      const first = document.querySelector(sidebarSelector);
+      const container = first?.closest("[class*='overflow'], nav, aside") || null;
+      collect();
+      let unchanged = 0;
+      let previousSize = seen.size;
+      for (let pass = 0; pass < 40 && container && seen.size < MAX_CONVERSATIONS; pass += 1) {
+        const previousTop = container.scrollTop;
+        container.scrollTop = Math.min(
+          container.scrollHeight,
+          container.scrollTop + Math.max(320, container.clientHeight * 0.8),
+        );
+        await new Promise((resolve) => setTimeout(resolve, 160));
+        collect();
+        if (seen.size === previousSize && container.scrollTop === previousTop) unchanged += 1;
+        else unchanged = 0;
+        previousSize = seen.size;
+        if (unchanged >= 3 || container.scrollTop + container.clientHeight >= container.scrollHeight - 4) break;
       }
-      return result;
+      if (container) container.scrollTop = 0;
+      return Array.from(seen.values()).slice(0, MAX_CONVERSATIONS);
     },
     send_text(payload) {
       const target = composer();

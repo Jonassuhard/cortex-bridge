@@ -35,13 +35,15 @@ function requireCortexTab(cortexTab) {
   return cortexTab;
 }
 
-export async function findOrOpenChatGPTTab(chromeApi, cortexTab) {
+export async function findOrOpenChatGPTTab(chromeApi, cortexTab, excludedTabIds = new Set()) {
   const source = requireCortexTab(cortexTab);
   const candidates = await chromeApi.tabs.query({
     windowId: source.windowId,
     url: ["https://chatgpt.com/*"],
   });
-  const existing = candidates.find((tab) => isChatGPTUrl(tab.url || tab.pendingUrl));
+  const existing = candidates.find((tab) => (
+    isChatGPTUrl(tab.url || tab.pendingUrl) && !excludedTabIds.has(tab.id)
+  ));
   if (existing?.id) {
     await chromeApi.tabs.update(existing.id, { active: true });
     return existing;
@@ -71,6 +73,9 @@ async function boundTab(context, session) {
 }
 
 async function sendToContentScript(context, session, action, payload) {
+  if (!context.sessionTabs.has(session) && !session.startsWith("cortex-conv-")) {
+    await openForSession(context, session);
+  }
   const tab = await boundTab(context, session);
   if (!isChatGPTUrl(tab.url || tab.pendingUrl)) {
     throw new ExtensionCommandError("TAB_UNAVAILABLE", "The bound tab is not ChatGPT");
@@ -98,7 +103,30 @@ async function sendToContentScript(context, session, action, payload) {
 }
 
 async function openForSession(context, session) {
-  const tab = await findOrOpenChatGPTTab(context.chrome, context.cortexTab);
+  const currentTabId = context.sessionTabs.get(session);
+  if (Number.isInteger(currentTabId)) {
+    try {
+      const current = await context.chrome.tabs.get(currentTabId);
+      await context.chrome.tabs.update(currentTabId, { active: true });
+      return {
+        tab_id: currentTabId,
+        window_id: current.windowId,
+        url: current.url || current.pendingUrl || "https://chatgpt.com/",
+      };
+    } catch {
+      context.sessionTabs.delete(session);
+    }
+  }
+  const writer = session.startsWith("cortex-conv-");
+  const excluded = new Set();
+  for (const [boundSession, tabId] of context.sessionTabs.entries()) {
+    if (writer || boundSession.startsWith("cortex-conv-")) excluded.add(tabId);
+  }
+  const tab = await findOrOpenChatGPTTab(
+    context.chrome,
+    context.cortexTab,
+    excluded,
+  );
   if (!Number.isInteger(tab.id)) {
     throw new ExtensionCommandError("TAB_UNAVAILABLE", "Chrome did not create a ChatGPT tab");
   }
