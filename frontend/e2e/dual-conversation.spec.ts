@@ -17,7 +17,7 @@ test("two writers stay isolated and a third preserves its draft and file", async
     await appPage.getByRole("button", { name: "Envoyer", exact: true }).click();
 
     await expect(composer).toHaveValue(`Brouillon C conservé ${run}`);
-    await expect(appPage.getByText("preuve.txt")).toBeVisible();
+    await expect(appPage.locator(".staged-file-pill", { hasText: "preuve.txt" })).toBeVisible();
   }
   console.log("cold_dual_runs=10 crossovers=0 third_writer_draft_preserved=true");
 });
