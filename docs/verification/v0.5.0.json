@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "release": "0.5.0",
-  "commit": "aafdc8da9929952c264e9e8743b2f4d15c958c4b",
-  "generatedAt": "2026-07-29T15:51:17Z",
+  "commit": "4f7f02b68bfa8a3725b40654850d365ed3b91e11",
+  "generatedAt": "2026-07-29T16:16:30Z",
   "environment": {
     "os": "macOS 26.5.1",
     "python": "3.14.5",
@@ -12,15 +12,15 @@
     "simulation": true
   },
   "suites": {
-    "backend": {"passed": 334, "failed": 0, "skipped": 0},
+    "backend": {"passed": 336, "failed": 0, "skipped": 0},
     "frontendUnit": {"passed": 145, "failed": 0, "skipped": 0},
     "e2e": {"passed": 11, "failed": 0, "skipped": 1},
     "a11y": {"passed": 4, "failed": 0, "skipped": 0}
   },
   "performance": {
-    "cachedUsabilityMs": 442.8,
-    "switchP95Ms": 106.5,
-    "switchMaxMs": 106.5
+    "cachedUsabilityMs": 297.4,
+    "switchP95Ms": 80.4,
+    "switchMaxMs": 80.4
   },
   "dualConversations": {
     "runs": 10,
