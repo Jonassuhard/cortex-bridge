@@ -1,13 +1,14 @@
 import type { HealthState } from "@/lib/types";
 import { formatDuration } from "@/lib/api";
 import { statusPresentation } from "@/lib/runtimeTruth";
-import { ActivityIcon } from "./Icons";
+import { ActivityIcon, BrowserIcon } from "./Icons";
 
 interface StatusRailProps {
   transport: HealthState;
   executor: HealthState;
   execution?: string | null;
   latencyMs?: number | null;
+  onOpenChatGPTProfile?: () => void;
 }
 
 const executionLabels: Record<string, string> = {
@@ -23,7 +24,7 @@ const executionLabels: Record<string, string> = {
   CANCELLED: "Annulé",
 };
 
-export function StatusRail({ transport, executor, execution, latencyMs }: StatusRailProps) {
+export function StatusRail({ transport, executor, execution, latencyMs, onOpenChatGPTProfile }: StatusRailProps) {
   const chat = statusPresentation(transport);
   const local = statusPresentation(executor);
   const localLabel = execution ? executionLabels[execution] || local.label : local.label;
@@ -31,6 +32,12 @@ export function StatusRail({ transport, executor, execution, latencyMs }: Status
     <div className="status-rail" aria-label="Statuts ChatGPT et exécuteur">
       <span className={`status-pill is-${chat.tone}`} title="Statut de la connexion ChatGPT"><span className={`presence-dot is-${chat.tone}`} /><span>ChatGPT</span><strong>{chat.label}</strong></span>
       <span className={`status-pill is-${local.tone}`} title="Statut de l'agent exécutif local"><span className={`presence-dot is-${local.tone}`} /><span>Exécuteur</span><strong>{localLabel}</strong></span>
+      {onOpenChatGPTProfile && (
+        <button className="status-profile-action" onClick={onOpenChatGPTProfile}>
+          <BrowserIcon size={14} />
+          <span>Ouvrir le profil ChatGPT</span>
+        </button>
+      )}
       {latencyMs != null && <span className="latency-badge"><ActivityIcon size={14} /><span>Latence</span><strong>{formatDuration(latencyMs)}</strong></span>}
     </div>
   );

@@ -20,11 +20,13 @@ import type {
   ConversationSummary,
   CortexSettings,
   ExecutionPreflight,
+  HealthState,
   MissionDetail,
   OllamaModelInfo,
   PipelineStatus,
   RuntimeStatus,
   TransportStatus,
+  TransportProbeStatus,
 } from "@/lib/types";
 import { useInterval } from "@/hooks/useInterval";
 import { useChatRunStream } from "@/hooks/useChatRunStream";
@@ -33,6 +35,7 @@ import { canResolveRekeyConflict } from "@/lib/conversation-state";
 import {
   createRequestEpoch,
   createUnavailableClientState,
+  transportHealthFromProbe,
 } from "@/lib/runtimeTruth";
 import { ConversationSidebar } from "./ConversationSidebar";
 import { ChatWorkspace, type WorkspaceAvailability } from "./ChatWorkspace";
@@ -207,6 +210,7 @@ export function CortexApp() {
   const [transport, setTransport] = useState<TransportStatus>(
     DEVELOPMENT_FIXTURES_ENABLED ? demoTransport : INITIAL_UNAVAILABLE_STATE.transport,
   );
+  const [transportHealth, setTransportHealth] = useState<HealthState>("unknown");
   const [pipeline, setPipeline] = useState<PipelineStatus>(
     DEVELOPMENT_FIXTURES_ENABLED ? demoPipeline : INITIAL_UNAVAILABLE_STATE.pipeline,
   );
@@ -241,12 +245,13 @@ export function CortexApp() {
   );
   const workspaceAvailability = useMemo<WorkspaceAvailability>(() => {
     const transportComponent = pipeline.components.find((component) => component.id === "transport");
+    const pipelineState = transportComponent?.state || pipeline.overall;
     return {
-      chatState: transportComponent?.state || pipeline.overall,
+      chatState: pipelineState === "unknown" ? transportHealth : pipelineState,
       agentState: runtime.executor_available ? "available" : "unavailable",
       transportLatencyMs: transportComponent?.latency_ms ?? null,
     };
-  }, [pipeline, runtime.executor_available]);
+  }, [pipeline, runtime.executor_available, transportHealth]);
 
   const notify = useCallback((message: string) => {
     setToast(message);
@@ -255,12 +260,14 @@ export function CortexApp() {
 
   const refreshRuntime = useCallback(async () => {
     try {
-      const [runtimeData, transportData] = await Promise.all([
+      const [runtimeData, transportData, probeData] = await Promise.all([
         api<RuntimeStatus>("/api/status"),
         api<TransportStatus>("/api/transport/status"),
+        api<TransportProbeStatus>("/api/transport/probe").catch(() => null),
       ]);
       setRuntime(runtimeData);
       setTransport(transportData);
+      setTransportHealth(transportHealthFromProbe(probeData));
       setDemoMode(false);
     } catch {
       if (DEVELOPMENT_FIXTURES_ENABLED) {
@@ -271,10 +278,21 @@ export function CortexApp() {
         const unavailable = createUnavailableClientState(new Date().toISOString());
         setRuntime(unavailable.runtime);
         setTransport(unavailable.transport);
+        setTransportHealth("unknown");
         setDemoMode(false);
       }
     }
   }, []);
+
+  const openChatGPTProfile = useCallback(async () => {
+    try {
+      await postJson("/api/onboarding/browser/open", {});
+      notify("Profil ChatGPT ouvert. Termine la connexion dans cette fenêtre.");
+      await refreshRuntime();
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Impossible d’ouvrir le profil ChatGPT.");
+    }
+  }, [notify, refreshRuntime]);
 
   const refreshPipeline = useCallback(async () => {
     const key = conversationStateRef.current.selectedKey;
@@ -865,6 +883,7 @@ export function CortexApp() {
         })}
         onToggleSidebar={() => setSidebarCollapsed((value) => !value)}
         onToggleInspector={() => setInspectorOpen((value) => !value)}
+        onOpenChatGPTProfile={() => void openChatGPTProfile()}
         onSendChat={sendChat}
         onSendAttachment={sendAttachment}
         onSendScreenshot={sendScreenshot}

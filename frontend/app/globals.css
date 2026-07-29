@@ -370,6 +370,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .status-pill.is-offline strong { color: var(--red); }
 .status-pill.is-unknown strong { color: var(--muted); }
 .status-pill.is-active strong { color: var(--blue-light); }
+.status-profile-action { display: inline-flex; align-items: center; gap: 6px; min-height: 31px; padding: 5px 10px; border: 1px solid rgba(96,165,250,.28); border-radius: 999px; color: #bfdbfe; background: var(--blue-soft); cursor: pointer; font-size: 10px; }
+.status-profile-action:hover { color: #fff; border-color: rgba(96,165,250,.5); background: rgba(37,99,235,.22); }
 .presence-dot { width: 7px; height: 7px; border-radius: 50%; }
 .presence-dot.is-online { background: var(--green); box-shadow: 0 0 0 4px rgba(34,197,94,.08), 0 0 14px rgba(34,197,94,.35); animation: pulse 2s ease-in-out infinite; }
 .presence-dot.is-offline { background: var(--red); }
@@ -702,6 +704,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 /* ---- Responsive ----------------------------------------------------------- */
 @media (max-width: 1280px) {
   :root { --sidebar-width: 285px; --inspector-width: 330px; }
+  .chat-workspace { grid-template-rows: auto minmax(0,1fr) auto; }
   .pipeline-component-grid { grid-template-columns: 1fr; }
   .conversation-toolbar { grid-template-columns: minmax(0,1fr) auto; }
   .conversation-toolbar { grid-template-columns: minmax(0,1fr) auto; grid-template-areas: "title actions" "status status"; }

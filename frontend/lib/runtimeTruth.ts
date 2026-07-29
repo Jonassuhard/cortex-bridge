@@ -7,10 +7,12 @@ import type {
   OllamaModelInfo,
   PipelineComponent,
   PipelineStatus,
+  HealthState,
   RuntimeStatus,
   RuntimeTruth,
   SyncStatus,
   TransportStatus,
+  TransportProbeStatus,
 } from "./types";
 
 export interface ConversationRefreshState {
@@ -324,6 +326,9 @@ export function statusPresentation(state?: string): StatusPresentation {
   if (state === "waiting") {
     return { connected: false, label: "En attente", tone: "active" };
   }
+  if (state === "manual_action") {
+    return { connected: false, label: "Action manuelle requise", tone: "active" };
+  }
   if (state === "idle") {
     return { connected: false, label: "Inactif", tone: "unknown" };
   }
@@ -334,4 +339,14 @@ export function statusPresentation(state?: string): StatusPresentation {
     return { connected: false, label: "Indisponible", tone: "offline" };
   }
   return { connected: false, label: "État inconnu", tone: "unknown" };
+}
+
+export function transportHealthFromProbe(
+  probe?: TransportProbeStatus | null,
+): HealthState {
+  if (!probe) return "unknown";
+  if (probe.ok) return "connected";
+  const failures = new Set(probe.failures || []);
+  if (failures.has("composer") || failures.has("messages")) return "manual_action";
+  return "degraded";
 }

@@ -6,6 +6,7 @@ export type HealthState =
   | "idle"
   | "running"
   | "waiting"
+  | "manual_action"
   | "degraded"
   | "blocked"
   | "disconnected"
@@ -183,6 +184,12 @@ export interface TransportStatus {
   experimental_warning: string;
   opt_in_accepted: boolean;
   global_stop: boolean;
+}
+
+export interface TransportProbeStatus {
+  ok: boolean;
+  title?: string | null;
+  failures?: string[];
 }
 
 export interface PipelineComponent {
