@@ -3,29 +3,24 @@
 ## Complete local gate
 
 ```bash
-PYTHON=.venv/bin/python ./scripts/test-all.sh
+PYTHON=$HOME/.local/share/cortex-bridge/venv/bin/python ./scripts/test-all.sh
 ```
 
-The gate runs:
+The gate runs backend tests, Python compilation, Manifest V3 protocol tests,
+fallback syntax, dependency audit, frontend unit/runtime/coverage/type/lint,
+static build, Playwright E2E and accessibility fixtures, runtime verification,
+and public privacy checks.
 
-- backend and release unit tests;
-- Python compilation;
-- fallback JavaScript syntax;
-- npm dependency audit;
-- frontend unit and runtime tests;
-- coverage, typecheck and lint;
-- deterministic static build and normalization;
-- Playwright E2E and accessibility;
-- runtime verification;
-- public privacy verification when release marker and URL controls are supplied.
+Playwright is the synthetic browser test tool. It is not the product transport.
 
 ## Focused commands
 
 ```bash
-.venv/bin/python -m unittest discover -s tests -v
+python -m unittest tests.test_chrome_extension_bridge -v
+python -m unittest tests.test_chrome_extension_driver -v
+node --test chrome-extension/tests/extension.test.mjs
 cd frontend
 ../scripts/npmw run test:unit
-../scripts/npmw run test:coverage
 ../scripts/npmw run typecheck
 ../scripts/npmw run lint
 ../scripts/npmw run build
@@ -33,29 +28,31 @@ cd frontend
 ../scripts/npmw run test:a11y
 ```
 
-## What fixtures prove
+## Fixture proof
 
-- exact composer send behavior;
-- explicit execution preflight;
-- two writer isolation and third-writer preservation;
-- delayed A/B response rejection;
-- 10-second selection deadline and explicit reload;
-- attachment, screenshot and restart boundaries;
-- 375, 768 and 1440 pixel layouts;
-- keyboard, Axe and reduced-motion behavior;
-- zero unexpected browser, console and hydration errors.
+Fixtures prove pairing expiry/replay, command allowlisting, same-window tab
+creation logic, connection dialog states, exact send lifecycle, two writers and
+third rejection, 10-second selection, attachments, screenshots, restart,
+responsive layouts, keyboard behavior, Axe, reduced motion, and absence of
+unexpected browser errors.
 
-Fixtures do not prove current compatibility with the live ChatGPT website.
+Fixtures do not prove current compatibility with a real authenticated ChatGPT
+account.
 
-## Live gates
+## Owner-approved live gate
 
-Authenticated consumer-site automation is not run under the current OpenAI Europe Terms of Use because the adapter would programmatically extract ChatGPT Output. The release evidence records `BLOCKED_BY_PROVIDER_TERMS` with zero live counters.
+The live gate requires explicit approval and the owner's normal Chrome profile.
+It checks one conversation, two isolated conversations, third rejection, a
+small redacted file, a redacted screenshot, tab-close recovery, and three
+disposable mini-site missions. Evidence stores aggregate results and hashes,
+never account identity, cookies, conversation text, or unredacted media.
 
-An officially supported provider transport must exist before live conversations, uploads or mini-site missions can become release evidence. Future live tests must use synthetic content and disposable workspaces, record aggregate commands, hashes, HTTP checks, browser traces and process cleanup, and retain failed attempts.
+Any unrun item remains `PENDING_OWNER_APPROVAL`. Fixture success cannot change
+that state.
 
 ## Release evidence
 
-`docs/verification/v0.5.0.json` records the final commit, environment, suite counts, performance, recovery, dual writers, mini-site runs, privacy/link results and artifact hashes. Validate it with:
+Validate `docs/verification/v0.5.0.json` with:
 
 ```bash
 ./scripts/verify-release-evidence.py docs/verification/v0.5.0.json

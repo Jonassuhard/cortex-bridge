@@ -1,20 +1,18 @@
 # Install Cortex Bridge v0.5 on macOS
 
-The installer is plan-based. A dry-run cannot mutate the machine. Installation requires the exact hash of the plan you reviewed.
+The installer is plan-based. A dry run cannot mutate the machine, and applying
+the plan requires the exact hash that was reviewed.
 
 ## Requirements
 
+- [Google Chrome](https://www.google.com/chrome/) 116 or newer
 - [Git for macOS](https://git-scm.com/download/mac)
-- [Python 3.11 or newer for macOS](https://www.python.org/downloads/macos/)
-- [Playwright Chromium](https://playwright.dev/python/docs/browsers), downloaded only after approval
-- A [ChatGPT](https://chatgpt.com/) account, signed in manually
+- [Python 3.11 or newer](https://www.python.org/downloads/macos/)
+- a [ChatGPT](https://chatgpt.com/) account
 
-Optional:
-
-- [Node.js](https://nodejs.org/en/download) to rebuild the interface
-- [Ollama for macOS](https://ollama.com/download/mac) for an optional local model
-
-WebBridge is compatibility-only. There is no public official distribution link, so Cortex Bridge does not install it.
+Optional: [Node.js](https://nodejs.org/en/download) for a UI rebuild and
+[Ollama](https://ollama.com/download/mac) for an optional local model.
+Playwright Chromium is needed only for development browser tests.
 
 ## 1. Inspect the plan
 
@@ -22,16 +20,8 @@ WebBridge is compatibility-only. There is no public official distribution link, 
 ./scripts/install.sh --dry-run --json
 ```
 
-Review:
-
-- `commands`, including every argument;
-- `official_url` for each install source;
-- `disk_bytes`;
-- `rollback`;
-- `human_pauses`;
-- `plan_hash`.
-
-The plan must not contain `sudo`. Login, terms, extensions, secrets and large downloads remain human pauses.
+Review `commands`, `official_url`, `disk_bytes`, `rollback`, `human_pauses`,
+`chrome_extension_path`, and `plan_hash`. The plan must not contain `sudo`.
 
 ## 2. Approve that exact plan
 
@@ -39,7 +29,8 @@ The plan must not contain `sudo`. Login, terms, extensions, secrets and large do
 ./scripts/install.sh --approve-plan PLAN_HASH --json
 ```
 
-Changing an option changes the hash. Generate and review a new plan before approving it.
+Changing an option changes the hash. Generate and review a new plan before
+approving it.
 
 Optional UI rebuild:
 
@@ -53,65 +44,57 @@ Optional Ollama model:
 ./scripts/install.sh --dry-run --json --with-ollama-model MODEL_TAG
 ```
 
-Neither option runs until its exact plan hash is approved.
+## 3. Load the Chrome extension
 
-## 3. Diagnose the installation
+Chrome does not allow a local application to silently install an unpacked
+extension. This one-time step requires the person using Chrome:
+
+1. open `chrome://extensions`;
+2. enable **Developer mode**;
+3. choose **Load unpacked**;
+4. select the absolute `chrome_extension_path` printed by the installer;
+5. confirm that **Cortex Bridge 0.5.0** is enabled.
+
+The extension can access only `https://chatgpt.com/*` and
+`http://127.0.0.1:8420/*`. It does not request cookies, passwords, history, or
+all-sites access.
+
+## 4. Run Doctor and start
 
 ```bash
 ./scripts/cortex.sh doctor --json
-```
-
-The deterministic mode must be available without Ollama. Optional services appear as warnings, not fake failures.
-
-## 4. Start Cortex Bridge
-
-```bash
 ./scripts/cortex.sh start
 ./scripts/cortex.sh status --json
 ```
 
-Open `http://127.0.0.1:8420`. Complete ChatGPT login in the dedicated Chromium profile yourself.
+Doctor must report the `chrome_extension` manifest as `pass`. Open
+`http://127.0.0.1:8420` in Google Chrome, then press **Open and connect
+ChatGPT**. Cortex opens or focuses ChatGPT in the same Chrome window.
+
+If the dialog says login or verification is required, complete it in the
+ChatGPT tab and press **Retry**. Cortex never types credentials, accepts terms,
+or solves CAPTCHA.
 
 ## Runtime data
 
-By default, mutable data lives under:
+Mutable data defaults to `~/.local/share/cortex-bridge`. Set an absolute
+`CORTEX_HOME` before installation to choose another location. Relative paths
+are rejected.
 
-```text
-~/.local/share/cortex-bridge
-```
-
-Set an absolute `CORTEX_HOME` before installation to choose another location. Relative paths are rejected.
-
-Model storage uses this priority:
-
-1. `CORTEX_MODEL_DIR`
-2. legacy `CORTEX_STORAGE_PATH`
-3. `~/.ollama/models`
-
-## Stop
+## Stop and uninstall
 
 ```bash
 ./scripts/cortex.sh stop
-```
-
-Stop refuses a foreign listener or a process whose persisted identity no longer matches.
-
-## Uninstall
-
-Inspect first:
-
-```bash
 ./scripts/uninstall.sh --dry-run --json
-```
-
-Then approve the exact uninstall plan:
-
-```bash
 ./scripts/uninstall.sh --approve-plan PLAN_HASH --json
 ```
 
-The uninstaller removes only resources listed in Cortex Bridge’s ownership manifest. Settings, databases, runs, attachments, browser profiles and logs are preserved unless the user removes them separately.
+The uninstaller removes only manifest-owned runtime resources. It does not
+delete the repository extension, Chrome data, settings, databases, runs,
+attachments, or logs.
 
 ## Agent-assisted installation
 
-Agentic LLMs must follow [docs/agent-installation.md](docs/agent-installation.md). They may inspect and present a plan, but they cannot approve it on the user’s behalf.
+Agents must follow [docs/agent-installation.md](docs/agent-installation.md).
+They may inspect and apply an approved plan, but they cannot approve the hash,
+install the extension, sign in, or accept third-party terms for the user.

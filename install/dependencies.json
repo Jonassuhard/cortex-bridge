@@ -16,11 +16,25 @@
       "human_pause": false
     },
     {
-      "id": "playwright-chromium",
+      "id": "google-chrome",
       "required": true,
+      "official_url": "https://www.google.com/chrome/",
+      "human_pause": true,
+      "reason": "the user installs and signs in to their normal browser"
+    },
+    {
+      "id": "chrome-extension",
+      "required": true,
+      "official_url": "https://developer.chrome.com/docs/extensions/get-started/tutorial/hello-world#load-unpacked",
+      "human_pause": true,
+      "reason": "unpacked extensions require explicit review and manual installation"
+    },
+    {
+      "id": "playwright-chromium",
+      "required": false,
       "official_url": "https://playwright.dev/python/docs/browsers",
       "human_pause": true,
-      "reason": "large download"
+      "reason": "development and synthetic browser tests only"
     },
     {
       "id": "ollama",

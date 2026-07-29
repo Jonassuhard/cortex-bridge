@@ -1,62 +1,65 @@
 # Troubleshooting
 
-Start with machine-readable diagnostics:
+Start with:
 
 ```bash
 ./scripts/cortex.sh doctor --json
 ./scripts/cortex.sh status --json
 ```
 
-## The console does not start
+## Extension Chrome introuvable
 
-Run doctor. If the port is foreign, Cortex Bridge refuses to take ownership or stop that process. Change the port or stop the foreign service yourself after identifying it.
+Open `chrome://extensions`, enable Developer mode, choose **Load unpacked**,
+and select the `chrome_extension_path` printed by the installer. Ensure Cortex
+Bridge is enabled, reload the Cortex tab, and retry.
 
-## The fallback diagnostic page appears
+## ChatGPT requires login, CAPTCHA, or verification
 
-The static UI is missing or invalid. Rebuild it:
+Use the ChatGPT tab that Cortex opened in the same Chrome window. Complete the
+human action, then press **Réessayer**. Cortex does not type credentials,
+accept terms, solve CAPTCHA, or bypass rate limits.
 
-```bash
-./scripts/build-ui.sh
-```
+## ChatGPT stays in loading state
 
-The fallback page cannot send messages or start execution.
-
-## ChatGPT requires login, CAPTCHA or rate-limit recovery
-
-Open the dedicated Chromium profile and resolve the account state manually. Cortex Bridge does not type credentials, solve CAPTCHA or bypass a rate limit.
+Wait for the ChatGPT page to finish, check that the composer is visible, and
+retry. If the page changed incompatibly, the probe reports missing selectors;
+Cortex does not open Playwright as a substitute.
 
 ## Conversation switching times out
 
-Selection has a 10-second hard budget. Use **Recharger la conversation** after checking the dedicated browser. Cortex Bridge does not retry a send automatically.
+The complete switch has a 10-second budget. Use **Recharger la conversation**
+after checking the bound ChatGPT tab. A send is never retried automatically.
 
-## A message is marked uncertain
+## A message is uncertain
 
-Check the ChatGPT conversation directly. Delivery uncertainty means the click may have happened but confirmation failed. Sending again automatically could duplicate the message, so Cortex Bridge pauses.
+Inspect the ChatGPT conversation directly. The click may have happened but the
+visible confirmation did not. Resolve it manually before sending again.
 
 ## A third conversation cannot send
 
-Two distinct conversation writers are already active. Finish or cancel one. The blocked conversation’s draft and selected file should remain intact.
+Two writer leases are active. Finish or cancel one. The third draft and file
+remain in place.
 
-## An attachment is rejected
+## A file is rejected
 
-Check extension, content and size. Images are limited to 20 MiB. Other supported files are limited to 512 MiB. Office files must contain the correct DOCX, XLSX or PPTX internal structure. Symlinks and misleading extensions are rejected.
+The Chrome extension transfer limit is 25 MiB in v0.5. Check file type,
+content, size, symlinks, and the visible ChatGPT error. Office files must have
+the expected ZIP container structure.
 
-## Execution is unavailable
+## Screenshot capture is rejected
 
-Open the preflight and verify the workspace, executor, approvals and requested capabilities. Write, process and network permissions are disabled by default. Ollama is optional; deterministic execution should remain available.
+The bound ChatGPT tab must be the visible active tab in its Chrome window.
+Cortex refuses to capture another page by accident.
 
-## Stop refuses the process
+## Console, fallback, or stop problems
 
-The persisted owner no longer matches PID, start time, executable, arguments, token or port. Cortex Bridge refuses to signal it. Inspect `doctor --json` and identify the process outside Cortex Bridge.
+If the fallback page appears, run `./scripts/build-ui.sh`. If the port is owned
+by another process or the persisted identity is stale, Cortex refuses to take
+ownership or signal it. Inspect Doctor and identify that process separately.
 
 ## Installer approval fails
 
-Any option change creates a different plan hash. Run a new dry-run, review it and approve the new exact hash. Never copy a hash from another machine or an older plan.
+Any option change creates a new hash. Generate a fresh dry run, review it, and
+approve that exact hash. Never reuse a hash from another plan or machine.
 
-## Logs
-
-```bash
-./scripts/cortex.sh logs
-```
-
-Logs live under `CORTEX_HOME`. Remove personal content before sharing a report.
+Logs live under `CORTEX_HOME`. Remove personal content before sharing them.

@@ -1,67 +1,41 @@
-# Manual development setup
+# Manual setup
 
-Use this path when you want to inspect every command instead of running the consent-bound installer.
+Prefer the plan-based installer in [INSTALL.md](../INSTALL.md). Use this page
+only when inspecting each step manually.
 
-## Prerequisites
-
-- Git
-- Python 3.11 or newer
-- Node.js with Corepack for frontend development
-
-ChatGPT login and Playwright Chromium remain separate human actions.
-
-## Python environment
+## Python runtime
 
 ```bash
-python3 -m venv .venv
-.venv/bin/python -m pip install --require-hashes -r requirements.lock
+python3 -m venv "$HOME/.local/share/cortex-bridge/venv"
+"$HOME/.local/share/cortex-bridge/venv/bin/python" -m pip install \
+  --require-hashes -r requirements.lock
 ```
 
-Install Playwright Chromium only after reviewing the download:
+No Playwright browser download is required for normal use. Playwright Chromium
+is only for the synthetic development test suite.
+
+## Chrome extension
+
+1. Open `chrome://extensions` in the Google Chrome profile that will use
+   ChatGPT.
+2. Enable Developer mode.
+3. Select **Load unpacked**.
+4. Choose the repository's `chrome-extension` directory.
+5. Confirm Cortex Bridge 0.5.0 is enabled.
+
+This action is manual. No script should click the Chrome confirmation or grant
+permissions for the user.
+
+## Start and connect
 
 ```bash
-.venv/bin/python -m playwright install chromium
+./scripts/cortex.sh doctor --json
+./scripts/cortex.sh start
 ```
 
-## Frontend environment
+Open `http://127.0.0.1:8420` in the same Chrome window and press **Open and
+connect ChatGPT**. Complete login or verification in the ChatGPT tab, then
+retry in Cortex.
 
-```bash
-corepack enable
-cd frontend
-corepack npm ci
-cd ..
-```
-
-Do not replace `npm ci` with `npm install`; the release uses the committed lockfile and `npm@11.18.0`.
-
-## Runtime data
-
-```bash
-export CORTEX_HOME="$HOME/.local/share/cortex-bridge"
-```
-
-`CORTEX_HOME` must be absolute. Do not place browser profiles, databases or attachments inside the repository.
-
-## Build and test
-
-```bash
-scripts/build-ui.sh
-PYTHON=.venv/bin/python scripts/test-all.sh
-```
-
-## Start
-
-```bash
-scripts/cortex.sh doctor --json
-scripts/cortex.sh start
-```
-
-Open `http://127.0.0.1:8420` and complete login in the dedicated browser profile.
-
-## Optional Ollama
-
-Install Ollama only if you want a local model executor. The deterministic executor remains the default and requires no model download. Cortex Bridge lists detected Ollama tags after a capability probe and marks tested tags as recommendations without blocking other installed tags.
-
-## Remove the installation
-
-Use the ownership-aware plan in [INSTALL.md](../INSTALL.md). Manual deletion of `CORTEX_HOME` also deletes user data and is intentionally outside the automated uninstaller.
+`CORTEX_HOME` must be absolute. Keep mutable runtime data outside the
+repository.

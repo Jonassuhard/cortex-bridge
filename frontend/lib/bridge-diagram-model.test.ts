@@ -4,10 +4,10 @@ import { createBridgeDiagramModel } from "./bridge-diagram-model";
 describe("createBridgeDiagramModel", () => {
   it("keeps deterministic order and makes Ollama optional", () => {
     const base = createBridgeDiagramModel({ locale: "fr", includeOllama: false, reducedMotion: true });
-    expect(base.nodes.map((node) => node.id)).toEqual(["user", "profile", "chatgpt", "preflight", "executor", "workspace", "evidence"]);
+    expect(base.nodes.map((node) => node.id)).toEqual(["user", "extension", "chatgpt", "preflight", "executor", "workspace", "evidence"]);
     expect(base.nodes.some((node) => node.id === "ollama")).toBe(false);
     expect(base.animated).toBe(false);
-    expect(base.description).toContain("profil Playwright dédié");
+    expect(base.description).toContain("même fenêtre Chrome");
 
     const optional = createBridgeDiagramModel({ locale: "en", includeOllama: true, reducedMotion: false });
     expect(optional.nodes.map((node) => node.id)).toContain("ollama");

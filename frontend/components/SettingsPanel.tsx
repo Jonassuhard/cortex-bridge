@@ -212,11 +212,11 @@ export function SettingsPanel({
 
             {tab === "transport" && (
               <div className="settings-section-stack">
-                <div className="settings-section-title"><h3>Transport ChatGPT</h3><p>Le bridge contrôle une conversation sélectionnée avec un profil navigateur Cortex dédié, sans API OpenAI.</p></div>
+                <div className="settings-section-title"><h3>Transport ChatGPT</h3><p>Le bridge contrôle les onglets ChatGPT du Chrome de l’utilisateur, sans API OpenAI.</p></div>
                 <div className="settings-notice"><GlobeIcon /><span><strong>Transport expérimental</strong><small>La compatibilité dépend du DOM de ChatGPT. Aucun CAPTCHA, identifiant ou mécanisme anti-bot n'est contourné.</small></span></div>
                 <div className="settings-grid two">
-                  <label><span>Driver navigateur</span><select value={draft.browser_transport} onChange={(e) => patch("browser_transport", e.target.value as CortexSettings["browser_transport"])}><option value="playwright">Playwright — distribué</option><option value="webbridge">WebBridge — compatibilité</option></select></label>
-                  <label><span>Racine des profils</span><input value={draft.browser_profile_root} onChange={(e) => patch("browser_profile_root", e.target.value)} /></label>
+                  <label><span>Driver navigateur</span><select value={draft.browser_transport} onChange={(e) => patch("browser_transport", e.target.value as CortexSettings["browser_transport"])}><option value="chrome_extension">Extension Chrome — recommandée</option><option value="playwright">Playwright — développement uniquement</option><option value="webbridge">WebBridge — compatibilité historique</option></select></label>
+                  <label><span>Racine Playwright</span><input value={draft.browser_profile_root} onChange={(e) => patch("browser_profile_root", e.target.value)} disabled={draft.browser_transport === "chrome_extension"} /></label>
                 </div>
                 <div className="settings-grid two">
                   <label><span>Stabilité de réponse</span><input type="number" step="0.5" min={1} max={10} value={draft.response_stability_seconds} onChange={(e) => patch("response_stability_seconds", Number(e.target.value))} /></label>
@@ -231,7 +231,7 @@ export function SettingsPanel({
                 <div className="settings-section-title"><h3>Runtime local</h3><p>État des services utilisés par Cortex Bridge.</p></div>
                 <div className="settings-runtime-cards">
                   <div><CpuIcon /><span><strong>Ollama</strong><small>127.0.0.1:11434 · loopback uniquement</small></span><em className="good">healthy</em></div>
-                  <div><BrowserIcon /><span><strong>WebBridge</strong><small>127.0.0.1:10086 · Chrome signé</small></span><em className="good">connected</em></div>
+                  <div><BrowserIcon /><span><strong>Extension Chrome</strong><small>127.0.0.1:8420 · jumelage local</small></span><em className="good">à vérifier</em></div>
                   <div><DatabaseIcon /><span><strong>SQLite</strong><small>missions, décisions, preuves et approbations</small></span><em className="good">ready</em></div>
                 </div>
               </div>

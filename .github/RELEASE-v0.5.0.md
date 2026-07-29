@@ -10,14 +10,14 @@ Cortex Bridge v0.5 is a macOS technical preview for keeping a ChatGPT conversati
 - Two isolated conversation writers; a third keeps its draft and attachment until a slot is free.
 - Separate ChatGPT and executor status, with pipeline detail behind a drawer.
 - Explicit workspace, capability, approval and limit review before local execution.
-- Dedicated Playwright Chromium profile and compatibility-only WebBridge adapter.
+- Packaged Manifest V3 extension using ChatGPT in the user’s existing Chrome window; Playwright remains development-only.
 - Validated, expiring attachment tokens for images, documents and screenshots.
 - Consent-bound installer, machine-readable doctor, owned-process lifecycle and non-destructive uninstall.
 - Deterministic static build, responsive and accessibility gates, privacy scanner and synthetic guide media.
 
 ## Verification boundary
 
-The automated release suite uses synthetic fixtures and local browser pages. It does not sign in to a real ChatGPT account. Current OpenAI Europe terms block the consumer-site automation needed for live compatibility and the three ChatGPT-planned mini-site missions, so the machine-readable verdict remains pending rather than `READY`.
+The automated release suite uses synthetic fixtures and local browser pages. It does not sign in to a real ChatGPT account. Real Chrome linking, live messages, uploads and the three ChatGPT-planned mini-site missions remain explicit owner-approved gates, so the machine-readable verdict remains pending until those observations exist.
 
 Read the [release evidence](../docs/verification/v0.5.0.json), [installation guide](../INSTALL.md), [user guide](../docs/user-guide.md) and [security policy](../SECURITY.md) before publishing this candidate.
 

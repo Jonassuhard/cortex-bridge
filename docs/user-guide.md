@@ -1,102 +1,96 @@
 # Cortex Bridge v0.5 user guide
 
-The application interface is French. This guide explains the behavior in English.
+The application interface is French. This guide is in English.
 
 ## First launch
 
-1. Start Cortex Bridge with `./scripts/cortex.sh start`.
-2. Open `http://127.0.0.1:8420`.
-3. Open the dedicated Chromium profile from onboarding.
-4. Sign in to ChatGPT yourself.
-5. Return to Cortex Bridge and refresh conversations.
+1. Complete [installation](../INSTALL.md), including **Load unpacked** from
+   `chrome://extensions`.
+2. Start Cortex with `./scripts/cortex.sh start`.
+3. Open `http://127.0.0.1:8420` in Google Chrome.
+4. Press **Ouvrir et connecter ChatGPT** / **Open and connect ChatGPT**.
+5. Cortex opens or focuses ChatGPT in the same Chrome window and checks the
+   page.
+6. If login or verification is required, finish it in the ChatGPT tab and
+   press **Réessayer**. **Fermer** only dismisses the dialog.
 
 ![Synthetic onboarding](screenshots/v0.5.0/1440/01-onboarding.png)
 
+![Synthetic Chrome connection dialog](screenshots/v0.5.0/1440/01b-connexion-chrome.png)
+
+## Connection states
+
+- **Extension Chrome introuvable**: load or enable the unpacked extension.
+- **Connexion à ChatGPT requise**: sign in in the opened ChatGPT tab.
+- **Vérification requise**: complete the human check in ChatGPT.
+- **ChatGPT est encore en chargement**: keep the tab open and retry.
+- **ChatGPT connecté**: the tab is paired and the composer is visible.
+- **Onglet ChatGPT fermé**: reopen and connect before continuing.
+
+Cortex never enters credentials, accepts terms, solves CAPTCHA, or falls back
+to another browser.
+
 ## Conversation navigation
 
-The left sidebar loads at most 50 conversations and places each conversation in exactly one group:
-
-- **Épinglées** for conversations pinned in ChatGPT;
-- **Projets** for conversations with real project metadata;
-- **Récentes** for the remaining conversations.
-
-Use **Nouvelle conversation** at the top. The collapsed rail keeps one expand button, new conversation, conversation navigation and settings.
+The sidebar loads at most 50 conversations and places each in one exposed
+group: **Épinglées**, **Projets**, or **Récentes**. Use **Nouvelle
+conversation** at the top. The collapsed rail keeps navigation, new
+conversation, expand, and settings.
 
 ![Synthetic grouped navigation](screenshots/v0.5.0/1440/02-navigation.png)
 
 ## Send a message
 
-Type in the composer. `Enter` sends the exact draft to ChatGPT. `Shift+Enter` adds a new line.
-
-The optimistic message stays in place while its French status changes:
-
-1. waiting;
-2. sending;
-3. visible in ChatGPT;
-4. waiting for the response;
-5. received;
-6. uncertain or failed when confirmation is impossible.
-
-An uncertain delivery is never sent again automatically.
+`Enter` sends the exact draft to ChatGPT; `Shift+Enter` inserts a line. The
+optimistic message remains visible while its French state moves through local
+queue, sending, visible, waiting, and received. An uncertain delivery is never
+resent automatically.
 
 ![Synthetic send lifecycle](screenshots/v0.5.0/1440/03-cycle-envoi.png)
 
 ## Execute locally
 
-**Exécuter** does not send a mission immediately. It opens a preflight containing:
-
-- conversation;
-- workspace;
-- executor;
-- read, write, process, network and delete capabilities;
-- approval policy;
-- iteration and time limits;
-- attachment tokens.
-
-Write, process and network capabilities start disabled. Delete remains unavailable. Only confirmation creates the local execution.
+**Exécuter** opens a preflight rather than sending an execution immediately.
+It shows conversation, workspace, executor, capabilities, policy, limits, and
+attachments. Write, process, and network start disabled; delete remains
+unavailable.
 
 ![Synthetic execution preflight](screenshots/v0.5.0/1440/04-preflight.png)
 
 ## Two active conversations
 
-Cortex Bridge supports two distinct active conversation writers. A third conversation can still be opened and edited, but sending is blocked until a slot is free. Its draft and selected file remain in the composer.
+Two distinct conversations may write concurrently in two bound ChatGPT tabs
+in the same Chrome window. A third remains readable and editable, but send is
+rejected until a slot is free. Its draft and staged file remain intact.
 
 ![Synthetic dual conversation state](screenshots/v0.5.0/1440/06-deux-conversations.png)
 
 ## Files and screenshots
 
-Supported files:
+The backend validates supported image, PDF, text, data, and Office-container
+formats before staging. The Chrome extension v0.5 transfer limit is 25 MiB per
+file. ChatGPT may enforce a smaller limit and its visible error wins.
 
-- PNG, JPEG, GIF and WebP images, maximum 20 MiB;
-- PDF, TXT, JSON, CSV and Markdown;
-- DOCX, XLSX and PPTX with validated Office containers;
-- maximum 512 MiB for supported non-image files.
-
-Cortex Bridge validates content, not only the filename. Attachments use opaque tokens that expire after 15 minutes. A screenshot must be a regular PNG produced for the selected ChatGPT target.
+Screenshots capture only the visible bound ChatGPT tab. Show that tab before
+capturing; Cortex refuses to capture a different active tab.
 
 ![Synthetic attachment flow](screenshots/v0.5.0/1440/07-piece-jointe.png)
 
-## Status and pipeline
+## Status, timeout, and information
 
-The header shows ChatGPT transport and executor status independently. The pipeline inspector stays collapsed until requested and remains scoped to the selected conversation.
+ChatGPT and local-agent states are independent and adjacent. The activity
+drawer remains closed until requested. A conversation switch has one absolute
+10-second budget; cached content remains visible and explicit reload is
+available after timeout.
 
-Unknown information stays unknown. The UI does not invent latency, message counts or connection status.
-
-## Timeout and reload
-
-Conversation selection has one absolute 10-second budget. On timeout, Cortex Bridge preserves the cached conversation as stale and shows **Recharger la conversation**. Reload is explicit and deterministic.
-
-![Synthetic timeout recovery](screenshots/v0.5.0/1440/08-timeout.png)
-
-## Information diagram
-
-Settings include an Info section explaining the bridge from the user to the dedicated browser, ChatGPT, execution preflight, deterministic or optional Ollama executor, and scoped results.
+Settings > **Info** shows the animated flow from the user through the local
+Chrome extension, ChatGPT, preflight, executor, workspace, and evidence.
 
 ![Architecture flow](media/architecture-flow.gif)
 
-Reduced-motion users receive the complete static state without animated movement.
+Reduced-motion users receive a complete static diagram.
 
-## Stop and diagnose
+## Diagnose and stop
 
 ```bash
 ./scripts/cortex.sh status --json
@@ -105,4 +99,4 @@ Reduced-motion users receive the complete static state without animated movement
 ./scripts/cortex.sh stop
 ```
 
-If the static UI is missing, the fallback page only shows diagnostics and rebuild help. It cannot send a message or start an execution.
+The fallback page is diagnostics-only and cannot send or execute.

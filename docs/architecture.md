@@ -3,73 +3,86 @@
 ## Runtime flow
 
 ```text
-French local UI
-    |
-    | exact ChatGPT message
+Cortex tab on 127.0.0.1:8420
+    | one-time pairing token
     v
-FastAPI console ----> dedicated Playwright Chromium profile ----> ChatGPT
-    |
-    | confirmed execution preflight
+Chrome MV3 extension <---- authenticated loopback WebSocket ----> FastAPI
+    | structured allowlisted DOM commands
     v
-mission protocol ----> deterministic executor or optional Ollama ----> workspace
+ChatGPT tab in the same Chrome window
+    | exact message or explicit execution preflight
+    v
+mission protocol ----> deterministic executor / optional Ollama ----> workspace
     |
     +---- scoped status, evidence and approvals ----> selected conversation UI
 ```
 
-The default browser transport is Playwright with a dedicated headed profile. Login is manual. WebBridge is compatibility-only.
+The Chrome extension is the default product transport. Playwright is an
+explicit development and fixture transport, never a silent fallback.
 
 ## Components
 
+### `chrome-extension/`
+
+Manifest V3 service worker and content scripts. The service worker opens or
+focuses ChatGPT in the Cortex tab's `windowId`, maintains the loopback
+WebSocket, binds logical sessions to tab IDs, and accepts structured commands
+only. Host access is limited to ChatGPT and Cortex loopback.
+
 ### `frontend/`
 
-React and Next.js static UI. Conversation state is reduced per identity. Late responses carry an epoch and cannot overwrite a newer selection.
+React and Next.js static UI. It creates the pairing token, explains connection
+states in French, and keeps conversation state reduced per identity. Late
+responses cannot overwrite a newer selection.
 
 ### `console/`
 
-Loopback FastAPI service. It exposes settings, ChatGPT chat, attachments, mission control, health, pipeline status and lifecycle diagnostics.
+Loopback FastAPI service with HTTP APIs, WebSocket pairing, settings, ChatGPT
+chat, attachments, missions, health, pipeline status, and diagnostics.
 
 ### `transport/`
 
-ChatGPT browser adapter, Playwright driver and deterministic fixture. Selection shares one monotonic deadline across navigation and state reads.
+Structured Chrome-extension driver, legacy compatibility driver, Playwright
+development driver, and deterministic fixtures. Selection shares one
+monotonic 10-second deadline across navigation and state reads.
 
-### `orchestration/`
+### `orchestration/` and `executor/`
 
-Mission state machine, `cortex.v1` decision protocol and SQLite evidence store. Completion requires structured validation evidence.
+The mission state machine stores `cortex.v1` decisions and evidence in SQLite.
+Workspace-confined file and process tools execute only after policy and
+preflight checks. Ollama is optional and is reported active only after a real
+model call.
 
-### `executor/`
+## Pairing protocol
 
-Workspace-confined file and process tools. The deterministic executor is always available. Ollama is optional and never inferred as active merely because a model is installed.
-
-## Data layout
-
-Mutable data lives under `CORTEX_HOME`, defaulting to `~/.local/share/cortex-bridge`:
-
-```text
-attachments/
-browser/
-data/
-logs/
-pids/
-runs/
-settings/
-```
-
-Legacy repository-local data is copied non-destructively when migration is required. Existing files are not overwritten or deleted.
+1. Cortex issues a 256-bit token that expires after 60 seconds.
+2. The Cortex page passes it to the localhost content script.
+3. The extension presents it over its outbound WebSocket.
+4. The backend consumes it once and enables the command channel.
+5. Every command has a random request ID, session ID, allowlisted action, and
+   structured payload.
+6. Disconnects, timeouts, unknown actions, oversized payloads, and replays fail
+   closed.
 
 ## Conversation isolation
 
-Each writer owns a lease tied to a conversation identity and browser session. Two distinct leases may be active. A third is rejected with HTTP 409 while preserving client draft state.
+Each writer owns a lease tied to a conversation identity, logical session, and
+Chrome tab. Two leases may be active. A third is rejected with HTTP 409 before
+a tab opens or a message sends, while the client keeps its draft and file.
 
-Provisional conversations receive unique identities and rekey when a canonical ChatGPT URL appears. Stale releases cannot free a successor’s slot.
+## Data and media
 
-## Attachments
+Mutable data lives under `CORTEX_HOME`, default
+`~/.local/share/cortex-bridge`. Attachments resolve from opaque tokens to
+validated managed paths. The extension transfer limit is 25 MiB in v0.5.
+Screenshots must come from the visible bound ChatGPT tab and are written
+atomically under `CORTEX_HOME`.
 
-The browser receives a validated server-side descriptor, never a client path. The descriptor includes owner, token, name, MIME, kind and size. Office formats are checked as ZIP containers. Screenshot paths must match the expected selected target.
+## Process ownership and release boundary
 
-## Process ownership
+Lifecycle records include PID, start time, executable, argument hash, instance
+token, and port. Stop signals only an exact match.
 
-Lifecycle records include PID, start time, executable, argument hash, instance token and port. `stop` signals only an exact match. Foreign listeners, stale records and PID reuse fail closed.
-
-## Release boundaries
-
-CI uses fixtures and no authenticated browser. Live ChatGPT compatibility, account state and three disposable mini-site missions require explicit owner approval outside CI.
+CI uses synthetic pages and never an authenticated account. Real Chrome,
+ChatGPT, file, screenshot, dual-conversation, and mini-site gates require
+explicit owner approval and redacted evidence.

@@ -157,7 +157,7 @@ const settings = {
   persist_conversation_history: true,
   response_stability_seconds: 1,
   chat_timeout_seconds: 30,
-  browser_transport: "playwright",
+  browser_transport: "chrome_extension",
   browser_profile_root: "/tmp/profile",
 };
 

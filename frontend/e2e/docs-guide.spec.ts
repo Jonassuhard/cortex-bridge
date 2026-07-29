@@ -72,7 +72,7 @@ test("generate the synthetic v0.5 visual guide", async ({ appPage }) => {
         default_workspace: "Espace synthétique", max_iterations: 10, max_duration_minutes: 10, ollama_context: 8192,
         auto_continue: false, browser_research: false, network_access: false, never_delete_files: true,
         persist_conversation_history: false, response_stability_seconds: 2, chat_timeout_seconds: 10,
-        browser_transport: "playwright", browser_profile_root: "Profil synthétique",
+        browser_transport: "chrome_extension", browser_profile_root: "Profil synthétique",
       }),
     });
   });
@@ -107,6 +107,12 @@ test("generate the synthetic v0.5 visual guide", async ({ appPage }) => {
     await capture(appPage, viewport.width, "01-onboarding");
     await appPage.getByRole("button", { name: "Fermer l'assistant" }).click();
     showOnboarding = false;
+
+    await reset();
+    await appPage.getByRole("button", { name: "Ouvrir et connecter ChatGPT" }).click();
+    await expect(appPage.getByRole("heading", { name: "Connexion à ChatGPT requise" })).toBeVisible();
+    await capture(appPage, viewport.width, "01b-connexion-chrome");
+    await appPage.getByRole("button", { name: "Fermer", exact: true }).click();
 
     await reset();
     await expandNavigation(appPage);

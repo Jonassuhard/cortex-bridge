@@ -23,7 +23,7 @@ def valid_payload() -> dict[str, object]:
             "os": "macOS fixture",
             "python": "3.11 fixture",
             "node": "22 fixture",
-            "browserDriver": "playwright",
+            "browserDriver": "chrome_extension",
             "executorKind": "deterministic",
             "simulation": True,
         },

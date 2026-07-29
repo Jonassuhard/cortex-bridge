@@ -89,28 +89,30 @@ class InstallerTest(unittest.TestCase):
         self.assertNotEqual(normal["plan_hash"], rebuild["plan_hash"])
         self.assertNotEqual(normal["commands"], rebuild["commands"])
 
-    def test_browser_download_is_declared_inside_owned_staging(self):
+    def test_default_install_prepares_the_extension_without_downloading_playwright(self):
         plan = self.dry_plan()
-        browser = next(command for command in plan["commands"] if command["id"] == "install_browser")
-
+        command_ids = {command["id"] for command in plan["commands"]}
+        self.assertNotIn("install_browser", command_ids)
         self.assertEqual(
-            browser.get("environment"),
-            {
-                "PLAYWRIGHT_BROWSERS_PATH": str(
-                    (self.cortex_home / ".install-staging" / "browser-cache").resolve()
-                )
-            },
+            plan["chrome_extension_path"],
+            str((ROOT / "chrome-extension").resolve()),
         )
+        extension_pause = next(
+            pause for pause in plan["human_pauses"] if pause["kind"] == "extension"
+        )
+        self.assertIn("explicit approval", extension_pause["detail"])
+        self.assertIn("chrome://extensions", extension_pause["detail"])
 
-    def test_browser_runtime_is_moved_owned_and_removed(self):
+    def test_install_does_not_claim_or_remove_the_repository_extension(self):
         self.approved_install()
         browser_cache = (self.cortex_home / "browser-cache").resolve()
         manifest = json.loads(
             (self.cortex_home / "install" / "owned.json").read_text(encoding="utf-8")
         )
 
-        self.assertTrue((browser_cache / "browser-fixture").is_file())
-        self.assertIn(str(browser_cache), manifest["resources"])
+        self.assertFalse(browser_cache.exists())
+        self.assertNotIn(str(browser_cache), manifest["resources"])
+        self.assertNotIn(str((ROOT / "chrome-extension").resolve()), manifest["resources"])
 
         dry = self.run_script("uninstall.sh", "--dry-run", "--json")
         self.assertEqual(dry.returncode, 0, dry.stderr)
@@ -119,7 +121,7 @@ class InstallerTest(unittest.TestCase):
             "uninstall.sh", "--approve-plan", plan["plan_hash"], "--json"
         )
         self.assertEqual(applied.returncode, 0, applied.stderr)
-        self.assertFalse(browser_cache.exists())
+        self.assertTrue((ROOT / "chrome-extension" / "manifest.json").is_file())
 
     def test_ui_rebuild_uses_the_repository_npm_wrapper(self):
         rebuild = self.dry_plan("--rebuild-ui")
@@ -130,17 +132,21 @@ class InstallerTest(unittest.TestCase):
         self.assertEqual(commands["npm_ci"], [wrapper, "ci"])
         self.assertEqual(commands["build_ui"], [wrapper, "run", "build"])
 
-    def test_webbridge_has_no_fake_official_distribution_link(self):
+    def test_chrome_extension_is_the_required_manual_product_dependency(self):
         manifest = json.loads(
             (ROOT / "install/dependencies.json").read_text(encoding="utf-8")
         )
-        webbridge = next(
+        extension = next(
             dependency
             for dependency in manifest["dependencies"]
-            if dependency["id"] == "webbridge"
+            if dependency["id"] == "chrome-extension"
         )
-        self.assertIsNone(webbridge["official_url"])
-        self.assertIn("no public official distribution", webbridge["reason"])
+        self.assertTrue(extension["required"])
+        self.assertTrue(extension["human_pause"])
+        self.assertEqual(
+            extension["official_url"],
+            "https://developer.chrome.com/docs/extensions/get-started/tutorial/hello-world#load-unpacked",
+        )
 
     def test_wrong_or_missing_approval_never_mutates_target(self):
         result = self.run_script("install.sh", "--approve-plan", "0" * 64, "--json")
@@ -188,7 +194,24 @@ class InstallerTest(unittest.TestCase):
         self.assertEqual(payload["schema_version"], 1)
         self.assertEqual(payload["version"], "0.5.0")
         self.assertIn("deterministic", payload["modes"])
+        self.assertTrue(payload["modes"]["chrome_extension"])
+        extension = next(check for check in payload["checks"] if check["id"] == "chrome_extension")
+        self.assertEqual(extension["status"], "pass")
+        self.assertEqual(extension["path"], str((ROOT / "chrome-extension").resolve()))
         self.assertIsInstance(payload["checks"], list)
+
+    def test_public_install_docs_use_the_real_chrome_tab_flow(self):
+        docs = [
+            ROOT / "README.md",
+            ROOT / "INSTALL.md",
+            ROOT / "docs/agent-installation.md",
+            ROOT / "docs/chatgpt-web-transport.md",
+        ]
+        source = "\n".join(path.read_text(encoding="utf-8") for path in docs)
+        self.assertIn("chrome://extensions", source)
+        self.assertIn("Open and connect ChatGPT", source)
+        self.assertNotIn("dedicated Playwright Chromium profile", source)
+        self.assertNotIn("dedicated Chromium profile", source)
 
     def test_uninstall_removes_only_manifest_owned_resources(self):
         self.approved_install()

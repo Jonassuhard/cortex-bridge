@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 
 const args = process.argv.slice(2);
 if (args.includes("--help") || args.length === 0) {
-  process.stdout.write(`Usage: node scripts/render-architecture-media.mjs --url <loopback-url> --output <png> [--gif <gif>] [--frames <count>]\n\nRenders the shared in-app Info diagram with Playwright. The PNG verifies reduced motion; the optional GIF captures the live CSS flow.\n`);
+  process.stdout.write(`Usage: node scripts/render-architecture-media.mjs --url <loopback-url> --output <png> [--gif <gif>] [--frames <count>]\n\nRenders the shared in-app Info diagram. Playwright is used only as the rendering test tool; the diagram describes the Chrome extension product flow.\n`);
   process.exit(0);
 }
 const value = (flag) => args[args.indexOf(flag) + 1];

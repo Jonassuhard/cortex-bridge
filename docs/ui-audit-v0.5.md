@@ -4,7 +4,7 @@ Audit date: 2026-07-29
 
 Surfaces: synthetic fixture build at 375 × 812, 768 × 1024 and 1440 × 900
 
-Evidence: 33 committed screenshots, Playwright interaction tests and Axe scans
+Evidence: 36 committed synthetic screenshots, Playwright interaction tests and Axe scans
 
 ## Release verdict
 
@@ -46,6 +46,6 @@ The fixture interface is understandable, responsive and internally consistent. N
 
 ## Remaining manual checks
 
-- Sign in to the dedicated Playwright profile and confirm the live ChatGPT adapter still recognizes the current DOM.
+- Load the unpacked extension in the owner’s Chrome profile and confirm the live ChatGPT tab, retry dialog and selectors with redacted evidence.
 - Run the three approved disposable mini-site missions only after the owner authorizes the account and workspace.
 - Confirm installation on a second clean macOS user before calling the release generally available.

@@ -1,38 +1,54 @@
 # Security model
 
-Cortex Bridge reduces the authority of browser-driven instructions; it is not a virtual machine or a substitute for backups.
+Cortex Bridge reduces the authority of browser-driven instructions. It is not
+a virtual machine or a substitute for backups.
 
-## Browser boundary
+## Chrome boundary
 
-- The service binds to loopback.
-- A dedicated persistent profile separates Cortex activity from the normal browser profile.
-- The user performs login and account decisions.
-- The adapter does not call private ChatGPT endpoints or bypass blockers.
-- A conversation identity is checked before delivery.
-- Uncertain delivery fails closed and is never retried automatically.
+- HTTP and WebSocket services bind to loopback.
+- The Manifest V3 extension has host access only to `chatgpt.com` and
+  `127.0.0.1:8420`.
+- It requests no cookie, password, history, debugger, or all-sites permission.
+- Pairing tokens contain 256 bits of entropy, expire after 60 seconds, and are
+  consumed once.
+- Unpaired connections may heartbeat and request pairing only.
+- Commands use a fixed allowlist and structured payloads. Raw remote
+  JavaScript is rejected.
+- The user performs login, terms, CAPTCHA, rate-limit, and account decisions.
+- Conversation identity is checked before delivery; uncertain delivery is
+  never retried automatically.
+- A disconnect fails closed and never falls back to Playwright.
 
 ## Execution boundary
 
 - Chat messages cannot directly trigger local tools.
-- Execution starts only after a preflight identifies the workspace, capabilities, approval policy and limits.
-- Paths must resolve inside the approved workspace; absolute paths, traversal and symlink escapes are rejected.
-- Writes and processes follow the selected approval policy.
-- Process arguments are validated as vectors without a shell and are bounded by time and output limits.
-- Deployment, publishing, payment, credentials and account modification are unsupported.
+- Execution starts after a preflight identifies workspace, capabilities,
+  approval policy, and limits.
+- Paths must resolve inside the approved workspace; traversal, absolute paths,
+  and symlink escapes are rejected.
+- Process arguments are vectors without a shell and are bounded by time and
+  output limits.
+- Deployment, publishing, payment, credentials, and account modification are
+  unsupported.
 
-## Attachments
+## Attachments and screenshots
 
-- The backend validates extension, MIME signature and supported Office containers.
-- Images are limited to 20 MiB; other supported files are limited to 512 MiB.
-- Client paths are rejected. Opaque attachment tokens expire and resolve server-side.
-- Staged files are cleaned on expiry and restart.
+- The backend validates extension, MIME signature, and Office containers.
+- Client paths are rejected; opaque attachment tokens expire and resolve only
+  to managed files.
+- The extension v0.5 transfer limit is 25 MiB.
+- Transfers use bounded chunks and require a visible ChatGPT attachment chip.
+- Screenshots must be PNG data from the visible bound ChatGPT tab and are
+  written atomically under `CORTEX_HOME`.
 
-## Runtime ownership
+## Runtime ownership and release privacy
 
-Mutable state lives under the absolute `CORTEX_HOME`. Start and stop records include process identity data. Stop refuses a foreign listener, a stale record and PID reuse rather than signalling an unverified process.
+Start/stop records contain exact process identity. Stop refuses foreign
+listeners, stale records, and PID reuse.
 
-## Release privacy
+Public media must be synthetic or redacted. Release gates scan the tree and
+history for secrets, private markers, paths, links, unknown binaries, metadata,
+and OCR text. Live evidence never records account identity, cookies,
+conversation content, or unredacted screenshots.
 
-Public media must be synthetic. The release gate scans tracked and untracked public files for private markers, encoded home paths, unapproved links, unknown binaries, image metadata and OCR text in English and French. Secret scanning covers the current tree and repository history.
-
-See [SECURITY.md](../SECURITY.md) for reporting and release requirements.
+See [SECURITY.md](../SECURITY.md) for reporting requirements.

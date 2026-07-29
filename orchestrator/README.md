@@ -5,8 +5,8 @@ This directory keeps design notes for two orchestration paths. It is not a separ
 | Path | Role in v0.5 |
 |---|---|
 | [`api/`](api/) | Reference architecture for a future official-API transport |
-| [`browser-bridge/`](browser-bridge/) | Compatibility notes for the experimental consumer-web transport |
+| [`browser-bridge/`](browser-bridge/) | Notes for the local Chrome extension transport |
 
-The implemented v0.5 browser path lives in `transport/`, is selected through `transport/browser.py`, and uses a dedicated Playwright profile by default. The execution state machine lives in `orchestration/`.
+The implemented v0.5 browser path lives in `chrome-extension/` and `transport/`, is selected through `transport/browser.py`, and uses the user's existing Chrome window. Playwright is development-only. The execution state machine lives in `orchestration/`.
 
 No orchestrator path receives execution authority directly. Chat messages remain messages; local actions require a separate preflight and policy decision.

@@ -1,11 +1,16 @@
-# Consumer web transport notes
+# Chrome extension transport notes
 
-The implemented v0.5 transport is in `transport/`. This directory contains compatibility notes only.
+The implemented v0.5 transport lives in `chrome-extension/` and `transport/`.
+It links Cortex to ChatGPT tabs in the user's existing Chrome window through an
+authenticated loopback WebSocket and structured commands.
 
-Cortex Bridge uses a dedicated persistent Playwright Chromium profile by default. The optional WebBridge adapter exists for compatibility, but Cortex Bridge has no verified public distribution URL for WebBridge and therefore does not install it.
+This directory contains architecture notes only. Login, CAPTCHA, rate limits,
+account decisions, and third-party terms remain the user's responsibility.
+Cortex does not enter credentials, call private ChatGPT endpoints, or fall back
+to a separate browser.
 
-Browser automation targets a changing consumer interface. Login, CAPTCHA, rate limits, account decisions and third-party terms remain the user’s responsibility. Cortex Bridge does not bypass them, enter credentials or call private ChatGPT endpoints.
+Use synthetic fixtures in CI. A real ChatGPT session is a manual owner gate
+with redacted evidence.
 
-Use synthetic fixtures in automated tests. A live ChatGPT session is a manual owner gate and must never run in CI.
-
-See [ChatGPT web transport](../../docs/chatgpt-web-transport.md) and [legal notes](../../docs/legal-notes.md).
+See [ChatGPT web transport](../../docs/chatgpt-web-transport.md) and
+[security model](../../docs/security-model.md).
