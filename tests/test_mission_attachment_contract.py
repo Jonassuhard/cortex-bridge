@@ -30,7 +30,7 @@ class MissionAttachmentContractTest(unittest.TestCase):
     def test_client_paths_and_malformed_tokens_are_rejected(self):
         common = {"objective": "Inspecter", "workspace": "/tmp/cortex-demo-workspace", "conversation_url": "https://chatgpt.com/c/fixture"}
         with self.assertRaises(ValidationError):
-            missions.MissionIn(**common, attachment_paths=["/Users/example/secret.txt"])
+            missions.MissionIn(**common, attachment_paths=["/tmp/absolute-secret.txt"])
         with self.assertRaises(ValidationError):
             missions.MissionIn(**common, attachment_tokens=["../escape"])
 

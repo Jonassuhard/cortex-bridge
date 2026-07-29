@@ -28,6 +28,9 @@ sessions/
 # Frontend build artifacts
 frontend/node_modules/
 frontend/.next/
+frontend/coverage/
+frontend/playwright-report/
+frontend/test-results/
 
 # Isolated implementation and review workspaces
 .worktrees/

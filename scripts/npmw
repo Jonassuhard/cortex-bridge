@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if command -v corepack >/dev/null 2>&1; then
+  exec corepack npm "$@"
+fi
+
+printf '%s\n' \
+  'Corepack is required to run the npm version pinned by frontend/package.json.' \
+  'Install a supported Node.js distribution that includes Corepack.' >&2
+exit 2

@@ -39,9 +39,9 @@
     {
       "id": "webbridge",
       "required": false,
-      "official_url": "https://github.com/",
+      "official_url": null,
       "human_pause": true,
-      "reason": "compatibility extension requires manual review and installation"
+      "reason": "no public official distribution; compatibility extension requires manual review and installation"
     }
   ]
 }

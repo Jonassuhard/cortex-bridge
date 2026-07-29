@@ -96,17 +96,18 @@ def build_install_plan(*, rebuild_ui: bool = False, ollama_model: str | None = N
             ),
         ])
     if rebuild_ui:
+        npm_wrapper = str(ROOT / "scripts" / "npmw")
         commands.extend([
             _command(
                 "npm_ci",
-                ["npm", "ci"],
+                [npm_wrapper, "ci"],
                 "https://docs.npmjs.com/cli/v11/commands/npm-ci",
                 400 * 1024 * 1024,
                 "remove frontend/node_modules if it was created by this approved run",
             ),
             _command(
                 "build_ui",
-                ["npm", "run", "build"],
+                [npm_wrapper, "run", "build"],
                 "https://nextjs.org/docs/app/api-reference/cli/next",
                 200 * 1024 * 1024,
                 "restore the previous generated frontend artifact",

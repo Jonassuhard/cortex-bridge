@@ -1,6 +1,6 @@
 {
   "name": "cortex-bridge-ui",
-  "version": "0.2.0",
+  "version": "0.5.0",
   "private": true,
   "packageManager": "npm@11.18.0",
   "type": "module",
@@ -29,8 +29,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run && tsx --test lib/runtimeTruth.test.mts test/privacy.test.mts test/next-image-optimizer.test.mts",
     "test:unit": "vitest run",
-    "test:runtime": "tsx --test lib/runtimeTruth.test.mts test/privacy.test.mts test/next-image-optimizer.test.mts",
-    "test:coverage": "vitest run --coverage && tsx --test lib/runtimeTruth.test.mts test/privacy.test.mts test/next-image-optimizer.test.mts",
+    "test:runtime": "tsx --test lib/runtimeTruth.test.mts test/privacy.test.mts test/next-image-optimizer.test.mts test/build-config.test.mts",
+    "test:coverage": "vitest run --coverage && tsx --test lib/runtimeTruth.test.mts test/privacy.test.mts test/next-image-optimizer.test.mts test/build-config.test.mts",
     "test:e2e": "playwright test",
     "test:a11y": "playwright test --grep @a11y"
   },

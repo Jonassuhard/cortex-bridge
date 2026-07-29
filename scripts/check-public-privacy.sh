@@ -4,10 +4,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MARKERS="${CORTEX_PRIVACY_MARKERS_FILE:-}"
 URL_ALLOWLIST="${CORTEX_PUBLIC_URL_ALLOWLIST_FILE:-}"
+FINGERPRINTS="${CORTEX_PRIVACY_FINGERPRINTS_FILE:-}"
 
 usage() {
   printf '%s\n' \
-    'Usage: check-public-privacy.sh --markers FILE --url-allowlist FILE [--root DIR]' \
+    'Usage: check-public-privacy.sh --markers FILE --fingerprints FILE --url-allowlist FILE [--root DIR]' \
     '' \
     'The marker file is owner-supplied and must contain at least one non-comment line.' \
     'Findings print only category, relative path, and line number.'
@@ -27,6 +28,10 @@ while [[ $# -gt 0 ]]; do
       URL_ALLOWLIST="$2"
       shift 2
       ;;
+    --fingerprints)
+      FINGERPRINTS="$2"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -39,10 +44,12 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-python3 - "$ROOT" "$MARKERS" "$URL_ALLOWLIST" <<'PY'
+python3 - "$ROOT" "$MARKERS" "$URL_ALLOWLIST" "$FINGERPRINTS" <<'PY'
 from __future__ import annotations
 
 import os
+import hashlib
+import json
 import re
 import shutil
 import subprocess
@@ -54,6 +61,7 @@ from urllib.parse import unquote
 root = Path(sys.argv[1]).expanduser().resolve()
 markers_path = Path(sys.argv[2]).expanduser().resolve() if sys.argv[2] else None
 allowlist_path = Path(sys.argv[3]).expanduser().resolve() if sys.argv[3] else None
+fingerprints_path = Path(sys.argv[4]).expanduser().resolve() if sys.argv[4] else None
 findings: set[tuple[str, str, int]] = set()
 
 
@@ -77,8 +85,36 @@ def read_control(path: Path | None, category: str, require_value: bool) -> list[
 
 markers = read_control(markers_path, "marker_config", require_value=True)
 allowed_urls = set(read_control(allowlist_path, "url_allowlist_config", require_value=False))
+if fingerprints_path is None or not fingerprints_path.is_file():
+    report("fingerprint_config", "control")
+    fingerprints: list[dict[str, object]] = []
+else:
+    try:
+        loaded_fingerprints = json.loads(fingerprints_path.read_text(encoding="utf-8"))
+        if not isinstance(loaded_fingerprints, list):
+            raise ValueError("fingerprints must be a list")
+        fingerprints = []
+        for item in loaded_fingerprints:
+            if not isinstance(item, dict):
+                raise ValueError("fingerprint entries must be objects")
+            length = item.get("length")
+            digest = item.get("sha256")
+            category = item.get("category")
+            if (
+                not isinstance(length, int)
+                or length < 1
+                or not isinstance(digest, str)
+                or not re.fullmatch(r"[0-9a-f]{64}", digest)
+                or not isinstance(category, str)
+                or not category.strip()
+            ):
+                raise ValueError("invalid fingerprint entry")
+            fingerprints.append(item)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+        report("fingerprint_config", "control")
+        fingerprints = []
 excluded_controls = {
-    path for path in (markers_path, allowlist_path) if path is not None
+    path for path in (markers_path, allowlist_path, fingerprints_path) if path is not None
 }
 
 
@@ -118,7 +154,7 @@ def listed_files() -> list[Path]:
     )
 
 
-URL_RE = re.compile(r"https?://[^\s<>\"'\)\]]+", re.IGNORECASE)
+URL_RE = re.compile(r"https?://[^\s<>\"'`\)\]]+", re.IGNORECASE)
 PRIVATE_PATH_RE = re.compile(
     r"(?:file:/{2,3})?/(?:users|home|volumes)/[^\s<>\"']+",
     re.IGNORECASE,
@@ -131,19 +167,86 @@ def decoded_variants(text: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys((text, once, twice)))
 
 
+def normalized_privacy_text(text: str) -> str:
+    decoded = text
+    for _ in range(3):
+        previous = decoded
+        decoded = re.sub(
+            r"\\u\{([0-9a-f]{1,6})\}",
+            lambda match: chr(int(match.group(1), 16)),
+            decoded,
+            flags=re.IGNORECASE,
+        )
+        decoded = re.sub(
+            r"\\u([0-9a-f]{4})",
+            lambda match: chr(int(match.group(1), 16)),
+            decoded,
+            flags=re.IGNORECASE,
+        )
+        decoded = re.sub(
+            r"\\x([0-9a-f]{2})",
+            lambda match: chr(int(match.group(1), 16)),
+            decoded,
+            flags=re.IGNORECASE,
+        )
+        decoded = unquote(decoded.replace("+", " "))
+        if decoded == previous:
+            break
+    return decoded.casefold()
+
+
+def fingerprint_categories(text: str) -> set[str]:
+    if not fingerprints:
+        return set()
+    normalized = normalized_privacy_text(text)
+    lengths = {int(item["length"]) for item in fingerprints}
+    fingerprints_by_key = {
+        (int(item["length"]), str(item["sha256"])): str(item["category"])
+        for item in fingerprints
+    }
+    categories: set[str] = set()
+    tokens = re.findall(r"[\w.@+-]+", normalized, flags=re.UNICODE)
+    for token in tokens:
+        characters = list(token)
+        for length in lengths:
+            for index in range(0, len(characters) - length + 1):
+                digest = hashlib.sha256(
+                    "".join(characters[index : index + length]).encode("utf-8")
+                ).hexdigest()
+                category = fingerprints_by_key.get((length, digest))
+                if category:
+                    categories.add(category)
+    for length in (value for value in lengths if value > 12):
+        characters = list(normalized)
+        for index in range(0, len(characters) - length + 1):
+            digest = hashlib.sha256(
+                "".join(characters[index : index + length]).encode("utf-8")
+            ).hexdigest()
+            category = fingerprints_by_key.get((length, digest))
+            if category:
+                categories.add(category)
+    return categories
+
+
 def scan_text(
     text: str,
     relative: str,
     forced_category: str | None = None,
     enforce_url_allowlist: bool = True,
+    scan_fingerprints: bool = True,
+    scan_private_paths: bool = True,
 ) -> None:
     lower_text = text.casefold()
+    if scan_fingerprints:
+        for category in fingerprint_categories(text):
+            safe_category = re.sub(r"[^a-z0-9]+", "_", category.casefold()).strip("_")
+            report(forced_category or f"private_fingerprint_{safe_category}", relative, 0)
     for marker in markers:
         if marker.casefold() in lower_text:
             line = lower_text[: lower_text.index(marker.casefold())].count("\n") + 1
             report(forced_category or "private_marker", relative, line)
     for variant in decoded_variants(text):
-        match = PRIVATE_PATH_RE.search(variant)
+        match = PRIVATE_PATH_RE.search(variant) if scan_private_paths else None
         if match:
             line = variant[: match.start()].count("\n") + 1
             report(forced_category or "private_path", relative, line)
@@ -194,7 +297,14 @@ for path in listed_files():
         "Pipfile.lock",
         "uv.lock",
     }
-    scan_text(text, relative, enforce_url_allowlist=not lockfile)
+    public_navigation_document = Path(relative).suffix.lower() in {".md", ".markdown"}
+    scan_text(
+        text,
+        relative,
+        enforce_url_allowlist=public_navigation_document and not lockfile,
+        scan_fingerprints=not lockfile,
+        scan_private_paths=relative != "tests/test_public_privacy.py",
+    )
 
 
 def resolve_tool(env_name: str, fallback: str) -> str | None:

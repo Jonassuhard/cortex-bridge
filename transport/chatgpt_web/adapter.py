@@ -1222,7 +1222,7 @@ _CONVERSATIONS_JS = r"""
     if (unchanged >= 3 || container.scrollTop + container.clientHeight >= container.scrollHeight - 4) break;
   }
   if (container) container.scrollTop = 0;
-  // Sidebar order is recency order: keep the 50 most recent (Jonas spec P1d).
+  // Sidebar order is recency order: keep the 50 most recent conversations.
   return JSON.stringify(Array.from(seen.values()).slice(0, 50));
 })()
 """

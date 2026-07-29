@@ -1,88 +1,62 @@
 # Troubleshooting
 
-## Mission pauses with `DELIVERY_UNCERTAIN`
-
-The transport could not prove that a send landed. **It never resends on its
-own.** Open the ChatGPT tab and look:
-
-- **Contract/report visible in the chat** → it was delivered; resume the
-  mission (the resume logic only re-sends what was never proven).
-- **Text sitting in the composer, unsent** → resume: the send is idempotent
-  and will click send on the existing draft, not duplicate it.
-- **Nothing there** → resume sends the payload normally.
-
-Known causes (all fixed as of 2026-07-24, kept here for reference):
-
-| Symptom | Cause | Fix shipped |
-|---|---|---|
-| Send always failed | ProseMirror ignores `textContent =` | `execCommand('insertText')` |
-| Voice mode opened instead of sending | `.composer-submit-button-color` matches "Démarrer le mode vocal" before React arms the real button | Only `data-testid="send-button"` / send aria-labels are accepted |
-| Send reported failed but message visible | Post-send check raced the SPA render | Poll ≤ 30 s for the message to appear |
-| Report send "not visible" though present | Markdown eats the ` ```cortex-report ` fence and its label | Delivery marker = first substantial content line, matched in message + code blocks |
-| Draft lost | Send attempted while ChatGPT was still streaming | Transport waits out the stream first |
-| `NO_DECISION_BLOCK` on replies that look perfect (thinking model, 2026-07-25) | Empty assistant placeholder extracted during the paint gap between "stop gone" and the code block render | Empty-reply grace window (45 s) + stability signature covering code blocks |
-
-## Diagnosing a broken ChatGPT UI (probe)
-
-`GET http://127.0.0.1:8420/api/transport/probe` is a read-only DOM health
-check on the live tab. It tells you **which selector currently matches each
-role** (composer, messages, send, stop), with `failures` (mission-critical:
-composer, messages) vs `warnings` (send/stop are absent by design on an
-idle page). A watchdog Automation re-checks every 30 min and notifies only
-on failure. If a `failures` entry appears, the candidate lists in
-`transport/chatgpt_web/adapter.py` (`_STATE_JS`, `_SEND_JS`, `_PROBE_JS`)
-need a new candidate — the probe's `diagnostics.buttons` dump tells you
-what the new UI actually renders.
-
-## Mission pauses with `CONVERSATION_MISMATCH`
-
-The page no longer shows the conversation the mission is locked to. This
-protects you from mission content leaking into the wrong chat. Bring the
-locked conversation back (its URL is in the mission's conversation binding)
-and resume.
-
-Note: right after the first send, ChatGPT shows a transient `/c/WEB:<uuid>`
-URL before the canonical `/c/<uuid>`. The transport waits for the canonical
-form before locking; if you see a binding with a `WEB:` identity (created
-before that fix), start a fresh mission.
-
-## `LOGIN_REQUIRED` / `CAPTCHA` / `RATE_LIMIT`
-
-ChatGPT is asking something of the human. Solve it in the tab (log in, pass
-the challenge, wait out the rate limit) — the transport **never** bypasses
-these — then resume.
-
-## Resume fails with `cannot re-attach conversation`
-
-The conversation binding holds a URL that no longer resolves to the same
-identity (deleted conversation, logged-out session). Start a new mission on
-a fresh conversation; the store keeps the old mission for audit.
-
-## The mission loops protocol violations
-
-ChatGPT is not following the cortex.v1 contract (missing/duplicate fenced
-block, wrong iteration, non-UUID actionId, unknown argument). The loop
-reports each violation back; after 3 consecutive ones the mission fails.
-The contract already embeds the tool argument schemas — if you see
-`MALFORMED_ARGUMENTS: unknown argument ...`, check the report: it tells
-ChatGPT the exact schema to use next.
-
-## ChatGPT changed its frontend
-
-Selectors live in `transport/chatgpt_web/adapter.py` (`_STATE_JS`,
-`_SEND_JS`, `_CONVERSATIONS_JS`) and are documented in
-[phase5-dom-contract.md](phase5-dom-contract.md). While you fix them,
-missions still work in [manual fallback](manual-fallback.md) mode.
-
-## Console won't start / port busy
+Start with machine-readable diagnostics:
 
 ```bash
-lsof -tiTCP:8420 -sTCP:LISTEN | xargs kill
-cd console && python3 server.py
+./scripts/cortex.sh doctor --json
+./scripts/cortex.sh status --json
 ```
 
-## Ollama executor unreachable
+## The console does not start
 
-The console checks `http://127.0.0.1:11434`. If models live on an external
-drive, make sure it is mounted before starting Ollama
-(`ln -sfn /Volumes/YOUR_DRIVE/ollama/models ~/.ollama/models`).
+Run doctor. If the port is foreign, Cortex Bridge refuses to take ownership or stop that process. Change the port or stop the foreign service yourself after identifying it.
+
+## The fallback diagnostic page appears
+
+The static UI is missing or invalid. Rebuild it:
+
+```bash
+./scripts/build-ui.sh
+```
+
+The fallback page cannot send messages or start execution.
+
+## ChatGPT requires login, CAPTCHA or rate-limit recovery
+
+Open the dedicated Chromium profile and resolve the account state manually. Cortex Bridge does not type credentials, solve CAPTCHA or bypass a rate limit.
+
+## Conversation switching times out
+
+Selection has a 10-second hard budget. Use **Recharger la conversation** after checking the dedicated browser. Cortex Bridge does not retry a send automatically.
+
+## A message is marked uncertain
+
+Check the ChatGPT conversation directly. Delivery uncertainty means the click may have happened but confirmation failed. Sending again automatically could duplicate the message, so Cortex Bridge pauses.
+
+## A third conversation cannot send
+
+Two distinct conversation writers are already active. Finish or cancel one. The blocked conversation’s draft and selected file should remain intact.
+
+## An attachment is rejected
+
+Check extension, content and size. Images are limited to 20 MiB. Other supported files are limited to 512 MiB. Office files must contain the correct DOCX, XLSX or PPTX internal structure. Symlinks and misleading extensions are rejected.
+
+## Execution is unavailable
+
+Open the preflight and verify the workspace, executor, approvals and requested capabilities. Write, process and network permissions are disabled by default. Ollama is optional; deterministic execution should remain available.
+
+## Stop refuses the process
+
+The persisted owner no longer matches PID, start time, executable, arguments, token or port. Cortex Bridge refuses to signal it. Inspect `doctor --json` and identify the process outside Cortex Bridge.
+
+## Installer approval fails
+
+Any option change creates a different plan hash. Run a new dry-run, review it and approve the new exact hash. Never copy a hash from another machine or an older plan.
+
+## Logs
+
+```bash
+./scripts/cortex.sh logs
+```
+
+Logs live under `CORTEX_HOME`. Remove personal content before sharing a report.

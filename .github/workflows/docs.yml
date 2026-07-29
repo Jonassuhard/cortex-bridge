@@ -1,0 +1,51 @@
+name: Public documentation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "**/*.md"
+      - "docs/**"
+      - "frontend/out/**"
+      - "scripts/check-public-privacy.sh"
+      - "scripts/verify-links.sh"
+  pull_request:
+    paths:
+      - "**/*.md"
+      - "docs/**"
+      - "frontend/out/**"
+      - "scripts/check-public-privacy.sh"
+      - "scripts/verify-links.sh"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  public-tree:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.11"
+      - name: Install public-tree scanners
+        run: brew install exiftool gitleaks tesseract-lang
+      - name: Verify public text, binaries, metadata and OCR
+        run: |
+          ./scripts/check-public-privacy.sh \
+            --markers tests/fixtures/privacy/ci-markers.txt \
+            --fingerprints scripts/privacy-fingerprints.json \
+            --url-allowlist scripts/public-url-allowlist.txt
+      - name: Verify public links
+        run: ./scripts/verify-links.sh
+      - name: Verify repository history secrets
+        run: gitleaks detect --source . --no-banner --redact --log-opts="--all"

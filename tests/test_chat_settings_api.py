@@ -2,8 +2,7 @@
 
 The suite drives the real FastAPI application against the local ChatGPT HTML
 fixture. It never opens the user's browser and never sends traffic to
-chatgpt.com. It covers the conversation-first endpoints added for the new
-Preuvia-inspired UI.
+chatgpt.com. It covers the conversation-first release endpoints.
 """
 
 from __future__ import annotations
@@ -765,15 +764,19 @@ class ChatSettingsApiTestCase(unittest.TestCase):
         self.assertEqual(status, 422)
 
     def test_10d_loaded_invalid_browser_settings_fail_closed_and_external_paths_are_anonymized(self):
+        self.assertEqual(
+            settings_api.DEFAULT_SETTINGS["default_workspace"],
+            str(settings_api.RUNTIME_PATHS.home / "workspaces"),
+        )
         settings_api.SETTINGS_FILE.write_text(json.dumps({
             "browser_transport": "selenium",
             "browser_profile_root": "",
         }), encoding="utf-8")
         with self.assertRaises(ValueError):
             settings_api.load_settings()
-        anonymized = settings_api._anonymize("/Volumes/ClientSecret/browser-profile")
+        anonymized = settings_api._anonymize("/tmp/private-volume/browser-profile")
         self.assertNotIn("Volumes", anonymized)
-        self.assertNotIn("ClientSecret", anonymized)
+        self.assertNotIn("private-volume", anonymized)
 
     def test_10e_onboarding_invalid_persisted_browser_settings_are_structured(self):
         settings_api.SETTINGS_FILE.write_text(json.dumps({
@@ -805,14 +808,17 @@ class ChatSettingsApiTestCase(unittest.TestCase):
             self.assertIn("Cortex Bridge — Local orchestration client", html)
         else:
             self.assertIn('<span class="word">Cortex<b>Bridge</b></span>', html)
-            self.assertIn("Mission autonome", html)
-            self.assertIn("gridfx", html)
+            self.assertIn("Interface principale indisponible", html)
+            self.assertNotIn("Mission autonome", html)
+            self.assertNotIn("/api/missions", html)
         # The standalone safety net must always ship, whatever is served.
         fallback = REPO_ROOT / "frontend" / "fallback" / "index.html"
         self.assertTrue(fallback.is_file())
         fallback_html = fallback.read_text(encoding="utf-8")
         self.assertIn('<span class="word">Cortex<b>Bridge</b></span>', fallback_html)
-        self.assertIn("Mission autonome", fallback_html)
+        self.assertIn("uniquement au diagnostic", fallback_html)
+        self.assertNotIn("Mission autonome", fallback_html)
+        self.assertNotIn("/api/missions", fallback_html)
 
 
 

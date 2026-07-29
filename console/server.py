@@ -29,7 +29,6 @@ from cortex_paths import build_paths, migrate_legacy_state
 from version import current_version
 
 BASE_DIR = Path(__file__).resolve().parent
-STATIC_DIR = BASE_DIR / "static"
 RUNTIME_PATHS = build_paths()
 DATA_DIR = RUNTIME_PATHS.home
 STORE_FILE = RUNTIME_PATHS.iterations

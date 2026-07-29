@@ -1,0 +1,13 @@
+[
+  {"category":"personal account","length":8,"sha256":"b53fd2a5e757a97ced3d59c11e56f30f793b725e36a30f478d575ff41f340c0d"},
+  {"category":"personal account","length":5,"sha256":"bf74e4a280affafbdf6692bc6a9f3d66b03094fbfb4a91589bc7fd6b32664fdb"},
+  {"category":"personal account","length":6,"sha256":"edf7cda2e256d7234fcaeee199840a5ab3442683cd4c9ccc454e3b3fb541c331"},
+  {"category":"personal workspace","length":4,"sha256":"e4f9c522e1c89280e9561b825f4f24fe32b51ff82d61e5c2b1dfd0321c35a90b"},
+  {"category":"personal volume","length":3,"sha256":"f68037abc082783e2de1adb2db7d96e6c7a0b8efd04cefd82bc3cac5a0f1fb5e"},
+  {"category":"unrelated project","length":9,"sha256":"b944f71f549f394c0b2d0fa7a9b1a9305f29eef5ba95cc196ef485b3021ff327"},
+  {"category":"unrelated project","length":9,"sha256":"2914be845439fef5b6fa99f4c78ed344d786402336ebdb0f52f0fa652bd994b2"},
+  {"category":"unrelated project","length":9,"sha256":"c97945a464719a1773c92f5801524bb5139a0fbbfb7e6f8ae88bbe0f3d4f4a06"},
+  {"category":"unrelated design brand","length":7,"sha256":"baba03f4054218588fa0d9394c9bb5c771a335817bad42c2bf3070f5579680cd"},
+  {"category":"personal macOS home","length":7,"sha256":"3e44fb009899c0f900c1e74cd803b171d70a5d799d2cc933898d78e8d5fc17ca"},
+  {"category":"personal mounted volume","length":9,"sha256":"6592078a7321c458cd4586c3945ef79b7fd3b13947eba1faa78568364918178d"}
+]

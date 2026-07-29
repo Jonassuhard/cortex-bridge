@@ -30,10 +30,26 @@ PY
 fi
 
 if [[ -d frontend/node_modules ]]; then
-  (cd frontend && npm audit --audit-level=high && npm run test:unit && npm run test:coverage && npm run typecheck && npm run lint && npm run build && npm run test:e2e && npm run test:a11y)
+  (
+    cd frontend
+    "$ROOT/scripts/npmw" audit --audit-level=high
+    "$ROOT/scripts/npmw" run test:unit
+    "$ROOT/scripts/npmw" run test:coverage
+    "$ROOT/scripts/npmw" run typecheck
+    "$ROOT/scripts/npmw" run lint
+    "$ROOT/scripts/npmw" run build
+    "$PYTHON" "$ROOT/scripts/normalize-static-output.py" "$ROOT/frontend/out"
+    "$ROOT/scripts/npmw" run test:e2e
+    "$ROOT/scripts/npmw" run test:a11y
+  )
 else
   printf '\nFrontend dependencies are not installed; skipped TypeScript/ESLint.\n'
 fi
 
 "$PYTHON" scripts/verify-runtime.py --json
-if [[ -x scripts/check-public-privacy.sh ]]; then scripts/check-public-privacy.sh; fi
+if [[ -x scripts/check-public-privacy.sh ]]; then
+  scripts/check-public-privacy.sh \
+    --markers tests/fixtures/privacy/ci-markers.txt \
+    --fingerprints scripts/privacy-fingerprints.json \
+    --url-allowlist scripts/public-url-allowlist.txt
+fi

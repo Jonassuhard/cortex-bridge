@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import subprocess
 import tempfile
@@ -23,6 +24,8 @@ class PublicPrivacyTest(unittest.TestCase):
         self.allowlist.write_text("", encoding="utf-8")
         self.markers = self.root / "markers.txt"
         self.markers.write_text("Private Person Fixture\n", encoding="utf-8")
+        self.fingerprints = self.root / "fingerprints.json"
+        self.fingerprints.write_text("[]\n", encoding="utf-8")
 
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
@@ -45,6 +48,8 @@ class PublicPrivacyTest(unittest.TestCase):
                 str(marker_file or self.markers),
                 "--url-allowlist",
                 str(allowlist_file or self.allowlist),
+                "--fingerprints",
+                str(self.fingerprints),
             ],
             cwd=REPO_ROOT,
             env=env,
@@ -77,6 +82,33 @@ class PublicPrivacyTest(unittest.TestCase):
         self.assertNotIn(secret, result.stdout)
         self.assertNotIn(secret, result.stderr)
 
+    def test_hashed_fingerprint_detection_never_requires_or_prints_the_marker(self) -> None:
+        secret = "Private Person Fixture"
+        normalized = secret.casefold()
+        self.fingerprints.write_text(
+            json.dumps(
+                [
+                    {
+                        "category": "synthetic owner marker",
+                        "length": len(normalized),
+                        "sha256": hashlib.sha256(normalized.encode()).hexdigest(),
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
+        self.markers.write_text("Synthetic CI sentinel\n", encoding="utf-8")
+        (self.root / "README.md").write_text(
+            f"A fixture accidentally contains {secret}.\n", encoding="utf-8"
+        )
+
+        result = self.run_scan()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("private_fingerprint", result.stdout)
+        self.assertNotIn(secret, result.stdout)
+        self.assertNotIn(secret, result.stderr)
+
     def test_url_allowlist_is_exact_including_query_and_fragment(self) -> None:
         canonical = "https://docs.example.invalid/product"
         self.allowlist.write_text(f"{canonical}\n", encoding="utf-8")
@@ -92,10 +124,52 @@ class PublicPrivacyTest(unittest.TestCase):
         self.assertIn("unapproved_url", rejected.stdout)
         self.assertNotIn("profile=private", rejected.stdout)
 
+    def test_allowlisted_url_inside_markdown_code_span_is_exact(self) -> None:
+        canonical = "http://127.0.0.1:8420"
+        self.allowlist.write_text(f"{canonical}\n", encoding="utf-8")
+        (self.root / "README.md").write_text(
+            f"Open `{canonical}`.\n", encoding="utf-8"
+        )
+
+        result = self.run_scan()
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_dependency_lock_urls_do_not_require_public_navigation_allowlisting(self) -> None:
         (self.root / "package-lock.json").write_text(
             '{"resolved":"https://registry.example.invalid/pkg/-/pkg-1.0.0.tgz"}\n',
             encoding="utf-8",
+        )
+
+        result = self.run_scan()
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_dependency_lock_integrity_text_does_not_trigger_owner_fingerprint(self) -> None:
+        synthetic = "abc"
+        self.fingerprints.write_text(
+            json.dumps(
+                [{
+                    "category": "synthetic lock collision",
+                    "length": len(synthetic),
+                    "sha256": hashlib.sha256(synthetic.encode()).hexdigest(),
+                }]
+            ),
+            encoding="utf-8",
+        )
+        (self.root / "package-lock.json").write_text(
+            '{"integrity":"sha512-abc123"}\n', encoding="utf-8"
+        )
+
+        result = self.run_scan()
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_generated_frontend_urls_do_not_require_navigation_allowlisting(self) -> None:
+        output = self.root / "frontend" / "out" / "_next" / "static"
+        output.mkdir(parents=True)
+        (output / "bundle.js").write_text(
+            'const docs="https://react.dev/errors/fixture";\n', encoding="utf-8"
         )
 
         result = self.run_scan()

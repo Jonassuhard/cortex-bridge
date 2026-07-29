@@ -85,6 +85,27 @@ class InstallerTest(unittest.TestCase):
         self.assertNotEqual(normal["plan_hash"], rebuild["plan_hash"])
         self.assertNotEqual(normal["commands"], rebuild["commands"])
 
+    def test_ui_rebuild_uses_the_repository_npm_wrapper(self):
+        rebuild = self.dry_plan("--rebuild-ui")
+        commands = {
+            command["id"]: command["argv"] for command in rebuild["commands"]
+        }
+        wrapper = str(ROOT / "scripts" / "npmw")
+        self.assertEqual(commands["npm_ci"], [wrapper, "ci"])
+        self.assertEqual(commands["build_ui"], [wrapper, "run", "build"])
+
+    def test_webbridge_has_no_fake_official_distribution_link(self):
+        manifest = json.loads(
+            (ROOT / "install/dependencies.json").read_text(encoding="utf-8")
+        )
+        webbridge = next(
+            dependency
+            for dependency in manifest["dependencies"]
+            if dependency["id"] == "webbridge"
+        )
+        self.assertIsNone(webbridge["official_url"])
+        self.assertIn("no public official distribution", webbridge["reason"])
+
     def test_wrong_or_missing_approval_never_mutates_target(self):
         result = self.run_script("install.sh", "--approve-plan", "0" * 64, "--json")
         self.assertNotEqual(result.returncode, 0)

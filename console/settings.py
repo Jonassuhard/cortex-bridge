@@ -48,7 +48,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "fallback_executor": "orchestra-executor-fallback",
     "approval_policy": "workspace-write-with-approvals",
     "access_profile": "workspace",
-    "default_workspace": str(Path.home() / "Documents" / "kimi" / "workspace" / "e2e-sandbox"),
+    "default_workspace": str(RUNTIME_PATHS.home / "workspaces"),
     "max_iterations": 25,
     "max_duration_minutes": 60,
     "ollama_context": 8192,
