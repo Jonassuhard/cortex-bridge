@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "release": "0.5.0",
-  "commit": "059795a5c42da3a009a512cc8e533a819f272e2b",
-  "generatedAt": "2026-07-29T14:15:00Z",
+  "commit": "7af5fd1616ce62483c2b796c6f6e540d5210d317",
+  "generatedAt": "2026-07-29T15:38:42Z",
   "environment": {
     "os": "macOS 26.5.1",
     "python": "3.14.5",
@@ -12,15 +12,15 @@
     "simulation": true
   },
   "suites": {
-    "backend": {"passed": 328, "failed": 0, "skipped": 0},
+    "backend": {"passed": 334, "failed": 0, "skipped": 0},
     "frontendUnit": {"passed": 145, "failed": 0, "skipped": 0},
     "e2e": {"passed": 11, "failed": 0, "skipped": 1},
     "a11y": {"passed": 4, "failed": 0, "skipped": 0}
   },
   "performance": {
-    "cachedUsabilityMs": 321.2,
-    "switchP95Ms": 78.5,
-    "switchMaxMs": 78.5
+    "cachedUsabilityMs": 493.7,
+    "switchP95Ms": 230.5,
+    "switchMaxMs": 230.5
   },
   "dualConversations": {
     "runs": 10,
@@ -31,6 +31,34 @@
     "fixtureMissions": {"runs": 20, "passed": 20},
     "coldDualRuns": {"runs": 10, "passed": 10},
     "crashPoints": {"runs": 6, "passed": 6},
+    "liveChatGPT": {
+      "status": "BLOCKED_BY_PROVIDER_TERMS",
+      "singleConversation": {"runs": 0, "passed": 0},
+      "dualConversations": {"runs": 0, "passed": 0, "crossovers": null},
+      "thirdWriterRefused": false,
+      "fileUpload": false,
+      "screenshotUpload": false,
+      "personalDataRecorded": false
+    },
+    "cleanMacosLifecycle": {
+      "status": "PASS",
+      "realCommands": true,
+      "install": true,
+      "browserLaunch": true,
+      "serviceLifecycle": true,
+      "doctor": true,
+      "reinstall": true,
+      "uninstall": true,
+      "foreignSentinelPreserved": true,
+      "attempts": 2,
+      "failedAttempts": 1,
+      "failedAttemptsRetained": true,
+      "planHashes": {
+        "install": "c48dd70917f6e9af2913e23bf095377a8723a71d7f5d69da7065a60e34f68e60",
+        "reinstall": "02f8bc3379bf6d36761ebb11a6a0ca4d05ebbd737956a3c4598e7d4b573ed4da",
+        "uninstall": "cab9851b4dd67f5886d1998d72b9928cb5d7fc7918a25f6010ac35ce0f33a741"
+      }
+    },
     "miniSites": {
       "runs": 0,
       "passed": 0,

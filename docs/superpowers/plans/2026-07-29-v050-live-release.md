@@ -47,9 +47,9 @@ The official transport is a separate architecture decision: it requires provider
 
 - [x] Run the full backend, frontend, runtime, E2E and accessibility suites.
 - [x] Run release-evidence, artifact, privacy, link, secret, dependency and shell gates.
-- [ ] Commit the audited source changes.
-- [ ] Update the evidence source commit, timestamp and final observed suite counts.
-- [ ] Commit the evidence and require a clean worktree.
+- [x] Commit the audited source changes.
+- [x] Update the evidence source commit, timestamp and final observed suite counts.
+- [x] Commit the evidence and require a clean worktree.
 
 ## 5. GitHub publication
 
