@@ -54,6 +54,11 @@ class CiContractTest(unittest.TestCase):
         self.assertIn("frontend/playwright-report", source)
         self.assertIn("frontend/test-results", source)
 
+    def test_backend_ci_installs_the_locked_playwright_browser(self):
+        source = WORKFLOWS[0].read_text(encoding="utf-8")
+
+        self.assertIn(".venv/bin/python -m playwright install chromium", source)
+
     def test_public_tree_installs_every_required_image_scanner(self):
         source = WORKFLOWS[1].read_text(encoding="utf-8")
 

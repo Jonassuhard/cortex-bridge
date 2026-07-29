@@ -30,6 +30,8 @@ jobs:
         run: |
           python -m venv .venv
           .venv/bin/python -m pip install --require-hashes -r requirements.lock
+      - name: Install locked backend fixture browser
+        run: .venv/bin/python -m playwright install chromium
       - name: Run backend and release tests
         env:
           CORTEX_HOME: ${{ runner.temp }}/cortex-home
@@ -105,4 +107,3 @@ jobs:
         run: |
           shellcheck scripts/*.sh scripts/npmw executor/scripts/*.sh
           gitleaks detect --source . --no-banner --redact
-
