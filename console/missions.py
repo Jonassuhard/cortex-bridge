@@ -74,11 +74,17 @@ _store: Store | None = None
 
 def get_store() -> Store:
     global _store
-    if _store is None:
+    if _store is None or _store.closed:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         _store = Store(DB_PATH)
     _restore_persisted_leases()
     return _store
+
+
+def close_store() -> None:
+    """Close the process-owned Store at the backend lifecycle boundary."""
+    if _store is not None:
+        _store.close()
 
 
 def optin_accepted() -> bool:

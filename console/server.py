@@ -21,6 +21,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from local_executor import DEVELOPMENT_FIXTURE_ENV, runtime_status, run_task
+from missions import close_store as close_mission_store
 from missions import router as missions_router
 from chat import router as chat_router
 from settings import router as settings_router
@@ -48,6 +49,7 @@ app.include_router(missions_router)
 app.include_router(chat_router)
 app.include_router(settings_router)
 app.include_router(onboarding_router)
+app.router.add_event_handler("shutdown", close_mission_store)
 
 if (FRONTEND_OUT / "_next").is_dir():
     app.mount("/_next", StaticFiles(directory=FRONTEND_OUT / "_next"), name="next-assets")

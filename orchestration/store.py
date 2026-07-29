@@ -254,9 +254,17 @@ class Store:
         self._migrate_conversation_bindings()
         self._migrate_mission_runtime_truth()
         self._recover_interrupted_missions()
+        self._closed = False
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
 
     def close(self) -> None:
+        if self._closed:
+            return
         self._conn.close()
+        self._closed = True
 
     def _migrate_conversation_bindings(self) -> None:
         """Add v0.5 lease fields without invalidating an existing evidence DB."""

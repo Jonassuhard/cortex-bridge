@@ -284,10 +284,12 @@ class ChatRouteSessionIsolationTest(unittest.IsolatedAsyncioTestCase):
         self.saved_registry = write_slots._registry
         self.saved_factory = chat_api.ui_transport_factory
         self.saved_optin = missions_api.optin_accepted
+        self.saved_store = missions_api._store
         self.saved_runs_file = chat_api.CHAT_RUNS_FILE
         self.saved_runs = dict(chat_api._runs)
         write_slots._registry = conversation_sessions.ConversationSessionRegistry(capacity=2)
         chat_api.CHAT_RUNS_FILE = Path(self.tmp.name) / "chat-runs.json"
+        missions_api._store = Store(Path(self.tmp.name) / "chat-missions.db")
         chat_api._runs.clear()
         chat_api._view_transport = None
         chat_api._view_url = None
@@ -342,6 +344,8 @@ class ChatRouteSessionIsolationTest(unittest.IsolatedAsyncioTestCase):
         chat_api.ui_transport_factory = self.saved_factory
         chat_api.CHAT_RUNS_FILE = self.saved_runs_file
         missions_api.optin_accepted = self.saved_optin
+        missions_api.close_store()
+        missions_api._store = self.saved_store
         chat_api._runs.clear()
         chat_api._runs.update(self.saved_runs)
         chat_api._view_transport = None
