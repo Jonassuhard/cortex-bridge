@@ -1,0 +1,62 @@
+{
+  "schemaVersion": 1,
+  "release": "0.5.0",
+  "commit": "059795a5c42da3a009a512cc8e533a819f272e2b",
+  "generatedAt": "2026-07-29T14:15:00Z",
+  "environment": {
+    "os": "macOS 26.5.1",
+    "python": "3.14.5",
+    "node": "25.8.2",
+    "browserDriver": "Playwright 1.62.0 (frontend) and 1.61.0 (Python transport)",
+    "executorKind": "deterministic fixture",
+    "simulation": true
+  },
+  "suites": {
+    "backend": {"passed": 328, "failed": 0, "skipped": 0},
+    "frontendUnit": {"passed": 145, "failed": 0, "skipped": 0},
+    "e2e": {"passed": 11, "failed": 0, "skipped": 1},
+    "a11y": {"passed": 4, "failed": 0, "skipped": 0}
+  },
+  "performance": {
+    "cachedUsabilityMs": 321.2,
+    "switchP95Ms": 78.5,
+    "switchMaxMs": 78.5
+  },
+  "dualConversations": {
+    "runs": 10,
+    "crossovers": 0,
+    "thirdWriterDraftPreserved": true
+  },
+  "acceptance": {
+    "fixtureMissions": {"runs": 20, "passed": 20},
+    "coldDualRuns": {"runs": 10, "passed": 10},
+    "crashPoints": {"runs": 6, "passed": 6},
+    "miniSites": {
+      "runs": 0,
+      "passed": 0,
+      "status": "PENDING_OWNER_APPROVAL"
+    }
+  },
+  "gates": {
+    "privacy": "PASS",
+    "links": "PASS",
+    "secrets": "PASS",
+    "dependencies": "PASS",
+    "install": "PASS",
+    "doctor": "PASS",
+    "uninstall": "PASS",
+    "build": "PASS",
+    "e2e": "PASS",
+    "a11y": "PASS",
+    "consoleErrors": 0
+  },
+  "artifacts": {
+    "frontend/out/index.html": "b8ccf710e942895cb5f47ce240209c8afa253a907a660c1fe2407dd24e8f880c",
+    "docs/media/architecture-flow.png": "037ec7b8eb7271b900af118f7ccb8faa721113549db57008dd3ae04f0e643dd6",
+    "docs/media/architecture-flow.gif": "4ba6dd1f056ddcdd0c9328bff980dcf4d6b21b7464c6585150e1b1eaec5282c6",
+    "docs/screenshots/v0.5.0/375/10-info-diagramme.png": "19e3470168c72e52bcea494aefe8244f06c1f3f82ec0d75f7eedde2b797adb5e",
+    "docs/screenshots/v0.5.0/768/04-preflight.png": "c417521ccc0c9b5001cf3ab4d41a6041e59f8eda3c1c4ff7d60107e92e714300",
+    "docs/screenshots/v0.5.0/1440/01-onboarding.png": "c4a68c6a44793984b072002da524ec2da6716e49be8c62437607c4490ba38164"
+  },
+  "verdict": "PENDING_OWNER_APPROVAL_FOR_LIVE_GATES"
+}
