@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "release": "0.5.0",
-  "commit": "7af5fd1616ce62483c2b796c6f6e540d5210d317",
-  "generatedAt": "2026-07-29T15:38:42Z",
+  "commit": "aafdc8da9929952c264e9e8743b2f4d15c958c4b",
+  "generatedAt": "2026-07-29T15:51:17Z",
   "environment": {
     "os": "macOS 26.5.1",
     "python": "3.14.5",
@@ -18,9 +18,9 @@
     "a11y": {"passed": 4, "failed": 0, "skipped": 0}
   },
   "performance": {
-    "cachedUsabilityMs": 493.7,
-    "switchP95Ms": 230.5,
-    "switchMaxMs": 230.5
+    "cachedUsabilityMs": 442.8,
+    "switchP95Ms": 106.5,
+    "switchMaxMs": 106.5
   },
   "dualConversations": {
     "runs": 10,
