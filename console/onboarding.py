@@ -18,6 +18,8 @@ from fastapi import APIRouter, HTTPException
 
 from local_executor import runtime_status
 from transport.browser import create_browser_driver
+from transport.chatgpt_web.adapter import DriverError, TabClosedError
+from chrome_extension import chrome_extension_manager
 
 import missions as missions_api
 import settings as settings_api
@@ -27,6 +29,189 @@ router = APIRouter(prefix="/api")
 DATA_DIR = Path(__file__).resolve().parent / "data"
 MARKER_FILE = DATA_DIR / "onboarding-done.json"
 browser_driver_factory = create_browser_driver
+
+
+def _connection_result(
+    *,
+    code: str,
+    state: str,
+    title: str,
+    message: str,
+    recoverable: bool,
+    driver: str = "chrome_extension",
+    url: str | None = None,
+    tab_id: int | None = None,
+    window_id: int | None = None,
+) -> dict[str, Any]:
+    return {
+        "code": code,
+        "state": state,
+        "title": title,
+        "message": message,
+        "recoverable": recoverable,
+        "driver": driver,
+        "url": url,
+        "tab_id": tab_id,
+        "window_id": window_id,
+    }
+
+
+def connection_result_from_bridge_status(status: dict[str, Any]) -> dict[str, Any]:
+    state = str(status.get("state") or "disconnected")
+    if status.get("paired"):
+        return _connection_result(
+            code="EXTENSION_PAIRED",
+            state="checking",
+            title="Extension Chrome connectée",
+            message="Cortex vérifie maintenant l’onglet ChatGPT.",
+            recoverable=True,
+        )
+    if state == "extension_detected":
+        return _connection_result(
+            code="EXTENSION_UNPAIRED",
+            state="checking",
+            title="Jumelage Chrome en attente",
+            message="L’extension est détectée. Relance la connexion depuis Cortex.",
+            recoverable=True,
+        )
+    return _connection_result(
+        code="EXTENSION_MISSING",
+        state="disconnected",
+        title="Extension Chrome introuvable",
+        message="Installe ou active l’extension Cortex Bridge dans Chrome, puis réessaie.",
+        recoverable=True,
+    )
+
+
+def connection_result_from_probe(
+    probe: dict[str, Any],
+    *,
+    opened: dict[str, Any] | None = None,
+    driver: str = "chrome_extension",
+) -> dict[str, Any]:
+    opened = opened or {}
+    url = str(probe.get("url") or opened.get("url") or "") or None
+    shared = {
+        "driver": driver,
+        "url": url,
+        "tab_id": opened.get("tab_id"),
+        "window_id": opened.get("window_id"),
+    }
+    blocker = str(probe.get("blocker") or "").lower()
+    failures = {str(value).lower() for value in probe.get("failures") or []}
+    if blocker == "login" or "login" in failures:
+        return _connection_result(
+            code="LOGIN_REQUIRED",
+            state="manual_action",
+            title="Connexion à ChatGPT requise",
+            message=(
+                "ChatGPT est ouvert dans Chrome, mais tu n’es pas connecté. "
+                "Connecte-toi dans l’onglet ChatGPT, puis réessaie."
+            ),
+            recoverable=True,
+            **shared,
+        )
+    if blocker == "captcha" or "captcha" in failures:
+        return _connection_result(
+            code="CAPTCHA",
+            state="manual_action",
+            title="Vérification requise",
+            message=(
+                "ChatGPT demande une vérification humaine. Ouvre l’onglet, "
+                "termine la vérification, puis réessaie."
+            ),
+            recoverable=True,
+            **shared,
+        )
+    if blocker == "rate_limit" or "rate_limit" in failures:
+        return _connection_result(
+            code="RATE_LIMIT",
+            state="manual_action",
+            title="ChatGPT limite temporairement les requêtes",
+            message="Attends la fin de la limitation dans ChatGPT, puis réessaie.",
+            recoverable=True,
+            **shared,
+        )
+    if probe.get("ok") is True and probe.get("composer_present") is True:
+        return _connection_result(
+            code="CONNECTED",
+            state="connected",
+            title="ChatGPT connecté",
+            message="Cortex est lié à cet onglet Chrome.",
+            recoverable=False,
+            **shared,
+        )
+    return _connection_result(
+        code="CHATGPT_LOADING",
+        state="checking",
+        title="ChatGPT est encore en chargement",
+        message="Garde l’onglet ChatGPT ouvert et réessaie dans un instant.",
+        recoverable=True,
+        **shared,
+    )
+
+
+async def open_connection_with_driver(driver) -> dict[str, Any]:
+    try:
+        opened = await driver.open_login()
+    except TabClosedError:
+        return _connection_result(
+            code="TAB_CLOSED",
+            state="disconnected",
+            title="Onglet ChatGPT fermé",
+            message="Rouvre et connecte ChatGPT pour continuer.",
+            recoverable=True,
+            driver=getattr(driver, "driver_name", "chrome_extension"),
+        )
+    except DriverError as exc:
+        code = str(exc).split(":", 1)[0]
+        if code in {"EXTENSION_UNPAIRED", "EXTENSION_DISCONNECTED"}:
+            return connection_result_from_bridge_status(
+                chrome_extension_manager.public_status()
+            )
+        return _connection_result(
+            code="CONNECTION_FAILED",
+            state="disconnected",
+            title="Connexion Chrome impossible",
+            message=str(exc),
+            recoverable=True,
+            driver=getattr(driver, "driver_name", "chrome_extension"),
+        )
+    probe = opened.get("probe") if isinstance(opened, dict) else None
+    if not isinstance(probe, dict):
+        probe = await driver.probe()
+    return connection_result_from_probe(
+        probe,
+        opened=opened if isinstance(opened, dict) else None,
+        driver=getattr(driver, "driver_name", "chrome_extension"),
+    )
+
+
+async def retry_connection_with_driver(driver) -> dict[str, Any]:
+    try:
+        probe = await driver.probe()
+    except TabClosedError:
+        return _connection_result(
+            code="TAB_CLOSED",
+            state="disconnected",
+            title="Onglet ChatGPT fermé",
+            message="Rouvre et connecte ChatGPT pour continuer.",
+            recoverable=True,
+            driver=getattr(driver, "driver_name", "chrome_extension"),
+        )
+    except DriverError as exc:
+        return _connection_result(
+            code="CONNECTION_FAILED",
+            state="disconnected",
+            title="Vérification Chrome impossible",
+            message=str(exc),
+            recoverable=True,
+            driver=getattr(driver, "driver_name", "chrome_extension"),
+        )
+    return connection_result_from_probe(
+        probe,
+        driver=getattr(driver, "driver_name", "chrome_extension"),
+    )
 
 
 def onboarding_completed() -> bool:
@@ -98,7 +283,11 @@ async def run_checks() -> list[dict[str, Any]]:
         "browser-driver", f"Transport navigateur {driver_name}",
         bridge_ok,
         f"{driver_name} connecté · {health.get('tabs', 0)} onglet(s)" if bridge_ok else f"{driver_name} indisponible",
-        "Ouvre le profil navigateur dédié puis connecte-toi manuellement à ChatGPT.",
+        (
+            "Installe ou active l’extension Cortex Bridge dans Chrome."
+            if driver_name == "chrome_extension"
+            else "Ouvre explicitement le navigateur de développement."
+        ),
     ))
 
     # 4. ChatGPT page usable
@@ -121,7 +310,7 @@ async def run_checks() -> list[dict[str, Any]]:
         "chatgpt-tab", "ChatGPT est prêt",
         chatgpt_ok,
         "Composeur ChatGPT détecté" if chatgpt_ok else "La page ChatGPT n'est pas encore utilisable",
-        "Ouvre le profil ChatGPT, termine la connexion ou la vérification affichée, puis réessaie.",
+        "Ouvre et connecte ChatGPT dans Chrome, puis termine la connexion ou la vérification affichée.",
     ))
 
     # 5. Default workspace exists
@@ -163,6 +352,12 @@ async def open_browser_login() -> dict[str, Any]:
             session="cortex-bridge-ui",
             settings=settings,
         )
+        if getattr(driver, "driver_name", None) == "chrome_extension":
+            if not chrome_extension_manager.public_status().get("paired"):
+                return connection_result_from_bridge_status(
+                    chrome_extension_manager.public_status()
+                )
+            return await open_connection_with_driver(driver)
         return await driver.open_login()
     except Exception as exc:
         driver_name = getattr(driver, "driver_name", None)
@@ -176,3 +371,27 @@ async def open_browser_login() -> dict[str, Any]:
                 "error": str(exc),
             },
         ) from exc
+
+
+@router.post("/chrome-extension/open")
+async def open_chrome_extension() -> dict[str, Any]:
+    status = chrome_extension_manager.public_status()
+    if not status.get("paired"):
+        return connection_result_from_bridge_status(status)
+    driver = browser_driver_factory(
+        session="cortex-bridge-ui",
+        settings=settings_api.load_settings(),
+    )
+    return await open_connection_with_driver(driver)
+
+
+@router.post("/chrome-extension/retry")
+async def retry_chrome_extension() -> dict[str, Any]:
+    status = chrome_extension_manager.public_status()
+    if not status.get("paired"):
+        return connection_result_from_bridge_status(status)
+    driver = browser_driver_factory(
+        session="cortex-bridge-ui",
+        settings=settings_api.load_settings(),
+    )
+    return await retry_connection_with_driver(driver)
