@@ -330,6 +330,41 @@ class PublicPrivacyTest(unittest.TestCase):
         self.assertIn("image_ocr", result.stdout)
         self.assertNotIn("Private Person Fixture", result.stdout)
 
+    def test_exiftool_filesystem_fields_are_not_treated_as_embedded_metadata(self) -> None:
+        screenshots = self.root / "docs" / "screenshots"
+        screenshots.mkdir()
+        image = screenshots / "fixture.png"
+        image.write_bytes(b"\x89PNG\r\n\x1a\n" + b"synthetic")
+        bin_dir = self.root / "bin"
+        bin_dir.mkdir()
+        fake_exiftool = bin_dir / "exiftool"
+        fake_exiftool.write_text(
+            "#!/bin/sh\n"
+            "printf '[{\"SourceFile\":\"/%s/%s/work/private/fixture.png\","
+            "\"System:Directory\":\"/%s/%s/work/private\","
+            "\"System:FileName\":\"fixture.png\",\"PNG:Comment\":\"clean\"}]\\n' "
+            "Users runner Users runner\n",
+            encoding="utf-8",
+        )
+        fake_exiftool.chmod(0o755)
+        fake_tesseract = bin_dir / "tesseract"
+        fake_tesseract.write_text(
+            "#!/bin/sh\n"
+            "if [ \"$1\" = \"--list-langs\" ]; then printf 'eng\\nfra\\n'; exit 0; fi\n"
+            "printf 'clean\\n'\n",
+            encoding="utf-8",
+        )
+        fake_tesseract.chmod(0o755)
+
+        result = self.run_scan(
+            extra_env={
+                "EXIFTOOL_BIN": str(fake_exiftool),
+                "TESSERACT_BIN": str(fake_tesseract),
+            }
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_animated_gif_ocr_scans_every_extracted_frame(self) -> None:
         media = self.root / "docs" / "media"
         media.mkdir(parents=True)

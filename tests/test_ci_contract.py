@@ -54,6 +54,14 @@ class CiContractTest(unittest.TestCase):
         self.assertIn("frontend/playwright-report", source)
         self.assertIn("frontend/test-results", source)
 
+    def test_public_tree_installs_every_required_image_scanner(self):
+        source = WORKFLOWS[1].read_text(encoding="utf-8")
+
+        self.assertIn(
+            "brew install exiftool ffmpeg gitleaks tesseract-lang",
+            source,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

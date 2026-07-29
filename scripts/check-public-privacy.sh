@@ -399,6 +399,27 @@ def resolve_tool(env_name: str, fallback: str) -> str | None:
     return shutil.which(candidate)
 
 
+def embedded_exiftool_json(payload: str) -> str | None:
+    try:
+        records = json.loads(payload)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(records, list):
+        return None
+    embedded_records: list[dict[str, object]] = []
+    for record in records:
+        if not isinstance(record, dict):
+            return None
+        embedded_records.append(
+            {
+                str(key): value
+                for key, value in record.items()
+                if key != "SourceFile" and not str(key).startswith("System:")
+            }
+        )
+    return json.dumps(embedded_records, ensure_ascii=False, sort_keys=True)
+
+
 if images:
     exiftool = resolve_tool("EXIFTOOL_BIN", "exiftool")
     ffmpeg = resolve_tool("FFMPEG_BIN", "ffmpeg")
@@ -435,7 +456,15 @@ if images:
             if metadata.returncode != 0:
                 report("image_tool_failure", relative)
             else:
-                scan_text(metadata.stdout, relative, forced_category="image_metadata")
+                embedded_json = embedded_exiftool_json(metadata.stdout)
+                if embedded_json is None:
+                    report("image_tool_failure", relative)
+                else:
+                    scan_text(
+                        embedded_json,
+                        relative,
+                        forced_category="image_metadata",
+                    )
         if ocr_ready and tesseract:
             with tempfile.TemporaryDirectory(prefix="cortex-privacy-ocr-") as temp_dir:
                 targets = [image]

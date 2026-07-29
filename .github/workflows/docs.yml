@@ -38,7 +38,7 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install public-tree scanners
-        run: brew install exiftool gitleaks tesseract-lang
+        run: brew install exiftool ffmpeg gitleaks tesseract-lang
       - name: Verify public text, binaries, metadata and OCR
         run: |
           ./scripts/check-public-privacy.sh \
