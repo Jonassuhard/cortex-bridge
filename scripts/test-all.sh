@@ -17,6 +17,7 @@ if [[ ! -x "$PYTHON" ]]; then PYTHON=python3; fi
   transport/chatgpt_web/fixture.py
 
 if command -v node >/dev/null 2>&1; then
+  node --test chrome-extension/tests/extension.test.mjs
   "$PYTHON" - <<'PY'
 from pathlib import Path
 import re
