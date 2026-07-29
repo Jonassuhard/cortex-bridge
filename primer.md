@@ -13,5 +13,5 @@
   `BLOCKED_BY_PROVIDER_TERMS`; current OpenAI Europe terms prohibit automatic
   or programmatic extraction of data or Output. Do not mark live conversations,
   uploads, screenshots, mini-sites, or the release verdict as ready.
-- Next exact action: finish reproducible evidence, rerun the complete suite,
-  push the branch, and report the existing pull request status.
+- Next exact action: rerun the complete suite against the evidence commit, push
+  the branch, and report the existing pull request status.

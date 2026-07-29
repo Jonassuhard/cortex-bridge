@@ -1,26 +1,27 @@
 {
   "schemaVersion": 1,
   "release": "0.5.0",
-  "commit": "a7e786e6c3c93b2d6db41b6c1f6eb3ce67775edb",
-  "generatedAt": "2026-07-29T17:20:50Z",
+  "commit": "f514e7b3367cdec94dc855c8ee4ca320ba477845",
+  "generatedAt": "2026-07-29T23:43:47Z",
   "environment": {
     "os": "macOS 26.5.1",
-    "python": "3.12.1",
-    "node": "22.22.2",
-    "browserDriver": "Playwright 1.62.0 (frontend) and 1.61.0 (Python transport)",
+    "python": "3.14.5",
+    "node": "25.8.2",
+    "browserDriver": "Cortex Chrome extension 0.5.0 protocol with Chrome 150.0.7871.187; Playwright 1.62.0 fixtures",
     "executorKind": "deterministic fixture",
     "simulation": true
   },
   "suites": {
-    "backend": {"passed": 337, "failed": 0, "skipped": 0},
-    "frontendUnit": {"passed": 146, "failed": 0, "skipped": 0},
-    "e2e": {"passed": 11, "failed": 0, "skipped": 1},
-    "a11y": {"passed": 4, "failed": 0, "skipped": 0}
+    "backend": {"passed": 374, "failed": 0, "skipped": 0},
+    "frontendUnit": {"passed": 153, "failed": 0, "skipped": 0},
+    "e2e": {"passed": 12, "failed": 0, "skipped": 1},
+    "a11y": {"passed": 4, "failed": 0, "skipped": 0},
+    "extension": {"passed": 10, "failed": 0, "skipped": 0}
   },
   "performance": {
-    "cachedUsabilityMs": 547.9,
-    "switchP95Ms": 226.3,
-    "switchMaxMs": 226.3
+    "cachedUsabilityMs": 391.3,
+    "switchP95Ms": 113.0,
+    "switchMaxMs": 113.0
   },
   "dualConversations": {
     "runs": 10,
@@ -50,19 +51,19 @@
       "reinstall": true,
       "uninstall": true,
       "foreignSentinelPreserved": true,
-      "attempts": 2,
+      "attempts": 5,
       "failedAttempts": 1,
       "failedAttemptsRetained": true,
       "planHashes": {
-        "install": "c48dd70917f6e9af2913e23bf095377a8723a71d7f5d69da7065a60e34f68e60",
-        "reinstall": "02f8bc3379bf6d36761ebb11a6a0ca4d05ebbd737956a3c4598e7d4b573ed4da",
-        "uninstall": "cab9851b4dd67f5886d1998d72b9928cb5d7fc7918a25f6010ac35ce0f33a741"
+        "install": "f62caea80c91a189c9ce26a095e2493f2385828cd9881e4fc127c8805d442bd0",
+        "reinstall": "db75608108330e2b8dfb8252c6f5e8d7d627ee6cbf15f1b63aa5da0b846971b3",
+        "uninstall": "84ee8e269bbd584eeb0a6421d4a94df37d02a9a4a046f30ef510211403c5941f"
       }
     },
     "miniSites": {
       "runs": 0,
       "passed": 0,
-      "status": "PENDING_OWNER_APPROVAL"
+      "status": "BLOCKED_BY_PROVIDER_TERMS"
     }
   },
   "gates": {
@@ -79,12 +80,12 @@
     "consoleErrors": 0
   },
   "artifacts": {
-    "frontend/out/index.html": "4955d7a433c73be385744763698a81858f3d1193a1e40f3514240cf969ca1b9e",
-    "docs/media/architecture-flow.png": "037ec7b8eb7271b900af118f7ccb8faa721113549db57008dd3ae04f0e643dd6",
-    "docs/media/architecture-flow.gif": "4ba6dd1f056ddcdd0c9328bff980dcf4d6b21b7464c6585150e1b1eaec5282c6",
-    "docs/screenshots/v0.5.0/375/10-info-diagramme.png": "19e3470168c72e52bcea494aefe8244f06c1f3f82ec0d75f7eedde2b797adb5e",
-    "docs/screenshots/v0.5.0/768/04-preflight.png": "c417521ccc0c9b5001cf3ab4d41a6041e59f8eda3c1c4ff7d60107e92e714300",
-    "docs/screenshots/v0.5.0/1440/01-onboarding.png": "c4a68c6a44793984b072002da524ec2da6716e49be8c62437607c4490ba38164"
+    "frontend/out/index.html": "ba7ec354fbdcf1d0fd38275e2aa28ac6b8a1848385899916c35b0f99d550816c",
+    "docs/media/architecture-flow.png": "83213c2182b5d2dcba691d0628dde8e9a5489f327362c069340dc3eee217dc8a",
+    "docs/media/architecture-flow.gif": "39c9a1ad5bee1cd218af5e1aae1f2c6dcf6841f0b410abaa1f05a238c4a156da",
+    "docs/screenshots/v0.5.0/375/10-info-diagramme.png": "632afc793b5207a87b516609594a2a22220c78aa8480d2b45ed10f8c55554254",
+    "docs/screenshots/v0.5.0/768/04-preflight.png": "56d36d0628ad94c82031ebe4a7894f4697be00c35c8d87c47d2e2de2263b41f1",
+    "docs/screenshots/v0.5.0/1440/01-onboarding.png": "9781f602ab1b2354eda137681c16c7e34aabb6d95855e2c906fc97dce863766b"
   },
-  "verdict": "PENDING_OWNER_APPROVAL_FOR_LIVE_GATES"
+  "verdict": "RELEASE_BLOCKED_BY_PROVIDER_TERMS"
 }
