@@ -40,3 +40,5 @@ Release media must be synthetic and pass text, binary, metadata and OCR scans.
 ## Release process
 
 A release candidate requires backend, frontend, browser, accessibility, dependency, privacy, link, installer and evidence gates. Live browser missions require explicit owner approval and do not run in CI.
+
+The current dependency-maintainership review is recorded in the [supply-chain risk report](.supply-chain-risk-auditor/results.md).

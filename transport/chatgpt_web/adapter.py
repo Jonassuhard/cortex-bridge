@@ -1032,7 +1032,9 @@ class LocalFixtureDriver:
             with urllib.request.urlopen(url, timeout=5) as resp:
                 resp.read()
         except urllib.error.HTTPError as exc:
-            raise DriverError(f"GET {url} -> {exc.code}") from exc
+            code = exc.code
+            exc.close()
+            raise DriverError(f"GET {url} -> {code}") from exc
         except (urllib.error.URLError, OSError) as exc:
             raise DriverError(f"GET {url} failed: {exc}") from exc
 
@@ -1042,7 +1044,9 @@ class LocalFixtureDriver:
             with urllib.request.urlopen(url, timeout=5) as resp:
                 return json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
-            raise DriverError(f"GET {url} -> {exc.code}") from exc
+            code = exc.code
+            exc.close()
+            raise DriverError(f"GET {url} -> {code}") from exc
         except (urllib.error.URLError, OSError, json.JSONDecodeError) as exc:
             raise DriverError(f"GET {url} failed: {exc}") from exc
 
@@ -1055,8 +1059,12 @@ class LocalFixtureDriver:
             with urllib.request.urlopen(req, timeout=5) as resp:
                 return json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")[:200]
-            raise DriverError(f"POST {url} -> {exc.code} {detail}") from exc
+            code = exc.code
+            try:
+                detail = exc.read().decode("utf-8", errors="replace")[:200]
+            finally:
+                exc.close()
+            raise DriverError(f"POST {url} -> {code} {detail}") from exc
         except (urllib.error.URLError, OSError) as exc:
             raise DriverError(f"POST {url} failed: {exc}") from exc
 

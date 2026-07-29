@@ -2,6 +2,10 @@
 http://127.0.0.1:8420
 https://chatgpt.com/
 https://git-scm.com/download/mac
+https://github.com/aaif-goose/goose
+https://github.com/browser-use/browser-use
+https://github.com/openai/codex
+https://github.com/openinterpreter/openinterpreter
 https://nodejs.org/en/download
 https://ollama.com/download/mac
 https://openai.com/policies/terms-of-use/

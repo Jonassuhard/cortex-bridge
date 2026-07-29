@@ -217,7 +217,7 @@ class PublicPrivacyTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("unknown_public_binary", result.stdout)
 
-    def test_public_image_requires_metadata_and_ocr_tools(self) -> None:
+    def test_public_image_requires_ocr_tool(self) -> None:
         screenshots = self.root / "docs" / "screenshots"
         screenshots.mkdir()
         (screenshots / "fixture.png").write_bytes(
@@ -233,6 +233,37 @@ class PublicPrivacyTest(unittest.TestCase):
 
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("missing_image_tool", result.stdout)
+        self.assertNotIn("exiftool", result.stdout)
+
+    def test_embedded_png_metadata_is_scanned_without_exiftool(self) -> None:
+        screenshots = self.root / "docs" / "screenshots"
+        screenshots.mkdir()
+        marker = b"Comment\x00Private Person Fixture"
+        chunk = len(marker).to_bytes(4, "big") + b"tEXt" + marker + b"\x00\x00\x00\x00"
+        (screenshots / "fixture.png").write_bytes(
+            b"\x89PNG\r\n\x1a\n" + chunk
+        )
+        bin_dir = self.root / "bin"
+        bin_dir.mkdir()
+        fake_tesseract = bin_dir / "tesseract"
+        fake_tesseract.write_text(
+            "#!/bin/sh\n"
+            "if [ \"$1\" = \"--list-langs\" ]; then printf 'eng\\nfra\\n'; exit 0; fi\n"
+            "printf 'clean\\n'\n",
+            encoding="utf-8",
+        )
+        fake_tesseract.chmod(0o755)
+
+        result = self.run_scan(
+            extra_env={
+                "EXIFTOOL_BIN": str(self.root / "missing-exiftool"),
+                "TESSERACT_BIN": str(fake_tesseract),
+            }
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("image_metadata", result.stdout)
+        self.assertNotIn("Private Person Fixture", result.stdout)
 
     def test_public_image_requires_both_ocr_languages(self) -> None:
         screenshots = self.root / "docs" / "screenshots"

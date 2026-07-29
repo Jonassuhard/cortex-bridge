@@ -1,5 +1,12 @@
 import { expect, test } from "./fixtures/app";
 
+test("cached fixture interface becomes usable below two seconds", async ({ appPage }) => {
+  await expect(appPage.getByRole("textbox", { name: "Message à envoyer" })).toBeEditable();
+  const usableMs = await appPage.evaluate(() => performance.now());
+  expect(usableMs).toBeLessThan(2000);
+  console.log(`cached_usability_ms=${usableMs.toFixed(1)}`);
+});
+
 test("ten A/B switches stay below p95 and hard maximum", async ({ appPage }) => {
   const samples: number[] = [];
   for (let index = 0; index < 10; index += 1) {

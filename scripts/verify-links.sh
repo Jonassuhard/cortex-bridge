@@ -55,7 +55,17 @@ checked_links = 0
 MARKDOWN_LINK_RE = re.compile(r"!?\[[^\]]*\]\(([^)\s]+)(?:\s+[^)]*)?\)")
 HTML_LINK_RE = re.compile(r"(?:href|src)\s*=\s*[\"']([^\"']+)[\"']", re.IGNORECASE)
 HTML_ANCHOR_RE = re.compile(r"(?:id|name)\s*=\s*[\"']([^\"']+)[\"']", re.IGNORECASE)
-SKIP_PARTS = {".git", ".worktrees", ".superpowers", "node_modules", ".next", ".venv"}
+SKIP_PARTS = {
+    ".git",
+    ".next",
+    ".superpowers",
+    ".venv",
+    ".worktrees",
+    "coverage",
+    "node_modules",
+    "playwright-report",
+    "test-results",
+}
 
 
 def report(category: str, source: Path, line: int) -> None:
@@ -104,9 +114,20 @@ def unsafe_external(url: str) -> bool:
     return False
 
 
+def local_document_url(url: str) -> bool:
+    parsed = urlsplit(url)
+    host = (parsed.hostname or "").lower()
+    if host == "localhost" or host.endswith(".localhost"):
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
 def check_external(url: str, source: Path, line: int) -> None:
     global external_checked, external_skipped
-    if offline:
+    if offline or local_document_url(url):
         external_skipped += 1
         return
     if unsafe_external(url):
@@ -148,6 +169,7 @@ documents = sorted(
     if path.is_file()
     and path.suffix.lower() in {".md", ".markdown", ".html", ".htm"}
     and not (set(path.relative_to(root).parts) & SKIP_PARTS)
+    and path.relative_to(root).parts[:2] != ("frontend", "out")
 )
 
 for source in documents:

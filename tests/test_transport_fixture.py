@@ -8,12 +8,15 @@ never the WebBridge daemon, never the console on 8420). stdlib unittest:
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import sys
 import time
 import unittest
+import urllib.error
 import uuid
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -24,6 +27,7 @@ from transport.chatgpt_web.adapter import (  # noqa: E402
     DELIVERY_UNCERTAIN,
     GENERATION_CANCELLED,
     DUPLICATE_EXTRACTION,
+    DriverError,
     TAB_CLOSED,
     TRANSPORT_PAUSED,
     BlockerDetected,
@@ -33,6 +37,26 @@ from transport.chatgpt_web.adapter import (  # noqa: E402
     TransportError,
 )
 from transport.chatgpt_web.fixture import FixtureServer  # noqa: E402
+
+
+class FixtureDriverResourceTest(unittest.TestCase):
+    def test_http_error_responses_are_closed(self):
+        for operation in ("_fetch", "_get", "_post"):
+            with self.subTest(operation=operation):
+                body = io.BytesIO(b'{"error":"synthetic"}')
+                error = urllib.error.HTTPError(
+                    "http://127.0.0.1/fixture", 500, "synthetic", {}, body
+                )
+                with patch(
+                    "transport.chatgpt_web.adapter.urllib.request.urlopen",
+                    side_effect=error,
+                ):
+                    with self.assertRaises(DriverError):
+                        if operation == "_post":
+                            LocalFixtureDriver._post(error.url, {})
+                        else:
+                            getattr(LocalFixtureDriver, operation)(error.url)
+                self.assertTrue(body.closed)
 
 
 class FixtureTransportTestCase(unittest.IsolatedAsyncioTestCase):

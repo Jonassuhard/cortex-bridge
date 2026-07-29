@@ -20,9 +20,12 @@ class VerifyLinksTest(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
 
-    def run_check(self) -> subprocess.CompletedProcess[str]:
+    def run_check(self, *, offline: bool = True) -> subprocess.CompletedProcess[str]:
+        command = ["bash", str(CHECKER), "--root", str(self.root)]
+        if offline:
+            command.append("--offline")
         return subprocess.run(
-            ["bash", str(CHECKER), "--root", str(self.root), "--offline"],
+            command,
             cwd=REPO_ROOT,
             text=True,
             capture_output=True,
@@ -79,6 +82,28 @@ class VerifyLinksTest(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("external_skipped=1", result.stdout)
+
+    def test_loopback_installation_url_is_never_requested_online(self) -> None:
+        (self.root / "README.md").write_text(
+            "Open [Cortex Bridge](http://127.0.0.1:8420).\n", encoding="utf-8"
+        )
+
+        result = self.run_check(offline=False)
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("external_skipped=1", result.stdout)
+
+    def test_generated_frontend_export_is_owned_by_browser_gate(self) -> None:
+        output = self.root / "frontend" / "out"
+        output.mkdir(parents=True)
+        (output / "index.html").write_text(
+            '<script src="/_next/generated.js"></script>\n', encoding="utf-8"
+        )
+        (self.root / "README.md").write_text("# Public docs\n", encoding="utf-8")
+
+        result = self.run_check()
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_parent_traversal_outside_root_is_rejected(self) -> None:
         outside = self.root.parent / "outside-guide.md"

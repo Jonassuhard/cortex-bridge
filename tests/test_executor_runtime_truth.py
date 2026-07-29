@@ -11,6 +11,7 @@ import json
 import os
 import socket
 import sqlite3
+from contextlib import closing
 import subprocess
 import sys
 import tempfile
@@ -278,7 +279,7 @@ class ExecutorRuntimeTruthTestCase(unittest.IsolatedAsyncioTestCase):
 
     def test_pre_v05_mission_schema_migrates_additively_and_reloads_runtime_truth(self) -> None:
         database = self.workspace / "pre-v05.db"
-        with sqlite3.connect(database) as connection:
+        with closing(sqlite3.connect(database)) as connection:
             connection.executescript(
                 """
                 CREATE TABLE missions (

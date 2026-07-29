@@ -20,6 +20,7 @@ import urllib.parse
 import urllib.request
 import uuid
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
@@ -464,6 +465,17 @@ class ChatSettingsApiTestCase(unittest.TestCase):
                 "observed_at": None,
             },
         )
+
+    def test_09aa_database_probe_closes_its_sqlite_connection(self):
+        settings_api.DB_PATH.touch()
+        connection = MagicMock()
+        connection.execute.return_value.fetchone.return_value = (1,)
+
+        with patch.object(settings_api.sqlite3, "connect", return_value=connection):
+            available = settings_api._database_available(settings_api.DB_PATH)
+
+        self.assertTrue(available)
+        connection.close.assert_called_once_with()
 
     def test_09a_pipeline_scope_filters_every_mission_and_chat_payload_to_identity(self):
         """A global latest-mission or chat-run fallback would leak Alpha into Beta."""

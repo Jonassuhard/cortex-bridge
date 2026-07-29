@@ -54,6 +54,7 @@ import re
 import shutil
 import subprocess
 import sys
+import zlib
 from pathlib import Path
 from urllib.parse import unquote
 
@@ -269,6 +270,88 @@ def image_kind(blob: bytes) -> str | None:
     return None
 
 
+def embedded_metadata(blob: bytes, kind: str) -> list[str]:
+    payloads: list[bytes] = []
+    if kind == "png":
+        offset = 8
+        while offset + 12 <= len(blob):
+            size = int.from_bytes(blob[offset : offset + 4], "big")
+            chunk_type = blob[offset + 4 : offset + 8]
+            start = offset + 8
+            end = start + size
+            if end + 4 > len(blob):
+                break
+            payload = blob[start:end]
+            if chunk_type in {b"tEXt", b"iTXt", b"eXIf"}:
+                payloads.append(payload)
+            elif chunk_type == b"zTXt":
+                try:
+                    keyword, compressed = payload.split(b"\0", 1)
+                    payloads.extend((keyword, zlib.decompress(compressed[1:])))
+                except (ValueError, zlib.error):
+                    payloads.append(payload)
+            offset = end + 4
+    elif kind == "jpeg":
+        offset = 2
+        while offset + 4 <= len(blob):
+            if blob[offset] != 0xFF:
+                offset += 1
+                continue
+            marker = blob[offset + 1]
+            offset += 2
+            if marker in {0xD8, 0xD9}:
+                continue
+            if marker == 0xDA:
+                break
+            size = int.from_bytes(blob[offset : offset + 2], "big")
+            if size < 2 or offset + size > len(blob):
+                break
+            if marker == 0xFE or 0xE0 <= marker <= 0xEF:
+                payloads.append(blob[offset + 2 : offset + size])
+            offset += size
+    elif kind == "webp":
+        offset = 12
+        while offset + 8 <= len(blob):
+            chunk_type = blob[offset : offset + 4]
+            size = int.from_bytes(blob[offset + 4 : offset + 8], "little")
+            start = offset + 8
+            end = start + size
+            if end > len(blob):
+                break
+            if chunk_type in {b"EXIF", b"XMP ", b"ICCP"}:
+                payloads.append(blob[start:end])
+            offset = end + (size % 2)
+    elif kind == "gif":
+        # Comment and application extensions are uncompressed. Raster text is
+        # LZW-compressed and therefore cannot be mistaken for metadata here.
+        offset = 13
+        while offset + 2 <= len(blob):
+            if blob[offset] != 0x21:
+                offset += 1
+                continue
+            label = blob[offset + 1]
+            offset += 2
+            blocks: list[bytes] = []
+            while offset < len(blob):
+                size = blob[offset]
+                offset += 1
+                if size == 0:
+                    break
+                blocks.append(blob[offset : offset + size])
+                offset += size
+            joined = b"".join(blocks)
+            if label == 0xFE or (label == 0xFF and not joined.startswith(b"NETSCAPE2.0")):
+                payloads.append(joined)
+
+    metadata: list[str] = []
+    for payload in payloads:
+        try:
+            metadata.append(payload.decode("utf-8"))
+        except UnicodeDecodeError:
+            metadata.append(payload.decode("latin-1", errors="ignore"))
+    return metadata
+
+
 text_files: list[tuple[Path, str]] = []
 images: list[Path] = []
 for path in listed_files():
@@ -318,8 +401,6 @@ def resolve_tool(env_name: str, fallback: str) -> str | None:
 if images:
     exiftool = resolve_tool("EXIFTOOL_BIN", "exiftool")
     tesseract = resolve_tool("TESSERACT_BIN", "tesseract")
-    if not exiftool:
-        report("missing_image_tool", "exiftool")
     if not tesseract:
         report("missing_image_tool", "tesseract-eng-fra")
     ocr_ready = False
@@ -336,9 +417,13 @@ if images:
         ocr_ready = languages.returncode == 0 and {"eng", "fra"}.issubset(installed_languages)
         if not ocr_ready:
             report("missing_image_tool", "tesseract-eng-fra")
-    if exiftool:
-        for image in images:
-            relative = image.relative_to(root).as_posix()
+    for image in images:
+        relative = image.relative_to(root).as_posix()
+        blob = image.read_bytes()
+        kind = image_kind(blob)
+        for metadata_text in embedded_metadata(blob, kind or ""):
+            scan_text(metadata_text, relative, forced_category="image_metadata")
+        if exiftool:
             metadata = subprocess.run(
                 [exiftool, "-j", "-a", "-G1", "-s", str(image)],
                 text=True,
@@ -349,17 +434,17 @@ if images:
                 report("image_tool_failure", relative)
             else:
                 scan_text(metadata.stdout, relative, forced_category="image_metadata")
-            if ocr_ready and tesseract:
-                ocr = subprocess.run(
-                    [tesseract, str(image), "stdout", "-l", "eng+fra"],
-                    text=True,
-                    capture_output=True,
-                    timeout=30,
-                )
-                if ocr.returncode != 0:
-                    report("image_tool_failure", relative)
-                else:
-                    scan_text(ocr.stdout, relative, forced_category="image_ocr")
+        if ocr_ready and tesseract:
+            ocr = subprocess.run(
+                [tesseract, str(image), "stdout", "-l", "eng+fra"],
+                text=True,
+                capture_output=True,
+                timeout=30,
+            )
+            if ocr.returncode != 0:
+                report("image_tool_failure", relative)
+            else:
+                scan_text(ocr.stdout, relative, forced_category="image_ocr")
 
 
 for category, relative, line in sorted(findings):

@@ -2,7 +2,9 @@
 
 Cortex Bridge connects a ChatGPT conversation to a reviewed executor on your Mac. Messages stay messages. Local execution starts only after a separate preflight shows the workspace, capabilities, approval policy and limits.
 
-![Cortex Bridge architecture](docs/media/architecture-flow.png)
+![Animated Cortex Bridge architecture](docs/media/architecture-flow.gif)
+
+[Static architecture image](docs/media/architecture-flow.png)
 
 ## What v0.5 does
 
@@ -51,6 +53,7 @@ Full instructions:
 - [Agent-assisted installation](docs/agent-installation.md)
 - [User guide](docs/user-guide.md)
 - [Troubleshooting](docs/troubleshooting.md)
+- [Launch strategy](docs/launch-strategy.md)
 
 ## Development
 

@@ -40,6 +40,21 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _database_available(path: Path) -> bool:
+    if not path.exists():
+        return False
+    connection: sqlite3.Connection | None = None
+    try:
+        connection = sqlite3.connect(path)
+        connection.execute("SELECT 1").fetchone()
+        return True
+    except sqlite3.Error:
+        return False
+    finally:
+        if connection is not None:
+            connection.close()
+
+
 DEFAULT_SETTINGS: dict[str, Any] = {
     "language": "fr",
     "theme": "dark",
@@ -512,13 +527,7 @@ async def pipeline_status(
         ).health()
     except Exception as exc:
         bridge_health = {"connected": False, "tabs": 0, "error": str(exc)}
-    try:
-        db_ok = DB_PATH.exists()
-        if db_ok:
-            with sqlite3.connect(DB_PATH) as connection:
-                connection.execute("SELECT 1").fetchone()
-    except sqlite3.Error:
-        db_ok = False
+    db_ok = _database_available(DB_PATH)
     if scoped:
         current_chat = _latest_chat_run_for_conversation(normalized_identity)
     else:
