@@ -6,7 +6,7 @@
   installation and agent guides, synthetic image guide, animated architecture,
   dependency/privacy gates, and a real clean macOS install/Doctor/reinstall/
   uninstall cycle.
-- Verified automated totals: 374 backend tests, 10 extension tests, 119 Vitest
+- Verified automated totals: 375 backend tests, 10 extension tests, 119 Vitest
   tests, 35 frontend runtime/privacy tests, 12 E2E tests plus one skipped guide,
   and 4 accessibility tests.
 - Open blocker: authenticated ChatGPT.com automation is
