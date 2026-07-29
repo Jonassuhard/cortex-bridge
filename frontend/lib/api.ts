@@ -76,9 +76,9 @@ export function shortTime(value?: string | number | null): string {
   if (Number.isNaN(date.getTime())) return "";
   const today = new Date();
   if (date.toDateString() === today.toDateString()) {
-    return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    return new Intl.DateTimeFormat("fr-FR", { hour: "2-digit", minute: "2-digit" }).format(date);
   }
-  return date.toLocaleDateString([], { month: "short", day: "numeric" });
+  return new Intl.DateTimeFormat("fr-FR", { month: "short", day: "numeric" }).format(date);
 }
 
 export function relativeEta(elapsedMs: number, estimateMs?: number | null): string {
