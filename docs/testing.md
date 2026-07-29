@@ -49,13 +49,9 @@ Fixtures do not prove current compatibility with the live ChatGPT website.
 
 ## Live gates
 
-Live tests require explicit approval for:
+Authenticated consumer-site automation is not run under the current OpenAI Europe Terms of Use because the adapter would programmatically extract ChatGPT Output. The release evidence records `BLOCKED_BY_PROVIDER_TERMS` with zero live counters.
 
-- the dedicated ChatGPT profile;
-- a disposable workspace root;
-- each mini-site mission.
-
-They must never use a personal conversation or important workspace. A live result records commands, hashes, HTTP checks, browser traces, screenshots and process cleanup. Failed attempts remain in the evidence; retries cannot erase them.
+An officially supported provider transport must exist before live conversations, uploads or mini-site missions can become release evidence. Future live tests must use synthetic content and disposable workspaces, record aggregate commands, hashes, HTTP checks, browser traces and process cleanup, and retain failed attempts.
 
 ## Release evidence
 

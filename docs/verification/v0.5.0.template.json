@@ -31,6 +31,34 @@
     "fixtureMissions": {"runs": 0, "passed": 0},
     "coldDualRuns": {"runs": 0, "passed": 0},
     "crashPoints": {"runs": 0, "passed": 0},
+    "liveChatGPT": {
+      "status": "PENDING_OWNER_APPROVAL",
+      "singleConversation": {"runs": 0, "passed": 0},
+      "dualConversations": {"runs": 0, "passed": 0, "crossovers": null},
+      "thirdWriterRefused": false,
+      "fileUpload": false,
+      "screenshotUpload": false,
+      "personalDataRecorded": false
+    },
+    "cleanMacosLifecycle": {
+      "status": "NOT_RUN",
+      "realCommands": false,
+      "install": false,
+      "browserLaunch": false,
+      "serviceLifecycle": false,
+      "doctor": false,
+      "reinstall": false,
+      "uninstall": false,
+      "foreignSentinelPreserved": false,
+      "attempts": 0,
+      "failedAttempts": 0,
+      "failedAttemptsRetained": false,
+      "planHashes": {
+        "install": null,
+        "reinstall": null,
+        "uninstall": null
+      }
+    },
     "miniSites": {
       "runs": 0,
       "passed": 0,

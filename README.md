@@ -25,7 +25,7 @@ The deterministic executor works without Ollama. Ollama is optional. WebBridge r
 
 The fixture release gates cover backend behavior, frontend unit tests, three responsive viewports, accessibility, two-conversation isolation, a 10-second hard switch limit, installation dry-runs, process ownership and privacy contracts.
 
-Fixture tests do not prove that the current ChatGPT website still matches the browser adapter. ChatGPT login and live acceptance remain manual, explicit gates because automating a consumer web UI is inherently fragile.
+Fixture tests do not prove that the current ChatGPT website still matches the browser adapter. Authenticated consumer-site acceptance is not run because the current OpenAI Europe Terms of Use prohibit automatically or programmatically extracting data or Output. The release remains a technical preview pending an officially supported provider transport.
 
 See [Testing](docs/testing.md) and the machine-readable [release evidence](docs/verification/v0.5.0.json) when it is generated for the final commit.
 
@@ -97,9 +97,9 @@ docs/           Architecture, user, security and release documentation
 ## Known boundaries
 
 - macOS is the only v0.5 release target.
-- Live ChatGPT behavior can change without notice.
+- The authenticated consumer-site transport is not an approved release gate under the current OpenAI Europe terms.
 - Login, CAPTCHA, rate limits and account policy decisions stay with the user.
-- Three live mini-site missions are never run without explicit approval for the ChatGPT profile and disposable workspace.
+- Live conversations, uploads and mini-site missions require an officially supported provider transport before release acceptance.
 - Historical privacy cleanup may require a separate repository-history decision even after the current tree is clean.
 
 ## Contributing

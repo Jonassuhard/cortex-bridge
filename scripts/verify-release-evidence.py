@@ -132,6 +132,92 @@ class EvidenceValidator:
         mini_runs = self.get("acceptance.miniSites.runs")
         mini_passed = self.get("acceptance.miniSites.passed")
         mini_status = self.get("acceptance.miniSites.status")
+        live_status = self.get("acceptance.liveChatGPT.status")
+        single_runs = self.get("acceptance.liveChatGPT.singleConversation.runs")
+        single_passed = self.get("acceptance.liveChatGPT.singleConversation.passed")
+        live_dual_runs = self.get("acceptance.liveChatGPT.dualConversations.runs")
+        live_dual_passed = self.get("acceptance.liveChatGPT.dualConversations.passed")
+        live_crossovers = self.get("acceptance.liveChatGPT.dualConversations.crossovers")
+        third_refused = self.get("acceptance.liveChatGPT.thirdWriterRefused")
+        file_upload = self.get("acceptance.liveChatGPT.fileUpload")
+        screenshot_upload = self.get("acceptance.liveChatGPT.screenshotUpload")
+        personal_data = self.get("acceptance.liveChatGPT.personalDataRecorded")
+
+        live_ready = (
+            live_status == "PASS"
+            and self.nonnegative_int(single_runs)
+            and self.nonnegative_int(single_passed)
+            and single_runs >= 1
+            and single_passed == single_runs
+            and self.nonnegative_int(live_dual_runs)
+            and self.nonnegative_int(live_dual_passed)
+            and live_dual_runs >= 2
+            and live_dual_passed == live_dual_runs
+            and live_crossovers == 0
+            and third_refused is True
+            and file_upload is True
+            and screenshot_upload is True
+            and personal_data is False
+        )
+        live_honestly_blocked = (
+            live_status in {"PENDING_OWNER_APPROVAL", "BLOCKED_BY_PROVIDER_TERMS"}
+            and single_runs == 0
+            and single_passed == 0
+            and live_dual_runs == 0
+            and live_dual_passed == 0
+            and live_crossovers is None
+            and third_refused is False
+            and file_upload is False
+            and screenshot_upload is False
+            and personal_data is False
+        )
+
+        lifecycle_status = self.get("acceptance.cleanMacosLifecycle.status")
+        lifecycle_boolean_fields = (
+            "realCommands",
+            "install",
+            "browserLaunch",
+            "serviceLifecycle",
+            "doctor",
+            "reinstall",
+            "uninstall",
+            "foreignSentinelPreserved",
+        )
+        lifecycle_booleans = {
+            name: self.get(f"acceptance.cleanMacosLifecycle.{name}")
+            for name in lifecycle_boolean_fields
+        }
+        lifecycle_attempts = self.get("acceptance.cleanMacosLifecycle.attempts")
+        lifecycle_failures = self.get("acceptance.cleanMacosLifecycle.failedAttempts")
+        failures_retained = self.get(
+            "acceptance.cleanMacosLifecycle.failedAttemptsRetained"
+        )
+        lifecycle_hashes = {
+            name: self.get(f"acceptance.cleanMacosLifecycle.planHashes.{name}")
+            for name in ("install", "reinstall", "uninstall")
+        }
+        clean_lifecycle_pass = (
+            lifecycle_status == "PASS"
+            and all(value is True for value in lifecycle_booleans.values())
+            and self.nonnegative_int(lifecycle_attempts)
+            and lifecycle_attempts >= 1
+            and self.nonnegative_int(lifecycle_failures)
+            and lifecycle_failures <= lifecycle_attempts
+            and failures_retained is True
+            and all(
+                isinstance(digest, str) and HEX64_RE.fullmatch(digest)
+                for digest in lifecycle_hashes.values()
+            )
+        )
+        clean_lifecycle_not_run = (
+            lifecycle_status == "NOT_RUN"
+            and all(value is False for value in lifecycle_booleans.values())
+            and lifecycle_attempts == 0
+            and lifecycle_failures == 0
+            and failures_retained is False
+            and all(digest is None for digest in lifecycle_hashes.values())
+        )
+
         verdict = self.get("verdict")
         valid_mini_counts = self.nonnegative_int(mini_runs) and self.nonnegative_int(mini_passed)
         if verdict == READY:
@@ -142,6 +228,13 @@ class EvidenceValidator:
                 or mini_passed != mini_runs
             ):
                 self.report("live_gate_verdict", "acceptance.miniSites")
+            if not live_ready:
+                self.report("live_chatgpt_evidence", "acceptance.liveChatGPT")
+            if not clean_lifecycle_pass:
+                self.report(
+                    "clean_macos_lifecycle",
+                    "acceptance.cleanMacosLifecycle",
+                )
         elif verdict == PENDING:
             if not (
                 valid_mini_counts
@@ -151,6 +244,13 @@ class EvidenceValidator:
                 and mini_passed == 0
             ):
                 self.report("live_gate_verdict", "acceptance.miniSites")
+            if not live_honestly_blocked:
+                self.report("live_chatgpt_evidence", "acceptance.liveChatGPT")
+            if not (clean_lifecycle_pass or clean_lifecycle_not_run):
+                self.report(
+                    "clean_macos_lifecycle",
+                    "acceptance.cleanMacosLifecycle",
+                )
         else:
             self.report("release_verdict", "verdict")
 

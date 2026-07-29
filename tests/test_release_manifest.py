@@ -45,6 +45,34 @@ def valid_payload() -> dict[str, object]:
             "fixtureMissions": {"runs": 20, "passed": 20},
             "coldDualRuns": {"runs": 10, "passed": 10},
             "crashPoints": {"runs": 6, "passed": 6},
+            "liveChatGPT": {
+                "status": "PASS",
+                "singleConversation": {"runs": 1, "passed": 1},
+                "dualConversations": {"runs": 2, "passed": 2, "crossovers": 0},
+                "thirdWriterRefused": True,
+                "fileUpload": True,
+                "screenshotUpload": True,
+                "personalDataRecorded": False,
+            },
+            "cleanMacosLifecycle": {
+                "status": "PASS",
+                "realCommands": True,
+                "install": True,
+                "browserLaunch": True,
+                "serviceLifecycle": True,
+                "doctor": True,
+                "reinstall": True,
+                "uninstall": True,
+                "foreignSentinelPreserved": True,
+                "attempts": 1,
+                "failedAttempts": 0,
+                "failedAttemptsRetained": True,
+                "planHashes": {
+                    "install": "b" * 64,
+                    "reinstall": "c" * 64,
+                    "uninstall": "d" * 64,
+                },
+            },
             "miniSites": {"runs": 3, "passed": 3, "status": "PASS"},
         },
         "gates": {
@@ -136,6 +164,42 @@ class ReleaseManifestTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("live_gate_verdict", result.stdout)
 
+    def test_ready_verdict_requires_every_live_chatgpt_observation(self) -> None:
+        mutations = {
+            "singleConversation": {"runs": 0, "passed": 0},
+            "dualConversations": {"runs": 2, "passed": 2, "crossovers": 1},
+            "thirdWriterRefused": False,
+            "fileUpload": False,
+            "screenshotUpload": False,
+            "personalDataRecorded": True,
+        }
+        for field, invalid in mutations.items():
+            with self.subTest(field=field):
+                payload = valid_payload()
+                acceptance = payload["acceptance"]
+                assert isinstance(acceptance, dict)
+                live = acceptance["liveChatGPT"]
+                assert isinstance(live, dict)
+                live[field] = invalid
+
+                result = self.run_validation(payload)
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("live_chatgpt_evidence", result.stdout)
+
+    def test_ready_verdict_requires_real_clean_macos_lifecycle(self) -> None:
+        payload = valid_payload()
+        acceptance = payload["acceptance"]
+        assert isinstance(acceptance, dict)
+        lifecycle = acceptance["cleanMacosLifecycle"]
+        assert isinstance(lifecycle, dict)
+        lifecycle["browserLaunch"] = False
+
+        result = self.run_validation(payload)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("clean_macos_lifecycle", result.stdout)
+
     def test_missing_live_counts_report_validation_errors_without_crashing(self) -> None:
         payload = valid_payload()
         acceptance = payload["acceptance"]
@@ -157,11 +221,49 @@ class ReleaseManifestTest(unittest.TestCase):
             "passed": 0,
             "status": "PENDING_OWNER_APPROVAL",
         }
+        acceptance["liveChatGPT"] = {
+            "status": "BLOCKED_BY_PROVIDER_TERMS",
+            "singleConversation": {"runs": 0, "passed": 0},
+            "dualConversations": {"runs": 0, "passed": 0, "crossovers": None},
+            "thirdWriterRefused": False,
+            "fileUpload": False,
+            "screenshotUpload": False,
+            "personalDataRecorded": False,
+        }
         payload["verdict"] = "PENDING_OWNER_APPROVAL_FOR_LIVE_GATES"
 
         result = self.run_validation(payload)
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_pending_live_gate_cannot_claim_unobserved_success(self) -> None:
+        payload = valid_payload()
+        acceptance = payload["acceptance"]
+        assert isinstance(acceptance, dict)
+        acceptance["miniSites"] = {
+            "runs": 0,
+            "passed": 0,
+            "status": "PENDING_OWNER_APPROVAL",
+        }
+        live = acceptance["liveChatGPT"]
+        assert isinstance(live, dict)
+        live.update(
+            {
+                "status": "BLOCKED_BY_PROVIDER_TERMS",
+                "singleConversation": {"runs": 1, "passed": 1},
+                "dualConversations": {"runs": 0, "passed": 0, "crossovers": None},
+                "thirdWriterRefused": False,
+                "fileUpload": False,
+                "screenshotUpload": False,
+                "personalDataRecorded": False,
+            }
+        )
+        payload["verdict"] = "PENDING_OWNER_APPROVAL_FOR_LIVE_GATES"
+
+        result = self.run_validation(payload)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("live_chatgpt_evidence", result.stdout)
 
     def test_commit_and_artifact_hashes_must_be_full_hex(self) -> None:
         payload = valid_payload()

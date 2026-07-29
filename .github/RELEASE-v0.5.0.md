@@ -17,7 +17,7 @@ Cortex Bridge v0.5 is a macOS technical preview for keeping a ChatGPT conversati
 
 ## Verification boundary
 
-The automated release suite uses synthetic fixtures and local browser pages. It does not sign in to a real ChatGPT account. Live ChatGPT compatibility and three disposable mini-site missions remain owner-approved manual gates.
+The automated release suite uses synthetic fixtures and local browser pages. It does not sign in to a real ChatGPT account. Current OpenAI Europe terms block the consumer-site automation needed for live compatibility and the three ChatGPT-planned mini-site missions, so the machine-readable verdict remains pending rather than `READY`.
 
 Read the [release evidence](../docs/verification/v0.5.0.json), [installation guide](../INSTALL.md), [user guide](../docs/user-guide.md) and [security policy](../SECURITY.md) before publishing this candidate.
 

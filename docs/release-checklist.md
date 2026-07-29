@@ -58,7 +58,8 @@ Every item must link to evidence from one release commit. A previous branch or a
 - [ ] Ten cold dual-conversation runs pass.
 - [ ] Six crash points recover without duplicate send or execution.
 - [ ] Self-diagnostic mission runs in a disposable worktree and does not merge itself.
-- [ ] Three live mini-sites pass only after explicit owner approval.
+- [ ] An officially supported provider transport passes every live ChatGPT and mini-site gate.
+- [ ] The consumer-site blocker is not relabelled as owner approval or fixture success.
 - [ ] `docs/verification/v0.5.0.json` matches the final commit and artifact hashes.
 
 ## External actions
