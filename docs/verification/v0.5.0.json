@@ -1,26 +1,26 @@
 {
   "schemaVersion": 1,
   "release": "0.5.0",
-  "commit": "7c21453e1153691091babfe54d80a7912384ba76",
-  "generatedAt": "2026-07-29T16:42:25Z",
+  "commit": "48b103ae7822343d5648e5b1166042885974c9ef",
+  "generatedAt": "2026-07-29T17:10:12Z",
   "environment": {
     "os": "macOS 26.5.1",
     "python": "3.12.1",
-    "node": "25.8.2",
+    "node": "22.22.2",
     "browserDriver": "Playwright 1.62.0 (frontend) and 1.61.0 (Python transport)",
     "executorKind": "deterministic fixture",
     "simulation": true
   },
   "suites": {
     "backend": {"passed": 337, "failed": 0, "skipped": 0},
-    "frontendUnit": {"passed": 145, "failed": 0, "skipped": 0},
+    "frontendUnit": {"passed": 146, "failed": 0, "skipped": 0},
     "e2e": {"passed": 11, "failed": 0, "skipped": 1},
     "a11y": {"passed": 4, "failed": 0, "skipped": 0}
   },
   "performance": {
-    "cachedUsabilityMs": 297.4,
-    "switchP95Ms": 80.4,
-    "switchMaxMs": 80.4
+    "cachedUsabilityMs": 547.9,
+    "switchP95Ms": 226.3,
+    "switchMaxMs": 226.3
   },
   "dualConversations": {
     "runs": 10,
@@ -79,7 +79,7 @@
     "consoleErrors": 0
   },
   "artifacts": {
-    "frontend/out/index.html": "b8ccf710e942895cb5f47ce240209c8afa253a907a660c1fe2407dd24e8f880c",
+    "frontend/out/index.html": "4955d7a433c73be385744763698a81858f3d1193a1e40f3514240cf969ca1b9e",
     "docs/media/architecture-flow.png": "037ec7b8eb7271b900af118f7ccb8faa721113549db57008dd3ae04f0e643dd6",
     "docs/media/architecture-flow.gif": "4ba6dd1f056ddcdd0c9328bff980dcf4d6b21b7464c6585150e1b1eaec5282c6",
     "docs/screenshots/v0.5.0/375/10-info-diagramme.png": "19e3470168c72e52bcea494aefe8244f06c1f3f82ec0d75f7eedde2b797adb5e",
