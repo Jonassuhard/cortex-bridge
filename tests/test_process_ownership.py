@@ -136,6 +136,18 @@ class CortexScriptOwnershipTest(unittest.TestCase):
                 encoding="utf-8",
             )
             lsof_wrapper.chmod(0o755)
+            curl_wrapper = bin_dir / "curl"
+            curl_wrapper.write_text(
+                "#!/bin/sh\n"
+                "pid=''\n"
+                "if [ -f \"$CORTEX_HOME/pids/launch.pid\" ]; then\n"
+                " pid=\"$(tr -cd '0-9' < \"$CORTEX_HOME/pids/launch.pid\")\"\n"
+                "fi\n"
+                f"if [ -s {str(server_environment)!r} ] && [ -n \"$pid\" ] && kill -0 \"$pid\" 2>/dev/null; then exit 0; fi\n"
+                "exit 1\n",
+                encoding="utf-8",
+            )
+            curl_wrapper.chmod(0o755)
             environment = {
                 **os.environ,
                 "CORTEX_HOME": str(root_path / "cortex-home"),
