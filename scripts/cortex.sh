@@ -89,7 +89,7 @@ case "$COMMAND" in
       if curl -sf --max-time 1 "http://127.0.0.1:$PORT/api/status" >/dev/null 2>&1 \
         && [ "$(_port_pid)" = "$pid" ]; then
         "$PYTHON" "$OWNERSHIP" capture \
-          --record "$PID_RECORD" --pid "$pid" --port "$PORT" --token "$instance_token" >/dev/null
+          --record "$PID_RECORD" --pid "$pid" --port "$PORT" --token="$instance_token" >/dev/null
         rm -f "$PIDS_DIR/launch.pid"
         echo "Cortex Bridge ready: http://127.0.0.1:$PORT"
         echo "Logs: $LOG_FILE"

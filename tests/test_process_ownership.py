@@ -114,6 +114,9 @@ class CortexScriptOwnershipTest(unittest.TestCase):
                 "#!/bin/sh\n"
                 f"if [ \"$1\" = server.py ]; then exec {sys.executable!r} "
                 f"{str(fake_server)!r}; fi\n"
+                "if [ \"$1\" = -c ] && [ \"$2\" = \"import secrets; print(secrets.token_urlsafe(32))\" ]; then\n"
+                " printf '%s\\n' '-leading-dash-token'; exit 0\n"
+                "fi\n"
                 f"exec {sys.executable!r} \"$@\"\n",
                 encoding="utf-8",
             )
@@ -126,13 +129,17 @@ class CortexScriptOwnershipTest(unittest.TestCase):
             }
             environment.pop("PYTHONPATH", None)
 
+            # The lifecycle command owns smaller internal deadlines (including
+            # three 3 s identity probes). This is only the outer test harness
+            # bound and must leave scheduling margin on a cold macOS runner.
+            lifecycle_timeout = 35
             started = subprocess.run(
                 ["bash", str(ROOT / "scripts" / "cortex.sh"), "start"],
                 cwd=ROOT,
                 env=environment,
                 capture_output=True,
                 text=True,
-                timeout=20,
+                timeout=lifecycle_timeout,
             )
             try:
                 self.assertEqual(started.returncode, 0, started.stdout + started.stderr)
@@ -147,7 +154,7 @@ class CortexScriptOwnershipTest(unittest.TestCase):
                     env=environment,
                     capture_output=True,
                     text=True,
-                    timeout=20,
+                    timeout=lifecycle_timeout,
                 )
 
     def _foreign_environment(self, root: Path) -> tuple[dict[str, str], Path]:
