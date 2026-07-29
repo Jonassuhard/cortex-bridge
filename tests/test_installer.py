@@ -210,6 +210,8 @@ class InstallerTest(unittest.TestCase):
         source = "\n".join(path.read_text(encoding="utf-8") for path in docs)
         self.assertIn("chrome://extensions", source)
         self.assertIn("Open and connect ChatGPT", source)
+        self.assertIn("BLOCKED_BY_PROVIDER_TERMS", source)
+        self.assertIn("https://openai.com/policies/eu-terms-of-use/", source)
         self.assertNotIn("dedicated Playwright Chromium profile", source)
         self.assertNotIn("dedicated Chromium profile", source)
 

@@ -499,7 +499,7 @@ Run:
 git status --short --branch
 git log --oneline -8
 git push origin codex/v050-release-qa
-gh pr checks 1 --repo Jonassuhard/cortex-bridge --watch
+gh pr checks 1 --watch
 ```
 
 Expected: clean worktree, pushed commits visible on PR 1, and all required

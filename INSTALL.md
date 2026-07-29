@@ -3,12 +3,17 @@
 The installer is plan-based. A dry run cannot mutate the machine, and applying
 the plan requires the exact hash that was reviewed.
 
+v0.5 installs a technical prototype. Authenticated consumer-site acceptance is
+`BLOCKED_BY_PROVIDER_TERMS` under the current
+[OpenAI Europe Terms of Use](https://openai.com/policies/eu-terms-of-use/),
+which prohibit automatically or programmatically extracting data or Output.
+Installing the local components does not clear that release gate.
+
 ## Requirements
 
 - [Google Chrome](https://www.google.com/chrome/) 116 or newer
 - [Git for macOS](https://git-scm.com/download/mac)
 - [Python 3.11 or newer](https://www.python.org/downloads/macos/)
-- a [ChatGPT](https://chatgpt.com/) account
 
 Optional: [Node.js](https://nodejs.org/en/download) for a UI rebuild and
 [Ollama](https://ollama.com/download/mac) for an optional local model.
@@ -44,7 +49,7 @@ Optional Ollama model:
 ./scripts/install.sh --dry-run --json --with-ollama-model MODEL_TAG
 ```
 
-## 3. Load the Chrome extension
+## 3. Review the Chrome extension
 
 Chrome does not allow a local application to silently install an unpacked
 extension. This one-time step requires the person using Chrome:
@@ -59,7 +64,7 @@ The extension can access only `https://chatgpt.com/*` and
 `http://127.0.0.1:8420/*`. It does not request cookies, passwords, history, or
 all-sites access.
 
-## 4. Run Doctor and start
+## 4. Run Doctor and start the local interface
 
 ```bash
 ./scripts/cortex.sh doctor --json

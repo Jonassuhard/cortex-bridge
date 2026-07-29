@@ -20,7 +20,7 @@
       "required": true,
       "official_url": "https://www.google.com/chrome/",
       "human_pause": true,
-      "reason": "the user installs and signs in to their normal browser"
+      "reason": "the user reviews the extension in their normal browser; authenticated consumer-site acceptance remains blocked"
     },
     {
       "id": "chrome-extension",

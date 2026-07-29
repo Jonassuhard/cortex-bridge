@@ -5,6 +5,12 @@ executor on your Mac. Chat messages remain ordinary ChatGPT messages. Local
 execution starts only after a separate preflight shows the workspace,
 capabilities, approvals, and limits.
 
+> **Release status:** v0.5 is a technical prototype. Authenticated consumer-site
+> acceptance is `BLOCKED_BY_PROVIDER_TERMS`: the current
+> [OpenAI Europe Terms of Use](https://openai.com/policies/eu-terms-of-use/)
+> prohibit automatically or programmatically extracting data or Output. Owner
+> approval does not turn that gate into a pass.
+
 ![Animated Cortex Bridge architecture](docs/media/architecture-flow.gif)
 
 [Static architecture image](docs/media/architecture-flow.png)
@@ -80,8 +86,9 @@ Full instructions:
 Automated gates cover the backend, extension protocol, frontend, responsive
 views, accessibility, two-writer isolation, 10-second switching, installation,
 process ownership, dependencies, and privacy. They do not impersonate a live
-ChatGPT account. Authenticated live acceptance is recorded only after the owner
-loads the extension and approves the test in their Chrome profile.
+ChatGPT account. Authenticated consumer-site acceptance is not run while the
+provider-terms blocker above remains. The extension protocol is verified with
+synthetic fixtures and local browser pages only.
 
 See [release evidence](docs/verification/v0.5.0.json). A fixture pass never
 turns a pending live gate into a pass.
@@ -135,7 +142,8 @@ docs/              Architecture, user, security and release documentation
 - The v0.5 extension transfer limit is 25 MiB per file.
 - ChatGPT DOM changes can temporarily break selectors; Cortex reports the
   failure and never substitutes another browser.
-- Live acceptance remains pending until the owner explicitly runs it.
+- Live acceptance remains blocked until an officially supported provider
+  transport can pass it.
 
 ## Contributing and license
 
