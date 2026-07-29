@@ -54,6 +54,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import zlib
 from pathlib import Path
 from urllib.parse import unquote
@@ -400,6 +401,7 @@ def resolve_tool(env_name: str, fallback: str) -> str | None:
 
 if images:
     exiftool = resolve_tool("EXIFTOOL_BIN", "exiftool")
+    ffmpeg = resolve_tool("FFMPEG_BIN", "ffmpeg")
     tesseract = resolve_tool("TESSERACT_BIN", "tesseract")
     if not tesseract:
         report("missing_image_tool", "tesseract-eng-fra")
@@ -435,16 +437,42 @@ if images:
             else:
                 scan_text(metadata.stdout, relative, forced_category="image_metadata")
         if ocr_ready and tesseract:
-            ocr = subprocess.run(
-                [tesseract, str(image), "stdout", "-l", "eng+fra"],
-                text=True,
-                capture_output=True,
-                timeout=30,
-            )
-            if ocr.returncode != 0:
-                report("image_tool_failure", relative)
-            else:
-                scan_text(ocr.stdout, relative, forced_category="image_ocr")
+            with tempfile.TemporaryDirectory(prefix="cortex-privacy-ocr-") as temp_dir:
+                targets = [image]
+                if kind == "gif":
+                    if not ffmpeg:
+                        report("missing_image_tool", "ffmpeg-animated-gif")
+                        continue
+                    frame_pattern = Path(temp_dir) / "frame-%06d.png"
+                    extraction = subprocess.run(
+                        [
+                            ffmpeg,
+                            "-hide_banner",
+                            "-loglevel",
+                            "error",
+                            "-i",
+                            str(image),
+                            str(frame_pattern),
+                        ],
+                        text=True,
+                        capture_output=True,
+                        timeout=60,
+                    )
+                    targets = sorted(Path(temp_dir).glob("frame-*.png"))
+                    if extraction.returncode != 0 or not targets:
+                        report("image_tool_failure", relative)
+                        continue
+                for target in targets:
+                    ocr = subprocess.run(
+                        [tesseract, str(target), "stdout", "-l", "eng+fra"],
+                        text=True,
+                        capture_output=True,
+                        timeout=30,
+                    )
+                    if ocr.returncode != 0:
+                        report("image_tool_failure", relative)
+                        break
+                    scan_text(ocr.stdout, relative, forced_category="image_ocr")
 
 
 for category, relative, line in sorted(findings):

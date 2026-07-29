@@ -29,6 +29,22 @@ interface ConversationSidebarProps {
   onOpenSettings: () => void;
 }
 
+function formatTimestamp(value?: string): string {
+  if (!value) return "";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  const now = new Date();
+  if (parsed.toDateString() === now.toDateString()) {
+    return new Intl.DateTimeFormat("fr-FR", { hour: "2-digit", minute: "2-digit" }).format(parsed);
+  }
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  if (parsed.toDateString() === yesterday.toDateString()) return "Hier";
+  return new Intl.DateTimeFormat("fr-FR", { day: "2-digit", month: "short" })
+    .format(parsed)
+    .replace(/\.$/u, "");
+}
+
 function ConversationRow({ conversation, selectedKey, onSelect }: {
   conversation: ConversationSummary;
   selectedKey: string | null;
@@ -43,7 +59,7 @@ function ConversationRow({ conversation, selectedKey, onSelect }: {
     >
       <span className={`conversation-status ${conversation.status === "error" || conversation.status === "blocked" ? "is-error" : conversation.status && conversation.status !== "idle" ? "is-active" : "is-idle"}`} />
       <span className="conversation-copy">
-        <span className="conversation-title-line"><strong>{conversation.title || "Conversation sans titre"}</strong><time>{conversation.timestamp || ""}</time></span>
+        <span className="conversation-title-line"><strong>{conversation.title || "Conversation sans titre"}</strong><time dateTime={conversation.timestamp}>{formatTimestamp(conversation.timestamp)}</time></span>
         <span className="conversation-preview">{conversation.preview || "Ouvrir la conversation"}</span>
         <span className="conversation-subline">
           {conversation.sync_state === "stale" && <span className="conv-sync-state" title={conversation.sync_error || "Synchronisation en échec"}>Cache obsolète</span>}

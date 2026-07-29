@@ -10,7 +10,7 @@ The application interface is French. This guide explains the behavior in English
 4. Sign in to ChatGPT yourself.
 5. Return to Cortex Bridge and refresh conversations.
 
-![Synthetic onboarding](screenshots/v0.5.0/onboarding-desktop.png)
+![Synthetic onboarding](screenshots/v0.5.0/1440/01-onboarding.png)
 
 ## Conversation navigation
 
@@ -22,7 +22,7 @@ The left sidebar loads at most 50 conversations and places each conversation in 
 
 Use **Nouvelle conversation** at the top. The collapsed rail keeps one expand button, new conversation, conversation navigation and settings.
 
-![Synthetic grouped navigation](screenshots/v0.5.0/navigation-desktop.png)
+![Synthetic grouped navigation](screenshots/v0.5.0/1440/02-navigation.png)
 
 ## Send a message
 
@@ -39,7 +39,7 @@ The optimistic message stays in place while its French status changes:
 
 An uncertain delivery is never sent again automatically.
 
-![Synthetic send lifecycle](screenshots/v0.5.0/send-lifecycle-desktop.png)
+![Synthetic send lifecycle](screenshots/v0.5.0/1440/03-cycle-envoi.png)
 
 ## Execute locally
 
@@ -55,13 +55,13 @@ An uncertain delivery is never sent again automatically.
 
 Write, process and network capabilities start disabled. Delete remains unavailable. Only confirmation creates the local execution.
 
-![Synthetic execution preflight](screenshots/v0.5.0/preflight-desktop.png)
+![Synthetic execution preflight](screenshots/v0.5.0/1440/04-preflight.png)
 
 ## Two active conversations
 
 Cortex Bridge supports two distinct active conversation writers. A third conversation can still be opened and edited, but sending is blocked until a slot is free. Its draft and selected file remain in the composer.
 
-![Synthetic dual conversation state](screenshots/v0.5.0/dual-conversations-desktop.png)
+![Synthetic dual conversation state](screenshots/v0.5.0/1440/06-deux-conversations.png)
 
 ## Files and screenshots
 
@@ -74,7 +74,7 @@ Supported files:
 
 Cortex Bridge validates content, not only the filename. Attachments use opaque tokens that expire after 15 minutes. A screenshot must be a regular PNG produced for the selected ChatGPT target.
 
-![Synthetic attachment flow](screenshots/v0.5.0/attachment-desktop.png)
+![Synthetic attachment flow](screenshots/v0.5.0/1440/07-piece-jointe.png)
 
 ## Status and pipeline
 
@@ -86,7 +86,7 @@ Unknown information stays unknown. The UI does not invent latency, message count
 
 Conversation selection has one absolute 10-second budget. On timeout, Cortex Bridge preserves the cached conversation as stale and shows **Recharger la conversation**. Reload is explicit and deterministic.
 
-![Synthetic timeout recovery](screenshots/v0.5.0/timeout-reload-desktop.png)
+![Synthetic timeout recovery](screenshots/v0.5.0/1440/08-timeout.png)
 
 ## Information diagram
 

@@ -72,4 +72,28 @@ describe("ConversationSidebar", () => {
     expect(screen.queryByText("Non synchronisé")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Nouvelle mission" })).not.toBeInTheDocument();
   });
+
+  it("formats ISO timestamps instead of exposing transport data", () => {
+    render(
+      <ConversationSidebar
+        collapsed={false}
+        conversations={[{
+          url: "https://chatgpt.com/c/timestamp",
+          identity: "timestamp",
+          title: "Date lisible",
+          timestamp: "2026-07-26T08:00:00.000Z",
+        }]}
+        loading={false}
+        onCollapse={() => undefined}
+        onNewConversation={() => undefined}
+        onOpenSettings={() => undefined}
+        onRefresh={() => undefined}
+        onSelect={() => undefined}
+        selectedKey={null}
+      />,
+    );
+
+    expect(screen.queryByText("2026-07-26T08:00:00.000Z")).not.toBeInTheDocument();
+    expect(screen.getByText(/26 juil/i)).toBeInTheDocument();
+  });
 });

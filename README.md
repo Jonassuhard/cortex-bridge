@@ -52,6 +52,7 @@ Full instructions:
 - [Installation guide](INSTALL.md)
 - [Agent-assisted installation](docs/agent-installation.md)
 - [User guide](docs/user-guide.md)
+- [v0.5 UI audit](docs/ui-audit-v0.5.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Launch strategy](docs/launch-strategy.md)
 

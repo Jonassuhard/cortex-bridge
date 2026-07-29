@@ -142,7 +142,7 @@ export function SettingsPanel({
         <div className="settings-layout">
           <nav className="settings-tabs">
             {tabs.map((item) => (
-              <button className={tab === item.id ? "is-active" : ""} key={item.id} onClick={() => setTab(item.id)}>{item.icon}<span>{item.label}</span></button>
+              <button aria-label={item.label} className={tab === item.id ? "is-active" : ""} key={item.id} onClick={() => setTab(item.id)}>{item.icon}<span>{item.label}</span></button>
             ))}
           </nav>
           <div className="settings-content">

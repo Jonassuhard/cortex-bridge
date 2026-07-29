@@ -330,6 +330,50 @@ class PublicPrivacyTest(unittest.TestCase):
         self.assertIn("image_ocr", result.stdout)
         self.assertNotIn("Private Person Fixture", result.stdout)
 
+    def test_animated_gif_ocr_scans_every_extracted_frame(self) -> None:
+        media = self.root / "docs" / "media"
+        media.mkdir(parents=True)
+        (media / "animation.gif").write_bytes(b"GIF89a" + b"synthetic")
+        bin_dir = self.root / "bin"
+        bin_dir.mkdir()
+        fake_ffmpeg = bin_dir / "ffmpeg"
+        fake_ffmpeg.write_text(
+            "#!/bin/sh\n"
+            "output=''\n"
+            "for argument in \"$@\"; do output=$argument; done\n"
+            "first=$(printf '%s' \"$output\" | sed 's/%06d/000001/')\n"
+            "second=$(printf '%s' \"$output\" | sed 's/%06d/000002/')\n"
+            "printf 'frame one' > \"$first\"\n"
+            "printf 'frame two' > \"$second\"\n",
+            encoding="utf-8",
+        )
+        fake_ffmpeg.chmod(0o755)
+        fake_tesseract = bin_dir / "tesseract"
+        fake_tesseract.write_text(
+            "#!/bin/sh\n"
+            "if [ \"$1\" = \"--list-langs\" ]; then printf 'eng\\nfra\\n'; exit 0; fi\n"
+            "case \"$1\" in\n"
+            "  *.gif) exit 1 ;;\n"
+            "  *000002.png) printf '%s%s\\n' 'Private Person' ' Fixture' ;;\n"
+            "  *) printf 'clean\\n' ;;\n"
+            "esac\n",
+            encoding="utf-8",
+        )
+        fake_tesseract.chmod(0o755)
+
+        result = self.run_scan(
+            extra_env={
+                "EXIFTOOL_BIN": str(self.root / "missing-exiftool"),
+                "FFMPEG_BIN": str(fake_ffmpeg),
+                "TESSERACT_BIN": str(fake_tesseract),
+            }
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("image_ocr", result.stdout)
+        self.assertNotIn("image_tool_failure", result.stdout)
+        self.assertNotIn("Private Person Fixture", result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

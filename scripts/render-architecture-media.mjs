@@ -20,10 +20,6 @@ if (!Number.isInteger(frameCount) || frameCount < 2 || frameCount > 120) throw n
 
 const { chromium } = await import("../frontend/node_modules/playwright/index.mjs");
 const { spawnSync } = await import("node:child_process");
-const docsContrastPatch = `
-  .bridge-diagram { border-color: #d6dde1 !important; }
-  .bridge-diagram .bd-node-title { fill: #f7f9fa !important; font-size: 11px !important; }
-`;
 mkdirSync(dirname(output), { recursive: true });
 if (gif) mkdirSync(dirname(gif), { recursive: true });
 
@@ -38,7 +34,6 @@ async function openDiagram(browser, reducedMotion) {
     await route.continue();
   });
   await page.goto(url, { waitUntil: "networkidle" });
-  await page.addStyleTag({ content: docsContrastPatch });
   await page.locator(".settings-entry").click();
   await page.getByRole("button", { name: "Info", exact: true }).click();
   const diagram = page.locator(".bridge-diagram");

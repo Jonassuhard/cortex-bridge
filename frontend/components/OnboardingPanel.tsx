@@ -86,7 +86,7 @@ export function OnboardingPanel({ onOpenSettings }: { onOpenSettings: () => void
         <header className="settings-head">
           <div>
             <span className="panel-eyebrow">Cortex Bridge</span>
-            <h2>Bienvenue 👋</h2>
+            <h2>Bienvenue</h2>
             <p>Vérifions ensemble que tout est prêt. ChatGPT planifie, Ollama exécute sur ta machine.</p>
           </div>
           <button className="icon-button" onClick={() => void dismiss()} aria-label="Fermer l'assistant"><XIcon /></button>
@@ -107,7 +107,7 @@ export function OnboardingPanel({ onOpenSettings }: { onOpenSettings: () => void
           ) : null}
         </div>
         <footer className="settings-footer">
-          <span>{state.ready ? "✅ Tout est prêt." : "Certains prérequis manquent — tu peux quand même explorer."}</span>
+          <span>{state.ready ? "Tout est prêt." : "Certains prérequis manquent — tu peux quand même explorer."}</span>
           <div>
             <button className="secondary-button" disabled={openingBrowser} onClick={() => void openBrowser()}>
               {openingBrowser ? "Ouverture…" : "Ouvrir le profil de connexion"}

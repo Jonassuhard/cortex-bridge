@@ -12,14 +12,6 @@ const allViewports = [
 ] as const;
 const requestedWidth = Number(process.env.CORTEX_DOCS_VIEWPORT || 0);
 const viewports = requestedWidth ? allViewports.filter(({ width }) => width === requestedWidth) : allViewports;
-const docsContrastPatch = `
-  .onboarding-check { border-color: #d6dde1 !important; }
-  .onboarding-check strong, .staged-file-pill { color: #101419 !important; }
-  .staged-file-pill, .bridge-diagram { border-color: #d6dde1 !important; }
-  .bridge-diagram .bd-node-title { fill: #f7f9fa !important; font-size: 11px !important; }
-  .cortex-app:has(.settings-overlay) .account-avatar,
-  .cortex-app:has(.dialog-backdrop) .account-avatar { visibility: hidden !important; }
-`;
 
 async function capture(page: Page, width: number, name: string) {
   const directory = `${outputRoot}/${width}`;
@@ -102,7 +94,6 @@ test("generate the synthetic v0.5 visual guide", async ({ appPage }) => {
 
   const reset = async () => {
     await appPage.goto("/");
-    await appPage.addStyleTag({ content: docsContrastPatch });
     await expect(appPage.getByRole("heading", { name: "Release checklist" })).toBeVisible();
   };
 
@@ -112,7 +103,6 @@ test("generate the synthetic v0.5 visual guide", async ({ appPage }) => {
 
     showOnboarding = true;
     await appPage.reload();
-    await appPage.addStyleTag({ content: docsContrastPatch });
     await expect(appPage.getByRole("dialog", { name: "Bienvenue dans Cortex Bridge" })).toBeVisible();
     await capture(appPage, viewport.width, "01-onboarding");
     await appPage.getByRole("button", { name: "Fermer l'assistant" }).click();

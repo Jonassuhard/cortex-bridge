@@ -355,8 +355,8 @@ export function ChatWorkspace({
     <section className="chat-workspace">
       <div className="conversation-toolbar">
         <div className="toolbar-left">
-          {!sidebarCollapsed && <button className="toolbar-icon-button mobile-only" onClick={onToggleSidebar}><MenuIcon /></button>}
-          {sidebarCollapsed && <button className="toolbar-icon-button" onClick={onToggleSidebar} title="Afficher les conversations"><MenuIcon /></button>}
+          {!sidebarCollapsed && <button className="toolbar-icon-button mobile-only" onClick={onToggleSidebar} title="Masquer les conversations" aria-label="Masquer les conversations"><MenuIcon /></button>}
+          {sidebarCollapsed && <button className="toolbar-icon-button" onClick={onToggleSidebar} title="Afficher les conversations" aria-label="Afficher les conversations"><MenuIcon /></button>}
           <div className="conversation-title-block">
             <div><h1>{title}</h1><button aria-label="Options de conversation"><MoreIcon size={17} /></button></div>
             <p>

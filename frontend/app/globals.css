@@ -12,6 +12,9 @@
   --surface: #f4f5f5;
   --surface-2: #ffffff;
   --surface-muted: #e8eaec;
+  --surface-ink: #101419;
+  --surface-muted-ink: #66727a;
+  --surface-line: #d6dde1;
   --ink: #f7f9fa;
   --ink-soft: #d6dde1;
   --muted: #8d989f;
@@ -333,6 +336,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   overflow: hidden;
   background: rgba(4, 6, 7, .72);
 }
+.chat-workspace:has(.dialog-backdrop) { z-index: 90; }
 .conversation-toolbar {
   position: relative;
   z-index: 6;
@@ -362,7 +366,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .toolbar-center-status, .status-rail { display: flex; align-items: center; gap: 8px; color: var(--green); font-size: 12px; white-space: nowrap; }
 .toolbar-center-status strong { font-weight: 650; }
 .status-pill { display: inline-flex; align-items: center; gap: 7px; padding: 5px 11px; border: 1px solid var(--line); border-radius: 999px; background: rgba(255,255,255,.02); color: var(--muted); }
-.status-pill strong { color: var(--text); }
+.status-pill strong { color: var(--ink); }
 .status-pill.is-offline strong { color: var(--red); }
 .status-pill.is-unknown strong { color: var(--muted); }
 .status-pill.is-active strong { color: var(--blue-light); }
@@ -516,7 +520,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .execution-preflight-button:hover:not(:disabled) { color: #fff; border-color: rgba(79,140,255,.55); background: rgba(79,140,255,.12); }
 .execution-preflight-button:disabled { opacity: .38; cursor: not-allowed; }
 .dialog-backdrop { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; padding: 20px; background: rgba(2,3,4,.76); backdrop-filter: blur(10px); }
-.execution-preflight-dialog { width: min(610px, 100%); max-height: min(760px, calc(100vh - 32px)); overflow-y: auto; color: var(--ink); border: 1px solid var(--line-strong); border-radius: var(--radius-md); background: #101419; box-shadow: var(--shadow-lg); }
+.execution-preflight-dialog { position: relative; inset: auto; width: min(610px, 100%); max-height: min(760px, calc(100vh - 32px)); margin: 0; padding: 0; overflow-y: auto; color: var(--ink); border: 1px solid var(--line-strong); border-radius: var(--radius-md); background: #101419; box-shadow: var(--shadow-lg); }
 .execution-preflight-dialog > header { display: grid; grid-template-columns: 36px 1fr 36px; gap: 12px; align-items: start; padding: 20px; border-bottom: 1px solid var(--line); }
 .execution-preflight-dialog > header > span { width: 36px; height: 36px; display: grid; place-items: center; color: #4f8cff; border-radius: 10px; background: rgba(79,140,255,.12); }
 .execution-preflight-dialog h2 { margin: 0; font-size: 18px; }
@@ -758,10 +762,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   margin: 0 8px 4px;
   padding: 6px 10px;
   border-radius: 8px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--surface-line);
   background: var(--surface);
   font-size: 11px;
-  color: var(--text);
+  color: var(--surface-ink);
 }
 
 .staged-file-pill button {
@@ -773,19 +777,19 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 }
 
 .staged-file-pill button:hover {
-  color: var(--text);
+  color: var(--surface-ink);
 }
 
 /* ── BridgeDiagram (Settings › Info) ─────────────────────────────── */
 .bridge-diagram {
-  border: 1px solid var(--border);
+  border: 1px solid var(--surface-line);
   border-radius: 14px;
   background: var(--surface);
   padding: 14px;
 }
 
 .bridge-diagram .bd-zone {
-  stroke: var(--border);
+  stroke: var(--surface-line);
   stroke-width: 1;
 }
 
@@ -798,7 +802,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 
 .bridge-diagram .bd-node rect {
   fill: var(--bg);
-  stroke: var(--border);
+  stroke: var(--surface-line);
   stroke-width: 1.2;
 }
 
@@ -812,8 +816,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 }
 
 .bridge-diagram .bd-node-title {
-  fill: var(--text);
-  font-size: 13px;
+  fill: var(--ink);
+  font-size: 11px;
   font-weight: 700;
   text-anchor: middle;
 }
@@ -870,7 +874,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   margin: 10px 4px 0;
   font-size: 11.5px;
   line-height: 1.5;
-  color: var(--muted);
+  color: var(--surface-muted-ink);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -895,7 +899,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   gap: 12px;
   align-items: flex-start;
   padding: 12px 14px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--surface-line);
   border-radius: 12px;
   background: var(--surface);
 }
@@ -914,8 +918,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   gap: 3px;
 }
 
-.onboarding-check strong { font-size: 13px; color: var(--text); }
-.onboarding-check small { font-size: 11.5px; color: var(--muted); }
+.onboarding-check strong { font-size: 13px; color: var(--surface-ink); }
+.onboarding-check small { font-size: 11.5px; color: var(--surface-muted-ink); }
 .onboarding-check em {
   font-size: 11.5px;
   font-style: normal;
@@ -932,7 +936,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .diagnostic-result {
   margin: 8px 22px 0;
   font-size: 12px;
-  color: var(--text);
+  color: var(--ink);
 }
 
 .diagnostic-result.failed { color: #f87171; }
@@ -944,4 +948,4 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   text-align: center;
 }
 
-.sidebar-empty-guidance b { color: var(--text); }
+.sidebar-empty-guidance b { color: var(--ink); }
