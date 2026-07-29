@@ -67,6 +67,18 @@ class CiContractTest(unittest.TestCase):
             source,
         )
 
+    def test_typescript_incremental_cache_is_not_versioned(self):
+        ignore_source = (ROOT / ".gitignore").read_text(encoding="utf-8")
+        self.assertIn("frontend/tsconfig.tsbuildinfo", ignore_source.splitlines())
+        tracked = subprocess.run(
+            ["git", "ls-files", "--error-unmatch", "frontend/tsconfig.tsbuildinfo"],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            timeout=10,
+        )
+        self.assertNotEqual(tracked.returncode, 0)
+
 
 if __name__ == "__main__":
     unittest.main()
