@@ -26,6 +26,7 @@ from missions import router as missions_router
 from chat import router as chat_router
 from settings import router as settings_router
 from onboarding import router as onboarding_router
+from chrome_extension import router as chrome_extension_router
 from cortex_paths import build_paths, migrate_legacy_state
 from version import current_version
 
@@ -49,6 +50,7 @@ app.include_router(missions_router)
 app.include_router(chat_router)
 app.include_router(settings_router)
 app.include_router(onboarding_router)
+app.include_router(chrome_extension_router)
 app.router.add_event_handler("shutdown", close_mission_store)
 
 if (FRONTEND_OUT / "_next").is_dir():
