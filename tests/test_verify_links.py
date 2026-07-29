@@ -118,6 +118,12 @@ class VerifyLinksTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("outside_root", result.stdout)
 
+    def test_access_control_responses_count_as_reachable(self) -> None:
+        source = CHECKER.read_text(encoding="utf-8")
+
+        self.assertIn("fallback_error.code in {401, 403}", source)
+        self.assertIn("external_checked += 1", source)
+
 
 if __name__ == "__main__":
     unittest.main()

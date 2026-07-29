@@ -140,7 +140,7 @@ def check_external(url: str, source: Path, line: int) -> None:
                 report("external_http_error", source, line)
                 return
     except HTTPError as error:
-        if error.code in {403, 405}:
+        if error.code in {401, 403, 405}:
             fallback = Request(
                 url,
                 method="GET",
@@ -151,7 +151,13 @@ def check_external(url: str, source: Path, line: int) -> None:
                     if response.status >= 400:
                         report("external_http_error", source, line)
                         return
-            except (HTTPError, URLError, TimeoutError):
+            except HTTPError as fallback_error:
+                if fallback_error.code in {401, 403}:
+                    external_checked += 1
+                    return
+                report("external_unreachable", source, line)
+                return
+            except (URLError, TimeoutError):
                 report("external_unreachable", source, line)
                 return
         else:
