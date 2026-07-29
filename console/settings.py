@@ -75,7 +75,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "persist_conversation_history": False,
     "response_stability_seconds": 2.0,
     "chat_timeout_seconds": 300,
-    "browser_transport": "playwright",
+    "browser_transport": "chrome_extension",
     "browser_profile_root": str(RUNTIME_PATHS.browser_profiles),
 }
 
@@ -99,7 +99,7 @@ class SettingsIn(BaseModel):
     persist_conversation_history: bool = False
     response_stability_seconds: float = Field(default=2.0, ge=1.0, le=10.0)
     chat_timeout_seconds: int = Field(default=300, ge=30, le=900)
-    browser_transport: Literal["playwright", "webbridge"] = "playwright"
+    browser_transport: Literal["chrome_extension", "playwright", "webbridge"] = "chrome_extension"
     browser_profile_root: str = str(RUNTIME_PATHS.browser_profiles)
 
 

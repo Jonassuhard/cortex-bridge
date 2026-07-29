@@ -731,6 +731,11 @@ class ChatGPTWebTransport:
             await uploader(selector, [path])
             attached = True
         except DriverError as cdp_exc:
+            if getattr(self.driver, "supports_raw_evaluation", True) is False:
+                raise TransportError(
+                    "ATTACHMENT_FAILED",
+                    f"structured upload rejected: {cdp_exc}",
+                ) from cdp_exc
             # Primary fallback: base64 injection — no CDP, no network.
             import base64
             import mimetypes

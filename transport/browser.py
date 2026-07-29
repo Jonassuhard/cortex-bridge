@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 from transport.browser_playwright import PlaywrightBrowserDriver
+from transport.browser_chrome_extension import ChromeExtensionBrowserDriver
 from transport.chatgpt_web.adapter import WebBridgeDriver
 try:
     from cortex_paths import build_paths
@@ -19,10 +20,12 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 RUNTIME_PATHS = build_paths()
 SETTINGS_FILE = RUNTIME_PATHS.settings
 DEFAULT_BROWSER_SETTINGS = {
-    "browser_transport": "playwright",
+    "browser_transport": "chrome_extension",
     "browser_profile_root": str(RUNTIME_PATHS.browser_profiles),
 }
-ALLOWED_BROWSER_TRANSPORTS = frozenset({"playwright", "webbridge"})
+ALLOWED_BROWSER_TRANSPORTS = frozenset(
+    {"chrome_extension", "playwright", "webbridge"}
+)
 
 
 @runtime_checkable
@@ -53,7 +56,7 @@ class BrowserDriver(Protocol):
     async def open_login(self) -> dict[str, Any]: ...
 
 
-_driver_cache: dict[tuple[str, str, str, bool | None], PlaywrightBrowserDriver] = {}
+_driver_cache: dict[tuple[str, str, str, bool | None], BrowserDriver] = {}
 _driver_cache_lock = threading.Lock()
 
 
@@ -69,7 +72,7 @@ def load_browser_settings(settings: dict[str, Any] | None = None) -> dict[str, A
     transport = str(result["browser_transport"])
     if transport not in ALLOWED_BROWSER_TRANSPORTS:
         raise ValueError(
-            "browser_transport must be exactly one of: playwright, webbridge"
+            "browser_transport must be exactly one of: chrome_extension, playwright, webbridge"
         )
     _profile_root(str(result["browser_profile_root"]))
     return result
@@ -102,8 +105,17 @@ def create_browser_driver(
     selected = transport_name or str(config["browser_transport"])
     if selected not in ALLOWED_BROWSER_TRANSPORTS:
         raise ValueError(
-            "browser_transport must be exactly one of: playwright, webbridge"
+            "browser_transport must be exactly one of: chrome_extension, playwright, webbridge"
         )
+    if selected == "chrome_extension":
+        key = (selected, "extension", session, None)
+        with _driver_cache_lock:
+            cached = _driver_cache.get(key)
+            if cached is not None:
+                return cached
+            driver = ChromeExtensionBrowserDriver(session=session)
+            _driver_cache[key] = driver
+            return driver
     if selected == "webbridge":
         return WebBridgeDriver(session=session)
 

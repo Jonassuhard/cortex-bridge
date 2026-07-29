@@ -411,7 +411,7 @@ class ChatSettingsApiTestCase(unittest.TestCase):
             defaults.get("process_capabilities"),
             {"allowed": False, "allow_network": False, "allow_deletions": False},
         )
-        self.assertEqual(defaults["browser_transport"], "playwright")
+        self.assertEqual(defaults["browser_transport"], "chrome_extension")
         self.assertEqual(
             Path(defaults["browser_profile_root"]),
             settings_api.RUNTIME_PATHS.browser_profiles,
@@ -874,7 +874,7 @@ class ChatSettingsApiTestCase(unittest.TestCase):
                 "driver": "unknown",
                 "error": (
                     "browser_transport must be exactly one of: "
-                    "playwright, webbridge"
+                    "chrome_extension, playwright, webbridge"
                 ),
             },
         })

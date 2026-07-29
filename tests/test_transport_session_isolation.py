@@ -417,7 +417,7 @@ class ChatRouteSessionIsolationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             failed.error,
             "CHAT_RUN_CRASHED: browser_transport must be exactly one of: "
-            "playwright, webbridge",
+            "chrome_extension, playwright, webbridge",
         )
         self.assertEqual(write_slots._registry.active_leases(), ())
 
