@@ -27,8 +27,8 @@ describe("SettingsPanel settings refresh", () => {
     };
     const fresh = {
       ...demoSettings,
-      default_workspace: "/Users/test/.local/share/cortex-bridge/workspaces",
-      browser_profile_root: "/Users/test/.local/share/cortex-bridge/browser-profiles",
+      default_workspace: "/tmp/cortex-bridge-qa/user-data/workspaces",
+      browser_profile_root: "/tmp/cortex-bridge-qa/user-data/browser-profiles",
     };
     const { rerender } = render(<SettingsPanel {...common} settings={stale} />);
 
