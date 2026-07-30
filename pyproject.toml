@@ -10,6 +10,7 @@ requires-python = ">=3.11"
 dependencies = [
   "fastapi==0.140.13",
   "uvicorn==0.51.0",
+  "websockets==17.0",
   "playwright==1.61.0",
 ]
 

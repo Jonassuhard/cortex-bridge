@@ -45,6 +45,7 @@ class StartLocalTest(unittest.TestCase):
             expected_cache = str(root_path / "state" / "browser-cache")
             expected_pythonpath = f"{REPO_ROOT / 'console'}:{REPO_ROOT}"
             self.assertTrue(calls[0].startswith(f"{expected_cache}|{expected_pythonpath}|-c "))
+            self.assertIn("websockets", calls[0])
             self.assertEqual(calls[1], f"{expected_cache}|{expected_pythonpath}|server.py")
             self.assertNotIn("pip install", "\n".join(calls))
             self.assertNotIn("playwright install", "\n".join(calls))

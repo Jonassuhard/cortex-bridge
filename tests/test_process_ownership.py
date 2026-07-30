@@ -110,8 +110,11 @@ class CortexScriptOwnershipTest(unittest.TestCase):
                 encoding="utf-8",
             )
             python_wrapper = root_path / "python"
+            python_calls = root_path / "python-calls.log"
             python_wrapper.write_text(
                 "#!/bin/sh\n"
+                f"printf '%s\\n' \"$*\" >> {str(python_calls)!r}\n"
+                "if [ \"$1\" = -c ] && [ \"$2\" = \"import fastapi,uvicorn,playwright,websockets\" ]; then exit 0; fi\n"
                 f"if [ \"$1\" = server.py ]; then exec {sys.executable!r} "
                 f"{str(fake_server)!r}; fi\n"
                 "if [ \"$1\" = -c ] && [ \"$2\" = \"import secrets; print(secrets.token_urlsafe(32))\" ]; then\n"
@@ -174,6 +177,10 @@ class CortexScriptOwnershipTest(unittest.TestCase):
                 self.assertEqual(
                     server_environment.read_text(encoding="utf-8"),
                     f"{ROOT / 'console'}:{ROOT}",
+                )
+                self.assertIn(
+                    "import fastapi,uvicorn,playwright,websockets",
+                    python_calls.read_text(encoding="utf-8"),
                 )
             finally:
                 subprocess.run(

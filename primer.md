@@ -19,10 +19,14 @@
 - Fresh local rerun on July 30: 375 backend, 10 extension, 119 Vitest, 35
   runtime/privacy, 12 E2E plus one skipped guide, and 4 accessibility tests all
   passed. Cached usability was 145.6 ms; switch p95/max was 62.1 ms.
-- Runtime now: Cortex answers on `http://127.0.0.1:8420`; Cortex and ChatGPT are
-  open in the same Chrome profile, but the Cortex extension reports
-  `disconnected` and `paired=false`. No authenticated message or upload was
-  claimed.
-- Next exact action: replace the blocked consumer-site adapter with an
-  officially supported provider transport before running any authenticated
-  live gate.
+- Runtime now: Cortex answers on `http://127.0.0.1:8420` and is open in the
+  real Chrome profile. Chrome developer mode was already enabled. The missing
+  WebSocket runtime dependency was added to the source requirements and lock,
+  installed locally, and guarded by both launchers. The live backend confirms
+  `extension_connected=true`, `paired=true`; the real ChatGPT probe sees the
+  composer and Cortex lists exactly the latest 50 conversations.
+- Fresh regression after the WebSocket fix: 375 backend tests and 10 extension
+  tests pass, `pip check` reports no broken requirements, and Doctor is healthy.
+  No authenticated message or upload was claimed.
+- Next exact action: commit the WebSocket dependency fix, then push it to pull
+  request #1 only after owner approval.

@@ -10,7 +10,7 @@ if [ ! -x "$PYTHON" ]; then
   echo "Cortex Bridge runtime is not installed. Run scripts/install.sh --dry-run --json first." >&2
   exit 1
 fi
-if ! "$PYTHON" -c 'import fastapi,uvicorn,playwright'; then
+if ! "$PYTHON" -c 'import fastapi,uvicorn,playwright,websockets'; then
   echo "Cortex Bridge dependencies are incomplete. Re-run the approved installer plan." >&2
   exit 1
 fi
