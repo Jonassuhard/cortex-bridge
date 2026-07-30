@@ -350,7 +350,23 @@ def protocol_text(message: dict) -> str:
     blocks = message.get("code_blocks") or []
     if not blocks:
         return message.get("text", "")
-    return "\n".join(f"```{b.get('lang', '')}\n{b.get('text', '')}\n```" for b in blocks)
+    visible_lines = [
+        line.strip()
+        for line in str(message.get("text", "")).splitlines()
+        if line.strip()
+    ]
+    visible_protocol_label = (
+        visible_lines[0]
+        if len(blocks) == 1
+        and visible_lines
+        and visible_lines[0] in {"cortex-decision", "cortex-report"}
+        else ""
+    )
+    rebuilt = []
+    for block in blocks:
+        language = str(block.get("lang") or "").strip() or visible_protocol_label
+        rebuilt.append(f"```{language}\n{block.get('text', '')}\n```")
+    return "\n".join(rebuilt)
 
 
 class ChatGPTWebTransport:
