@@ -5,11 +5,12 @@ executor on your Mac. Chat messages remain ordinary ChatGPT messages. Local
 execution starts only after a separate preflight shows the workspace,
 capabilities, approvals, and limits.
 
-> **Release status:** v0.5 is a technical prototype. Authenticated consumer-site
-> acceptance is `BLOCKED_BY_PROVIDER_TERMS`: the current
+> **Release status:** v0.5 is a technical release candidate ready for owner
+> approval. Owner-authorized acceptance passed against a real signed-in ChatGPT
+> tab, but this consumer-site automation is not an officially supported OpenAI
+> integration. Review the current
 > [OpenAI Europe Terms of Use](https://openai.com/policies/eu-terms-of-use/)
-> prohibit automatically or programmatically extracting data or Output. Owner
-> approval does not turn that gate into a pass.
+> before distribution or production use.
 
 ![Animated Cortex Bridge architecture](docs/media/architecture-flow.gif)
 
@@ -85,13 +86,13 @@ Full instructions:
 
 Automated gates cover the backend, extension protocol, frontend, responsive
 views, accessibility, two-writer isolation, 10-second switching, installation,
-process ownership, dependencies, and privacy. They do not impersonate a live
-ChatGPT account. Authenticated consumer-site acceptance is not run while the
-provider-terms blocker above remains. The extension protocol is verified with
-synthetic fixtures and local browser pages only.
+process ownership, dependencies, and privacy. Separate owner-authorized live
+acceptance covers one real conversation, two isolated writers, refusal of a
+third writer, a text file, an explicitly authorized screenshot, closed-tab
+recovery, and three autonomous mini-sites.
 
-See [release evidence](docs/verification/v0.5.0.json). A fixture pass never
-turns a pending live gate into a pass.
+See [release evidence](docs/verification/v0.5.0.json). Live tests prove the
+observed technical behavior only; they do not imply provider endorsement.
 
 ## Development
 

@@ -4,10 +4,12 @@ This guide is for an agentic LLM helping a person install Cortex Bridge. The
 agent may inspect, explain, and execute an approved local plan. It may not
 manufacture consent.
 
-Authenticated consumer-site acceptance is `BLOCKED_BY_PROVIDER_TERMS` under
-the current [OpenAI Europe Terms of Use](https://openai.com/policies/eu-terms-of-use/).
-An agent must not reinterpret owner approval or a fixture pass as permission to
-automatically extract ChatGPT Output.
+Owner-authorized consumer-site acceptance passed for the v0.5 release
+candidate. This does not make Cortex Bridge an officially supported OpenAI
+integration. An installation agent must show the current
+[OpenAI Europe Terms of Use](https://openai.com/policies/eu-terms-of-use/) and
+must not reinterpret a test result as provider endorsement or permission for
+production use.
 
 ## Required flow
 
@@ -89,9 +91,10 @@ For development:
 PYTHON=.venv/bin/python ./scripts/test-all.sh
 ```
 
-Never run or mark a live ChatGPT, file, screenshot, or mission gate as passed
-while the provider-terms blocker remains. Fixture results prove only the local
-implementation.
+Mark a live ChatGPT, file, screenshot, or mission gate as passed only after an
+explicitly authorized real observation. Fixture results prove only the local
+implementation. Live observations prove technical behavior, not provider
+approval.
 
 ## Uninstall
 

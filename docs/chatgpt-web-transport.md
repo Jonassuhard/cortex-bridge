@@ -7,11 +7,11 @@ extension. It controls ChatGPT in the person's existing Chrome profile and in
 the same Chrome window as the Cortex tab. It does not use an OpenAI API or
 launch a separate browser.
 
-Authenticated consumer-site acceptance is `BLOCKED_BY_PROVIDER_TERMS`. The
-current [OpenAI Europe Terms of Use](https://openai.com/policies/eu-terms-of-use/)
-prohibit automatically or programmatically extracting data or Output. The
-transport therefore remains an experimental implementation, not a supported
-live release route.
+Owner-authorized authenticated acceptance passed for the v0.5 release
+candidate. The transport remains an experimental consumer-site integration,
+not an officially supported OpenAI route. Review the current
+[OpenAI Europe Terms of Use](https://openai.com/policies/eu-terms-of-use/)
+before distribution or production use.
 
 Install the extension once from `chrome://extensions`, then press **Open and
 connect ChatGPT**. Cortex creates a 60-second single-use pairing token. The
@@ -71,6 +71,6 @@ user's Chrome profile, and is never a silent fallback.
 ## Testing boundary
 
 Automated suites test the protocol, DOM fixtures, UI states, two-writer limit,
-files, screenshots, and failures. They do not authorize or impersonate a real
-ChatGPT session. A compliant official-provider transport is required before
-the live gate can run.
+files, screenshots, and failures. Separate owner-authorized live tests cover
+the real signed-in Chrome tab. Neither class of test implies provider
+endorsement.
