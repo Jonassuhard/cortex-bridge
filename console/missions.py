@@ -210,7 +210,11 @@ def _make_approval_callback(rt: MissionRuntime):
             return None
         scope = rt.approval_scope
         tool = (decision.get("action") or {}).get("tool")
-        if scope and rt.policy is not None and tool:
+        # Returning SCOPE_ONCE authorizes the action currently waiting below;
+        # persisting it in PolicyEngine would incorrectly authorize the next
+        # action of the same tool as well. Only wider scopes survive this
+        # approval callback.
+        if scope and scope != SCOPE_ONCE and rt.policy is not None and tool:
             try:
                 rt.policy.approve(scope, tool=tool if scope != SCOPE_ALL_WRITES_FOR_MISSION else None)
             except ValueError:
