@@ -4,6 +4,11 @@
 
 **Goal:** Make Cortex Bridge open, verify, and drive the user's real ChatGPT tab in the same Google Chrome window through a secure local MV3 extension.
 
+**Execution status:** Tasks 1–6 are implemented and verified. In Task 7, the
+automated suite, clean macOS lifecycle, evidence update, branch push, and pull
+request are complete. The authenticated same-window acceptance and final
+`READY` verdict remain intentionally incomplete.
+
 **Architecture:** A packaged Chrome extension connects outbound to a FastAPI WebSocket on loopback. A single-use token pairs the Cortex browser tab with the extension, after which an allowlisted command protocol binds logical Cortex sessions to ChatGPT tabs in the same window. The normal user path never launches the existing Playwright profile; Playwright remains an explicit development transport.
 
 **Tech Stack:** Python 3.11+, FastAPI WebSockets, Pydantic, Chrome Manifest V3 (Chrome 116+), plain JavaScript content scripts, React 19, TypeScript, Vitest, Playwright test fixtures, `unittest`.
@@ -449,21 +454,24 @@ git commit -m "docs(install): ship the Chrome extension setup flow"
 - Consumes: all prior tasks and the owner's authenticated Chrome session.
 - Produces: redacted machine-readable and human-readable release evidence.
 
-- [ ] **Step 1: Run the complete automated suite**
+- [x] **Step 1: Run the complete automated suite**
 
 Run:
 
 ```bash
-./scripts/test-all.sh
-cd frontend && npm audit --audit-level=high
-cd .. && gitleaks detect --no-banner
-./scripts/check-public-privacy.sh
+PYTHON=$HOME/.local/share/cortex-bridge/venv/bin/python ./scripts/test-all.sh
+./scripts/npmw audit --audit-level=high
+gitleaks detect --no-banner
+./scripts/check-public-privacy.sh \
+  --markers tests/fixtures/privacy/ci-markers.txt \
+  --fingerprints scripts/privacy-fingerprints.json \
+  --url-allowlist scripts/public-url-allowlist.txt
 ```
 
 Expected: zero failed tests, zero high/critical npm vulnerabilities, zero
 secrets, and zero privacy findings.
 
-- [ ] **Step 2: Rehearse install, Doctor, and uninstall in an isolated home**
+- [x] **Step 2: Rehearse install, Doctor, and uninstall in an isolated home**
 
 Use a temporary `HOME` and `CORTEX_HOME`. Prove installation prepares the
 extension, Doctor reports `extension not paired` before pairing, and uninstall
@@ -486,12 +494,12 @@ In the owner's normal Chrome profile:
 
 Do not store conversation text, account identity, cookies, or unredacted images.
 
-- [ ] **Step 4: Update release evidence truthfully**
+- [x] **Step 4: Update release evidence truthfully**
 
 Set each gate to `passed` only when its fresh output exists. Keep any unrun live
 gate `pending_owner_approval`; do not convert fixture success into live proof.
 
-- [ ] **Step 5: Verify Git state and push the existing branch**
+- [x] **Step 5: Verify Git state and push the existing branch**
 
 Run:
 

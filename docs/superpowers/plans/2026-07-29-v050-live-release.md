@@ -54,12 +54,12 @@ The official transport is a separate architecture decision: it requires provider
 ## 5. GitHub publication
 
 - [x] Confirm GitHub authentication, repository, remote and `main` base branch.
-- [ ] Push `codex/v050-release-qa` without force.
-- [ ] Open a technical-preview PR that states the blocked live boundary.
-- [ ] Verify the remote SHA and PR URL.
+- [x] Push `codex/v050-release-qa` without force.
+- [x] Open a technical-preview PR that states the blocked live boundary.
+- [x] Verify the remote SHA and PR URL.
 
 ## Release decision
 
-- Current verdict: `PENDING_OWNER_APPROVAL_FOR_LIVE_GATES`.
+- Current verdict: `RELEASE_BLOCKED_BY_PROVIDER_TERMS`.
 - `READY` is prohibited until an officially supported transport produces all required live evidence.
 - A pull request may still be published as a technical preview because the blocked boundary is explicit and machine-enforced.
