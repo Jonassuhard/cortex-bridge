@@ -5,17 +5,35 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import ipaddress
 import json
 import os
 import re
 import sys
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 
 REQUIRED_ARTIFACTS = ("index.html", "style.css", "app.js", "README.md")
 REQUIRED_VIEWPORTS = {375, 768, 1440}
 EXTERNAL_URL_RE = re.compile(r"(?:https?:)?//[^\s\"'<>]+", re.IGNORECASE)
+
+
+def contains_external_url(content: str) -> bool:
+    for match in EXTERNAL_URL_RE.finditer(content):
+        raw_url = match.group(0)
+        parsed = urlsplit(raw_url if not raw_url.startswith("//") else f"http:{raw_url}")
+        hostname = parsed.hostname
+        if hostname == "localhost" or (hostname and hostname.endswith(".localhost")):
+            continue
+        try:
+            if hostname and ipaddress.ip_address(hostname).is_loopback:
+                continue
+        except ValueError:
+            pass
+        return True
+    return False
 
 
 def file_hash(path: Path) -> str:
@@ -135,7 +153,7 @@ def verify(args: argparse.Namespace) -> int:
             findings.add("artifact_encoding")
             missing_or_invalid_artifact = True
         else:
-            if EXTERNAL_URL_RE.search(content):
+            if contains_external_url(content):
                 findings.add("external_url")
 
     for path in workspace.rglob("*"):
@@ -151,7 +169,7 @@ def verify(args: argparse.Namespace) -> int:
         except UnicodeDecodeError:
             findings.add("artifact_encoding")
             continue
-        if EXTERNAL_URL_RE.search(content):
+        if contains_external_url(content):
             findings.add("external_url")
 
     status = evidence.get("status")

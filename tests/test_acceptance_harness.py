@@ -162,6 +162,17 @@ class AcceptanceHarnessTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("external_url", result.stdout)
 
+    def test_loopback_url_in_readme_is_allowed(self) -> None:
+        (self.workspace / "README.md").write_text(
+            "# Local fixture\n\nOpen http://127.0.0.1:8765/ in a browser.\n",
+            encoding="utf-8",
+        )
+        self._write_evidence()
+
+        result = self.run_verify()
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_external_url_in_additional_workspace_file_is_rejected(self) -> None:
         (self.workspace / "extra.js").write_text(
             "fetch('https://tracker.example.invalid/extra');\n", encoding="utf-8"
