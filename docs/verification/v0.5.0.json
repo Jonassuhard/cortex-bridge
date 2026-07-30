@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "release": "0.5.0",
-  "commit": "fbbb8f3996314d3ae728fa0dc8738b3915ccef4a",
-  "generatedAt": "2026-07-30T19:09:14Z",
+  "commit": "4037f1329d725c1d5d170a846f6bec98749e18a2",
+  "generatedAt": "2026-07-30T19:51:15Z",
   "environment": {
     "os": "macOS 26.5.1",
     "python": "3.14.5",
