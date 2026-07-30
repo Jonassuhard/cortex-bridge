@@ -13,5 +13,9 @@
   `BLOCKED_BY_PROVIDER_TERMS`; current OpenAI Europe terms prohibit automatic
   or programmatic extraction of data or Output. Do not mark live conversations,
   uploads, screenshots, mini-sites, or the release verdict as ready.
-- Next exact action: rerun the complete suite against the evidence commit, push
-  the branch, and report the existing pull request status.
+- Delivery: branch `codex/v050-release-qa` is pushed to pull request #1; backend,
+  frontend, public-tree, and release-gates are green. No tag, merge, or release
+  was created.
+- Next exact action: replace the blocked consumer-site adapter with an
+  officially supported provider transport before running any authenticated
+  live gate.
