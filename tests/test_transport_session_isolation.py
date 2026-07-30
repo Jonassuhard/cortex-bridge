@@ -27,7 +27,11 @@ import write_slots  # noqa: E402
 from fastapi import HTTPException  # noqa: E402
 from orchestration.store import Store  # noqa: E402
 import transport.browser as browser_transport  # noqa: E402
-from transport.chatgpt_web.adapter import WebBridgeDriver
+from transport.chatgpt_web.adapter import (
+    CONVERSATION_MISMATCH,
+    TransportError,
+    WebBridgeDriver,
+)
 
 
 class SessionAwareFakeDaemon:
@@ -391,6 +395,52 @@ class ChatRouteSessionIsolationTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("brouillon est conservé", str(raised.exception.detail))
         self.assertIn(run_a["id"], chat_api._runs)
         self.assertIn(run_b["id"], chat_api._runs)
+
+    async def test_snapshot_rebuilds_a_stale_read_only_transport_once(self) -> None:
+        created: list[object] = []
+
+        class RecoveringViewTransport:
+            def __init__(self, *, fail_snapshot: bool):
+                self.fail_snapshot = fail_snapshot
+                self.lock = None
+
+            async def select_conversation(self, url: str):
+                self.lock = SimpleNamespace(url=url, identity=url.rsplit("/", 1)[-1])
+                return self.lock
+
+            async def snapshot(self, *, verify_lock: bool = True) -> dict:
+                del verify_lock
+                if self.fail_snapshot:
+                    raise TransportError(
+                        CONVERSATION_MISMATCH,
+                        "stale read-only tab",
+                    )
+                return {
+                    "url": self.lock.url,
+                    "conversation_id": self.lock.identity,
+                    "title": "Recovered",
+                    "messages": [],
+                }
+
+            async def close(self) -> None:
+                return None
+
+        def recovering_factory(session_id: str | None = None):
+            del session_id
+            transport = RecoveringViewTransport(fail_snapshot=not created)
+            created.append(transport)
+            return transport
+
+        chat_api.ui_transport_factory = recovering_factory
+        chat_api._view_transport = None
+        chat_api._view_url = None
+
+        snapshot = await chat_api.conversation_snapshot(
+            "https://chatgpt.com/c/recovered-view"
+        )
+
+        self.assertEqual(snapshot["conversation_id"], "recovered-view")
+        self.assertEqual(len(created), 2)
 
     async def test_invalid_settings_fail_run_and_release_exact_writer_capacity(self) -> None:
         invalid_settings = Path(self.tmp.name) / "invalid-settings.json"

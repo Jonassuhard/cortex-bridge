@@ -1,6 +1,8 @@
 import { ExtensionCommandError, isChatGPTUrl } from "./protocol.js";
 
 export const HEARTBEAT_INTERVAL_MS = 20_000;
+let tabAllocationTail = Promise.resolve();
+const SCREENSHOT_CAPTURE_TTL_MS = 60_000;
 
 export const ALLOWED_COMMANDS = new Set([
   "open_chatgpt",
@@ -33,6 +35,15 @@ function requireCortexTab(cortexTab) {
     );
   }
   return cortexTab;
+}
+
+function comparableChatGPTUrl(rawUrl) {
+  try {
+    const url = new URL(rawUrl);
+    return `${url.origin}${url.pathname.replace(/\/+$/, "") || "/"}`;
+  } catch {
+    return "";
+  }
 }
 
 export async function findOrOpenChatGPTTab(chromeApi, cortexTab, excludedTabIds = new Set()) {
@@ -102,7 +113,25 @@ async function sendToContentScript(context, session, action, payload) {
   }
 }
 
+async function reserveTabAllocation(work) {
+  const previous = tabAllocationTail;
+  let release;
+  tabAllocationTail = new Promise((resolve) => {
+    release = resolve;
+  });
+  await previous;
+  try {
+    return await work();
+  } finally {
+    release();
+  }
+}
+
 async function openForSession(context, session) {
+  return reserveTabAllocation(() => openForSessionUnlocked(context, session));
+}
+
+async function openForSessionUnlocked(context, session) {
   const currentTabId = context.sessionTabs.get(session);
   if (Number.isInteger(currentTabId)) {
     try {
@@ -179,7 +208,13 @@ export async function routeCommand(context, command) {
     }
     let tab;
     if (context.sessionTabs.has(session)) {
-      tab = await boundTab(context, session);
+      try {
+        tab = await boundTab(context, session);
+      } catch (error) {
+        if (error?.code !== "TAB_CLOSED") throw error;
+        const opened = await openForSession(context, session);
+        tab = await context.chrome.tabs.get(opened.tab_id);
+      }
       await context.chrome.tabs.update(tab.id, { url: payload.url, active: true });
     } else {
       const opened = await openForSession(context, session);
@@ -196,16 +231,29 @@ export async function routeCommand(context, command) {
   }
   if (action === "capture_screenshot") {
     const tab = await boundTab(context, session);
-    if (!tab.active) {
+    const capture = context.pendingCapture;
+    const captureAge = Date.now() - Number(capture?.captured_at || 0);
+    if (
+      !capture
+      || typeof capture.data_url !== "string"
+      || !capture.data_url.startsWith("data:image/png;base64,")
+      || captureAge < 0
+      || captureAge > SCREENSHOT_CAPTURE_TTL_MS
+    ) {
+      context.pendingCapture = null;
       throw new ExtensionCommandError(
-        "SCREENSHOT_TAB_NOT_VISIBLE",
-        "Open the bound ChatGPT tab before taking a screenshot",
+        "SCREENSHOT_PERMISSION_REQUIRED",
+        "Click the Cortex Bridge extension icon on the ChatGPT tab, then retry within 60 seconds",
       );
     }
-    const data_url = await context.chrome.tabs.captureVisibleTab(tab.windowId, {
-      format: "png",
-    });
-    return { data_url, tab_id: tab.id };
+    if (comparableChatGPTUrl(capture.url) !== comparableChatGPTUrl(tab.url || tab.pendingUrl)) {
+      throw new ExtensionCommandError(
+        "SCREENSHOT_TARGET_MISMATCH",
+        "The authorized screenshot belongs to a different ChatGPT conversation",
+      );
+    }
+    context.pendingCapture = null;
+    return { data_url: capture.data_url, tab_id: capture.tab_id };
   }
   return sendToContentScript(context, session, action, payload);
 }

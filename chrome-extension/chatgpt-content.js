@@ -193,9 +193,13 @@
       if (container) container.scrollTop = 0;
       return Array.from(seen.values()).slice(0, MAX_CONVERSATIONS);
     },
-    send_text(payload) {
+    async send_text(payload) {
       const target = composer();
       if (!target) throw Object.assign(new Error("ChatGPT composer not found"), { code: "COMPOSER_MISSING" });
+      const userIdsBefore = new Set(
+        messages().filter((message) => message.role === "user").map((message) => message.id),
+      );
+      const marker = String(payload.text || "").trim().slice(0, 80);
       target.focus();
       if (target instanceof HTMLTextAreaElement) {
         const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
@@ -205,12 +209,36 @@
         document.execCommand("insertText", false, payload.text);
       }
       target.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: payload.text }));
-      const button = sendButton();
-      if (!button || button.disabled) {
+
+      let button = null;
+      for (let attempt = 0; attempt < 50 && !button; attempt += 1) {
+        const candidate = sendButton();
+        if (candidate && !candidate.disabled && visible(candidate)) button = candidate;
+        else await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      if (!button) {
         throw Object.assign(new Error("ChatGPT send button is unavailable"), { code: "SEND_REJECTED" });
       }
       button.click();
-      return { ok: true };
+
+      for (let attempt = 0; attempt < 50; attempt += 1) {
+        const current = composer();
+        const value = current instanceof HTMLTextAreaElement
+          ? current.value
+          : current?.innerText || current?.textContent || "";
+        if (!current || !value.trim()) return { ok: true };
+        const visibleUserMessage = messages().find((message) => (
+          message.role === "user"
+          && !userIdsBefore.has(message.id)
+          && (!marker || message.text.includes(marker))
+        ));
+        if (visibleUserMessage) return { ok: true };
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      throw Object.assign(
+        new Error("ChatGPT composer did not clear after send"),
+        { code: "DELIVERY_UNCERTAIN" },
+      );
     },
     press_stop() {
       const button = stopButton();

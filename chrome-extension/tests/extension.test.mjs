@@ -133,6 +133,37 @@ test("gives each writer session a different ChatGPT tab", async () => {
   assert.equal(context.sessionTabs.get("cortex-conv-writer-b"), opened.tab_id);
 });
 
+test("concurrent writer allocation cannot bind two sessions to the same tab", async () => {
+  const chrome = chromeWithTabs([
+    { id: 31, windowId: 7, index: 0, url: "http://127.0.0.1:8420/" },
+    { id: 32, windowId: 7, index: 1, url: "https://chatgpt.com/" },
+  ]);
+  const context = {
+    chrome: chrome.api,
+    cortexTab: { id: 31, windowId: 7, index: 0 },
+    sessionTabs: new Map(),
+  };
+
+  const [writerA, writerB] = await Promise.all([
+    routeCommand(context, {
+      session: "cortex-conv-writer-concurrent-a",
+      action: "open_chatgpt",
+      payload: {},
+    }),
+    routeCommand(context, {
+      session: "cortex-conv-writer-concurrent-b",
+      action: "open_chatgpt",
+      payload: {},
+    }),
+  ]);
+
+  assert.notEqual(writerA.tab_id, writerB.tab_id);
+  assert.notEqual(
+    context.sessionTabs.get("cortex-conv-writer-concurrent-a"),
+    context.sessionTabs.get("cortex-conv-writer-concurrent-b"),
+  );
+});
+
 test("read-only sessions share the primary tab but never claim a writer tab", async () => {
   const chrome = chromeWithTabs([
     { id: 31, windowId: 7, index: 0, url: "http://127.0.0.1:8420/" },
@@ -180,6 +211,80 @@ test("a read-only page command automatically reuses the paired primary tab", asy
   assert.equal(chrome.calls.sendMessage[0].tabId, 32);
 });
 
+test("navigation replaces a stale closed session tab", async () => {
+  const chrome = chromeWithTabs([
+    { id: 31, windowId: 7, index: 0, url: "http://127.0.0.1:8420/" },
+    { id: 32, windowId: 7, index: 1, url: "https://chatgpt.com/" },
+  ]);
+  const context = {
+    chrome: chrome.api,
+    cortexTab: { id: 31, windowId: 7, index: 0 },
+    sessionTabs: new Map([["cortex-view-read-only", 999]]),
+  };
+
+  const result = await routeCommand(context, {
+    session: "cortex-view-read-only",
+    action: "navigate",
+    payload: { url: "https://chatgpt.com/c/recovered-view" },
+  });
+
+  assert.equal(result.tab_id, 32);
+  assert.equal(context.sessionTabs.get("cortex-view-read-only"), 32);
+  assert.deepEqual(chrome.calls.update.at(-1), {
+    tabId: 32,
+    options: { url: "https://chatgpt.com/c/recovered-view", active: true },
+  });
+});
+
+test("a screenshot requires a recent explicit extension-action capture", async () => {
+  const chrome = chromeWithTabs([
+    { id: 32, windowId: 7, index: 1, url: "https://chatgpt.com/c/screenshot-proof" },
+  ]);
+  const context = {
+    chrome: chrome.api,
+    cortexTab: { id: 31, windowId: 7, index: 0 },
+    sessionTabs: new Map([["cortex-conv-screenshot", 32]]),
+    pendingCapture: null,
+  };
+
+  await assert.rejects(
+    routeCommand(context, {
+      session: "cortex-conv-screenshot",
+      action: "capture_screenshot",
+      payload: {},
+    }),
+    (error) => error.code === "SCREENSHOT_PERMISSION_REQUIRED",
+  );
+});
+
+test("a matching action-authorized screenshot is consumed exactly once", async () => {
+  const url = "https://chatgpt.com/c/screenshot-proof";
+  const chrome = chromeWithTabs([
+    { id: 32, windowId: 7, index: 1, url },
+  ]);
+  const context = {
+    chrome: chrome.api,
+    cortexTab: { id: 31, windowId: 7, index: 0 },
+    sessionTabs: new Map([["cortex-conv-screenshot", 32]]),
+    pendingCapture: {
+      data_url: "data:image/png;base64,iVBORw0KGgo=",
+      tab_id: 32,
+      url,
+      captured_at: Date.now(),
+    },
+  };
+
+  const result = await routeCommand(context, {
+    session: "cortex-conv-screenshot",
+    action: "capture_screenshot",
+    payload: {},
+  });
+
+  assert.equal(result.tab_id, 32);
+  assert.match(result.data_url, /^data:image\/png;base64,/);
+  assert.equal(context.pendingCapture, null);
+});
+
 test("uses a 20 second WebSocket heartbeat", () => {
   assert.equal(HEARTBEAT_INTERVAL_MS, 20_000);
 });
@@ -214,6 +319,14 @@ test("extension source never creates a Chrome window or evaluates remote code", 
   assert.equal(source.includes("new Function"), false);
 });
 
+test("the extension action records the one-shot screenshot permission", async () => {
+  const source = await readFile(join(EXTENSION_ROOT, "service-worker.js"), "utf8");
+
+  assert.match(source, /chrome\.action\.onClicked\.addListener/);
+  assert.match(source, /chrome\.tabs\.captureVisibleTab/);
+  assert.match(source, /context\.pendingCapture/);
+});
+
 test("conversation discovery is sidebar-scoped, scrolls lazily, and caps at 50", async () => {
   const source = await readFile(join(EXTENSION_ROOT, "chatgpt-content.js"), "utf8");
 
@@ -221,4 +334,17 @@ test("conversation discovery is sidebar-scoped, scrolls lazily, and caps at 50",
   assert.equal(source.includes("parentList && parentList.closest('li')"), true);
   assert.equal(source.includes("for (let pass = 0; pass < 40"), true);
   assert.equal(source.includes("slice(0, MAX_CONVERSATIONS)"), true);
+});
+
+test("send_text waits for React to arm the send button and confirms delivery", async () => {
+  const source = await readFile(join(EXTENSION_ROOT, "chatgpt-content.js"), "utf8");
+
+  assert.match(source, /async send_text\(payload\)/);
+  assert.match(source, /const userIdsBefore = new Set/);
+  assert.match(
+    source,
+    /for \(let attempt = 0; attempt < 50 && !button; attempt \+= 1\)/,
+  );
+  assert.match(source, /visibleUserMessage/);
+  assert.match(source, /composer did not clear after send/);
 });

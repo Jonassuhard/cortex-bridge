@@ -28,7 +28,9 @@ import missions as missions_api
 import write_slots
 import attachments
 from transport.chatgpt_web.adapter import (
+    CONVERSATION_MISMATCH,
     GENERATION_CANCELLED,
+    TAB_CLOSED,
     ChatGPTWebTransport,
     TransportError,
 )
@@ -303,11 +305,20 @@ def _set_state(run: ChatRunRuntime, state: str) -> None:
     _emit(run, "status", {"state": state})
 
 
-async def _ensure_view_transport(url: str) -> ChatGPTWebTransport:
+async def _ensure_view_transport(
+    url: str,
+    *,
+    force_recreate: bool = False,
+) -> ChatGPTWebTransport:
     global _view_transport, _view_url
     async with _view_mutex:
-        if _view_transport is not None and _view_url == url:
+        if (
+            not force_recreate
+            and _view_transport is not None
+            and _view_url == url
+        ):
             return _view_transport
+        previous = _view_transport
         transport = _make_transport(READ_ONLY_SESSION_ID)
         if url.rstrip("/") == "https://chatgpt.com":
             await transport.start_new_conversation(url)
@@ -315,6 +326,8 @@ async def _ensure_view_transport(url: str) -> ChatGPTWebTransport:
             await transport.select_conversation(url)
         _view_transport = transport
         _view_url = url
+        if previous is not None and previous is not transport:
+            await previous.close()
         return transport
 
 
@@ -461,8 +474,8 @@ async def conversation_snapshot(url: str = Query(..., min_length=1), light: int 
     light=1 returns identity/count/streaming only (P0c) — the UI polls this
     cheaply and fetches the full snapshot only when the signature changes."""
     clean_url = _validate_chatgpt_url(url)
-    try:
-        transport = await _ensure_view_transport(clean_url)
+
+    async def read_snapshot(transport: ChatGPTWebTransport) -> dict[str, Any]:
         if light:
             light_state = await transport._light_state()
             return {
@@ -476,7 +489,9 @@ async def conversation_snapshot(url: str = Query(..., min_length=1), light: int 
                 "last_id": light_state.get("last_id"),
                 "light": True,
             }
-        state = await transport.snapshot(verify_lock=clean_url.rstrip("/") != "https://chatgpt.com")
+        state = await transport.snapshot(
+            verify_lock=clean_url.rstrip("/") != "https://chatgpt.com"
+        )
         # Do not expose protocol reconstruction or any browser-level secret.
         return {
             "url": state.get("url", clean_url),
@@ -490,6 +505,19 @@ async def conversation_snapshot(url: str = Query(..., min_length=1), light: int 
             "model_label": state.get("model_label"),
             "messages": state.get("messages", []),
         }
+
+    try:
+        transport = await _ensure_view_transport(clean_url)
+        try:
+            return await read_snapshot(transport)
+        except TransportError as exc:
+            if exc.code not in {TAB_CLOSED, CONVERSATION_MISMATCH}:
+                raise
+            recovered = await _ensure_view_transport(
+                clean_url,
+                force_recreate=True,
+            )
+            return await read_snapshot(recovered)
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"cannot read conversation: {exc}")
 

@@ -2,13 +2,14 @@ import {
   HEARTBEAT_INTERVAL_MS,
   routeCommand,
 } from "./service-worker-core.js";
-import { commandError } from "./protocol.js";
+import { commandError, isChatGPTUrl } from "./protocol.js";
 
 const SOCKET_URL = "ws://127.0.0.1:8420/api/chrome-extension/ws";
 const context = {
   chrome,
   cortexTab: null,
   sessionTabs: new Map(),
+  pendingCapture: null,
 };
 
 let socket = null;
@@ -81,6 +82,29 @@ function connect() {
   });
   socket.addEventListener("error", () => socket?.close());
 }
+
+chrome.action.onClicked.addListener(async (tab) => {
+  if (
+    !Number.isInteger(tab?.id)
+    || !Number.isInteger(tab?.windowId)
+    || !isChatGPTUrl(tab.url || tab.pendingUrl)
+  ) {
+    return;
+  }
+  try {
+    const data_url = await chrome.tabs.captureVisibleTab(tab.windowId, {
+      format: "png",
+    });
+    context.pendingCapture = {
+      data_url,
+      tab_id: tab.id,
+      url: tab.url || tab.pendingUrl,
+      captured_at: Date.now(),
+    };
+  } catch {
+    context.pendingCapture = null;
+  }
+});
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (

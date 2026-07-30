@@ -66,6 +66,7 @@ MAX_CONVERSATIONS = 50
 BLOCKER_CODES = {"login": LOGIN_REQUIRED, "captcha": CAPTCHA, "rate_limit": RATE_LIMIT}
 
 DEFAULT_STABILITY_INTERVAL = 2.0  # §13: message stable for 2 seconds
+DEFAULT_POST_STREAM_STABILITY_INTERVAL = 5.0
 DEFAULT_MAX_WAIT = 300.0  # §13: 5 minutes per ChatGPT response
 DEFAULT_POLL_INTERVAL = 0.5
 # Thinking models render an EMPTY assistant shell while reasoning, with a
@@ -364,9 +365,11 @@ class ChatGPTWebTransport:
         poll_interval: float = DEFAULT_POLL_INTERVAL,
         empty_reply_grace: float = DEFAULT_EMPTY_REPLY_GRACE,
         selection_budget: float = DEFAULT_SELECTION_BUDGET,
+        post_stream_stability_interval: float = DEFAULT_POST_STREAM_STABILITY_INTERVAL,
     ):
         self.driver = driver
         self.stability_interval = stability_interval
+        self.post_stream_stability_interval = post_stream_stability_interval
         self.max_wait = max_wait
         self.poll_interval = poll_interval
         self.empty_reply_grace = empty_reply_grace
@@ -895,6 +898,7 @@ class ChatGPTWebTransport:
         last_emit: tuple | None = None
         stable_since: float | None = None
         empty_since: float | None = None
+        final_paint_requested = False
 
         async def emit(payload: dict) -> None:
             if on_update is None:
@@ -925,6 +929,19 @@ class ChatGPTWebTransport:
                 self.streaming_observed = True
                 stable_since = None
                 empty_since = None
+            elif (
+                self.streaming_observed
+                and not final_paint_requested
+                and getattr(self.driver, "requires_content_stability", True)
+            ):
+                focus_tab = getattr(self.driver, "focus_tab", None)
+                if focus_tab is not None:
+                    await focus_tab()
+                    final_paint_requested = True
+                    last_sig = None
+                    stable_since = None
+                    await asyncio.sleep(self.poll_interval)
+                    continue
             new_msgs = [
                 m
                 for m in state.get("messages", [])
@@ -967,7 +984,15 @@ class ChatGPTWebTransport:
                         empty_since = None
                     if sig == last_sig:
                         stable_since = stable_since if stable_since is not None else now
-                        if now - stable_since >= self.stability_interval:
+                        required_stability = (
+                            self.post_stream_stability_interval
+                            if (
+                                self.streaming_observed
+                                and getattr(self.driver, "requires_content_stability", True)
+                            )
+                            else self.stability_interval
+                        )
+                        if now - stable_since >= required_stability:
                             if latest["id"] in self._extracted_ids:
                                 raise TransportError(
                                     DUPLICATE_EXTRACTION,

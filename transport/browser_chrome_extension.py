@@ -9,7 +9,7 @@ import os
 import time
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 try:
     from chrome_extension import (
@@ -33,6 +33,16 @@ RUNTIME_PATHS = build_paths()
 EXTENSION_FILE_LIMIT_BYTES = 25 * 1024 * 1024
 TRANSFER_CHUNK_CHARACTERS = 256 * 1024
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+CONTENT_SCRIPT_RETRY_DELAY_SECONDS = 0.25
+CONTENT_SCRIPT_READ_ACTIONS = frozenset(
+    {
+        "probe",
+        "get_state",
+        "get_light_state",
+        "list_conversations",
+        "list_models",
+    }
+)
 
 
 class ChromeExtensionBrowserDriver:
@@ -46,10 +56,12 @@ class ChromeExtensionBrowserDriver:
         session: str,
         manager: ChromeExtensionManager = chrome_extension_manager,
         allowed_root: str | Path | None = None,
+        retry_sleep: Callable[[float], Awaitable[None] | None] = asyncio.sleep,
     ) -> None:
         self.session = session
         self.manager = manager
         self.allowed_root = Path(allowed_root or RUNTIME_PATHS.home).expanduser().resolve()
+        self._retry_sleep = retry_sleep
         self.target_url: str | None = None
         self._closed = False
 
@@ -62,24 +74,64 @@ class ChromeExtensionBrowserDriver:
     ) -> Any:
         if self._closed and action != "list_tabs":
             raise TabClosedError("Chrome extension driver session is closed")
-        try:
-            return await self.manager.command(
-                self.session,
-                action,
-                payload or {},
-                timeout,
-            )
-        except Exception as exc:
-            code = getattr(exc, "code", None)
-            if code == "TAB_CLOSED":
-                raise TabClosedError(str(exc)) from exc
-            if code:
-                raise DriverError(f"{code}: {exc}") from exc
-            raise
+        deadline = time.monotonic() + timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise DriverError(
+                    f"TAB_UNAVAILABLE: ChatGPT did not become ready within {timeout:g} seconds"
+                )
+            try:
+                return await self.manager.command(
+                    self.session,
+                    action,
+                    payload or {},
+                    remaining,
+                )
+            except Exception as exc:
+                code = getattr(exc, "code", None)
+                if code == "TAB_CLOSED":
+                    raise TabClosedError(str(exc)) from exc
+                if (
+                    code == "TAB_UNAVAILABLE"
+                    and action in CONTENT_SCRIPT_READ_ACTIONS
+                    and remaining > CONTENT_SCRIPT_RETRY_DELAY_SECONDS
+                ):
+                    pending_sleep = self._retry_sleep(
+                        min(CONTENT_SCRIPT_RETRY_DELAY_SECONDS, remaining)
+                    )
+                    if pending_sleep is not None:
+                        await pending_sleep
+                    continue
+                if code:
+                    error = DriverError(f"{code}: {exc}")
+                    error.code = code
+                    raise error from exc
+                raise
 
     async def navigate(self, url: str) -> None:
         result = await self._command("navigate", {"url": url}, timeout=10)
         self.target_url = str((result or {}).get("url") or url)
+        await self._wait_until_page_ready(timeout=10)
+
+    async def _wait_until_page_ready(self, *, timeout: float) -> dict[str, Any]:
+        deadline = time.monotonic() + timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise DriverError(
+                    f"TAB_UNAVAILABLE: ChatGPT composer did not become ready within {timeout:g} seconds"
+                )
+            state = await self._command("get_state", timeout=remaining)
+            if not isinstance(state, dict):
+                raise DriverError("Chrome extension returned an invalid page state")
+            if state.get("composer_present") or state.get("blocker"):
+                return state
+            pending_sleep = self._retry_sleep(
+                min(CONTENT_SCRIPT_RETRY_DELAY_SECONDS, remaining)
+            )
+            if pending_sleep is not None:
+                await pending_sleep
 
     async def evaluate(self, code: str, timeout: float = 30) -> Any:
         del code, timeout
@@ -94,7 +146,20 @@ class ChromeExtensionBrowserDriver:
         return list(result or [])
 
     async def spa_navigate(self, url: str) -> bool:
-        result = await self._command("spa_navigate", {"url": url}, timeout=10)
+        try:
+            result = await self._command("spa_navigate", {"url": url}, timeout=10)
+        except TabClosedError:
+            # Selection is read-only at this point. Recreate the dedicated
+            # tab before any user message is attempted.
+            await self.navigate(url)
+            return True
+        except DriverError as exc:
+            if getattr(exc, "code", None) != "TAB_UNAVAILABLE":
+                raise
+            # A fresh writer session has no tab yet. Full navigation safely
+            # creates its dedicated tab; no user message is involved.
+            await self.navigate(url)
+            return True
         handled = bool((result or {}).get("handled"))
         if handled:
             self.target_url = url
@@ -119,6 +184,9 @@ class ChromeExtensionBrowserDriver:
 
     async def press_stop(self) -> None:
         await self._command("press_stop", timeout=10)
+
+    async def focus_tab(self) -> None:
+        await self._command("focus_tab", timeout=10)
 
     async def list_conversations(self) -> list[dict[str, Any]]:
         result = await self._command("list_conversations", timeout=10)
