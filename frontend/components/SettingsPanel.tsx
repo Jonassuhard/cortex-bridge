@@ -1,7 +1,7 @@
 "use client";
 /* eslint-disable react/no-unescaped-entities */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ChatGPTModelInfo, CortexSettings, OllamaModelInfo, RuntimeTruth } from "@/lib/types";
 import { formatBytes } from "@/lib/api";
 import { executorDiagnosticsLabel, isAvailableComponentState } from "@/lib/runtimeTruth";
@@ -78,10 +78,21 @@ export function SettingsPanel({
 }: SettingsPanelProps) {
   const [tab, setTab] = useState<TabId>("general");
   const [draft, setDraft] = useState<CortexSettings>(settings);
+  const draftDirtyRef = useRef(false);
   const [labConfirmation, setLabConfirmation] = useState("");
   const [diagTesting, setDiagTesting] = useState<string | null>(null);
   const [diagResult, setDiagResult] = useState<{ label: string; state: string; detail: string } | null>(null);
   const dialogRef = useAccessibleDialog<HTMLDivElement>({ open, onClose });
+
+  useEffect(() => {
+    if (!open) {
+      draftDirtyRef.current = false;
+      return;
+    }
+    if (!draftDirtyRef.current) {
+      setDraft(settings);
+    }
+  }, [open, settings]);
 
   const runDiagnostic = async (componentId: string, label: string) => {
     setDiagTesting(componentId);
@@ -110,6 +121,7 @@ export function SettingsPanel({
   if (!open) return null;
 
   const patch = <K extends keyof CortexSettings>(key: K, value: CortexSettings[K]) => {
+    draftDirtyRef.current = true;
     setDraft((current) => ({ ...current, [key]: value }));
   };
 
