@@ -175,6 +175,44 @@ class LoopTestCase(unittest.IsolatedAsyncioTestCase):
         checks = json.loads(validations[0]["checks_json"])
         self.assertEqual(checks[-1]["validator"], "execution-trace-v1")
 
+    async def test_default_trace_allows_completion_after_policy_denial_is_remediated(
+        self,
+    ):
+        loop, mock = self.make_loop(
+            [
+                execute(
+                    "run_process",
+                    {"argv": ["python3", "-c", "print('denied')"]},
+                ),
+                execute(
+                    "write_file",
+                    {
+                        "path": "verify.py",
+                        "content": "print('validated')\n",
+                    },
+                ),
+                execute(
+                    "run_process",
+                    {"argv": ["python3", "verify.py"]},
+                ),
+                complete(),
+                blocked("completion should not need this fallback"),
+            ],
+            policy=PolicyEngine(self.ws, allow_processes=True),
+        )
+
+        mission = await loop.run()
+
+        self.assertEqual(mission["state"], "COMPLETED")
+        reports = reports_received(mock)
+        self.assertEqual(reports[0]["status"], "DENIED")
+        self.assertEqual(reports[1]["status"], "SUCCEEDED")
+        self.assertEqual(reports[2]["status"], "SUCCEEDED")
+        final_validations = self.store.rows(
+            "validation_results", self.mission_id, order_by="rowid"
+        )[-3:]
+        self.assertTrue(all(row["passed"] == 1 for row in final_validations))
+
     async def test_final_validator_exception_fails_terminally(self):
         def exploding_validator(decision, tools):
             raise RuntimeError("validator crash")

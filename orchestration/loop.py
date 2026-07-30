@@ -213,17 +213,12 @@ def default_trace_validator(
     unresolved_actions = [
         row for row in executions if row.get("action_id") not in passed_action_ids
     ]
-    denied_action_ids = {
-        row["action_id"]
-        for row in store.rows("policy_decisions", mission_id, order_by="rowid")
-        if row.get("action_id") and row["allowed"] == 0
-    }
-    denied_action_ids.update(
+    denied_approval_ids = {
         row["action_id"]
         for row in store.rows("approvals", mission_id, order_by="rowid")
         if row.get("action_id") and row["approved"] == 0
-    )
-    unresolved_action_count = len(unresolved_actions) + len(denied_action_ids)
+    }
+    unresolved_action_count = len(unresolved_actions) + len(denied_approval_ids)
 
     process_ok = True
     changed_files_ok = True
