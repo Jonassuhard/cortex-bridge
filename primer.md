@@ -27,11 +27,20 @@
 - Visual guide: 36 synthetic screenshots at 375, 768, and 1440 pixels; no live
   personal data is committed. Animated and static architecture diagrams remain
   in `docs/media`.
+- Latest user-journey QA (2026-08-01): Doctor/start, same-window Chrome pairing,
+  one neutral chat, a simple file mission, and a complex responsive mini-site
+  mission all passed. Cortex remains running on port 8420 and open in Chrome;
+  the temporary mini-site server is stopped. Eight synthetic proof captures and
+  the report live under `.gstack/qa-reports/`.
+- Latest UX findings: mission conversations expose the full orchestration prompt
+  and raw decision JSON (medium readability concern); the generated QA mini-site
+  omitted a favicon (low output-hygiene concern, no page or console failure).
 - Release evidence: `docs/verification/v0.5.0.json` validates as
   `RELEASE_CANDIDATE_READY_FOR_OWNER_APPROVAL`.
 - Open risk: the consumer-site extension is not an officially supported OpenAI
   integration. Provider-terms review remains an owner release decision.
 - Git rule: local commits are complete. Do not push, tag, merge, publish, or
   create a release without explicit confirmation at action time.
-- Next exact action: obtain explicit confirmation to push
+- Next exact action: decide whether to hide the raw mission protocol behind a
+  details control before obtaining explicit confirmation to push
   `codex/v050-release-qa` and update pull request #1.
