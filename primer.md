@@ -42,8 +42,9 @@
   `RELEASE_CANDIDATE_READY_FOR_OWNER_APPROVAL`.
 - Open risk: the consumer-site extension is not an officially supported OpenAI
   integration. Provider-terms review remains an owner release decision.
-- Git state: source/UI fixes are committed at `2573fb0`; this release-evidence
-  refresh must be committed next. The user explicitly authorized pushing the
-  branch and updating pull request #1, but not merging, tagging, or releasing.
-- Next exact action: validate and commit the refreshed release evidence, push
-  `codex/v050-release-qa`, then update pull request #1 and wait for its checks.
+- Git state: source/UI fixes are committed at `2573fb0`; refreshed release
+  evidence is committed at `095f4d8`. Branch `codex/v050-release-qa` is pushed
+  and pull request #1 is updated in English. The user authorized that delivery,
+  but not merging, tagging, or releasing.
+- Next exact action: keep pull request #1 open for owner review and provider-
+  terms approval; do not merge, tag, or publish without new authorization.
