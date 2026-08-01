@@ -26,6 +26,7 @@ from transport.chatgpt_web.adapter import (  # noqa: E402
     CHATGPT_RESPONSE_TIMEOUT,
     ChatGPTWebTransport,
     TransportError,
+    protocol_text,
 )
 
 DECISION = '{"protocol": "cortex.v1", "state": "COMPLETE"}'
@@ -68,6 +69,7 @@ class ScriptedDriver:
 def make_transport(driver, **overrides):
     params = {
         "stability_interval": 0.15,
+        "post_stream_stability_interval": 0.15,
         "poll_interval": 0.05,
         "max_wait": 5.0,
         "empty_reply_grace": 0.6,
@@ -144,6 +146,21 @@ class EmptyReplyGraceTest(unittest.IsolatedAsyncioTestCase):
         transport = make_transport(ScriptedDriver(states), empty_reply_grace=0.6)
         result = await transport.await_response()
         self.assertIn(DECISION, result["protocol_text"])
+
+
+class ProtocolTextReconstructionTest(unittest.TestCase):
+    def test_visible_protocol_label_restores_language_when_dom_drops_it(self):
+        """Regression: current ChatGPT renders the language label outside the
+        code element, so the block's DOM language is empty even though the
+        visible message begins with ``cortex-decision``."""
+        message = {
+            "text": f"cortex-decision\n{DECISION}",
+            "code_blocks": [{"lang": "", "text": DECISION}],
+        }
+
+        rebuilt = protocol_text(message)
+
+        self.assertEqual(rebuilt, f"```cortex-decision\n{DECISION}\n```")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "version": "0.5.0",
+  "dependencies": [
+    {
+      "id": "git",
+      "required": true,
+      "official_url": "https://git-scm.com/download/mac",
+      "human_pause": false
+    },
+    {
+      "id": "python",
+      "required": true,
+      "minimum_version": "3.11",
+      "official_url": "https://www.python.org/downloads/macos/",
+      "human_pause": false
+    },
+    {
+      "id": "google-chrome",
+      "required": true,
+      "official_url": "https://www.google.com/chrome/",
+      "human_pause": true,
+      "reason": "the user reviews the extension in their normal browser; authenticated consumer-site acceptance remains blocked"
+    },
+    {
+      "id": "chrome-extension",
+      "required": true,
+      "official_url": "https://developer.chrome.com/docs/extensions/get-started/tutorial/hello-world#load-unpacked",
+      "human_pause": true,
+      "reason": "unpacked extensions require explicit review and manual installation"
+    },
+    {
+      "id": "playwright-chromium",
+      "required": false,
+      "official_url": "https://playwright.dev/python/docs/browsers",
+      "human_pause": true,
+      "reason": "development and synthetic browser tests only"
+    },
+    {
+      "id": "ollama",
+      "required": false,
+      "official_url": "https://ollama.com/download/mac",
+      "human_pause": true,
+      "reason": "optional application and model download"
+    },
+    {
+      "id": "node-build-tools",
+      "required": false,
+      "official_url": "https://nodejs.org/en/download",
+      "human_pause": true,
+      "reason": "optional UI rebuild"
+    },
+    {
+      "id": "webbridge",
+      "required": false,
+      "official_url": null,
+      "human_pause": true,
+      "reason": "no public official distribution; compatibility extension requires manual review and installation"
+    }
+  ]
+}

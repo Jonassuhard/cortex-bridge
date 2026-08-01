@@ -1,0 +1,109 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.lock
+      - name: Install locked Python dependencies
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install --require-hashes -r requirements.lock
+      - name: Install locked backend fixture browser
+        run: .venv/bin/python -m playwright install chromium
+      - name: Run backend and release tests
+        env:
+          CORTEX_HOME: ${{ runner.temp }}/cortex-home
+        run: .venv/bin/python -m unittest discover -s tests -v
+      - name: Validate Python and shell syntax
+        run: |
+          .venv/bin/python -m py_compile console/*.py transport/chatgpt_web/*.py scripts/*.py
+          bash -n scripts/*.sh scripts/npmw executor/scripts/*.sh
+
+  frontend:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version-file: frontend/package.json
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install locked frontend dependencies
+        run: |
+          corepack enable
+          cd frontend
+          corepack npm ci
+      - name: Audit and test frontend
+        run: |
+          cd frontend
+          corepack npm audit --audit-level=high
+          corepack npm run test:unit
+          corepack npm run test:coverage
+          corepack npm run typecheck
+          corepack npm run lint
+      - name: Build deterministic static UI
+        run: ./scripts/build-ui.sh
+      - name: Install fixture browser
+        run: |
+          cd frontend
+          corepack npm exec playwright install chromium
+      - name: Run browser and accessibility gates
+        run: |
+          cd frontend
+          corepack npm run test:e2e
+          corepack npm run test:a11y
+      - name: Upload browser failures
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: browser-failures
+          path: |
+            frontend/playwright-report
+            frontend/test-results
+          if-no-files-found: ignore
+          retention-days: 7
+
+  release-gates:
+    needs: [backend, frontend]
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.11"
+      - name: Install release scanners
+        run: brew install gitleaks shellcheck
+      - name: Run release scanner unit contracts
+        run: python -m unittest tests.test_public_privacy tests.test_verify_links tests.test_acceptance_harness tests.test_release_manifest -v
+      - name: Run shell and secret gates
+        run: |
+          shellcheck scripts/*.sh scripts/npmw executor/scripts/*.sh
+          gitleaks detect --source . --no-banner --redact

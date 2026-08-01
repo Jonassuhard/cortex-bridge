@@ -1,2 +1,4 @@
 fastapi>=0.110
 uvicorn>=0.29
+websockets>=17,<18
+playwright>=1.52,<2

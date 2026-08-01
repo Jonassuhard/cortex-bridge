@@ -1,140 +1,156 @@
-# Cortex Bridge 🌉🧠
+# Cortex Bridge
 
-**A cloud brain. Local hands. One conversation loop.**
+Cortex Bridge links a real ChatGPT conversation in Google Chrome to a reviewed
+executor on your Mac. Chat messages remain ordinary ChatGPT messages. Local
+execution starts only after a separate preflight shows the workspace,
+capabilities, approvals, and limits.
 
-Cortex Bridge connects a powerful cloud LLM orchestrator (ChatGPT, Claude, any
-strong planner) to a **local agentic executor** running on your own machine via
-Ollama. The orchestrator thinks and plans; the local model executes code,
-touches your filesystem, runs commands — then reports back into the
-conversation so the loop continues.
+> **Release status:** v0.5 is a technical release candidate ready for owner
+> approval. Owner-authorized acceptance passed against a real signed-in ChatGPT
+> tab, but this consumer-site automation is not an officially supported OpenAI
+> integration. Review the current
+> [OpenAI Europe Terms of Use](https://openai.com/policies/eu-terms-of-use/)
+> before distribution or production use.
 
-```mermaid
-flowchart LR
-    subgraph Cloud["☁️ Cloud"]
-        GPT["ChatGPT (web UI)<br/>orchestrator — plans & decides"]
-    end
+![Animated Cortex Bridge architecture](docs/media/architecture-flow.gif)
 
-    subgraph YourMac["💻 Your machine"]
-        UI["Local console<br/>127.0.0.1:8420<br/>(Next.js + FastAPI)"]
-        BR["Cortex Bridge<br/>mission loop + policy engine"]
-        OL["Ollama<br/>local executor model<br/>(gpt-oss, qwen3, granite…)"]
-        FS["Workspace<br/>files & commands"]
+[Static architecture image](docs/media/architecture-flow.png)
 
-        UI --> BR
-        BR --> OL
-        OL --> FS
-    end
+## What v0.5 does
 
-    GPT <-->|"task / report — via your own<br/>Chrome session (WebBridge)"| BR
+- Uses the person's existing Google Chrome profile through a packaged local
+  extension; Cortex and ChatGPT stay in the same Chrome window.
+- Opens or focuses `https://chatgpt.com/` with **Open and connect ChatGPT**,
+  then verifies login, CAPTCHA, loading, composer, and tab state.
+- Loads at most the latest 50 conversations and groups exposed Pinned,
+  Projects, and Recent metadata without inventing it.
+- Sends the exact composer draft to ChatGPT. `Enter` sends and `Shift+Enter`
+  adds a line.
+- Keeps two writing conversations isolated. A third keeps its draft and file
+  but is rejected before any browser action.
+- Shows independent ChatGPT and local-agent status in French.
+- Collapses Cortex mission instructions, decisions, and reports behind **Voir
+  le protocole** while keeping the complete technical exchange available for
+  audit.
+- Supports staged files up to the Chrome bridge's 25 MiB v0.5 transfer limit
+  and visible ChatGPT-tab screenshots. ChatGPT may enforce stricter limits.
+- Stores mutable runtime state under `CORTEX_HOME`, outside the repository.
 
-    style Cloud fill:#1e293b,stroke:#475569,color:#e2e8f0
-    style YourMac fill:#0f172a,stroke:#475569,color:#e2e8f0
-```
+The deterministic executor works without Ollama. Ollama is optional. No OpenAI
+API is used. Login, terms, CAPTCHA, rate limits, and security checks remain
+human actions.
 
-## Why?
+## Install on macOS
 
-- **Local execution is free and private** — no API cost per action, your code
-  never leaves your disk.
-- **Cloud planning is strong** — frontier models are better at decomposition,
-  review and long-horizon reasoning than anything that fits in 16 GB of RAM.
-- **Each model does what it's best at.**
+Requirements: [Google Chrome](https://www.google.com/chrome/),
+[Python 3.11+](https://www.python.org/downloads/macos/),
+[Git](https://git-scm.com/download/mac), and a ChatGPT account.
 
-## Project status
-
-✅ **Working end-to-end.** Autonomous missions verified against the real
-chatgpt.com web UI on 2026-07-24:
-
-- ✅ Local executor stack: Ollama models + policy engine + tool executor
-  (`executor/`)
-- ✅ Mission loop: contract → decision → tool execution → report → next
-  decision, all inside a single ChatGPT conversation (`orchestration/`)
-- ✅ ChatGPT Web Transport through the user's own Chrome via WebBridge
-  (`transport/chatgpt_web/`) — DOM-only, no OpenAI API key needed
-- ✅ Local web console (FastAPI) to launch, watch, approve, pause and stop
-  missions (`console/`) — loopback only, French UI
-- ✅ Live ChatGPT chat from the console: per-conversation statuses
-  (ChatGPT + Agent), pinned/project conversation types with counters
-  (50 max), explicit send states, SPA conversation switching in
-  ~0.9–3.2 s without page reload
-- ✅ Attachments: send files and images to ChatGPT, or a screenshot of the
-  conversation tab — with explicit limits (512 MB per file, 20 MB per
-  image) and French error messages; a two-conversation write guard keeps
-  drafts safe (409 with a clear message)
-- ✅ Verified live: read-only missions, file writes with human approval,
-  multi-iteration code repair, policy refusals, emergency stop,
-  screenshot round-trip (ChatGPT acknowledged receipt)
-- ⚠️ The web transport automates a consumer product UI and may break when
-  ChatGPT changes its frontend — read
-  [docs/legal-notes.md](docs/legal-notes.md) and
-  [docs/chatgpt-web-transport.md](docs/chatgpt-web-transport.md)
-
-See [docs/testing.md](docs/testing.md) for the full verification matrix.
-
-## Repository layout
-
-```
-cortex-bridge/
-├── docs/            Architecture, security model, transport, testing — read these first
-├── executor/        The local half: policy engine + tool executor (paths, processes)
-├── orchestration/   The loop: state machine, cortex.v1 protocol, runner, SQLite store
-├── transport/       ChatGPT Web Transport (WebBridge driver + local fixture)
-├── console/         Local web cockpit: launch/watch/approve/stop missions
-└── examples/        What a full loop looks like
-```
-
-## Quick start (missions)
-
-Requirements: macOS, [Ollama](https://ollama.com) with the executor models,
-Chrome with the WebBridge extension connected to your ChatGPT session.
+First inspect the immutable plan:
 
 ```bash
-./scripts/cortex.sh start    # console at http://127.0.0.1:8420
-./scripts/cortex.sh status   # console + Ollama + WebBridge health at a glance
-./scripts/cortex.sh stop     # stop the console
+./scripts/install.sh --dry-run --json
 ```
 
-On first launch the console greets you with an onboarding assistant that
-checks Ollama, the executor model, WebBridge and your ChatGPT tab, with
-actionable hints for anything missing.
+Approve the exact returned hash:
 
-The console is a local web cockpit (Next.js UI + FastAPI, loopback only):
+```bash
+./scripts/install.sh --approve-plan PLAN_HASH --json
+./scripts/cortex.sh doctor --json
+```
 
-1. Read the experimental-transport warning and opt in (persisted once).
-2. Pick a mode: **Message simple** (one-shot chat through ChatGPT) or
-   **Mission autonome** (the full plan → execute → report loop). Paste an
-   objective, pick a workspace, choose a new or existing ChatGPT conversation
-   from the sidebar, launch.
-3. Watch decisions, tool executions and reports stream in; approve writes
-   when prompted; STOP EVERYTHING kills everything instantly. Settings also
-   expose the ChatGPT model switcher (experimental).
+Chrome requires one explicit manual step for an unpacked local extension:
 
-To hack on the UI: `scripts/dev-ui.sh` (Next.js dev server) and
-`scripts/build-ui.sh` (static export served by the console).
+1. open `chrome://extensions`;
+2. enable **Developer mode**;
+3. choose **Load unpacked**;
+4. select the absolute `chrome_extension_path` printed by the installer;
+5. start Cortex and open `http://127.0.0.1:8420` in that Chrome window;
+6. press **Open and connect ChatGPT**.
 
-The executor never leaves the workspace, never installs packages, and every
-write can require your explicit approval. Details:
-[docs/security-model.md](docs/security-model.md).
+```bash
+./scripts/cortex.sh start
+```
 
-**Prefer to build it by hand, step by step?** →
-[docs/manual-setup.md](docs/manual-setup.md) explains every command and every
-config line — no scripts required.
+If ChatGPT is logged out, Cortex opens the tab and shows **Retry** and **Close**.
+Sign in in Chrome, then retry. Cortex never enters credentials or solves a
+challenge.
 
-## Contributing
+Full instructions:
 
-Cortex Bridge is community-driven — ideas, issues and PRs are all welcome.
+- [Installation guide](INSTALL.md)
+- [Agent-assisted installation](docs/agent-installation.md)
+- [User guide](docs/user-guide.md)
+- [Testing](docs/testing.md)
+- [Security model](docs/security-model.md)
+- [Troubleshooting](docs/troubleshooting.md)
 
-- 💡 **Suggest an improvement** → open a
-  [feature request](https://github.com/Jonassuhard/cortex-bridge/issues/new?template=feature_request.md)
-  (labelled `enhancement`, browsable
-  [here](https://github.com/Jonassuhard/cortex-bridge/labels/enhancement) —
-  vote with 👍 to prioritize)
-- 🐛 **Report a bug** → use the
-  [bug report template](https://github.com/Jonassuhard/cortex-bridge/issues/new?template=bug_report.md)
-- 💬 **Discuss** → [GitHub Discussions](https://github.com/Jonassuhard/cortex-bridge/discussions)
-  for questions, ideas and show-and-tell
-- 🔧 **Submit code** → read [CONTRIBUTING.md](CONTRIBUTING.md) first; the
-  test suite (`python3 -m unittest discover -s tests`) must stay green
+## Verification boundary
 
-## License
+Automated gates cover the backend, extension protocol, frontend, responsive
+views, accessibility, two-writer isolation, 10-second switching, installation,
+process ownership, dependencies, and privacy. Separate owner-authorized live
+acceptance covers one real conversation, two isolated writers, refusal of a
+third writer, a text file, an explicitly authorized screenshot, closed-tab
+recovery, and three autonomous mini-sites.
 
-MIT — see [LICENSE](LICENSE).
+See [release evidence](docs/verification/v0.5.0.json). Live tests prove the
+observed technical behavior only; they do not imply provider endorsement.
+
+## Development
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install --require-hashes -r requirements.lock
+cd frontend && ../scripts/npmw ci && cd ..
+PYTHON=.venv/bin/python ./scripts/test-all.sh
+```
+
+Playwright Chromium is a development and synthetic-test dependency only. It is
+not the normal user connection and is never selected as a silent fallback.
+
+## Security summary
+
+- HTTP and WebSocket services bind to loopback.
+- Pairing tokens have 256 bits of entropy, expire after 60 seconds, and are
+  single use.
+- Extension host access is limited to `chatgpt.com` and
+  `127.0.0.1:8420`; it requests no cookie, password, history, or all-sites
+  permission.
+- The backend sends structured allowlisted commands, never remote JavaScript.
+- Concurrent extension commands are serialized, and the same deadline bounds
+  both WebSocket delivery and the correlated response.
+- Attachments use opaque staging tokens and managed paths.
+- Delivery uncertainty never triggers an automatic resend.
+- Workspace paths, symlinks, process commands, and approvals fail closed.
+
+Read [SECURITY.md](SECURITY.md) before enabling local write or process access.
+
+## Repository map
+
+```text
+chrome-extension/  Manifest V3 bridge for the user's Chrome tabs
+console/           FastAPI API, WebSocket pairing, settings, chat and missions
+executor/          Reviewed local tools and process policy
+frontend/          React/Next.js interface and browser tests
+orchestration/     Mission protocol, state machine and SQLite store
+transport/         Chrome-extension driver, development drivers and fixtures
+scripts/           Lifecycle, installation and release gates
+tests/             Backend, security, packaging and acceptance contracts
+docs/              Architecture, user, security and release documentation
+```
+
+## Known boundaries
+
+- macOS and Google Chrome 116+ are the v0.5 target.
+- An unpacked extension requires one manual installation. Chrome Web Store
+  packaging is a later distribution step.
+- The v0.5 extension transfer limit is 25 MiB per file.
+- ChatGPT DOM changes can temporarily break selectors; Cortex reports the
+  failure and never substitutes another browser.
+- Live acceptance remains blocked until an officially supported provider
+  transport can pass it.
+
+## Contributing and license
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md). MIT license; see [LICENSE](LICENSE).

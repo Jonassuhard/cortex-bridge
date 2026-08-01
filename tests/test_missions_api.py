@@ -33,6 +33,8 @@ import uvicorn  # noqa: E402
 
 import missions as missions_api  # noqa: E402  (console/missions.py)
 import server as console_server  # noqa: E402  (console/server.py)
+import write_slots  # noqa: E402
+from conversation_sessions import ConversationSessionRegistry  # noqa: E402
 from orchestration.store import Store  # noqa: E402
 from transport.chatgpt_web.adapter import (  # noqa: E402
     ChatGPTWebTransport,
@@ -73,6 +75,15 @@ class MissionsApiTestCase(unittest.TestCase):
         tmp = Path(cls._tmp.name)
         cls.fixture = FixtureServer().start()
         cls.store_path = tmp / "cortex.db"
+        cls.original_store = missions_api._store
+        cls.original_optin_file = missions_api.OPTIN_FILE
+        cls.original_transport_factory = missions_api.transport_factory
+        cls.original_writer_registry = write_slots._registry
+        cls.original_mission_leases = dict(missions_api._mission_leases)
+        cls.original_mission_write_urls = dict(missions_api._mission_write_urls)
+        write_slots._registry = ConversationSessionRegistry(capacity=2)
+        missions_api._mission_leases.clear()
+        missions_api._mission_write_urls.clear()
         missions_api._store = Store(cls.store_path)
         missions_api.OPTIN_FILE = tmp / "transport-optin.json"
         missions_api.transport_factory = lambda: ChatGPTWebTransport(
@@ -103,6 +114,14 @@ class MissionsApiTestCase(unittest.TestCase):
         cls.thread.join(timeout=5)
         cls.fixture.stop()
         missions_api._store.close()
+        missions_api._store = cls.original_store
+        missions_api.OPTIN_FILE = cls.original_optin_file
+        missions_api.transport_factory = cls.original_transport_factory
+        missions_api._mission_leases.clear()
+        missions_api._mission_leases.update(cls.original_mission_leases)
+        missions_api._mission_write_urls.clear()
+        missions_api._mission_write_urls.update(cls.original_mission_write_urls)
+        write_slots._registry = cls.original_writer_registry
         cls._tmp.cleanup()
 
     def setUp(self):
@@ -132,11 +151,12 @@ class MissionsApiTestCase(unittest.TestCase):
             with urllib.request.urlopen(req, timeout=10) as r:
                 return r.status, json.loads(r.read().decode())
         except urllib.error.HTTPError as e:
-            body = e.read().decode()
-            try:
-                return e.code, json.loads(body)
-            except json.JSONDecodeError:
-                return e.code, {"detail": body}
+            with e:
+                body = e.read().decode()
+                try:
+                    return e.code, json.loads(body)
+                except json.JSONDecodeError:
+                    return e.code, {"detail": body}
 
     def wait_state(self, mission_id, want, timeout=30, extra=None):
         deadline = time.time() + timeout
@@ -247,8 +267,7 @@ class MissionsApiTestCase(unittest.TestCase):
             decision_reply(self.mission_id, 1, "EXECUTE", tool="write_file",
                            arguments={"path": "b.txt", "content": "B"},
                            criteria=["b.txt written"]),
-            decision_reply(self.mission_id, 2, "COMPLETE", criteria=["decision recorded"],
-                           terminal=True),
+            decision_reply(self.mission_id, 2, "BLOCKED", criteria=[], terminal=True),
         ], "Create b.txt.", approval_policy="workspace-write-with-approvals")
         self.assertEqual(status, 201, body)
         self.wait_state(self.mission_id, "WAITING_FOR_APPROVAL",
@@ -257,10 +276,24 @@ class MissionsApiTestCase(unittest.TestCase):
                               {"scope": "once", "approve": False})
         self.assertEqual(status, 200)
         d = self.wait_terminal(self.mission_id)
-        self.assertEqual(d["mission"]["state"], "COMPLETED")
+        self.assertEqual(d["mission"]["state"], "BLOCKED")
         self.assertFalse((self.ws / "b.txt").exists())  # rejected → never written
         approvals = missions_api.get_store().rows("approvals", self.mission_id)
         self.assertEqual(approvals[0]["approved"], 0)
+
+    def test_04b_empty_complete_fails_closed(self):
+        self.optin()
+        status, body = self.start_mission([
+            decision_reply(self.mission_id, 1, "COMPLETE", criteria=["done"], terminal=True),
+            decision_reply(self.mission_id, 2, "BLOCKED", criteria=[], terminal=True),
+        ], "Do not complete without local evidence.")
+        self.assertEqual(status, 201, body)
+
+        d = self.wait_terminal(self.mission_id)
+
+        self.assertEqual(d["mission"]["state"], "BLOCKED")
+        validations = missions_api.get_store().rows("validation_results", self.mission_id)
+        self.assertEqual(validations[0]["passed"], 0)
 
     def test_05_pause_resume(self):
         self.optin()

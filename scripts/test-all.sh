@@ -3,8 +3,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-python3 -m unittest discover -s tests -v
-python3 -m py_compile \
+PYTHON="${PYTHON:-$ROOT/.venv/bin/python}"
+if [[ ! -x "$PYTHON" ]]; then PYTHON=python3; fi
+
+"$PYTHON" -m unittest discover -s tests -v
+"$PYTHON" -m py_compile \
   console/chat.py \
   console/settings.py \
   console/server.py \
@@ -14,7 +17,8 @@ python3 -m py_compile \
   transport/chatgpt_web/fixture.py
 
 if command -v node >/dev/null 2>&1; then
-  python3 - <<'PY'
+  node --test chrome-extension/tests/extension.test.mjs
+  "$PYTHON" - <<'PY'
 from pathlib import Path
 import re
 source = Path("frontend/fallback/index.html").read_text(encoding="utf-8")
@@ -27,7 +31,26 @@ PY
 fi
 
 if [[ -d frontend/node_modules ]]; then
-  (cd frontend && npm run typecheck && npm run lint)
+  (
+    cd frontend
+    "$ROOT/scripts/npmw" audit --audit-level=high
+    "$ROOT/scripts/npmw" run test:unit
+    "$ROOT/scripts/npmw" run test:coverage
+    "$ROOT/scripts/npmw" run typecheck
+    "$ROOT/scripts/npmw" run lint
+    "$ROOT/scripts/npmw" run build
+    "$PYTHON" "$ROOT/scripts/normalize-static-output.py" "$ROOT/frontend/out"
+    "$ROOT/scripts/npmw" run test:e2e
+    "$ROOT/scripts/npmw" run test:a11y
+  )
 else
   printf '\nFrontend dependencies are not installed; skipped TypeScript/ESLint.\n'
+fi
+
+"$PYTHON" scripts/verify-runtime.py --json
+if [[ -x scripts/check-public-privacy.sh ]]; then
+  scripts/check-public-privacy.sh \
+    --markers tests/fixtures/privacy/ci-markers.txt \
+    --fingerprints scripts/privacy-fingerprints.json \
+    --url-allowlist scripts/public-url-allowlist.txt
 fi

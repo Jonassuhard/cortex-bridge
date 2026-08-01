@@ -59,6 +59,25 @@ class SummarizeProbeTest(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertIn("messages", result["failures"])
 
+    def test_home_page_without_messages_is_healthy_when_composer_exists(self):
+        result = _summarize_probe({
+            "url": "https://chatgpt.com/",
+            "roles": _roles(messages=False),
+        })
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["failures"], [])
+        self.assertIn("messages", result["warnings"])
+
+    def test_login_controls_fail_even_when_public_composer_exists(self):
+        result = _summarize_probe({
+            "url": "https://chatgpt.com/",
+            "roles": _roles(messages=False),
+            "diagnostics": {"login_controls": 2, "account_controls": 0},
+        })
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["blocker"], "login")
+        self.assertIn("login", result["failures"])
+
     def test_send_missing_is_warning_only(self):
         # Idle composer -> the real send button does not exist yet. A
         # read-only probe must not cry wolf: warning, never failure.

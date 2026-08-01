@@ -170,6 +170,16 @@ class ProtocolTestCase(unittest.TestCase):
             protocol.validate_decision(d, expected_mission_id=MISSION_ID, expected_iteration=1)
         self.assertEqual(cm.exception.code, "PATH_TRAVERSAL")
 
+    def test_run_tests_requires_structured_argv(self):
+        malformed = make_decision(tool="run_tests", arguments={"command": "python3 -m unittest"})
+        with self.assertRaises(DecisionError) as cm:
+            protocol.validate_decision(
+                malformed, expected_mission_id=MISSION_ID, expected_iteration=1
+            )
+        self.assertEqual(cm.exception.code, "MALFORMED_ARGUMENTS")
+        valid = make_decision(tool="run_tests", arguments={"argv": ["python3", "-m", "unittest"]})
+        protocol.validate_decision(valid, expected_mission_id=MISSION_ID, expected_iteration=1)
+
     # extraction helper (§9): exactly one fenced block, other JSON ignored
     def test_extract_decision_block(self):
         decision = make_decision()

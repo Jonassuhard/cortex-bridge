@@ -2,6 +2,8 @@
 
 import type { MissionDetail, PipelineComponent, PipelineStatus, RuntimeStatus, TransportStatus } from "@/lib/types";
 import { formatDuration, shortTime } from "@/lib/api";
+import { executorDiagnosticsLabel, statusPresentation } from "@/lib/runtimeTruth";
+import { useAccessibleDialog } from "@/hooks/useAccessibleDialog";
 import {
   ActivityIcon,
   AlertIcon,
@@ -51,10 +53,10 @@ function componentIcon(id: string) {
 }
 
 function stateTone(state: PipelineComponent["state"]) {
-  if (["healthy", "connected", "idle"].includes(state)) return "good";
+  if (["healthy", "connected", "available", "idle"].includes(state)) return "good";
   if (["running", "waiting"].includes(state)) return "active";
   if (["degraded", "blocked"].includes(state)) return "warning";
-  if (["failed", "disconnected"].includes(state)) return "danger";
+  if (["failed", "disconnected", "unavailable"].includes(state)) return "danger";
   return "muted";
 }
 
@@ -71,19 +73,21 @@ export function PipelineInspector({
   onStopAll,
   onResetStop,
 }: PipelineInspectorProps) {
-  const missionState = mission?.mission.state || pipeline.active_mission_state;
+  const missionState = mission?.mission.state;
   const running = !!missionState && !["COMPLETED", "BLOCKED", "FAILED", "CANCELLED", "PAUSED", "PAUSED_RECOVERY_REQUIRED"].includes(missionState);
   const paused = missionState === "PAUSED" || missionState === "PAUSED_RECOVERY_REQUIRED";
+  const pipelinePresentation = statusPresentation(pipeline.overall);
+  const inspectorRef = useAccessibleDialog<HTMLElement>({ open, onClose });
 
   return (
-    <aside className={`pipeline-inspector ${open ? "is-open" : ""}`} aria-label="État de la pipeline">
+    <aside ref={inspectorRef} className={`pipeline-inspector ${open ? "is-open" : ""}`} aria-label="État de la pipeline" aria-hidden={!open} inert={open ? undefined : true}>
       <div className="inspector-head">
         <div>
           <span className="panel-eyebrow">Pipeline</span>
           <h2>État du bridge</h2>
         </div>
         <div className="inspector-head-actions">
-          <span className={`pipeline-live ${pipeline.overall === "failed" ? "is-error" : ""}`}><i /> {pipeline.overall === "failed" ? "Dégradé" : "Live"}</span>
+          <span className={`pipeline-live is-${pipelinePresentation.tone}`}><i /> {pipelinePresentation.label}</span>
           <button className="icon-button" onClick={onClose} aria-label="Fermer la pipeline"><XIcon /></button>
         </div>
       </div>
@@ -143,10 +147,12 @@ export function PipelineInspector({
       <section className="inspector-section runtime-summary">
         <div className="inspector-section-head"><div><span className="panel-eyebrow">Runtime</span><h3>Exécution locale</h3></div></div>
         <dl>
-          <div><dt>Ollama</dt><dd className={runtime.ollama_up ? "good" : "danger"}>{runtime.ollama_status}</dd></div>
-          <div><dt>Modèle principal</dt><dd>{runtime.primary.name}</dd></div>
-          <div><dt>État du modèle</dt><dd>{runtime.primary.state}</dd></div>
-          <div><dt>Disque DJO</dt><dd className={runtime.volume_mounted ? "good" : "danger"}>{runtime.volume_mounted ? "monté" : "absent"}</dd></div>
+          <div><dt>Disponibilité Ollama</dt><dd className={runtime.executor_available ? "good" : "danger"}>{runtime.executor_available ? "disponible" : "indisponible"}</dd></div>
+          <div><dt>Modèle candidat</dt><dd>{runtime.primary.name}</dd></div>
+          <div><dt>Exécuteur utilisé</dt><dd>{pipeline.runtime_execution.executor_kind}</dd></div>
+          <div><dt>Modèle réellement utilisé</dt><dd>{pipeline.runtime_execution.executor_model_used || "aucun"}</dd></div>
+          <div><dt>Mode d&apos;exécution</dt><dd>{executorDiagnosticsLabel(pipeline.runtime_execution)}</dd></div>
+          <div><dt>Stockage local</dt><dd className={runtime.volume_mounted ? "good" : "danger"}>{runtime.volume_mounted ? "monté" : "absent"}</dd></div>
           <div><dt>Stockage</dt><dd title={runtime.storage_path}>{runtime.storage_path.split("/").slice(-3).join("/")}</dd></div>
           <div><dt>Mission</dt><dd>{missionState || "aucune"}</dd></div>
           <div><dt>Session</dt><dd>{mission?.mission.id?.slice(0, 8) || "—"}</dd></div>

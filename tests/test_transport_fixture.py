@@ -8,11 +8,15 @@ never the WebBridge daemon, never the console on 8420). stdlib unittest:
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import sys
+import time
 import unittest
+import urllib.error
 import uuid
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -23,6 +27,7 @@ from transport.chatgpt_web.adapter import (  # noqa: E402
     DELIVERY_UNCERTAIN,
     GENERATION_CANCELLED,
     DUPLICATE_EXTRACTION,
+    DriverError,
     TAB_CLOSED,
     TRANSPORT_PAUSED,
     BlockerDetected,
@@ -32,6 +37,26 @@ from transport.chatgpt_web.adapter import (  # noqa: E402
     TransportError,
 )
 from transport.chatgpt_web.fixture import FixtureServer  # noqa: E402
+
+
+class FixtureDriverResourceTest(unittest.TestCase):
+    def test_http_error_responses_are_closed(self):
+        for operation in ("_fetch", "_get", "_post"):
+            with self.subTest(operation=operation):
+                body = io.BytesIO(b'{"error":"synthetic"}')
+                error = urllib.error.HTTPError(
+                    "http://127.0.0.1/fixture", 500, "synthetic", {}, body
+                )
+                with patch(
+                    "transport.chatgpt_web.adapter.urllib.request.urlopen",
+                    side_effect=error,
+                ):
+                    with self.assertRaises(DriverError):
+                        if operation == "_post":
+                            LocalFixtureDriver._post(error.url, {})
+                        else:
+                            getattr(LocalFixtureDriver, operation)(error.url)
+                self.assertTrue(body.closed)
 
 
 class FixtureTransportTestCase(unittest.IsolatedAsyncioTestCase):
@@ -327,6 +352,190 @@ class FixtureTransportTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Transport unavailable", payload)
         self.assertIn("```cortex-report", payload)
         self.assertIn(mission_id, payload)
+
+
+class _DeadlineDriver:
+    requires_content_stability = True
+
+    def __init__(self, *, spa_delay=0.0, state_delay=0.0, light_delay=0.0):
+        self.spa_delay = spa_delay
+        self.state_delay = state_delay
+        self.light_delay = light_delay
+        self.current = "conv-a"
+
+    async def spa_navigate(self, url):
+        await asyncio.sleep(self.spa_delay)
+        self.current = url.rsplit("/c/", 1)[-1]
+        return True
+
+    async def navigate(self, url):
+        self.current = url.rsplit("/c/", 1)[-1]
+
+    def _state_payload(self):
+        return {
+            "url": f"https://chatgpt.com/c/{self.current}",
+            "conversation_id": self.current,
+            "title": f"Conversation {self.current}",
+            "blocker": None,
+            "messages": [{"id": f"m-{self.current}", "role": "assistant", "text": "ok"}],
+            "streaming": False,
+        }
+
+    async def get_state(self):
+        await asyncio.sleep(self.state_delay)
+        return self._state_payload()
+
+    async def get_light_state(self):
+        await asyncio.sleep(self.light_delay)
+        state = self._state_payload()
+        return {
+            "conversation_id": state["conversation_id"],
+            "title": state["title"],
+            "message_count": 1,
+            "first_id": state["messages"][0]["id"],
+        }
+
+
+class SelectionDeadlineTest(unittest.IsolatedAsyncioTestCase):
+    def _transport(self, driver, budget=0.08):
+        return ChatGPTWebTransport(
+            driver,
+            selection_budget=budget,
+            poll_interval=0.005,
+            stability_interval=0.005,
+        )
+
+    async def _assert_bounded(self, driver):
+        from transport.chatgpt_web.adapter import SELECTION_TIMEOUT
+
+        started = time.monotonic()
+        with self.assertRaises(TransportError) as raised:
+            await self._transport(driver).select_conversation(
+                "https://chatgpt.com/c/conv-a"
+            )
+        self.assertEqual(raised.exception.code, SELECTION_TIMEOUT)
+        self.assertTrue(raised.exception.details["reload_required"])
+        self.assertLess(time.monotonic() - started, 0.35)
+
+    async def test_spa_navigate_shares_the_absolute_deadline(self):
+        await self._assert_bounded(_DeadlineDriver(spa_delay=1.0))
+
+    async def test_get_state_shares_the_absolute_deadline(self):
+        await self._assert_bounded(_DeadlineDriver(state_delay=1.0))
+
+    async def test_get_light_state_shares_the_absolute_deadline(self):
+        await self._assert_bounded(_DeadlineDriver(light_delay=1.0))
+
+    async def test_late_selection_a_cannot_replace_completed_selection_b(self):
+        from transport.chatgpt_web.adapter import SELECTION_SUPERSEDED
+
+        driver = _DeadlineDriver()
+        driver.requires_content_stability = False
+        transport = self._transport(driver, budget=1.0)
+
+        async def gated_spa(url):
+            if url.endswith("conv-a"):
+                await asyncio.sleep(0.08)
+            driver.current = url.rsplit("/c/", 1)[-1]
+            return True
+
+        driver.spa_navigate = gated_spa
+        task_a = asyncio.create_task(
+            transport.select_conversation("https://chatgpt.com/c/conv-a")
+        )
+        await asyncio.sleep(0.01)
+        lock_b = await transport.select_conversation("https://chatgpt.com/c/conv-b")
+        with self.assertRaises(TransportError) as raised:
+            await task_a
+        self.assertEqual(raised.exception.code, SELECTION_SUPERSEDED)
+        self.assertEqual(lock_b.identity, "conv-b")
+        self.assertEqual(transport.lock.identity, "conv-b")
+
+    async def test_fixture_driver_skips_live_content_stability_wait(self):
+        self.assertFalse(LocalFixtureDriver.requires_content_stability)
+        server = FixtureServer().start()
+        self.addCleanup(server.stop)
+        transport = self._transport(LocalFixtureDriver(server.base_url), budget=1.0)
+        started = time.monotonic()
+        lock = await transport.select_conversation(f"{server.base_url}/c/fast-fixture")
+        self.assertEqual(lock.identity, "fast-fixture")
+        self.assertLess(time.monotonic() - started, 0.30)
+
+
+class ConversationNormalizationTest(unittest.TestCase):
+    def test_deduplicates_before_hard_limit_and_keeps_stable_order(self):
+        from transport.chatgpt_web.adapter import normalize_conversations
+
+        items = []
+        for index in range(55):
+            items.append({
+                "identity": f"conv-{index}",
+                "url": f"https://chatgpt.com/c/conv-{index}",
+                "title": f"Conversation {index}",
+                "message_count": index,
+            })
+            if index == 0:
+                items.append(dict(items[-1], title="duplicate must lose"))
+        normalized = normalize_conversations(items)
+        self.assertEqual(len(normalized), 50)
+        self.assertEqual(normalized[0]["title"], "Conversation 0")
+        self.assertEqual(normalized[-1]["identity"], "conv-49")
+
+    def test_unknown_metadata_is_not_fabricated(self):
+        from transport.chatgpt_web.adapter import normalize_conversations
+
+        [item] = normalize_conversations([{
+            "identity": "conv-1",
+            "url": "https://chatgpt.com/c/conv-1",
+            "title": "One",
+            "project": True,
+            "message_count": "12",
+        }])
+        self.assertFalse(item["project"])
+        self.assertIsNone(item["project_id"])
+        self.assertIsNone(item["project_title"])
+        self.assertIsNone(item["message_count"])
+
+
+class FixtureConversationMetadataTest(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.server = FixtureServer().start()
+        self.addCleanup(self.server.stop)
+        self.transport = ChatGPTWebTransport(
+            LocalFixtureDriver(self.server.base_url),
+            stability_interval=0.15,
+            poll_interval=0.03,
+            max_wait=5.0,
+        )
+
+    async def test_fixture_metadata_updates_are_truthful(self):
+        conversation = self.server.conversation("metadata")
+        conversation.add_message("user", "first")
+        self.server.set_metadata(
+            "metadata",
+            title="Titre réel",
+            pinned=True,
+            project_id="project-1",
+            project_title="Projet réel",
+            preview="first",
+            updated_at="2026-07-29T10:00:00+00:00",
+        )
+        listed = await self.transport.list_conversations()
+        item = next(entry for entry in listed if entry["identity"] == "metadata")
+        self.assertEqual(item["title"], "Titre réel")
+        self.assertTrue(item["pinned"])
+        self.assertEqual(item["project_id"], "project-1")
+        self.assertEqual(item["project_title"], "Projet réel")
+        self.assertEqual(item["preview"], "first")
+        self.assertEqual(item["message_count"], 1)
+
+    async def test_fixture_deletion_disappears_from_fresh_list(self):
+        self.server.conversation("deleted")
+        before = await self.transport.list_conversations()
+        self.assertIn("deleted", {item["identity"] for item in before})
+        self.server.delete_conversation("deleted")
+        after = await self.transport.list_conversations()
+        self.assertNotIn("deleted", {item["identity"] for item in after})
 
 
 if __name__ == "__main__":

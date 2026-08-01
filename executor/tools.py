@@ -21,8 +21,10 @@ import hashlib
 import json
 import os
 import re
+import signal
 import shutil
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -38,23 +40,22 @@ SKIP_DIRS = {".git", ".cortex", "__pycache__", "node_modules"}
 
 LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1", "[::1]"}
 
-# §15 default-deny program names (denied regardless of arguments).
-DENIED_PROGRAMS = {
-    "sudo",
-    "su",
-    "ssh",
-    "scp",
-    "sftp",
-    "wget",
-    "open",
-    "osascript",
-    "launchctl",
-    "kill",
-    "pkill",
-    "chown",
-}
+SHELL_INTERPRETERS = frozenset({"sh", "bash", "zsh", "dash", "fish", "ksh"})
+DELETION_PROGRAMS = frozenset({"rm", "rmdir", "unlink", "find"})
+NETWORK_CLIENTS = frozenset({"curl", "wget", "ssh", "scp", "sftp", "nc", "ncat"})
+APPROVED_EXECUTABLES = frozenset({"python", "python3", "node", "npm", "pytest", "git", "curl"})
+SAFE_GIT_SUBCOMMANDS = frozenset({"status", "diff", "log", "show", "rev-parse", "branch", "ls-files"})
 
 SHELL_METACHARS = ("&&", "||", ";", "|", "`", "$(", ">", "<")
+
+
+@dataclass(frozen=True)
+class ProcessCapabilities:
+    """Capabilities granted to a reviewed structured process invocation."""
+
+    allowed: bool = False
+    allow_network: bool = False
+    allow_deletions: bool = False
 
 
 class ToolError(Exception):
@@ -108,18 +109,38 @@ def _bounded(text: str, limit: int = MAX_OUTPUT_CHARS) -> tuple[str, bool]:
 
 
 # ---------------------------------------------------------------------------
-# §15 command denylist for run_process
+# §15 reviewed structured process policy
 # ---------------------------------------------------------------------------
 
+def sanitized_process_environment(workspace: Path) -> dict[str, str]:
+    """Return a non-secret environment for child processes."""
+    return {
+        "PATH": os.defpath,
+        "HOME": str(workspace.resolve()),
+        "TMPDIR": "/tmp",
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "PYTHONIOENCODING": "utf-8",
+        "PYTHONDONTWRITEBYTECODE": "1",
+    }
+
+
 def check_command_allowed(argv: list[str], workspace: Path) -> None:
-    """Raise ToolDenied if argv violates the §15 default-deny list."""
+    """Allow only reviewed executable and subcommand vectors."""
     if not argv or not all(isinstance(a, str) and a for a in argv):
         raise ToolDenied("MALFORMED_COMMAND", "argv must be a non-empty list of strings")
-    program = Path(argv[0]).name
+    executable = argv[0]
+    if os.path.isabs(executable) or "/" in executable or "\\" in executable:
+        raise ToolDenied("DENIED_COMMAND", "executable must be resolved through the fixed PATH")
+    program = executable
     args = argv[1:]
 
-    if program in DENIED_PROGRAMS:
-        raise ToolDenied("DENIED_COMMAND", f"{program} is on the default-deny list")
+    if program in SHELL_INTERPRETERS:
+        raise ToolDenied("DENIED_COMMAND", f"shell interpreter {program} is denied")
+    if program in DELETION_PROGRAMS:
+        raise ToolDenied("DENIED_COMMAND", f"deletion-capable program {program} is denied")
+    if program not in APPROVED_EXECUTABLES:
+        raise ToolDenied("DENIED_COMMAND", f"executable {program} is not approved")
 
     for a in args:
         for meta in SHELL_METACHARS:
@@ -130,40 +151,67 @@ def check_command_allowed(argv: list[str], workspace: Path) -> None:
                 )
 
     if program == "git":
-        if args and args[0] == "push":
-            raise ToolDenied("DENIED_COMMAND", "git push is denied")
-        if len(args) >= 2 and args[0] == "remote" and args[1] == "set-url":
-            raise ToolDenied("DENIED_COMMAND", "git remote set-url is denied")
-    if program == "npm" and args and args[0] == "publish":
-        raise ToolDenied("DENIED_COMMAND", "npm publish is denied")
-    if program == "docker" and args and args[0] == "login":
-        raise ToolDenied("DENIED_COMMAND", "docker login is denied")
-
-    if program == "curl":
-        for a in args:
-            if a.startswith(("http://", "https://")):
-                host = urlparse(a).hostname or ""
-                if host.lower() not in LOOPBACK_HOSTS:
-                    raise ToolDenied(
-                        "EXTERNAL_SIDE_EFFECT",
-                        f"curl to non-loopback destination is denied: {host}",
-                    )
-            elif re.match(r"^[A-Za-z0-9.-]+\.[a-z]{2,}(/|$|:)", a):
-                raise ToolDenied(
-                    "EXTERNAL_SIDE_EFFECT",
-                    f"curl to non-loopback destination is denied: {a}",
-                )
-
-    if program == "rm":
-        for a in args:
-            if a.startswith("-") and "r" in a and "f" in a:
-                raise ToolDenied("DENIED_COMMAND", "rm -rf is denied")
-
-    if program == "chmod":
-        for a in args:
-            if a.startswith("-"):
+        if not args or args[0] not in SAFE_GIT_SUBCOMMANDS:
+            raise ToolDenied("DENIED_COMMAND", "git subcommand is not approved")
+        subcommand, options = args[0], args[1:]
+        if subcommand == "status" and any(option != "--porcelain" for option in options):
+            raise ToolDenied("DENIED_COMMAND", "git status option is not approved")
+        if subcommand == "diff":
+            try:
+                separator = options.index("--")
+                flags, paths = options[:separator], options[separator + 1:]
+            except ValueError:
+                flags, paths = options, []
+            if flags:
+                raise ToolDenied("DENIED_COMMAND", "git diff option is not approved")
+            for path in paths:
+                resolve_in_workspace(workspace, path)
+        if subcommand in {"log", "show", "rev-parse", "branch", "ls-files"} and options:
+            raise ToolDenied("DENIED_COMMAND", f"git {subcommand} option is not approved")
+        return
+    if program in {"python", "python3"}:
+        if args[:1] == ["-m"] and args[1:2] == ["unittest"]:
+            return
+        if not args or args[0].startswith("-"):
+            raise ToolDenied("DENIED_COMMAND", "inline or option-based Python execution is denied")
+        resolve_in_workspace(workspace, args[0], must_exist=True)
+        return
+    if program == "node":
+        if not args or args[0].startswith("-"):
+            raise ToolDenied("DENIED_COMMAND", "inline or option-based Node execution is denied")
+        resolve_in_workspace(workspace, args[0], must_exist=True)
+        return
+    if program == "npm":
+        if args not in (["test"], ["run", "test"]):
+            raise ToolDenied("DENIED_COMMAND", "only npm test is approved")
+        return
+    if program == "pytest":
+        return
+    if program in NETWORK_CLIENTS:
+        safe_flags = {"--fail", "--silent", "--show-error", "-f", "-s", "-S"}
+        value_flags = {"--max-time", "--connect-timeout"}
+        urls = []
+        index = 0
+        while index < len(args):
+            argument = args[index]
+            if argument in safe_flags:
+                index += 1
                 continue
-            resolve_in_workspace(workspace, a)  # raises if outside workspace
+            if argument in value_flags:
+                if index + 1 >= len(args) or not args[index + 1].isdigit():
+                    raise ToolDenied("EXTERNAL_SIDE_EFFECT", "curl timeout option requires an integer")
+                index += 2
+                continue
+            if argument.startswith(("http://", "https://")):
+                urls.append(argument)
+                index += 1
+                continue
+            raise ToolDenied("EXTERNAL_SIDE_EFFECT", "curl option is not approved for health checks")
+        if len(urls) != 1:
+            raise ToolDenied("EXTERNAL_SIDE_EFFECT", "a single loopback health-check URL is required")
+        host = (urlparse(urls[0]).hostname or "").lower()
+        if host not in LOOPBACK_HOSTS:
+            raise ToolDenied("EXTERNAL_SIDE_EFFECT", f"network destination is not loopback: {host}")
 
 
 # ---------------------------------------------------------------------------
@@ -408,6 +456,7 @@ class ToolExecutor:
         proc = await asyncio.create_subprocess_exec(
             *argv,
             cwd=str(self.workspace),
+            env=sanitized_process_environment(self.workspace),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -553,6 +602,8 @@ class ToolExecutor:
             proc = await asyncio.create_subprocess_exec(
                 *argv,
                 cwd=str(workdir),
+                env=sanitized_process_environment(self.workspace),
+                start_new_session=True,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -562,7 +613,18 @@ class ToolExecutor:
             out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
             timed_out = False
         except asyncio.TimeoutError:
-            proc.kill()
+            try:
+                os.killpg(proc.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=2)
+            except asyncio.TimeoutError:
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                await proc.wait()
             out, err = await proc.communicate()
             timed_out = True
         stdout, out_trunc = _bounded(out.decode("utf-8", errors="replace"))
@@ -576,7 +638,7 @@ class ToolExecutor:
             "truncated": out_trunc or err_trunc,
         }
 
-    async def run_tests(self, command: str | None = None, cwd: str = ".", timeoutSeconds: float = 120) -> dict:
+    async def run_tests(self, argv: list[str] | None = None, cwd: str = ".", timeoutSeconds: float = 120) -> dict:
         """Run only a user-configured or manifest-detected test command."""
         allowed = list(self.test_commands)
         detected = detect_test_command(self.workspace)
@@ -587,22 +649,18 @@ class ToolExecutor:
                 "NO_TEST_COMMAND",
                 "no configured test command and none detectable from manifests",
             )
-        if command is None:
-            argv = allowed[0]
+        if argv is None:
+            selected = allowed[0]
         else:
-            import shlex
-
-            try:
-                requested = shlex.split(command)
-            except ValueError as exc:
-                raise ToolError("MALFORMED_ARGUMENTS", f"cannot parse command: {exc}") from exc
-            if requested not in allowed:
+            if not isinstance(argv, list) or not argv or not all(isinstance(arg, str) and arg for arg in argv):
+                raise ToolError("MALFORMED_ARGUMENTS", "argv must be a non-empty list of strings")
+            if argv not in allowed:
                 raise ToolDenied(
                     "UNCONFIGURED_TEST_COMMAND",
-                    f"test command is not configured or manifest-detected: {command!r}",
+                    f"test command is not configured or manifest-detected: {argv!r}",
                 )
-            argv = requested
-        return await self.run_process(argv, cwd=cwd, timeoutSeconds=timeoutSeconds)
+            selected = argv
+        return await self.run_process(selected, cwd=cwd, timeoutSeconds=timeoutSeconds)
 
 
 # ---------------------------------------------------------------------------

@@ -17,11 +17,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from executor.tools import ToolExecutor  # noqa: E402
+from executor.policy import PolicyEngine  # noqa: E402
 from orchestration.loop import (  # noqa: E402
     DUPLICATE_RESPONSE_IGNORED,
     MissionLoop,
     MockOrchestrator,
     MockReply,
+    default_trace_validator,
 )
 from orchestration.state import (  # noqa: E402
     Budgets,
@@ -92,6 +94,296 @@ class LoopTestCase(unittest.IsolatedAsyncioTestCase):
         )
         return loop, mock
 
+    async def test_process_exit_nonzero_is_failed(self):
+        (self.ws / "fail.py").write_text(
+            "import sys\nsys.exit(3)\n", encoding="utf-8"
+        )
+        loop, mock = self.make_loop(
+            [
+                execute("run_process", {"argv": ["python3", "fail.py"]}),
+                blocked("stop after the failed command"),
+            ], policy=PolicyEngine(self.ws, allow_processes=True)
+        )
+
+        await loop.run()
+
+        report = reports_received(mock)[0]
+        self.assertEqual(report["status"], "FAILED")
+        self.assertFalse(report["validation"]["passed"])
+        self.assertEqual(report["toolResult"]["exitCode"], 3)
+        self.assertTrue(
+            any(check["name"] == "process_exit_code" for check in report["validation"]["checks"])
+        )
+
+    async def test_process_timeout_is_failed(self):
+        (self.ws / "slow.py").write_text("import time\ntime.sleep(2)\n", encoding="utf-8")
+        loop, mock = self.make_loop(
+            [
+                execute(
+                    "run_process",
+                    {
+                        "argv": ["python3", "slow.py"],
+                        "timeoutSeconds": 1,
+                    },
+                ),
+                blocked("stop after the timed out command"),
+            ], policy=PolicyEngine(self.ws, allow_processes=True)
+        )
+
+        await loop.run()
+
+        report = reports_received(mock)[0]
+        self.assertEqual(report["status"], "FAILED")
+        self.assertFalse(report["validation"]["passed"])
+        self.assertTrue(
+            any(check["name"] == "process_timeout" for check in report["validation"]["checks"])
+        )
+
+    async def test_truncated_process_output_is_failed(self):
+        (self.ws / "large_output.py").write_text("print('x' * 20000)\n", encoding="utf-8")
+        loop, mock = self.make_loop(
+            [
+                execute(
+                    "run_process",
+                    {"argv": ["python3", "large_output.py"]},
+                ),
+                blocked("stop after the truncated command"),
+            ], policy=PolicyEngine(self.ws, allow_processes=True)
+        )
+
+        await loop.run()
+
+        report = reports_received(mock)[0]
+        self.assertEqual(report["status"], "FAILED")
+        self.assertFalse(report["validation"]["passed"])
+        self.assertTrue(
+            any(
+                check["name"] == "process_output_complete"
+                and check["passed"] is False
+                for check in report["validation"]["checks"]
+            )
+        )
+
+    async def test_default_trace_rejects_empty_complete(self):
+        loop, mock = self.make_loop([complete(), blocked("no execution evidence")])
+
+        mission = await loop.run()
+
+        self.assertEqual(mission["state"], "BLOCKED")
+        validations = self.store.rows("validation_results", self.mission_id, order_by="rowid")
+        self.assertEqual(validations[0]["passed"], 0)
+        checks = json.loads(validations[0]["checks_json"])
+        self.assertEqual(checks[-1]["validator"], "execution-trace-v1")
+
+    async def test_default_trace_allows_completion_after_policy_denial_is_remediated(
+        self,
+    ):
+        loop, mock = self.make_loop(
+            [
+                execute(
+                    "run_process",
+                    {"argv": ["python3", "-c", "print('denied')"]},
+                ),
+                execute(
+                    "write_file",
+                    {
+                        "path": "verify.py",
+                        "content": "print('validated')\n",
+                    },
+                ),
+                execute(
+                    "run_process",
+                    {"argv": ["python3", "verify.py"]},
+                ),
+                complete(),
+                blocked("completion should not need this fallback"),
+            ],
+            policy=PolicyEngine(self.ws, allow_processes=True),
+        )
+
+        mission = await loop.run()
+
+        self.assertEqual(mission["state"], "COMPLETED")
+        reports = reports_received(mock)
+        self.assertEqual(reports[0]["status"], "DENIED")
+        self.assertEqual(reports[1]["status"], "SUCCEEDED")
+        self.assertEqual(reports[2]["status"], "SUCCEEDED")
+        final_validations = self.store.rows(
+            "validation_results", self.mission_id, order_by="rowid"
+        )[-3:]
+        self.assertTrue(all(row["passed"] == 1 for row in final_validations))
+
+    async def test_final_validator_exception_fails_terminally(self):
+        def exploding_validator(decision, tools):
+            raise RuntimeError("validator crash")
+
+        loop, _ = self.make_loop([complete()], final_validator=exploding_validator)
+
+        mission = await loop.run()
+
+        self.assertEqual(mission["state"], "FAILED")
+        validations = self.store.rows("validation_results", self.mission_id, order_by="rowid")
+        self.assertEqual(validations[0]["passed"], 0)
+
+    async def test_malformed_final_validator_output_fails_terminally(self):
+        def malformed_validator(decision, tools):
+            return {"passed": True, "checks": "not a list"}
+
+        loop, _ = self.make_loop([complete()], final_validator=malformed_validator)
+
+        mission = await loop.run()
+
+        self.assertEqual(mission["state"], "FAILED")
+        validations = self.store.rows("validation_results", self.mission_id, order_by="rowid")
+        self.assertEqual(validations[0]["passed"], 0)
+
+    async def test_named_final_validator_records_identity_and_evidence(self):
+        def evidence_validator(decision, tools):
+            return {
+                "passed": True,
+                "checks": [
+                    {
+                        "name": "workspace_evidence",
+                        "passed": True,
+                        "evidence": "validated locally",
+                    }
+                ],
+            }
+
+        loop, _ = self.make_loop([complete()], final_validator=evidence_validator)
+
+        mission = await loop.run()
+
+        self.assertEqual(mission["state"], "COMPLETED")
+        validations = self.store.rows("validation_results", self.mission_id, order_by="rowid")
+        checks = json.loads(validations[0]["checks_json"])
+        self.assertEqual(checks[0]["evidence"], "validated locally")
+        self.assertEqual(checks[-1]["validator"], "evidence_validator")
+
+    async def test_final_validator_empty_checks_fails_terminally(self):
+        def empty_checks_validator(decision, tools):
+            return {"passed": True, "checks": []}
+
+        loop, _ = self.make_loop([complete()], final_validator=empty_checks_validator)
+
+        mission = await loop.run()
+
+        self.assertEqual(mission["state"], "FAILED")
+        validations = self.store.rows("validation_results", self.mission_id, order_by="rowid")
+        self.assertEqual(validations[0]["passed"], 0)
+
+    async def test_final_validator_empty_evidence_fails_terminally(self):
+        def empty_evidence_validator(decision, tools):
+            return {
+                "passed": True,
+                "checks": [{"name": "proof", "passed": True, "evidence": ""}],
+            }
+
+        loop, _ = self.make_loop([complete()], final_validator=empty_evidence_validator)
+
+        mission = await loop.run()
+
+        self.assertEqual(mission["state"], "FAILED")
+        validations = self.store.rows("validation_results", self.mission_id, order_by="rowid")
+        self.assertEqual(validations[0]["passed"], 0)
+
+    async def test_final_validator_failed_check_cannot_claim_success(self):
+        def contradictory_validator(decision, tools):
+            return {
+                "passed": True,
+                "checks": [{"name": "proof", "passed": False, "evidence": "missing"}],
+            }
+
+        loop, _ = self.make_loop([complete()], final_validator=contradictory_validator)
+
+        mission = await loop.run()
+
+        self.assertEqual(mission["state"], "FAILED")
+        validations = self.store.rows("validation_results", self.mission_id, order_by="rowid")
+        self.assertEqual(validations[0]["passed"], 0)
+
+    async def test_default_trace_rejects_approval_denied_action(self):
+        loop, _ = self.make_loop(
+            [
+                execute("write_file", {"path": "denied.txt", "content": "no"}),
+                execute("list_directory", {"path": "."}),
+                complete(),
+                blocked("approval denial remains unresolved"),
+            ],
+            approval_callback=lambda decision, policy: None,
+        )
+
+        mission = await loop.run()
+
+        self.assertEqual(mission["state"], "BLOCKED")
+        validations = self.store.rows("validation_results", self.mission_id, order_by="rowid")
+        self.assertEqual(validations[-1]["passed"], 0)
+
+    async def test_default_trace_rejects_nonzero_process_before_complete(self):
+        (self.ws / "fail.py").write_text("import sys\nsys.exit(3)\n", encoding="utf-8")
+        loop, _ = self.make_loop(
+            [
+                execute("run_process", {"argv": ["python3", "fail.py"]}),
+                complete(),
+                blocked("failed process remains unresolved"),
+            ], policy=PolicyEngine(self.ws, allow_processes=True)
+        )
+
+        mission = await loop.run()
+
+        self.assertEqual(mission["state"], "BLOCKED")
+        validations = self.store.rows("validation_results", self.mission_id, order_by="rowid")
+        self.assertEqual(validations[-1]["passed"], 0)
+
+    async def test_default_trace_rejects_timed_out_process_before_complete(self):
+        (self.ws / "slow.py").write_text("import time\ntime.sleep(2)\n", encoding="utf-8")
+        loop, _ = self.make_loop(
+            [
+                execute(
+                    "run_process",
+                    {
+                        "argv": ["python3", "slow.py"],
+                        "timeoutSeconds": 1,
+                    },
+                ),
+                complete(),
+                blocked("timed out process remains unresolved"),
+            ], policy=PolicyEngine(self.ws, allow_processes=True)
+        )
+
+        mission = await loop.run()
+
+        self.assertEqual(mission["state"], "BLOCKED")
+        validations = self.store.rows("validation_results", self.mission_id, order_by="rowid")
+        self.assertEqual(validations[-1]["passed"], 0)
+
+    def test_default_trace_rejects_missing_or_outside_changed_file(self):
+        for changed_path in ("missing.txt", "../outside.txt"):
+            trace_mission_id = str(uuid.uuid4())
+            self.store.create_mission(trace_mission_id, "trace check", str(self.ws))
+            action_id = str(uuid.uuid4())
+            self.store.record_tool_execution(
+                str(uuid.uuid4()),
+                trace_mission_id,
+                action_id,
+                "write_file",
+                {"path": changed_path},
+                {"filesChanged": [changed_path]},
+                0,
+                0,
+                0,
+            )
+            self.store.record_validation(
+                str(uuid.uuid4()), trace_mission_id, action_id, True, []
+            )
+
+            validation = default_trace_validator({}, self.tools, self.store, trace_mission_id)
+
+            self.assertFalse(validation["passed"])
+            self.assertFalse(
+                next(check["passed"] for check in validation["checks"] if check["name"] == "changed_files_present")
+            )
+
     # 1. Multi-iteration repair mission end-to-end → COMPLETED, evidence persisted
     async def test_01_multi_iteration_repair_completes(self):
         (self.ws / "broken.py").write_text("print('BROKEN')\n", encoding="utf-8")
@@ -115,7 +407,11 @@ class LoopTestCase(unittest.IsolatedAsyncioTestCase):
                 "checks": [{"name": "script_fixed", "passed": ok, "evidence": "content check"}],
             }
 
-        loop, mock = self.make_loop(script, final_validator=final_validator)
+        loop, mock = self.make_loop(
+            script,
+            final_validator=final_validator,
+            policy=PolicyEngine(self.ws, allow_processes=True),
+        )
         mission = await loop.run()
 
         self.assertEqual(mission["state"], "COMPLETED")

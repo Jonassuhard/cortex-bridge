@@ -1,9 +1,11 @@
 "use client";
 /* eslint-disable react/no-unescaped-entities */
 
-import { useMemo, useState } from "react";
-import type { ChatGPTModelInfo, CortexSettings, OllamaModelInfo } from "@/lib/types";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { ChatGPTModelInfo, CortexSettings, OllamaModelInfo, RuntimeTruth } from "@/lib/types";
 import { formatBytes } from "@/lib/api";
+import { executorDiagnosticsLabel, isAvailableComponentState } from "@/lib/runtimeTruth";
+import { useAccessibleDialog } from "@/hooks/useAccessibleDialog";
 import {
   AlertIcon,
   BrowserIcon,
@@ -25,6 +27,7 @@ interface SettingsPanelProps {
   settings: CortexSettings;
   ollamaModels: OllamaModelInfo[];
   chatgptModels: ChatGPTModelInfo[];
+  runtimeExecution: RuntimeTruth;
   saving: boolean;
   onClose: () => void;
   onSave: (settings: CortexSettings) => Promise<void>;
@@ -53,6 +56,7 @@ function Toggle({ checked, onChange, label, description, danger = false, disable
   disabled?: boolean;
 }) {
   return (
+    // oxlint-disable-next-line jsx-a11y/label-has-associated-control -- The checkbox is nested in its native label and the text is supplied by props.
     <label className={`settings-toggle-row ${danger ? "is-danger" : ""} ${disabled ? "is-disabled" : ""}`}>
       <span><strong>{label}</strong><small>{description}</small></span>
       <input type="checkbox" checked={checked} disabled={disabled} onChange={(event) => onChange(event.target.checked)} />
@@ -66,6 +70,7 @@ export function SettingsPanel({
   settings,
   ollamaModels,
   chatgptModels,
+  runtimeExecution,
   saving,
   onClose,
   onSave,
@@ -73,9 +78,21 @@ export function SettingsPanel({
 }: SettingsPanelProps) {
   const [tab, setTab] = useState<TabId>("general");
   const [draft, setDraft] = useState<CortexSettings>(settings);
+  const draftDirtyRef = useRef(false);
   const [labConfirmation, setLabConfirmation] = useState("");
   const [diagTesting, setDiagTesting] = useState<string | null>(null);
   const [diagResult, setDiagResult] = useState<{ label: string; state: string; detail: string } | null>(null);
+  const dialogRef = useAccessibleDialog<HTMLDivElement>({ open, onClose });
+
+  useEffect(() => {
+    if (!open) {
+      draftDirtyRef.current = false;
+      return;
+    }
+    if (!draftDirtyRef.current) {
+      setDraft(settings);
+    }
+  }, [open, settings]);
 
   const runDiagnostic = async (componentId: string, label: string) => {
     setDiagTesting(componentId);
@@ -86,7 +103,7 @@ export function SettingsPanel({
       const payload = await response.json();
       const component = (payload.components || []).find((row: { id: string }) => row.id === componentId);
       if (!component) throw new Error("composant introuvable");
-      const ok = ["connected", "healthy", "idle"].includes(String(component.state));
+      const ok = isAvailableComponentState(component.state) || component.state === "idle";
       setDiagResult({ label, state: ok ? "ok" : "failed", detail: String(component.detail || component.state) });
     } catch {
       setDiagResult({ label, state: "failed", detail: "Test impossible — la console est-elle démarrée ?" });
@@ -98,13 +115,13 @@ export function SettingsPanel({
   const primaryOptions = useMemo(() => {
     const names = new Set(ollamaModels.map((model) => model.name));
     names.add(settings.primary_executor);
-    names.add(settings.fallback_executor);
     return Array.from(names).filter(Boolean);
-  }, [ollamaModels, settings.primary_executor, settings.fallback_executor]);
+  }, [ollamaModels, settings.primary_executor]);
 
   if (!open) return null;
 
   const patch = <K extends keyof CortexSettings>(key: K, value: CortexSettings[K]) => {
+    draftDirtyRef.current = true;
     setDraft((current) => ({ ...current, [key]: value }));
   };
 
@@ -126,17 +143,18 @@ export function SettingsPanel({
   };
 
   return (
-    <div className="settings-overlay" role="dialog" aria-modal="true" aria-label="Paramètres Cortex Bridge">
+    // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role -- This styled overlay is controlled by React and does not use the native dialog lifecycle.
+    <div ref={dialogRef} className="settings-overlay" role="dialog" aria-modal="true" aria-label="Paramètres Cortex Bridge">
       <button className="settings-backdrop" onClick={onClose} aria-label="Fermer les paramètres" />
       <section className="settings-panel">
         <header className="settings-head">
           <div><span className="panel-eyebrow">Cortex Bridge</span><h2>Paramètres</h2><p>Configure les modèles, le transport et les limites d'accès sans exposer les identifiants.</p></div>
-          <button className="icon-button" onClick={onClose}><XIcon /></button>
+          <button className="icon-button" onClick={onClose} aria-label="Fermer les paramètres"><XIcon /></button>
         </header>
         <div className="settings-layout">
           <nav className="settings-tabs">
             {tabs.map((item) => (
-              <button className={tab === item.id ? "is-active" : ""} key={item.id} onClick={() => setTab(item.id)}>{item.icon}<span>{item.label}</span></button>
+              <button aria-label={item.label} className={tab === item.id ? "is-active" : ""} key={item.id} onClick={() => setTab(item.id)}>{item.icon}<span>{item.label}</span></button>
             ))}
           </nav>
           <div className="settings-content">
@@ -145,7 +163,7 @@ export function SettingsPanel({
                 <div className="settings-section-title"><h3>Expérience générale</h3><p>Préférences de l'application locale et comportement de la conversation.</p></div>
                 <div className="settings-grid two">
                   <label><span>Langue</span><select value={draft.language} onChange={(e) => patch("language", e.target.value as CortexSettings["language"])}><option value="fr">Français</option><option value="en">English</option></select></label>
-                  <label><span>Thème</span><select value={draft.theme} onChange={(e) => patch("theme", e.target.value as CortexSettings["theme"])}><option value="dark">Sombre Preuvia</option><option value="light">Clair</option><option value="system">Système</option></select></label>
+                  <label><span>Thème</span><select value={draft.theme} onChange={(e) => patch("theme", e.target.value as CortexSettings["theme"])}><option value="dark">Sombre</option><option value="light">Clair</option><option value="system">Système</option></select></label>
                 </div>
                 <label className="settings-field"><span>Workspace par défaut</span><input value={draft.default_workspace} onChange={(e) => patch("default_workspace", e.target.value)} /><small>Les outils structurés restent confinés à ce dossier sauf profil étendu explicite.</small></label>
                 <div className="settings-grid two">
@@ -159,7 +177,7 @@ export function SettingsPanel({
 
             {tab === "models" && (
               <div className="settings-section-stack">
-                <div className="settings-section-title"><h3>Modèles</h3><p>ChatGPT reste le planificateur. Granite exécute les actions explicites et Qwen intervient une seule fois en récupération.</p></div>
+                <div className="settings-section-title"><h3>Modèles</h3><p>ChatGPT planifie. Mode A exécute des outils déterministes ; Ollama n'est revendiqué que lorsqu'un appel local réussit réellement.</p></div>
                 <label className="settings-field"><span>Modèle ChatGPT visible</span>
                   <select
                     value={draft.planner_model}
@@ -172,16 +190,13 @@ export function SettingsPanel({
                   </select>
                   <small>Le changement est confirmé uniquement si le sélecteur visible de ChatGPT affiche le modèle demandé.</small>
                 </label>
-                <div className="settings-grid two">
-                  <label><span>Exécuteur principal</span><select value={draft.primary_executor} onChange={(e) => patch("primary_executor", e.target.value)}>{primaryOptions.map((name) => <option value={name} key={name}>{name}</option>)}</select></label>
-                  <label><span>Exécuteur de secours</span><select value={draft.fallback_executor} onChange={(e) => patch("fallback_executor", e.target.value)}>{primaryOptions.map((name) => <option value={name} key={name}>{name}</option>)}</select></label>
-                </div>
+                <label className="settings-field"><span>Modèle Ollama candidat</span><select value={draft.primary_executor} onChange={(e) => patch("primary_executor", e.target.value)}>{primaryOptions.map((name) => <option value={name} key={name}>{name}</option>)}</select><small>Installé ou chargé ne signifie pas exécuté. Le modèle utilisé apparaît seulement après un appel réussi.</small></label>
                 <label className="settings-field"><span>Contexte Ollama</span><select value={draft.ollama_context} onChange={(e) => patch("ollama_context", Number(e.target.value))}><option value={4096}>4K — rapide</option><option value={8192}>8K — recommandé</option><option value={12288}>12K — Qwen fallback</option><option value={16384}>16K — pression mémoire élevée</option></select><small>Sur un M1 16 Go, le contexte est borné pour laisser de la mémoire au navigateur et aux tests.</small></label>
                 <div className="model-table">
                   {ollamaModels.map((model) => (
                     <div className="model-table-row" key={model.name}>
                       <span className="model-state-dot" />
-                      <span><strong>{model.name}</strong><small>{model.loaded ? "chargé en mémoire" : "installé sur DJO"}</small></span>
+                      <span><strong>{model.name}</strong><small>{model.loaded ? "chargé en mémoire" : "installé localement"}</small></span>
                       <em>{formatBytes(model.size)}</em>
                     </div>
                   ))}
@@ -209,8 +224,12 @@ export function SettingsPanel({
 
             {tab === "transport" && (
               <div className="settings-section-stack">
-                <div className="settings-section-title"><h3>Transport ChatGPT</h3><p>Le bridge contrôle une conversation sélectionnée via WebBridge, sans API OpenAI.</p></div>
+                <div className="settings-section-title"><h3>Transport ChatGPT</h3><p>Le bridge contrôle les onglets ChatGPT du Chrome de l’utilisateur, sans API OpenAI.</p></div>
                 <div className="settings-notice"><GlobeIcon /><span><strong>Transport expérimental</strong><small>La compatibilité dépend du DOM de ChatGPT. Aucun CAPTCHA, identifiant ou mécanisme anti-bot n'est contourné.</small></span></div>
+                <div className="settings-grid two">
+                  <label><span>Driver navigateur</span><select value={draft.browser_transport} onChange={(e) => patch("browser_transport", e.target.value as CortexSettings["browser_transport"])}><option value="chrome_extension">Extension Chrome — recommandée</option><option value="playwright">Playwright — développement uniquement</option><option value="webbridge">WebBridge — compatibilité historique</option></select></label>
+                  <label><span>Racine Playwright</span><input value={draft.browser_profile_root} onChange={(e) => patch("browser_profile_root", e.target.value)} disabled={draft.browser_transport === "chrome_extension"} /></label>
+                </div>
                 <div className="settings-grid two">
                   <label><span>Stabilité de réponse</span><input type="number" step="0.5" min={1} max={10} value={draft.response_stability_seconds} onChange={(e) => patch("response_stability_seconds", Number(e.target.value))} /></label>
                   <label><span>Timeout ChatGPT</span><input type="number" min={30} max={900} value={draft.chat_timeout_seconds} onChange={(e) => patch("chat_timeout_seconds", Number(e.target.value))} /></label>
@@ -224,7 +243,7 @@ export function SettingsPanel({
                 <div className="settings-section-title"><h3>Runtime local</h3><p>État des services utilisés par Cortex Bridge.</p></div>
                 <div className="settings-runtime-cards">
                   <div><CpuIcon /><span><strong>Ollama</strong><small>127.0.0.1:11434 · loopback uniquement</small></span><em className="good">healthy</em></div>
-                  <div><BrowserIcon /><span><strong>WebBridge</strong><small>127.0.0.1:10086 · Chrome signé</small></span><em className="good">connected</em></div>
+                  <div><BrowserIcon /><span><strong>Extension Chrome</strong><small>127.0.0.1:8420 · jumelage local</small></span><em className="good">à vérifier</em></div>
                   <div><DatabaseIcon /><span><strong>SQLite</strong><small>missions, décisions, preuves et approbations</small></span><em className="good">ready</em></div>
                 </div>
               </div>
@@ -233,10 +252,10 @@ export function SettingsPanel({
             {tab === "storage" && (
               <div className="settings-section-stack">
                 <div className="settings-section-title"><h3>Stockage</h3><p>Modèles, preuves, archives et historique local.</p></div>
-                <div className="storage-path-card"><FolderIcon /><span><strong>Modèles Ollama</strong><small>/Volumes/DJO/AI/Ollama/models</small></span></div>
+                <div className="storage-path-card"><FolderIcon /><span><strong>Modèles Ollama</strong><small>/tmp/cortex-demo-workspace/models</small></span></div>
                 <div className="storage-path-card"><DatabaseIcon /><span><strong>Base de missions</strong><small>console/data/cortex.db</small></span></div>
                 <div className="storage-path-card"><TrashBlockedIcon /><span><strong>Archives restaurables</strong><small>.cortex-archive/&lt;mission&gt;/&lt;timestamp&gt;</small></span></div>
-                <div className="settings-notice"><ShieldIcon /><span><strong>Repli interdit</strong><small>Si DJO est absent, Cortex n'enregistre pas silencieusement les modèles sur le disque interne.</small></span></div>
+                <div className="settings-notice"><ShieldIcon /><span><strong>Repli interdit</strong><small>Si le stockage local est absent, Cortex n'enregistre pas silencieusement les modèles ailleurs.</small></span></div>
               </div>
             )}
 
@@ -255,7 +274,7 @@ export function SettingsPanel({
                   </p>
                 )}
                 <p className="diagnostic-note">Le rapport est anonymisé : chemins personnels remplacés par ~, identifiants de conversation hachés, aucun contenu de message. Tu peux le coller tel quel dans une issue GitHub.</p>
-                <pre className="diagnostic-console">{`Cortex Bridge UI\n- frontend: Next.js static export\n- backend: FastAPI\n- transport: WebBridge experimental\n- executor: Ollama structured tools\n- deletion: blocked / archive only`}</pre>
+                <pre className="diagnostic-console">{`Cortex Bridge UI\n- frontend: Next.js static export\n- backend: FastAPI\n- transport: WebBridge experimental\n- executor: ${executorDiagnosticsLabel(runtimeExecution)}\n- deletion: blocked / archive only`}</pre>
               </div>
             )}
 
@@ -265,11 +284,11 @@ export function SettingsPanel({
                 <BridgeDiagram />
                 <ul className="settings-check-list">
                   <li><CheckIcon /> ChatGPT planifie et découpe — il ne touche à rien directement</li>
-                  <li><CheckIcon /> Ollama exécute les actions dans ton workspace, avec tes approbations</li>
+                  <li><CheckIcon /> Mode A exécute les outils déterministes ; Ollama reste un chemin local distinct</li>
                   <li><CheckIcon /> Le rapport repart dans la conversation et la boucle continue</li>
                   <li><CheckIcon /> Loopback uniquement : rien ne sort de ta machine sauf via ChatGPT</li>
                 </ul>
-                <div className="settings-notice"><GlobeIcon /><span><strong>Projet open source (MIT)</strong><small>github.com/Jonassuhard/cortex-bridge — idées et contributions bienvenues via Issues et Discussions.</small></span></div>
+                <div className="settings-notice"><GlobeIcon /><span><strong>Projet open source (MIT)</strong><small>Dépôt public Cortex Bridge — idées et contributions bienvenues via Issues et Discussions.</small></span></div>
               </div>
             )}
           </div>
