@@ -81,6 +81,7 @@ class ChromeExtensionManager:
         self._paired_at: float | None = None
         self._pending: dict[str, asyncio.Future[Any]] = {}
         self._last_seen_at: float | None = None
+        self._send_lock = asyncio.Lock()
 
     @property
     def pending_count(self) -> int:
@@ -188,8 +189,15 @@ class ChromeExtensionManager:
         future: asyncio.Future[Any] = loop.create_future()
         self._pending[envelope["request_id"]] = future
         try:
-            await connection.send_json(envelope)
-            return await asyncio.wait_for(future, timeout=timeout)
+            async with asyncio.timeout(timeout):
+                async with self._send_lock:
+                    if connection is not self._connection:
+                        raise BridgeProtocolError(
+                            "EXTENSION_DISCONNECTED",
+                            "Chrome extension disconnected before sending a command",
+                        )
+                    await connection.send_json(envelope)
+                return await future
         except asyncio.TimeoutError as exc:
             raise BridgeProtocolError(
                 "EXTENSION_TIMEOUT",

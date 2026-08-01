@@ -31,6 +31,8 @@ actions. Cortex shows **Retry** and **Close** and never bypasses the page.
 - Pairing tokens use 256 bits of entropy, expire after 60 seconds, and are
   consumed once.
 - A disconnect fails closed and never falls back to Playwright.
+- Concurrent backend commands use one serialized WebSocket writer. The command
+  deadline covers both delivery to the extension and its correlated response.
 
 ## Conversation behavior
 
@@ -41,6 +43,8 @@ actions. Cortex shows **Retry** and **Close** and never bypasses the page.
   a recoverable error.
 - Permit two writer sessions; reject a third before opening a tab or sending.
 - Never let a late response overwrite a newer selection.
+- Collapse Cortex orchestration contracts, decisions, and reports behind an
+  explicit technical-protocol disclosure without deleting them.
 
 ## Delivery integrity
 

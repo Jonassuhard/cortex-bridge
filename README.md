@@ -29,6 +29,9 @@ capabilities, approvals, and limits.
 - Keeps two writing conversations isolated. A third keeps its draft and file
   but is rejected before any browser action.
 - Shows independent ChatGPT and local-agent status in French.
+- Collapses Cortex mission instructions, decisions, and reports behind **Voir
+  le protocole** while keeping the complete technical exchange available for
+  audit.
 - Supports staged files up to the Chrome bridge's 25 MiB v0.5 transfer limit
   and visible ChatGPT-tab screenshots. ChatGPT may enforce stricter limits.
 - Stores mutable runtime state under `CORTEX_HOME`, outside the repository.
@@ -115,6 +118,8 @@ not the normal user connection and is never selected as a silent fallback.
   `127.0.0.1:8420`; it requests no cookie, password, history, or all-sites
   permission.
 - The backend sends structured allowlisted commands, never remote JavaScript.
+- Concurrent extension commands are serialized, and the same deadline bounds
+  both WebSocket delivery and the correlated response.
 - Attachments use opaque staging tokens and managed paths.
 - Delivery uncertainty never triggers an automatic resend.
 - Workspace paths, symlinks, process commands, and approvals fail closed.

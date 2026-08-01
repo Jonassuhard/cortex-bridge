@@ -2,7 +2,7 @@ import { useState } from "react";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { demoPipeline, demoSettings } from "@/lib/demo";
+import { demoMissionDetail, demoPipeline, demoSettings } from "@/lib/demo";
 import {
   canResolveRekeyConflict,
   conversationReducer,
@@ -148,7 +148,86 @@ function fileInput(container: HTMLElement): HTMLInputElement {
   return input;
 }
 
+function stateWithMissionProtocol(includeMission = true): ConversationState {
+  let state = createConversationState([summary("a")], "a");
+  state = conversationReducer(state, { type: "SWITCH_STARTED", key: "a", epoch: 1 });
+  state = conversationReducer(state, {
+    type: "SNAPSHOT_RECEIVED",
+    key: "a",
+    epoch: 1,
+    snapshot: {
+      url: "https://chatgpt.com/c/a",
+      conversation_id: "a",
+      title: "Mission synthétique",
+      blocker: null,
+      composer_present: true,
+      send_button_present: true,
+      stop_button_present: false,
+      streaming: false,
+      messages: [
+        {
+          id: "mission-contract",
+          role: "user",
+          text: "You are the cloud orchestrator for Cortex Bridge.\n\nObjective: créer une preuve locale.",
+          created_at: "2026-08-01T12:00:00.000Z",
+        },
+        {
+          id: "mission-decision",
+          role: "assistant",
+          text: "cortex-decision\n{\n  \"protocol\": \"cortex.v1\",\n  \"state\": \"COMPLETE\"\n}",
+          code_blocks: [{ lang: "cortex-decision", text: "{\"protocol\":\"cortex.v1\"}" }],
+          created_at: "2026-08-01T12:00:01.000Z",
+        },
+        {
+          id: "visible-answer",
+          role: "assistant",
+          text: "La preuve locale a été validée.",
+          created_at: "2026-08-01T12:00:02.000Z",
+        },
+      ],
+    },
+  });
+  if (!includeMission) return state;
+  return conversationReducer(state, {
+    type: "MISSION_EVENT",
+    key: "a",
+    missionId: demoMissionDetail.mission.id,
+    mission: demoMissionDetail,
+  });
+}
+
 describe("ChatWorkspace controlled composer", () => {
+  it("recognizes persisted Cortex protocol after the local mission association was lost", () => {
+    render(<ControlledWorkspace initialState={stateWithMissionProtocol(false)} />);
+
+    expect(screen.getByText("La preuve locale a été validée.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Voir le protocole (2 échanges techniques)" })).toBeInTheDocument();
+    expect(screen.queryByText(/You are the cloud orchestrator for Cortex Bridge/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/cortex-decision/)).not.toBeInTheDocument();
+  });
+
+  it("keeps mission protocol out of the conversation until the user asks for it", () => {
+    render(<ControlledWorkspace initialState={stateWithMissionProtocol()} />);
+
+    expect(screen.getByText("La preuve locale a été validée.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Voir le protocole (2 échanges techniques)" })).toBeInTheDocument();
+    expect(screen.queryByText(/You are the cloud orchestrator for Cortex Bridge/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/cortex-decision/)).not.toBeInTheDocument();
+  });
+
+  it("reveals every technical mission exchange from one explicit disclosure", async () => {
+    const user = userEvent.setup();
+    render(<ControlledWorkspace initialState={stateWithMissionProtocol()} />);
+
+    await user.click(screen.getByRole("button", { name: "Voir le protocole (2 échanges techniques)" }));
+
+    expect(screen.getByRole("button", { name: "Masquer le protocole" })).toBeInTheDocument();
+    expect(screen.getByText(/You are the cloud orchestrator for Cortex Bridge/)).toBeInTheDocument();
+    expect(screen.getByText(/cortex-decision/)).toBeInTheDocument();
+    expect(screen.getByText("Cortex → ChatGPT")).toBeInTheDocument();
+    expect(screen.getByText("ChatGPT → Cortex")).toBeInTheDocument();
+  });
+
   it("keeps the composer disabled until a conversation is selected", () => {
     render(<ControlledWorkspace initialState={createConversationState([summary("a")])} />);
 

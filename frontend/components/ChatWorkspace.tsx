@@ -18,6 +18,7 @@ import {
   ActivityIcon,
   BrowserIcon,
   CheckIcon,
+  ChevronDownIcon,
   ClockIcon,
   CopyIcon,
   DoubleCheckIcon,
@@ -94,6 +95,70 @@ function cleanMessageText(text: string): string {
     .replace(/Réfléchi pendant\s+\d+[smh]\s*/gi, "")
     .replace(/Thinking completed/gi, "")
     .trim();
+}
+
+function isMissionProtocolMessage(message: ConversationMessage): boolean {
+  const text = cleanMessageText(message.text).trimStart();
+  const codeLanguages = (message.code_blocks || [])
+    .map((block) => block.lang?.trim().toLowerCase())
+    .filter(Boolean);
+
+  if (message.role === "user") {
+    return text.startsWith("You are the cloud orchestrator for Cortex Bridge.")
+      || text.startsWith("cortex-report")
+      || text.startsWith("```cortex-report")
+      || codeLanguages.includes("cortex-report");
+  }
+  if (message.role === "assistant") {
+    return text.startsWith("cortex-decision")
+      || text.startsWith("```cortex-decision")
+      || codeLanguages.includes("cortex-decision");
+  }
+  return false;
+}
+
+function MissionProtocolDisclosure({
+  messages,
+  expanded,
+  onToggle,
+}: {
+  messages: ConversationMessage[];
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const countLabel = `${messages.length} échange${messages.length > 1 ? "s" : ""} technique${messages.length > 1 ? "s" : ""}`;
+  return (
+    <section className={`mission-protocol ${expanded ? "is-expanded" : ""}`} aria-label="Protocole technique de la mission">
+      <button
+        className="mission-protocol-toggle"
+        type="button"
+        aria-expanded={expanded}
+        aria-label={expanded ? "Masquer le protocole" : `Voir le protocole (${countLabel})`}
+        onClick={onToggle}
+      >
+        <span className="mission-protocol-icon"><TerminalIcon size={14} /></span>
+        <span>
+          <strong>{expanded ? "Masquer le protocole" : "Voir le protocole"}</strong>
+          <small>{countLabel} entre ChatGPT et Cortex</small>
+        </span>
+        <ChevronDownIcon className={expanded ? "is-rotated" : ""} size={16} />
+      </button>
+      {expanded && (
+        <div className="mission-protocol-content">
+          <p>Ces informations permettent à Cortex de décider et de vérifier chaque action. Elles sont conservées pour l’audit.</p>
+          {messages.map((message) => (
+            <article key={message.id} className="mission-protocol-entry">
+              <header>
+                <strong>{message.role === "user" ? "Cortex → ChatGPT" : "ChatGPT → Cortex"}</strong>
+                {message.created_at && <time>{shortTime(message.created_at)}</time>}
+              </header>
+              <pre>{cleanMessageText(message.text)}</pre>
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
+  );
 }
 
 function MessageActions({ text }: { text: string }) {
@@ -263,6 +328,7 @@ export function ChatWorkspace({
   const [preflightOpen, setPreflightOpen] = useState(false);
   const [preflightConfirming, setPreflightConfirming] = useState(false);
   const [preflight, setPreflight] = useState<ExecutionPreflight | null>(null);
+  const [protocolExpanded, setProtocolExpanded] = useState(false);
   const viewportRef = useRef<HTMLDivElement>(null);
   const nearBottomRef = useRef(true);
 
@@ -317,12 +383,26 @@ export function ChatWorkspace({
     return source;
   }, [messages, chatRun]);
 
+  const { protocolMessages, visibleMessages } = useMemo(() => {
+    const protocol: ConversationMessage[] = [];
+    const visible: ConversationMessage[] = [];
+    for (const message of mergedMessages) {
+      if (isMissionProtocolMessage(message)) protocol.push(message);
+      else visible.push(message);
+    }
+    return { protocolMessages: protocol, visibleMessages: visible };
+  }, [mergedMessages]);
+
+  useEffect(() => {
+    setProtocolExpanded(false);
+  }, [conversationKey]);
+
   useEffect(() => {
     if (!nearBottomRef.current) return;
     const viewport = viewportRef.current;
     if (!viewport) return;
     window.requestAnimationFrame(() => viewport.scrollTo({ top: viewport.scrollHeight, behavior: "smooth" }));
-  }, [mergedMessages.length, chatRun?.response_text, mission?.mission.state]);
+  }, [visibleMessages.length, protocolMessages.length, chatRun?.response_text, mission?.mission.state]);
 
   async function submit() {
     const key = conversationKey;
@@ -396,21 +476,29 @@ export function ChatWorkspace({
         <div className="chat-background-grid" aria-hidden="true" />
         <div className="chat-blue-signal" aria-hidden="true" />
         <div className="message-column">
-          {loadingMessages && mergedMessages.length === 0 && (
+          {loadingMessages && visibleMessages.length === 0 && protocolMessages.length === 0 && (
             <div className="message-loading-state"><span className="thinking-spinner" /><p>Synchronisation de « {title} »…</p></div>
           )}
-          {!loadingMessages && mergedMessages.length === 0 && (
+          {!loadingMessages && visibleMessages.length === 0 && protocolMessages.length === 0 && (
             <EmptyConversation
               onExample={(text) => {
                 if (conversationKey) onDraftChange(conversationKey, text);
               }}
             />
           )}
-          {mergedMessages.map((message) => {
+          {visibleMessages.map((message) => {
             if (message.role === "user") return <UserMessage key={message.id} message={message} />;
             if (message.role === "assistant") return <AssistantMessage key={message.id} message={message} />;
             return null;
           })}
+
+          {protocolMessages.length > 0 && (
+            <MissionProtocolDisclosure
+              messages={protocolMessages}
+              expanded={protocolExpanded}
+              onToggle={() => setProtocolExpanded((value) => !value)}
+            />
+          )}
 
           {mission && (
             <div className="message-row message-cortex">

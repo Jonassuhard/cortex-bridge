@@ -57,6 +57,22 @@ unavailable.
 
 ![Synthetic execution preflight](screenshots/v0.5.0/1440/04-preflight.png)
 
+## Read a mission conversation
+
+Cortex recognizes its orchestration contract, `cortex-decision`, and
+`cortex-report` exchanges. They are grouped behind **Voir le protocole** so the
+conversation remains readable. The disclosure shows the complete exchange and
+its direction when technical audit is needed. Historical mission conversations
+use the same presentation even when the local mission record is no longer
+loaded.
+
+![Mission protocol collapsed](screenshots/v0.5.0/proofs/mission-protocol-collapsed.jpg)
+
+![Mission protocol expanded](screenshots/v0.5.0/proofs/mission-protocol-expanded.jpg)
+
+The collapsed and expanded states were also checked at 375 px with no
+horizontal overflow.
+
 ## Two active conversations
 
 Two distinct conversations may write concurrently in two bound ChatGPT tabs

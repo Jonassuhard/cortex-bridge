@@ -29,6 +29,12 @@ class FakeConnection:
         self.sent.append(payload)
 
 
+class HangingConnection(FakeConnection):
+    async def send_json(self, payload: dict) -> None:
+        self.sent.append(payload)
+        await asyncio.Event().wait()
+
+
 class ChromeExtensionPairingTest(unittest.TestCase):
     def test_pairing_token_has_256_bits_of_entropy_and_is_single_use(self) -> None:
         now = [100.0]
@@ -148,6 +154,21 @@ class ChromeExtensionCommandTest(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaises(BridgeProtocolError) as caught:
             await manager.command("session-a", "probe", {}, timeout=0.001)
+
+        self.assertEqual(caught.exception.code, "EXTENSION_TIMEOUT")
+        self.assertEqual(manager.pending_count, 0)
+
+    async def test_command_timeout_also_bounds_a_stalled_websocket_send(self) -> None:
+        manager = ChromeExtensionManager()
+        connection = HangingConnection()
+        ticket = manager.issue_pairing_token()
+        self.assertTrue(manager.consume_pairing_token(ticket.value, connection))
+
+        with self.assertRaises(BridgeProtocolError) as caught:
+            await asyncio.wait_for(
+                manager.command("session-a", "probe", {}, timeout=0.01),
+                timeout=0.1,
+            )
 
         self.assertEqual(caught.exception.code, "EXTENSION_TIMEOUT")
         self.assertEqual(manager.pending_count, 0)

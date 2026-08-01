@@ -33,7 +33,9 @@ only. Host access is limited to ChatGPT and Cortex loopback.
 
 React and Next.js static UI. It creates the pairing token, explains connection
 states in French, and keeps conversation state reduced per identity. Late
-responses cannot overwrite a newer selection.
+responses cannot overwrite a newer selection. Strict Cortex protocol markers
+are grouped into a collapsed audit disclosure instead of being rendered as
+ordinary chat messages.
 
 ### `console/`
 
@@ -61,7 +63,9 @@ model call.
 4. The backend consumes it once and enables the command channel.
 5. Every command has a random request ID, session ID, allowlisted action, and
    structured payload.
-6. Disconnects, timeouts, unknown actions, oversized payloads, and replays fail
+6. One serialized writer sends commands over the WebSocket; the command
+   deadline covers both the send and correlated result.
+7. Disconnects, timeouts, unknown actions, oversized payloads, and replays fail
    closed.
 
 ## Conversation isolation
