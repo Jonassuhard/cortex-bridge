@@ -1,27 +1,27 @@
 {
   "schemaVersion": 1,
   "release": "0.5.0",
-  "commit": "2573fb0d0da2d51f4817f8646bc1619d6d337cfe",
-  "generatedAt": "2026-08-01T19:56:44Z",
+  "commit": "9445b080653c5853a4aa921651d5529b208e4731",
+  "generatedAt": "2026-08-06T01:38:48Z",
   "environment": {
     "os": "macOS 26.5.1",
     "python": "3.14.5",
     "node": "25.8.2",
-    "browserDriver": "Cortex Chrome extension 0.5.0 protocol with Chrome 150.0.7871.187; Playwright 1.62.0 fixtures",
-    "executorKind": "deterministic executor with live ChatGPT web transport",
-    "simulation": false
+    "browserDriver": "Cortex Chrome extension 0.5.0 protocol 2 with Chrome 150.0.7871.187; Playwright 1.62.0 fixtures",
+    "executorKind": "deterministic executor; consumer ChatGPT live gate blocked",
+    "simulation": true
   },
   "suites": {
-    "backend": {"passed": 388, "failed": 0, "skipped": 0},
-    "frontendUnit": {"passed": 158, "failed": 0, "skipped": 0},
+    "backend": {"passed": 416, "failed": 0, "skipped": 0},
+    "frontendUnit": {"passed": 125, "failed": 0, "skipped": 0},
     "e2e": {"passed": 12, "failed": 0, "skipped": 1},
     "a11y": {"passed": 4, "failed": 0, "skipped": 0},
-    "extension": {"passed": 16, "failed": 0, "skipped": 0}
+    "extension": {"passed": 44, "failed": 0, "skipped": 0}
   },
   "performance": {
-    "cachedUsabilityMs": 177.5,
-    "switchP95Ms": 108.4,
-    "switchMaxMs": 108.4
+    "cachedUsabilityMs": 147.9,
+    "switchP95Ms": 64.8,
+    "switchMaxMs": 64.8
   },
   "dualConversations": {
     "runs": 10,
@@ -33,37 +33,37 @@
     "coldDualRuns": {"runs": 10, "passed": 10},
     "crashPoints": {"runs": 6, "passed": 6},
     "liveChatGPT": {
-      "status": "PASS",
-      "singleConversation": {"runs": 1, "passed": 1},
-      "dualConversations": {"runs": 2, "passed": 2, "crossovers": 0},
-      "thirdWriterRefused": true,
-      "fileUpload": true,
-      "screenshotUpload": true,
+      "status": "BLOCKED_BY_PROVIDER_TERMS",
+      "singleConversation": {"runs": 0, "passed": 0},
+      "dualConversations": {"runs": 0, "passed": 0, "crossovers": null},
+      "thirdWriterRefused": false,
+      "fileUpload": false,
+      "screenshotUpload": false,
       "personalDataRecorded": false
     },
     "cleanMacosLifecycle": {
-      "status": "PASS",
-      "realCommands": true,
-      "install": true,
-      "browserLaunch": true,
-      "serviceLifecycle": true,
-      "doctor": true,
-      "reinstall": true,
-      "uninstall": true,
-      "foreignSentinelPreserved": true,
-      "attempts": 1,
+      "status": "NOT_RUN",
+      "realCommands": false,
+      "install": false,
+      "browserLaunch": false,
+      "serviceLifecycle": false,
+      "doctor": false,
+      "reinstall": false,
+      "uninstall": false,
+      "foreignSentinelPreserved": false,
+      "attempts": 0,
       "failedAttempts": 0,
-      "failedAttemptsRetained": true,
+      "failedAttemptsRetained": false,
       "planHashes": {
-        "install": "b7ad74aaf0662429e938770fc3533928a9f3ce458960fa0531f155e69c4418c6",
-        "reinstall": "a8e7661c3752837694433340bf063675a1f28db5525d7811a746bd0dafbcf49c",
-        "uninstall": "aa10f1dbeae12099673288069883f36fa7f17fff2bb1a34425207bd9d26fd3f0"
+        "install": null,
+        "reinstall": null,
+        "uninstall": null
       }
     },
     "miniSites": {
-      "runs": 3,
-      "passed": 3,
-      "status": "PASS"
+      "runs": 0,
+      "passed": 0,
+      "status": "BLOCKED_BY_PROVIDER_TERMS"
     }
   },
   "gates": {
@@ -80,7 +80,7 @@
     "consoleErrors": 0
   },
   "artifacts": {
-    "frontend/out/index.html": "c71fab86d7771beec239226f499400107135906c50c3b59394a107b7c25f9d76",
+    "frontend/out/index.html": "3019027033511e58de8408819e43770db637ee87bd99c808b89dfd4a59201bdf",
     "docs/media/architecture-flow.png": "83213c2182b5d2dcba691d0628dde8e9a5489f327362c069340dc3eee217dc8a",
     "docs/media/architecture-flow.gif": "39c9a1ad5bee1cd218af5e1aae1f2c6dcf6841f0b410abaa1f05a238c4a156da",
     "docs/screenshots/v0.5.0/375/10-info-diagramme.png": "632afc793b5207a87b516609594a2a22220c78aa8480d2b45ed10f8c55554254",
@@ -90,5 +90,5 @@
     "docs/screenshots/v0.5.0/proofs/mission-protocol-expanded.jpg": "20ff475063ba786322310fb962f5456bd29edb50b351f1278d3a288111daadf8",
     "docs/screenshots/v0.5.0/proofs/mission-protocol-mobile.jpg": "6cd4b33e846510e5198eb1f53bdab3f1c01b96075ded012f2be339fe4b55212c"
   },
-  "verdict": "RELEASE_CANDIDATE_READY_FOR_OWNER_APPROVAL"
+  "verdict": "RELEASE_BLOCKED_BY_PROVIDER_TERMS"
 }

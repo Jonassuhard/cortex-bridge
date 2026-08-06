@@ -27,14 +27,14 @@
   unverified process.
 - Release evidence now hashes real repository artifacts instead of accepting
   any well-formed fake digest.
-- Fresh backend evidence: 414 tests passed in 128.087 seconds. The focused
-  extension suite passes 44/44, release-manifest suite 13/13, and process
-  ownership suite 10/10 plus ten repeated foreign-process runs.
-- The previous complete gate passed extension, frontend unit/runtime,
-  typecheck, lint, build, E2E, accessibility, runtime verification and privacy;
-  rerun the complete gate once more after the final documentation/evidence edit.
-- Static gates passed: ShellCheck, Gitleaks, npm/Python audits, 69 documentation
-  links including 30 external, and privacy over 293 files and 41 images.
+- Fresh complete gate passed: 416 backend tests, 44 extension tests, 125
+  frontend unit tests, 35 frontend contracts, typecheck, lint, production
+  build, 12 E2E tests with one documented skip, 4 accessibility tests, runtime
+  verification, privacy and release-evidence validation.
+- Final synthetic performance: cached usability 147.9 ms; ten-switch p95 and
+  maximum 64.8 ms.
+- Static gates passed: ShellCheck, Gitleaks, npm/Python audits, 70 documentation
+  links including 31 external, and privacy over 293 files and 41 images.
 - Earlier owner-authorized Chrome observations are historical technical data,
   not compliant release acceptance. The latest new-chat attempt failed at the
   10-second navigation deadline before the final no-wait extension fix was
@@ -50,12 +50,13 @@
   `de4fa416a41216ab428ebad22408cc8b2d803c9130dfeb02072079086c665986`;
   300 MiB estimate, no sudo. Apply, doctor, start/stop, reinstall and uninstall
   require explicit approval of that exact hash.
-- `docs/verification/v0.5.0.json` is stale. The improved validator correctly
-  rejects its old frontend hash. Final evidence must use a source commit, real
-  artifact hashes and either `RELEASE_BLOCKED_BY_PROVIDER_TERMS` or a genuinely
-  compliant transport result.
-- Current changes are uncommitted and unpushed. User authorization covers push,
-  not merge, tag, release or social publication.
+- Source commit `9445b080653c5853a4aa921651d5529b208e4731` contains the
+  hardened bridge and release gates. `docs/verification/v0.5.0.json` references
+  that exact commit, real artifact hashes and the truthful
+  `RELEASE_BLOCKED_BY_PROVIDER_TERMS` verdict.
+- Only the evidence/documentation follow-up remains uncommitted; nothing is
+  pushed. User authorization covers push, not merge, tag, release or social
+  publication.
 - Exact next action: choose between implementing an officially supported
   provider transport or publishing the branch explicitly as a blocked technical
   preview; separately approve the exact lifecycle hash if that test should run.
