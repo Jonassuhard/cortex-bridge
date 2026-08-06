@@ -10,6 +10,11 @@
   consumer adapter performs that extraction. Owner approval cannot turn this
   route into compliant release acceptance, so no further authenticated sends
   or `READY` verdict are allowed under the current design.
+- Official transport research: ChatGPT developer-mode plugins can call an MCP
+  server through a public HTTPS endpoint or Secure MCP Tunnel. The private
+  tunnel requires Platform permissions and a runtime API key. Neither route
+  preserves the current strict-local/no-API-credential constraint, so adopting
+  one is an explicit product architecture change.
 - Privacy rule: any technical observation uses neutral synthetic markers.
   Never publish account details, sidebar titles, conversation contents,
   conversation IDs, cookies, logs, or unredacted live captures.
@@ -46,17 +51,18 @@
 - Cortex and the controlled Chrome QA session are stopped. No test server is
   expected on loopback port 8420.
 - Fresh isolated install dry run target:
-  `/private/tmp/cortex-v050-clean.yDHvnq`; plan hash
-  `de4fa416a41216ab428ebad22408cc8b2d803c9130dfeb02072079086c665986`;
+  `/private/tmp/cortex-v050-clean-20260806`; plan hash
+  `952ac88a626737d69fe38ec2fe5bb1dcca6ab69df466e8df4314b64ab30fac90`;
   300 MiB estimate, no sudo. Apply, doctor, start/stop, reinstall and uninstall
   require explicit approval of that exact hash.
 - Source commit `9445b080653c5853a4aa921651d5529b208e4731` contains the
   hardened bridge and release gates. `docs/verification/v0.5.0.json` references
   that exact commit, real artifact hashes and the truthful
   `RELEASE_BLOCKED_BY_PROVIDER_TERMS` verdict.
-- Only the evidence/documentation follow-up remains uncommitted; nothing is
-  pushed. User authorization covers push, not merge, tag, release or social
-  publication.
+- Three audited commits are still local, including the committed
+  supported-transport clarification; the current candidate is not pushed. User
+  authorization covers push after the stated gates pass, not merge, tag,
+  release or social publication.
 - Exact next action: choose between implementing an officially supported
   provider transport or publishing the branch explicitly as a blocked technical
   preview; separately approve the exact lifecycle hash if that test should run.

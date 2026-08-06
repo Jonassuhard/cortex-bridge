@@ -10,8 +10,8 @@ capabilities, approvals, and limits.
 > while the current
 > [OpenAI Europe Terms of Use](https://openai.com/policies/eu-terms-of-use/)
 > prohibit automatic or programmatic extraction. Owner approval does not lift
-> that provider restriction. The fixture, security and local-lifecycle evidence
-> remains useful, but the live gate cannot support a `READY` verdict.
+> that provider restriction. The fixture, security and automated lifecycle
+> evidence remains useful, but the live gate cannot support a `READY` verdict.
 
 ![Animated Cortex Bridge architecture](docs/media/architecture-flow.gif)
 
@@ -96,6 +96,15 @@ observations cannot be relabelled as compliant release acceptance.
 
 See [release evidence](docs/verification/v0.5.0.json). A compliant live release
 requires an officially supported transport.
+
+OpenAI documents two supported MCP routes for ChatGPT: a stable public HTTPS
+endpoint, or a private server reached through
+[Secure MCP Tunnel](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)
+in developer mode. The tunnel requires Platform configuration, permissions and
+a runtime API key. Neither route satisfies Cortex's current combination of
+strictly local operation, no API credential, automatic execution and visible
+consumer ChatGPT conversations. Adopting either route is a product architecture
+change, not a silent transport fallback.
 
 ## Development
 

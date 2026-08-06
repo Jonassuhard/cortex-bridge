@@ -22,16 +22,19 @@
 - [x] Accept an honest zero-count `BLOCKED_BY_PROVIDER_TERMS` state only with the pending verdict.
 - [x] Reject any pending live gate that claims unobserved success.
 
-## 2. Real clean macOS lifecycle
+## 2. Real clean macOS lifecycle for the current candidate
 
 - [x] Review the dry-run commands, official URLs, disk estimate, rollback and plan hash.
-- [x] Run real package and Playwright downloads with a fresh `HOME` and `CORTEX_HOME`.
-- [x] Launch the installed Chromium runtime.
-- [x] Start Cortex Bridge, query its status, run doctor, stop it and prove the listener is gone.
-- [x] Reinstall and require zero commands plus `already_installed`.
-- [x] Uninstall every manifest-owned resource while preserving a foreign sentinel.
-- [x] Retain the first failed attempt that exposed the unowned browser-cache defect.
-- [x] Fix the missing clean-environment `PYTHONPATH` and add regression tests.
+- [ ] Apply the reviewed install plan after explicit approval of its exact hash.
+- [ ] Run real package and Playwright downloads with a fresh `HOME` and `CORTEX_HOME`.
+- [ ] Launch the installed Chromium runtime.
+- [ ] Start Cortex Bridge, query its status, run doctor, stop it and prove the listener is gone.
+- [ ] Reinstall and require zero commands plus `already_installed`.
+- [ ] Uninstall every manifest-owned resource while preserving a foreign sentinel.
+
+The automated lifecycle contracts pass, but they are not a substitute for this
+real destructive/reversible lifecycle. The machine-readable evidence therefore
+keeps `cleanMacosLifecycle.status` at `NOT_RUN`.
 
 ## 3. Provider-policy gate
 
@@ -39,9 +42,16 @@
 - [x] Record that the terms effective January 16, 2026 prohibit automatically or programmatically extracting data or Output.
 - [x] Stop before opening an authenticated profile or sending a consumer ChatGPT message.
 - [x] Keep live conversation, attachment and ChatGPT-planned mission counters at zero.
+- [x] Verify the documented ChatGPT plugin and Secure MCP Tunnel routes.
 - [ ] Implement an officially supported provider transport before retrying the live gates.
 
-The official transport is a separate architecture decision: it requires provider configuration and billing and does not automatically mirror consumer ChatGPT conversations. It is not silently substituted into v0.5.
+OpenAI documents a public HTTPS MCP endpoint for public plugins and Secure MCP
+Tunnel for private developer-mode servers. Secure MCP Tunnel requires a
+Platform organization, tunnel permissions and a runtime API key. It does not
+preserve the current strict-local/no-API-credential product constraint or
+automatically mirror consumer ChatGPT conversations. The official transport is
+therefore a separate architecture decision and is not silently substituted into
+v0.5.
 
 ## 4. Final regression and evidence commit
 
@@ -54,9 +64,10 @@ The official transport is a separate architecture decision: it requires provider
 ## 5. GitHub publication
 
 - [x] Confirm GitHub authentication, repository, remote and `main` base branch.
-- [x] Push `codex/v050-release-qa` without force.
-- [x] Open a technical-preview PR that states the blocked live boundary.
-- [x] Verify the remote SHA and PR URL.
+- [ ] Push the current `codex/v050-release-qa` commits without force after the
+  release boundary and clean lifecycle decision are explicit.
+- [x] Keep the existing technical-preview PR explicit about the blocked live boundary.
+- [ ] Verify the remote SHA and current PR checks after that push.
 
 ## Release decision
 
