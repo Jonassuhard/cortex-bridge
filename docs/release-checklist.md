@@ -58,9 +58,9 @@ Every item must link to evidence from one release commit. A previous branch or a
 - [x] Ten cold dual-conversation runs pass.
 - [x] Six crash points recover without duplicate send or execution.
 - [ ] Self-diagnostic mission runs in a disposable worktree and does not merge itself.
-- [x] The owner-authorized Chrome-extension transport passes every live ChatGPT and mini-site gate.
-- [x] The consumer-site terms risk remains explicit and is not presented as provider endorsement.
-- [x] `docs/verification/v0.5.0.json` matches the audited source commit and artifact hashes.
+- [ ] A provider-authorized transport passes every live ChatGPT and mini-site gate.
+- [x] The consumer-site terms blocker is explicit and cannot be overridden by owner approval.
+- [ ] `docs/verification/v0.5.0.json` matches the final audited source commit and artifact hashes.
 
 ## External actions
 

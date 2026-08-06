@@ -122,6 +122,47 @@ afterEach(() => {
 });
 
 describe("CortexApp conversation integration", () => {
+  it("refreshes conversations after Chrome becomes connected", async () => {
+    let conversationCalls = 0;
+    network.api.mockImplementation((path: string) => {
+      if (path === "/api/conversations") {
+        conversationCalls += 1;
+        return conversationCalls === 1
+          ? Promise.reject(new Error("extension not paired yet"))
+          : Promise.resolve([conversation("recovered")]);
+      }
+      return defaultApi(path);
+    });
+    network.postJson.mockImplementation((path: string) => {
+      if (path === "/api/chrome-extension/pairing") {
+        return Promise.resolve({ token: "a".repeat(43), expires_in_seconds: 60 });
+      }
+      if (path === "/api/chrome-extension/open") {
+        return Promise.resolve({
+          code: "CONNECTED",
+          state: "connected",
+          title: "ChatGPT connecté",
+          message: "Cortex est lié à cet onglet Chrome.",
+          recoverable: false,
+          driver: "chrome_extension",
+          url: "https://chatgpt.com/",
+          tab_id: 42,
+          window_id: 7,
+        });
+      }
+      return Promise.reject(new Error(`Unexpected POST ${path}`));
+    });
+    const user = userEvent.setup();
+    render(<CortexApp />);
+    await waitFor(() => expect(conversationCalls).toBe(1));
+
+    await user.click(screen.getByRole("button", { name: "Ouvrir et connecter ChatGPT" }));
+
+    await waitFor(() => expect(conversationCalls).toBeGreaterThanOrEqual(2));
+    await waitFor(() => expect(document.querySelectorAll(".conversation-row")).toHaveLength(1));
+    expect(conversationCalls).toBe(2);
+  });
+
   it("pairs Chrome, opens ChatGPT, explains login, and retries the existing tab", async () => {
     const token = "a".repeat(43);
     const postMessage = vi.spyOn(window, "postMessage").mockImplementation(() => undefined);
@@ -174,6 +215,71 @@ describe("CortexApp conversation integration", () => {
       expect(screen.queryByRole("heading", { name: "Connexion à ChatGPT requise" })).not.toBeInTheDocument();
     });
     expect(network.postJson.mock.calls.map(([path]) => path)).toContain("/api/chrome-extension/retry");
+  });
+
+  it("reloads Cortex and resumes pairing after the backend reports an outdated extension", async () => {
+    const token = "b".repeat(43);
+    let openCalls = 0;
+    const reload = vi.spyOn(window.history, "go").mockImplementation(() => undefined);
+    vi.spyOn(window, "postMessage").mockImplementation(() => undefined);
+    network.postJson.mockImplementation((path: string) => {
+      if (path === "/api/chrome-extension/pairing") {
+        return Promise.resolve({ token, expires_in_seconds: 60 });
+      }
+      if (path === "/api/chrome-extension/open") {
+        openCalls += 1;
+        if (openCalls === 1) {
+          return Promise.resolve({
+            code: "EXTENSION_OUTDATED",
+            state: "manual_action",
+            title: "Extension Cortex à recharger",
+            message: "Recharge l’extension Cortex Bridge, puis relance la connexion.",
+            recoverable: true,
+            driver: "chrome_extension",
+            url: null,
+            tab_id: null,
+            window_id: null,
+          });
+        }
+        return Promise.resolve({
+          code: "CONNECTED",
+          state: "connected",
+          title: "ChatGPT connecté",
+          message: "Cortex est lié à cet onglet Chrome.",
+          recoverable: false,
+          driver: "chrome_extension",
+          url: "https://chatgpt.com/",
+          tab_id: 42,
+          window_id: 7,
+        });
+      }
+      return Promise.reject(new Error(`Unexpected POST ${path}`));
+    });
+    const user = userEvent.setup();
+    const rendered = await readyApp();
+
+    await user.click(screen.getByRole("button", { name: "Ouvrir et connecter ChatGPT" }));
+    expect(await screen.findByRole("heading", { name: "Extension Cortex à recharger" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Réessayer" }));
+    expect(reload).toHaveBeenCalledWith(0);
+    expect(window.sessionStorage.getItem("cortex:pair-after-extension-reload")).toBe("1");
+
+    const pathsBeforeReload = network.postJson.mock.calls.map(([path]) => path);
+    expect(pathsBeforeReload.filter((path) => path === "/api/chrome-extension/pairing")).toHaveLength(1);
+    expect(pathsBeforeReload.filter((path) => path === "/api/chrome-extension/open")).toHaveLength(1);
+
+    rendered.unmount();
+    render(<CortexApp />);
+    await waitFor(() => {
+      expect(screen.queryByRole("heading", { name: "Extension Cortex à recharger" })).not.toBeInTheDocument();
+    });
+
+    const paths = network.postJson.mock.calls.map(([path]) => path);
+    expect(paths.filter((path) => path === "/api/chrome-extension/pairing")).toHaveLength(2);
+    expect(paths.filter((path) => path === "/api/chrome-extension/open")).toHaveLength(2);
+    expect(paths).not.toContain("/api/chrome-extension/retry");
+    expect(window.sessionStorage.getItem("cortex:pair-after-extension-reload")).toBeNull();
   });
 
   it("neutralizes every mission-specific pipeline field when no selected mission matches", () => {

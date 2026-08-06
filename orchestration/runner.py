@@ -259,19 +259,27 @@ class ModeARunner:
         except BlockerDetected as exc:
             # §5: login/CAPTCHA/rate-limit — pause safely, never bypass.
             return self._persist_runtime_truth(
-                mission_id, self._pause_mission(loop, exc.code)
+                mission_id, self._pause_mission(loop, exc.code, str(exc))
             )
         except TransportError as exc:
             return self._persist_runtime_truth(
-                mission_id, self._pause_mission(loop, exc.code)
+                mission_id, self._pause_mission(loop, exc.code, str(exc))
             )
 
-    def _pause_mission(self, loop: MissionLoop, reason: str) -> dict:
+    def _pause_mission(
+        self,
+        loop: MissionLoop,
+        reason: str,
+        error: str | None = None,
+    ) -> dict:
         try:
             loop.sm.transition("PAUSED", pause_reason=reason)
         except StoreError:
             pass
+        detail = {"reason": reason}
+        if error:
+            detail["error"] = error[:500]
         self.store.record_transport_event(
-            str(uuid.uuid4()), loop.mission_id, "TRANSPORT_PAUSED", {"reason": reason}
+            str(uuid.uuid4()), loop.mission_id, "TRANSPORT_PAUSED", detail
         )
         return self.store.get_mission(loop.mission_id)

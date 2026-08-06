@@ -6,6 +6,7 @@
   "minimum_chrome_version": "116",
   "permissions": [
     "activeTab",
+    "scripting",
     "storage"
   ],
   "host_permissions": [

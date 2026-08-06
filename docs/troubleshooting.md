@@ -13,6 +13,15 @@ Open `chrome://extensions`, enable Developer mode, choose **Load unpacked**,
 and select the `chrome_extension_path` printed by the installer. Ensure Cortex
 Bridge is enabled, reload the Cortex tab, and retry.
 
+## Cortex says the extension must be reloaded
+
+The files on disk are newer than the service worker currently running in
+Chrome. Open `chrome://extensions`, reload only Cortex Bridge, close the
+extensions page, then select **Retry** in Cortex. Cortex reloads its own page
+once, resumes pairing automatically, and rejects an older protocol generation
+before spending the pairing ticket. An outdated extension can no longer appear
+connected, and a stale second copy cannot alter the status of the active one.
+
 ## ChatGPT requires login, CAPTCHA, or verification
 
 Use the ChatGPT tab that Cortex opened in the same Chrome window. Complete the
@@ -27,8 +36,10 @@ Cortex does not open Playwright as a substitute.
 
 ## Conversation switching times out
 
-The complete switch has a 10-second budget. Use **Recharger la conversation**
-after checking the bound ChatGPT tab. A send is never retried automatically.
+Chrome URL navigation returns as soon as the requested target is exposed, then
+Cortex waits separately for the ChatGPT composer. The complete selection still
+has a 10-second budget. Use **Recharger la conversation** after checking the
+bound ChatGPT tab. A send is never retried automatically.
 
 ## A message is uncertain
 

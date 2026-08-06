@@ -66,6 +66,17 @@ def connection_result_from_bridge_status(status: dict[str, Any]) -> dict[str, An
             message="Cortex vérifie maintenant l’onglet ChatGPT.",
             recoverable=True,
         )
+    if state == "extension_outdated":
+        return _connection_result(
+            code="EXTENSION_OUTDATED",
+            state="manual_action",
+            title="Extension Cortex à recharger",
+            message=(
+                "Recharge l’extension Cortex Bridge dans chrome://extensions, "
+                "puis relance la connexion depuis Cortex."
+            ),
+            recoverable=True,
+        )
     if state == "extension_detected":
         return _connection_result(
             code="EXTENSION_UNPAIRED",

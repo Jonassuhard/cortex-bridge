@@ -54,6 +54,7 @@ AuditStore = Store
 
 DUPLICATE_RESPONSE_IGNORED = "DUPLICATE_RESPONSE_IGNORED"
 PROTOCOL_VIOLATION = "PROTOCOL_VIOLATION"
+PROTOCOL_RESYNCHRONIZED = "PROTOCOL_RESYNCHRONIZED"
 PROTOCOL_VIOLATIONS_EXCEEDED = "PROTOCOL_VIOLATIONS_EXCEEDED"
 APPROVAL_DENIED = "APPROVAL_DENIED"
 REPORT_RESEND_IGNORED = "REPORT_RESEND_IGNORED"
@@ -324,6 +325,7 @@ class MissionLoop:
         )
         self._stashed: MockReply | None = None
         self._protocol_violations = 0
+        self._protocol_resync_credits = 0
 
     # -- lifecycle ------------------------------------------------------------
 
@@ -438,15 +440,31 @@ class MissionLoop:
             self._record_protocol_violation(extraction_error, text, None)
             return "continue" if self.sm.state not in TERMINAL_STATES else "stop"
 
+        expected_iteration = self.sm.expected_iteration
         try:
-            decision = self.sm.process_decision(parsed)
+            decision = self.sm.process_decision(
+                parsed,
+                allow_forward_by=self._protocol_resync_credits,
+            )
         except DecisionError as exc:
             self._record_protocol_violation(exc, text, parsed)
             return "continue" if self.sm.state not in TERMINAL_STATES else "stop"
         except BudgetExceeded:
             raise  # REPETITION_LOOP pause already applied by the state machine
 
+        if decision["iteration"] != expected_iteration:
+            self.store.record_transport_event(
+                str(uuid.uuid4()),
+                self.mission_id,
+                PROTOCOL_RESYNCHRONIZED,
+                {
+                    "from_iteration": expected_iteration,
+                    "to_iteration": decision["iteration"],
+                    "credits_used": decision["iteration"] - expected_iteration,
+                },
+            )
         self._protocol_violations = 0
+        self._protocol_resync_credits = 0
         state = decision["state"]
         if state == "BLOCKED":
             self.sm.transition("BLOCKED")
@@ -461,6 +479,11 @@ class MissionLoop:
         self, error: DecisionError, text: str, parsed: dict | None
     ) -> None:
         self._protocol_violations += 1
+        if error.code == "INVALID_JSON":
+            # Exactly one cortex-decision fence existed but its JSON was
+            # malformed/truncated.  ChatGPT may count that emission even
+            # though Cortex could not execute it, so grant one bounded credit.
+            self._protocol_resync_credits += 1
         action_id = str(uuid.uuid4())
         if parsed and isinstance(parsed.get("actionId"), str):
             try:

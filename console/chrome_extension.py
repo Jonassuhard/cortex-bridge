@@ -22,10 +22,12 @@ PAIRING_TTL_SECONDS = 60
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 10.0
 MAX_MESSAGE_BYTES = 2 * 1024 * 1024
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1"})
+EXTENSION_PROTOCOL_VERSION = 2
 
 ALLOWED_ACTIONS = frozenset(
     {
         "open_chatgpt",
+        "release_session",
         "focus_tab",
         "navigate",
         "list_tabs",
@@ -82,6 +84,8 @@ class ChromeExtensionManager:
         self._pending: dict[str, asyncio.Future[Any]] = {}
         self._last_seen_at: float | None = None
         self._send_lock = asyncio.Lock()
+        self._extension_protocol_version: int | None = None
+        self._protocol_compatible: bool | None = None
 
     @property
     def pending_count(self) -> int:
@@ -132,10 +136,41 @@ class ChromeExtensionManager:
         self._last_seen_at = self._paired_at
         return True
 
+    def consume_pairing_message(
+        self,
+        message: dict[str, Any],
+        connection: JsonConnection,
+    ) -> tuple[bool, str]:
+        raw_version = message.get("protocol_version")
+        version = (
+            raw_version
+            if isinstance(raw_version, int) and not isinstance(raw_version, bool)
+            else None
+        )
+        self._extension_seen = True
+        self._last_seen_at = self._clock()
+        protocol_compatible = version == EXTENSION_PROTOCOL_VERSION
+        active_connection = self._connection
+        if active_connection is None or active_connection is connection:
+            self._extension_protocol_version = version
+            self._protocol_compatible = protocol_compatible
+        if not protocol_compatible:
+            return False, "EXTENSION_PROTOCOL_MISMATCH"
+        paired = self.consume_pairing_token(
+            str(message.get("token") or ""),
+            connection,
+        )
+        if paired:
+            self._extension_protocol_version = version
+            self._protocol_compatible = True
+        return paired, "PAIRED" if paired else "PAIRING_REJECTED"
+
     def public_status(self) -> dict[str, Any]:
         self._remove_expired_tickets()
         if self._connection is not None:
             state = "paired"
+        elif self._protocol_compatible is False:
+            state = "extension_outdated"
         elif self._tickets:
             state = "awaiting_extension"
         elif self._extension_seen:
@@ -147,6 +182,9 @@ class ChromeExtensionManager:
             "extension_connected": self._connection is not None,
             "paired": self._connection is not None,
             "pending_commands": len(self._pending),
+            "protocol_compatible": self._protocol_compatible,
+            "extension_protocol_version": self._extension_protocol_version,
+            "required_protocol_version": EXTENSION_PROTOCOL_VERSION,
         }
 
     async def command(
@@ -245,6 +283,8 @@ class ChromeExtensionManager:
         self._connection = None
         self._extension_seen = False
         self._paired_at = None
+        self._extension_protocol_version = None
+        self._protocol_compatible = None
         for future in list(self._pending.values()):
             if not future.done():
                 future.set_exception(
@@ -277,14 +317,12 @@ class ChromeExtensionManager:
                     continue
                 message_type = message.get("type")
                 if message_type == "pair":
-                    paired = self.consume_pairing_token(
-                        str(message.get("token") or ""), websocket
-                    )
+                    paired, code = self.consume_pairing_message(message, websocket)
                     await websocket.send_json(
                         {
                             "type": "pair.result",
                             "ok": paired,
-                            "code": "PAIRED" if paired else "PAIRING_REJECTED",
+                            "code": code,
                         }
                     )
                 elif message_type == "bridge.heartbeat":

@@ -1,3 +1,13 @@
+export const EXTENSION_PROTOCOL_VERSION = 2;
+
+export function createPairMessage(token) {
+  return {
+    type: "pair",
+    token,
+    protocol_version: EXTENSION_PROTOCOL_VERSION,
+  };
+}
+
 export class ExtensionCommandError extends Error {
   constructor(code, message) {
     super(message);

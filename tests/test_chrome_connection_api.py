@@ -16,6 +16,23 @@ import onboarding  # noqa: E402
 
 
 class ChromeConnectionResultTest(unittest.TestCase):
+    def test_outdated_extension_is_explained_as_a_reload_not_as_missing(self) -> None:
+        result = onboarding.connection_result_from_bridge_status(
+            {
+                "state": "extension_outdated",
+                "extension_connected": False,
+                "paired": False,
+                "protocol_compatible": False,
+                "extension_protocol_version": 1,
+                "required_protocol_version": 2,
+            }
+        )
+
+        self.assertEqual(result["code"], "EXTENSION_OUTDATED")
+        self.assertEqual(result["state"], "manual_action")
+        self.assertIn("Recharge", result["message"])
+        self.assertTrue(result["recoverable"])
+
     def test_connected_requires_a_real_composer_and_successful_probe(self) -> None:
         result = onboarding.connection_result_from_probe(
             {

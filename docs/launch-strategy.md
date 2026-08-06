@@ -2,7 +2,10 @@
 
 ## Recommendation
 
-Release v0.5 as a **technical preview**, not as a general-availability product. The fixture evidence is strong, but the live ChatGPT adapter remains an explicit manual gate and the release target is macOS only.
+Publish v0.5 only as an explicitly **blocked technical preview**, not as a
+general-availability product or a release-ready candidate. The fixture evidence
+is strong, but the consumer ChatGPT adapter conflicts with the current provider
+terms and the release target is macOS only.
 
 The project is niche, not unmarketable. The weak pitch is “another AI agent.” The useful pitch is:
 
@@ -55,9 +58,9 @@ Use GitHub as the source of truth: README, release notes, guide, architecture GI
 
 ## Five-stage rollout
 
-1. **Internal candidate:** complete fixture gates, privacy scans and release evidence.
-2. **Private alpha:** five invited macOS users, screen-shared installation, issue template and explicit live-adapter consent.
-3. **Public technical preview:** GitHub release, LinkedIn post, short demo and known-boundary list.
+1. **Internal candidate:** complete fixture gates, privacy scans and blocked release evidence.
+2. **Private alpha:** use local fixtures only until a provider-authorized transport exists; validate installation and execution safety with five invited macOS users.
+3. **Public technical preview:** publish source and documentation only with the provider blocker prominent; do not present the consumer adapter as release-ready.
 4. **Beta:** signed application, automatic updates, external crash evidence and at least one official provider/API adapter.
 5. **General availability:** multi-platform package, stable upgrade path, support policy and measured onboarding success.
 

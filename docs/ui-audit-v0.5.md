@@ -8,7 +8,10 @@ Evidence: 36 committed synthetic screenshots, Playwright interaction tests and A
 
 ## Release verdict
 
-The fixture interface is understandable, responsive and internally consistent. No known blocking UI defect remains in the audited synthetic flows. Live ChatGPT compatibility is a separate manual release gate because the consumer website can change independently of this repository.
+The fixture interface is understandable, responsive and internally consistent.
+No known blocking UI defect remains in the audited synthetic flows. The live
+consumer-ChatGPT gate is blocked by provider terms independently of visual
+compatibility or owner approval.
 
 ## What is intentionally prominent
 
@@ -46,6 +49,7 @@ The fixture interface is understandable, responsive and internally consistent. N
 
 ## Remaining manual checks
 
-- Load the unpacked extension in the owner’s Chrome profile and confirm the live ChatGPT tab, retry dialog and selectors with redacted evidence.
+- Re-run the live tab, retry-dialog and selector checks only after an officially
+  supported provider route exists; keep any evidence synthetic or redacted.
 - Run the three approved disposable mini-site missions only after the owner authorizes the account and workspace.
 - Confirm installation on a second clean macOS user before calling the release generally available.

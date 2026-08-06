@@ -5,12 +5,13 @@ executor on your Mac. Chat messages remain ordinary ChatGPT messages. Local
 execution starts only after a separate preflight shows the workspace,
 capabilities, approvals, and limits.
 
-> **Release status:** v0.5 is a technical release candidate ready for owner
-> approval. Owner-authorized acceptance passed against a real signed-in ChatGPT
-> tab, but this consumer-site automation is not an officially supported OpenAI
-> integration. Review the current
+> **Release status:** v0.5 is a blocked technical preview, not a release-ready
+> integration. The consumer-site adapter automatically reads ChatGPT Output,
+> while the current
 > [OpenAI Europe Terms of Use](https://openai.com/policies/eu-terms-of-use/)
-> before distribution or production use.
+> prohibit automatic or programmatic extraction. Owner approval does not lift
+> that provider restriction. The fixture, security and local-lifecycle evidence
+> remains useful, but the live gate cannot support a `READY` verdict.
 
 ![Animated Cortex Bridge architecture](docs/media/architecture-flow.gif)
 
@@ -89,13 +90,12 @@ Full instructions:
 
 Automated gates cover the backend, extension protocol, frontend, responsive
 views, accessibility, two-writer isolation, 10-second switching, installation,
-process ownership, dependencies, and privacy. Separate owner-authorized live
-acceptance covers one real conversation, two isolated writers, refusal of a
-third writer, a text file, an explicitly authorized screenshot, closed-tab
-recovery, and three autonomous mini-sites.
+process ownership, dependencies, and privacy. The authenticated consumer-site
+gate is blocked by the provider terms above. Earlier owner-authorized technical
+observations cannot be relabelled as compliant release acceptance.
 
-See [release evidence](docs/verification/v0.5.0.json). Live tests prove the
-observed technical behavior only; they do not imply provider endorsement.
+See [release evidence](docs/verification/v0.5.0.json). A compliant live release
+requires an officially supported transport.
 
 ## Development
 

@@ -673,6 +673,68 @@ class LoopTestCase(unittest.IsolatedAsyncioTestCase):
         events = self.store.rows("transport_events", self.mission_id)
         self.assertEqual(sum(1 for e in events if e["event_type"] == "PROTOCOL_VIOLATION"), 2)
 
+    async def test_truncated_decision_can_resynchronize_one_iteration_forward(self):
+        malformed = MockReply(
+            "```cortex-decision\n"
+            + json.dumps(
+                {
+                    "protocol": "cortex.v1",
+                    "missionId": self.mission_id,
+                    "actionId": str(uuid.uuid4()),
+                    "iteration": 1,
+                    "state": "EXECUTE",
+                }
+            )[:-1]
+            + "\n```",
+            "truncated-decision-1",
+        )
+        loop, _mock = self.make_loop(
+            [
+                malformed,
+                execute(
+                    "write_file",
+                    {"path": "recovered.txt", "content": "RECOVERED"},
+                    iteration=2,
+                ),
+                {**complete(), "iteration": 3},
+            ]
+        )
+
+        mission = await loop.run()
+
+        self.assertEqual(mission["state"], "COMPLETED")
+        self.assertEqual((self.ws / "recovered.txt").read_text(), "RECOVERED")
+        self.assertEqual(self.store.count("tool_executions", self.mission_id), 1)
+        events = self.store.rows("transport_events", self.mission_id)
+        self.assertEqual(
+            sum(1 for event in events if event["event_type"] == "PROTOCOL_RESYNCHRONIZED"),
+            1,
+        )
+
+    async def test_truncated_decision_does_not_allow_an_arbitrary_forward_jump(self):
+        malformed = MockReply(
+            "```cortex-decision\n{\"protocol\":\"cortex.v1\"\n```",
+            "truncated-decision-jump",
+        )
+        loop, _mock = self.make_loop(
+            [
+                malformed,
+                execute(
+                    "write_file",
+                    {"path": "must-not-exist.txt", "content": "NO"},
+                    iteration=3,
+                ),
+                {**blocked(), "iteration": 3},
+            ]
+        )
+
+        mission = await loop.run()
+
+        self.assertEqual(mission["state"], "FAILED")
+        self.assertEqual(mission["pause_reason"], "PROTOCOL_VIOLATIONS_EXCEEDED")
+        self.assertFalse((self.ws / "must-not-exist.txt").exists())
+        self.assertEqual(self.store.count("tool_executions", self.mission_id), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

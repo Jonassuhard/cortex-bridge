@@ -506,6 +506,8 @@ class ChatGPTWebTransport:
         self._selection_generation += 1
         generation = self._selection_generation
         want = url.rsplit("/c/", 1)[-1] if "/c/" in url else None
+        if hasattr(self.driver, "selection_used_full_navigation"):
+            self.driver.selection_used_full_navigation = False
         spa_nav = getattr(self.driver, "spa_navigate", None)
         spa_done = False
         if want and spa_nav is not None and not _force_reload:
@@ -531,6 +533,27 @@ class ChatGPTWebTransport:
         self._assert_current_selection(generation)
         state = await self._await_conversation(want, deadline=deadline)
         self._assert_current_selection(generation)
+        # A hard navigation can expose the final /c/<id> URL before React has
+        # mounted the composer. Identity alone is therefore insufficient for
+        # a writer session: wait inside the same absolute selection budget so
+        # the following send cannot race into COMPOSER_MISSING. This is a
+        # readiness poll, not the heavier SPA content-stability loop below.
+        if (
+            want
+            and state.get("conversation_id") == want
+            and getattr(self.driver, "selection_used_full_navigation", False)
+            and not state.get("composer_present")
+            and not state.get("blocker")
+        ):
+            while not state.get("composer_present"):
+                await self._selection_await(
+                    asyncio.sleep(min(self.poll_interval, self._remaining(deadline))),
+                    deadline,
+                )
+                state = await self._state(deadline=deadline)
+                self._assert_current_selection(generation)
+                if state.get("conversation_id") != want:
+                    continue
         # SPA route change updates the URL BEFORE the message DOM is replaced:
         # identity already matches while the old conversation's messages are
         # still painted, and a stable empty skeleton appears while the new one
@@ -541,6 +564,7 @@ class ChatGPTWebTransport:
             want
             and state.get("conversation_id") == want
             and getattr(self.driver, "requires_content_stability", True)
+            and not getattr(self.driver, "selection_used_full_navigation", False)
         ):
             def _sig(s: dict) -> tuple:
                 return (
@@ -610,7 +634,24 @@ class ChatGPTWebTransport:
         """§8 brand-new chat case: navigate to a fresh chat surface. The
         /c/<id> identity only exists after the first send; the lock is
         captured by send_message → _capture_new_lock()."""
-        await self.driver.navigate(url)
+        try:
+            await self.driver.navigate(url)
+        except TabClosedError as exc:
+            raise TransportError(
+                TAB_CLOSED,
+                "new conversation tab closed before delivery",
+                details={"reload_required": True},
+            ) from exc
+        except DriverError as exc:
+            driver_code = getattr(exc, "code", None)
+            details = {"reload_required": True}
+            if driver_code:
+                details["driver_code"] = driver_code
+            raise TransportError(
+                SELECTION_FAILED,
+                f"new conversation navigation failed: {exc}",
+                details=details,
+            ) from exc
         state = await self._state()
         if state.get("conversation_id"):
             # The URL already is a conversation — lock it normally.
@@ -680,6 +721,13 @@ class ChatGPTWebTransport:
         except TabClosedError as exc:
             self.pause(TAB_CLOSED)
             raise TransportError(TAB_CLOSED, "browser tab was closed") from exc
+        except DriverError as exc:
+            driver_code = getattr(exc, "code", None)
+            raise TransportError(
+                STATE_UNREADABLE,
+                str(exc),
+                details={"driver_code": driver_code} if driver_code else None,
+            ) from exc
         blocker = state.get("blocker")
         if blocker:
             self.pause(BLOCKER_CODES.get(blocker, blocker.upper()))
@@ -747,7 +795,11 @@ class ChatGPTWebTransport:
         selector = 'form input[type="file"]'
         attached = False
         try:
-            await uploader(selector, [path])
+            named_uploader = getattr(self.driver, "upload_files_named", None)
+            if name and callable(named_uploader):
+                await named_uploader(selector, [path], name)
+            else:
+                await uploader(selector, [path])
             attached = True
         except DriverError as cdp_exc:
             if getattr(self.driver, "supports_raw_evaluation", True) is False:

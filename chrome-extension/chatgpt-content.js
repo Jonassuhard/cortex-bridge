@@ -17,6 +17,22 @@
     return style.display !== "none" && style.visibility !== "hidden";
   };
 
+  const attachmentLabelMatches = (rawLabel, rawExpectedName) => {
+    const label = String(rawLabel || "").trim().toLowerCase();
+    const expectedName = String(rawExpectedName || "").trim().toLowerCase();
+    if (!expectedName) return true;
+    if (label.includes(expectedName)) return true;
+    const dot = expectedName.lastIndexOf(".");
+    const stem = dot > 0 ? expectedName.slice(0, dot) : expectedName;
+    const extension = dot > 0 ? expectedName.slice(dot) : "";
+    const escape = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    // ChatGPT may disambiguate an already-known upload as name(1).ext.
+    // Accept only that exact, numeric suffix form — never a loose basename.
+    return new RegExp(
+      `(?:^|\\s)${escape(stem)}\\s*\\(\\d+\\)${escape(extension)}(?:\\s|$)`,
+    ).test(label);
+  };
+
   const composer = () => queryFirst([
     "#prompt-textarea",
     "textarea[data-testid=prompt-textarea]",
@@ -55,19 +71,23 @@
 
   const messages = () => Array.from(
     document.querySelectorAll("[data-message-author-role]"),
-  ).map((node, index) => ({
-    id: node.getAttribute("data-message-id") || node.id || `dom-${index}`,
-    role: node.getAttribute("data-message-author-role") || "assistant",
-    text: node.innerText || node.textContent || "",
-    code_blocks: Array.from(node.querySelectorAll("pre code")).map((code) => ({
-      lang: Array.from(code.classList).find((name) => name.startsWith("language-"))?.slice(9) || "",
-      text: code.textContent || "",
-    })),
-  }));
-
-  const currentState = () => {
-    const items = messages();
+  ).map((node, index) => {
+    const role = node.getAttribute("data-message-author-role") || "assistant";
+    const content = role === "assistant"
+      ? queryFirst(["[data-message-content]", ".markdown", "[class*='markdown']"], node)
+      : node;
     return {
+      id: node.getAttribute("data-message-id") || node.id || `dom-${index}`,
+      role,
+      text: content?.innerText || content?.textContent || "",
+      code_blocks: Array.from(node.querySelectorAll("pre code")).map((code) => ({
+        lang: Array.from(code.classList).find((name) => name.startsWith("language-"))?.slice(9) || "",
+        text: code.textContent || "",
+      })),
+    };
+  });
+
+  const pageShellState = () => ({
       url: location.href,
       conversation_id: conversationId(),
       title: document.title.replace(/\s*[-–—]\s*ChatGPT\s*$/i, "").trim() || "ChatGPT",
@@ -76,13 +96,16 @@
       send_button_present: Boolean(sendButton()),
       stop_button_present: Boolean(stopButton()),
       streaming: Boolean(stopButton()),
-      messages: items,
-    };
-  };
+  });
+
+  const currentState = () => ({
+    ...pageShellState(),
+    messages: messages(),
+  });
 
   const operations = {
     probe() {
-      const state = currentState();
+      const state = pageShellState();
       const failures = [];
       if (state.blocker) failures.push(state.blocker);
       if (!state.composer_present && !state.blocker) failures.push("composer-missing");
@@ -101,14 +124,17 @@
       return currentState();
     },
     get_light_state() {
-      const state = currentState();
+      const state = pageShellState();
+      const messageNodes = document.querySelectorAll("[data-message-author-role]");
+      const first = messageNodes[0] || null;
+      const last = messageNodes[messageNodes.length - 1] || null;
       return {
         url: state.url,
         conversation_id: state.conversation_id,
         title: state.title,
-        message_count: state.messages.length,
-        first_id: state.messages[0]?.id || null,
-        last_id: state.messages.at(-1)?.id || null,
+        message_count: messageNodes.length,
+        first_id: first?.getAttribute("data-message-id") || first?.id || null,
+        last_id: last?.getAttribute("data-message-id") || last?.id || null,
         streaming: state.streaming,
         composer_present: state.composer_present,
       };
@@ -193,22 +219,49 @@
       if (container) container.scrollTop = 0;
       return Array.from(seen.values()).slice(0, MAX_CONVERSATIONS);
     },
-    async send_text(payload) {
+    async prepare_text(payload) {
       const target = composer();
       if (!target) throw Object.assign(new Error("ChatGPT composer not found"), { code: "COMPOSER_MISSING" });
-      const userIdsBefore = new Set(
-        messages().filter((message) => message.role === "user").map((message) => message.id),
-      );
-      const marker = String(payload.text || "").trim().slice(0, 80);
+      const normalizeComposerText = (value) => String(value || "").replace(/\s+/g, " ").trim();
+      const marker = normalizeComposerText(payload.text).slice(0, 80);
       target.focus();
       if (target instanceof HTMLTextAreaElement) {
         const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
         setter?.call(target, payload.text);
+        target.dispatchEvent(new InputEvent("input", {
+          bubbles: true,
+          inputType: "insertText",
+          data: payload.text,
+        }));
       } else {
-        document.execCommand("selectAll", false);
+        const range = document.createRange();
+        range.selectNodeContents(target);
+        const selection = window.getSelection();
+        selection?.removeAllRanges();
+        selection?.addRange(range);
         document.execCommand("insertText", false, payload.text);
       }
-      target.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: payload.text }));
+
+      let inputConfirmed = false;
+      let inputStableChecks = 0;
+      for (let attempt = 0; attempt < 40; attempt += 1) {
+        const current = composer();
+        const currentText = normalizeComposerText(current?.innerText || current?.textContent);
+        if (!marker || currentText.includes(marker)) {
+          inputStableChecks += 1;
+          if (inputStableChecks >= 6) {
+            inputConfirmed = true;
+            break;
+          }
+        } else inputStableChecks = 0;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      if (!inputConfirmed) {
+        throw Object.assign(
+          new Error("ChatGPT composer did not retain the requested text"),
+          { code: "COMPOSER_INPUT_FAILED" },
+        );
+      }
 
       let button = null;
       for (let attempt = 0; attempt < 50 && !button; attempt += 1) {
@@ -219,26 +272,27 @@
       if (!button) {
         throw Object.assign(new Error("ChatGPT send button is unavailable"), { code: "SEND_REJECTED" });
       }
-      button.click();
-
-      for (let attempt = 0; attempt < 50; attempt += 1) {
-        const current = composer();
-        const value = current instanceof HTMLTextAreaElement
-          ? current.value
-          : current?.innerText || current?.textContent || "";
-        if (!current || !value.trim()) return { ok: true };
-        const visibleUserMessage = messages().find((message) => (
-          message.role === "user"
-          && !userIdsBefore.has(message.id)
-          && (!marker || message.text.includes(marker))
-        ));
-        if (visibleUserMessage) return { ok: true };
-        await new Promise((resolve) => setTimeout(resolve, 100));
+      // ChatGPT's ProseMirror editor commits its pending state on focus loss.
+      // A form submission fired while the editor stays focused can therefore
+      // be ignored on a brand-new chat even though the button looks enabled.
+      button.focus({ preventScroll: true });
+      // The focus transition may rerender the composer controls. Never submit
+      // a detached React node: reacquire both elements after the commit.
+      await Promise.resolve();
+      const committedTarget = composer();
+      const committedButton = sendButton();
+      if (
+        !committedTarget
+        || !committedButton
+        || committedButton.disabled
+        || !visible(committedButton)
+      ) {
+        throw Object.assign(
+          new Error("ChatGPT send control changed before submission"),
+          { code: "SEND_REJECTED" },
+        );
       }
-      throw Object.assign(
-        new Error("ChatGPT composer did not clear after send"),
-        { code: "DELIVERY_UNCERTAIN" },
-      );
+      return { ok: true };
     },
     press_stop() {
       const button = stopButton();
@@ -281,16 +335,37 @@
       transfers.delete(payload.transfer_id);
       return { attached: true, name: transfer.name };
     },
-    async await_attachment() {
+    async await_attachment(payload) {
+      const expectedName = String(payload?.name || "").trim().toLowerCase();
       const deadline = Date.now() + 60_000;
+      let readyChecks = 0;
       while (Date.now() < deadline) {
-        const chip = queryFirst([
-          "[data-testid*='attachment']",
-          "[data-testid*='file']",
+        const candidates = Array.from(document.querySelectorAll([
+          "form [data-testid*='attachment']",
           "form [class*='attachment']",
+          "form button[aria-label*='file']",
+          "form button[aria-label*='fichier']",
+        ].join(", ")));
+        const chip = candidates.find((candidate) => {
+          const label = `${candidate.innerText || candidate.textContent || ""} ${candidate.getAttribute?.("aria-label") || ""}`
+            .trim()
+            .toLowerCase();
+          return attachmentLabelMatches(label, expectedName);
+        });
+        const progress = queryFirst([
+          "form [role=progressbar]",
+          "form [aria-busy=true]",
         ]);
-        const progress = queryFirst(["[role=progressbar]", "[aria-busy=true]"]);
-        if (chip && !progress) return { ok: true };
+        const button = sendButton();
+        if (chip && !progress && button && !button.disabled && visible(button)) {
+          readyChecks += 1;
+          if (readyChecks >= 4) {
+            return {
+              ok: true,
+              label: String(chip.innerText || chip.textContent || expectedName).trim(),
+            };
+          }
+        } else readyChecks = 0;
         await new Promise((resolve) => setTimeout(resolve, 250));
       }
       return { ok: false, error: "Attachment did not become ready" };

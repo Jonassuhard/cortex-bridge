@@ -198,10 +198,13 @@ export interface ChromeExtensionPairing {
 }
 
 export interface ChromeExtensionStatus {
-  state: "disconnected" | "awaiting_extension" | "extension_detected" | "paired";
+  state: "disconnected" | "awaiting_extension" | "extension_detected" | "extension_outdated" | "paired";
   extension_connected: boolean;
   paired: boolean;
   pending_commands: number;
+  protocol_compatible: boolean | null;
+  extension_protocol_version: number | null;
+  required_protocol_version: number;
 }
 
 export interface ChromeConnectionResult {

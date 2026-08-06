@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -13,6 +14,7 @@ from typing import Any
 
 HEX40_RE = re.compile(r"^[0-9a-f]{40}$")
 HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
+REPO_ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_SUITES = ("backend", "frontendUnit", "e2e", "a11y")
 REQUIRED_GATES = (
     "privacy",
@@ -278,6 +280,23 @@ class EvidenceValidator:
             for name, digest in artifacts.items():
                 if not isinstance(name, str) or not name or not isinstance(digest, str) or not HEX64_RE.fullmatch(digest):
                     self.report("artifact_hash", "artifacts")
+                    continue
+                candidate = REPO_ROOT / name
+                try:
+                    resolved = candidate.resolve(strict=True)
+                except OSError:
+                    self.report("artifact_missing", name)
+                    continue
+                if (
+                    REPO_ROOT not in resolved.parents
+                    or candidate.is_symlink()
+                    or not resolved.is_file()
+                ):
+                    self.report("artifact_path", name)
+                    continue
+                actual = hashlib.sha256(resolved.read_bytes()).hexdigest()
+                if actual != digest:
+                    self.report("artifact_hash_mismatch", name)
 
         return self.findings
 

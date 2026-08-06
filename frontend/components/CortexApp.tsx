@@ -55,6 +55,7 @@ const INITIAL_UNAVAILABLE_STATE = createUnavailableClientState(
 const INITIAL_POST_DEADLINE_MS = 10_000;
 const INITIAL_POST_TIMEOUT_MESSAGE =
   "Envoi incertain : le délai de 10 secondes a expiré. Le brouillon et la pièce jointe sont conservés.";
+const PAIR_AFTER_EXTENSION_RELOAD_KEY = "cortex:pair-after-extension-reload";
 const INITIAL_CHROME_CONNECTION: ChromeConnectionResult = {
   code: "CHECKING_CONNECTION",
   state: "checking",
@@ -369,6 +370,11 @@ export function CortexApp() {
   }, [applyConnectionResult, refreshRuntime, waitForExtensionPairing]);
 
   const retryChatGPTConnection = useCallback(async () => {
+    if (chatGPTConnection?.code === "EXTENSION_OUTDATED") {
+      window.sessionStorage.setItem(PAIR_AFTER_EXTENSION_RELOAD_KEY, "1");
+      window.history.go(0);
+      return;
+    }
     if (["EXTENSION_MISSING", "EXTENSION_UNPAIRED", "CONNECTION_FAILED"].includes(chatGPTConnection?.code || "")) {
       await openChatGPTProfile();
       return;
@@ -394,6 +400,12 @@ export function CortexApp() {
       setConnectionBusy(false);
     }
   }, [applyConnectionResult, chatGPTConnection?.code, openChatGPTProfile, refreshRuntime]);
+
+  useEffect(() => {
+    if (window.sessionStorage.getItem(PAIR_AFTER_EXTENSION_RELOAD_KEY) !== "1") return;
+    window.sessionStorage.removeItem(PAIR_AFTER_EXTENSION_RELOAD_KEY);
+    void openChatGPTProfile();
+  }, [openChatGPTProfile]);
 
   const refreshPipeline = useCallback(async () => {
     const key = conversationStateRef.current.selectedKey;
@@ -575,6 +587,12 @@ export function CortexApp() {
       .then((caps) => setCapabilities({ upload_file: !!caps.upload_file, take_screenshot: !!caps.take_screenshot }))
       .catch(() => undefined);
   }, [refreshConversations, refreshPipeline, refreshRuntime, refreshSettings]);
+
+  useEffect(() => {
+    if (chatGPTConnection?.code === "CONNECTED") {
+      void refreshConversations();
+    }
+  }, [chatGPTConnection?.code, refreshConversations]);
 
   useEffect(() => () => {
     if (terminalRefreshTimer.current) window.clearTimeout(terminalRefreshTimer.current);

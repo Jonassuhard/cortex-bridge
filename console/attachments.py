@@ -7,6 +7,7 @@ import codecs
 import io
 import json
 import secrets
+import shutil
 import stat
 import time
 import uuid
@@ -256,7 +257,7 @@ def store_upload(name: str, data_b64: str) -> dict:
     return _descriptor(target, safe_name, len(raw), mime, kind)
 
 
-def describe_path(path: str) -> dict:
+def _inspect_path(path: str) -> tuple[Path, str, int, str, str]:
     target = Path(path).expanduser()
     if target.is_symlink():
         raise ValueError("Les liens symboliques ne sont pas acceptés comme pièce jointe.")
@@ -273,7 +274,47 @@ def describe_path(path: str) -> dict:
     office_source = target if extension in _OFFICE_MEMBER else None
     mime, kind = _classify(safe_name, sample, office_source=office_source)
     _validate_size(kind, metadata.st_size)
-    return _descriptor(target.resolve(), safe_name, metadata.st_size, mime, kind)
+    return target.resolve(), safe_name, metadata.st_size, mime, kind
+
+
+def describe_path(path: str) -> dict:
+    target, safe_name, size, mime, kind = _inspect_path(path)
+    return _descriptor(target, safe_name, size, mime, kind)
+
+
+def stage_path(path: str) -> dict:
+    """Validate a user-selected file and copy it into Cortex-owned storage.
+
+    The Chrome extension intentionally refuses arbitrary filesystem paths. A
+    selected file therefore has to cross this intake boundary before its bytes
+    can be transferred to ChatGPT. Existing managed uploads are reused.
+    """
+    source, safe_name, size, mime, kind = _inspect_path(path)
+    ATTACHMENTS_DIR.mkdir(parents=True, exist_ok=True)
+    managed_root = ATTACHMENTS_DIR.resolve()
+    try:
+        source.relative_to(managed_root)
+    except ValueError:
+        target = ATTACHMENTS_DIR / (
+            f"cortex-attachment-{int(time.time())}-{uuid.uuid4().hex[:12]}-{safe_name}"
+        )
+        try:
+            with source.open("rb") as reader, target.open("xb") as writer:
+                shutil.copyfileobj(reader, writer, length=1024 * 1024)
+            copied, _copied_name, copied_size, copied_mime, copied_kind = _inspect_path(
+                str(target)
+            )
+            if (
+                copied_size != size
+                or copied_mime != mime
+                or copied_kind != kind
+            ):
+                raise ValueError("La copie sécurisée de la pièce jointe a changé.")
+        except Exception:
+            target.unlink(missing_ok=True)
+            raise
+        return _descriptor(copied, safe_name, size, mime, kind)
+    return _descriptor(source, safe_name, size, mime, kind)
 
 
 def _remove_owned_screenshot(path: Path) -> None:

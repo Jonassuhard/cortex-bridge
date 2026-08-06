@@ -166,12 +166,14 @@ class ChatCancelIn(BaseModel):
 
 # Read-only browsing always uses a session outside the bounded writer registry.
 READ_ONLY_SESSION_ID = "cortex-view-read-only"
+SCREENSHOT_SESSION_ID = "cortex-capture-read-only"
 ui_transport_factory = create_transport
 
 _runs: dict[str, ChatRunRuntime] = {}
 _view_transport: ChatGPTWebTransport | None = None
 _view_url: str | None = None
 _view_mutex = asyncio.Lock()
+_view_operation_mutex = asyncio.Lock()
 
 
 def _make_transport(session_id: str) -> ChatGPTWebTransport:
@@ -507,17 +509,18 @@ async def conversation_snapshot(url: str = Query(..., min_length=1), light: int 
         }
 
     try:
-        transport = await _ensure_view_transport(clean_url)
-        try:
-            return await read_snapshot(transport)
-        except TransportError as exc:
-            if exc.code not in {TAB_CLOSED, CONVERSATION_MISMATCH}:
-                raise
-            recovered = await _ensure_view_transport(
-                clean_url,
-                force_recreate=True,
-            )
-            return await read_snapshot(recovered)
+        async with _view_operation_mutex:
+            transport = await _ensure_view_transport(clean_url)
+            try:
+                return await read_snapshot(transport)
+            except TransportError as exc:
+                if exc.code not in {TAB_CLOSED, CONVERSATION_MISMATCH}:
+                    raise
+                recovered = await _ensure_view_transport(
+                    clean_url,
+                    force_recreate=True,
+                )
+                return await read_snapshot(recovered)
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"cannot read conversation: {exc}")
 
@@ -616,7 +619,7 @@ async def upload_attachment(body: AttachmentUploadIn) -> dict[str, Any]:
     pre-checked; the error is precise and in French."""
     try:
         if body.path:
-            return attachments.describe_path(body.path)
+            return attachments.stage_path(body.path)
         if body.name and body.data_b64:
             return attachments.store_upload(body.name, body.data_b64)
     except ValueError as exc:
@@ -653,7 +656,7 @@ async def send_with_attachment(body: ChatSendAttachmentIn) -> dict[str, Any]:
         raise HTTPException(status_code=403, detail="Experimental ChatGPT Web Transport is not enabled")
     url = _validate_chatgpt_url(body.conversation_url)
     try:
-        descriptor = attachments.describe_path(body.path)
+        descriptor = attachments.stage_path(body.path)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     return await _start_attachment_run(
@@ -679,30 +682,38 @@ async def send_screenshot(body: ChatScreenshotIn) -> dict[str, Any]:
     if not missions_api.optin_accepted():
         raise HTTPException(status_code=403, detail="Experimental ChatGPT Web Transport is not enabled")
     url = _validate_chatgpt_url(body.conversation_url)
-    transport = _make_transport(READ_ONLY_SESSION_ID)
-    shooter = getattr(transport.driver, "take_screenshot", None)
-    if shooter is None:
-        raise HTTPException(status_code=422, detail="ce transport ne sait pas capturer d'écran")
+    transport = _make_transport(SCREENSHOT_SESSION_ID)
     try:
-        if url.rstrip("/") == "https://chatgpt.com":
-            await transport.start_new_conversation(url)
-        else:
-            await transport.select_conversation(url)
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"conversation cible introuvable: {exc}")
-    attachments.ATTACHMENTS_DIR.mkdir(parents=True, exist_ok=True)
-    target = attachments.ATTACHMENTS_DIR / f"cortex-screenshot-{uuid.uuid4().hex[:8]}.png"
-    try:
-        result = await shooter(str(target))
-        if not isinstance(result, dict) or not result.get("path"):
-            raise ValueError("le pilote n'a pas confirmé le chemin de capture")
-        descriptor = attachments.describe_screenshot(
-            str(result["path"]),
-            expected_path=str(target),
-        )
-    except Exception as exc:
-        target.unlink(missing_ok=True)
-        raise HTTPException(status_code=503, detail=f"capture impossible: {exc}")
+        shooter = getattr(transport.driver, "take_screenshot", None)
+        if shooter is None:
+            raise HTTPException(status_code=422, detail="ce transport ne sait pas capturer d'écran")
+        try:
+            if url.rstrip("/") == "https://chatgpt.com":
+                await transport.start_new_conversation(url)
+            else:
+                await transport.select_conversation(url)
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail=f"conversation cible introuvable: {exc}")
+        attachments.ATTACHMENTS_DIR.mkdir(parents=True, exist_ok=True)
+        target = attachments.ATTACHMENTS_DIR / f"cortex-screenshot-{uuid.uuid4().hex[:8]}.png"
+        try:
+            result = await shooter(str(target))
+            if not isinstance(result, dict) or not result.get("path"):
+                raise ValueError("le pilote n'a pas confirmé le chemin de capture")
+            descriptor = attachments.describe_screenshot(
+                str(result["path"]),
+                expected_path=str(target),
+            )
+        except Exception as exc:
+            target.unlink(missing_ok=True)
+            raise HTTPException(status_code=503, detail=f"capture impossible: {exc}")
+    finally:
+        closer = getattr(transport, "close", None)
+        if callable(closer):
+            try:
+                await closer()
+            except Exception:
+                pass
     return await _start_attachment_run(
         url=url,
         text=body.text,

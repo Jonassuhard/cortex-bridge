@@ -121,6 +121,25 @@ class AttachmentBoundaryTest(unittest.TestCase):
         attachments._TOKENS[descriptor["token"]]["expires_at"] = time.time() - 1
         self.assertIsNone(attachments.resolve_token(descriptor["token"]))
 
+    def test_stage_path_copies_a_valid_external_file_into_managed_storage(self):
+        source = Path(self.tempdir.name) / "selected-by-user.txt"
+        source.write_bytes(b"synthetic attachment\n")
+
+        descriptor = attachments.stage_path(str(source))
+        staged = Path(descriptor["path"])
+
+        self.assertEqual(staged.parent.resolve(), attachments.ATTACHMENTS_DIR.resolve())
+        self.assertNotEqual(staged.resolve(), source.resolve())
+        self.assertEqual(staged.read_bytes(), source.read_bytes())
+        self.assertEqual(source.read_bytes(), b"synthetic attachment\n")
+
+    def test_stage_path_reuses_an_already_managed_upload(self):
+        uploaded = attachments.store_upload("already-managed.txt", _b64(b"managed\n"))
+
+        staged = attachments.stage_path(uploaded["path"])
+
+        self.assertEqual(Path(staged["path"]).resolve(), Path(uploaded["path"]).resolve())
+
     def test_cleanup_preserves_references_and_ignores_non_cortex_files(self):
         keep = attachments.store_upload("keep.pdf", _b64(PDF))
         drop = attachments.store_upload("drop.pdf", _b64(PDF))
@@ -214,6 +233,9 @@ class ChatAttachmentIntegrationTest(unittest.IsolatedAsyncioTestCase):
             async def select_conversation(self, url):
                 calls.append(("select", url))
 
+            async def close(self):
+                calls.append(("close",))
+
         async def start_run(**kwargs):
             calls.append(("start", kwargs))
             return kwargs
@@ -225,12 +247,15 @@ class ChatAttachmentIntegrationTest(unittest.IsolatedAsyncioTestCase):
         with (
             patch.object(self.chat.missions_api, "_global_stop", False),
             patch.object(self.chat.missions_api, "optin_accepted", return_value=True),
-            patch.object(self.chat, "_make_transport", return_value=Transport()),
+            patch.object(self.chat, "_make_transport", return_value=Transport()) as make_transport,
             patch.object(self.chat, "_start_attachment_run", side_effect=start_run),
         ):
             result = await self.chat.send_screenshot(body)
+        make_transport.assert_called_once_with(self.chat.SCREENSHOT_SESSION_ID)
         self.assertEqual(calls[0], ("select", body.conversation_url))
         self.assertEqual(calls[1][0], "screenshot")
+        self.assertEqual(calls[-2], ("close",))
+        self.assertEqual(calls[-1][0], "start")
         self.assertEqual(result["mime"], "image/png")
         self.assertTrue(result["token"])
 

@@ -34,6 +34,9 @@ EXTENSION_FILE_LIMIT_BYTES = 25 * 1024 * 1024
 TRANSFER_CHUNK_CHARACTERS = 256 * 1024
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 CONTENT_SCRIPT_RETRY_DELAY_SECONDS = 0.25
+CONTENT_SCRIPT_RECOVERY_FAILURES = 3
+CONTENT_SCRIPT_WRITE_READY_TIMEOUT_SECONDS = 10.0
+CONTENT_SCRIPT_NOT_READY_MESSAGE = "The ChatGPT content script is not available yet"
 CONTENT_SCRIPT_READ_ACTIONS = frozenset(
     {
         "probe",
@@ -63,7 +66,13 @@ class ChromeExtensionBrowserDriver:
         self.allowed_root = Path(allowed_root or RUNTIME_PATHS.home).expanduser().resolve()
         self._retry_sleep = retry_sleep
         self.target_url: str | None = None
+        self.selection_used_full_navigation = False
         self._closed = False
+        self._pending_attachment_name: str | None = None
+
+    @property
+    def live(self) -> bool:
+        return not self._closed
 
     async def _command(
         self,
@@ -75,6 +84,9 @@ class ChromeExtensionBrowserDriver:
         if self._closed and action != "list_tabs":
             raise TabClosedError("Chrome extension driver session is closed")
         deadline = time.monotonic() + timeout
+        unavailable_failures = 0
+        recovery_attempted = False
+        write_ready_deadline: float | None = None
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -90,13 +102,57 @@ class ChromeExtensionBrowserDriver:
                 )
             except Exception as exc:
                 code = getattr(exc, "code", None)
+                recoverable_read = (
+                    action in CONTENT_SCRIPT_READ_ACTIONS
+                    and bool(self.target_url)
+                    and not recovery_attempted
+                )
+                if code == "TAB_CLOSED" and recoverable_read:
+                    await self._recover_read_session(deadline)
+                    recovery_attempted = True
+                    continue
                 if code == "TAB_CLOSED":
                     raise TabClosedError(str(exc)) from exc
+                safe_pre_delivery_wait = (
+                    action == "send_text"
+                    and (
+                        code == "PRE_DELIVERY_NOT_READY"
+                        or (
+                            code == "TAB_UNAVAILABLE"
+                            and str(exc) == CONTENT_SCRIPT_NOT_READY_MESSAGE
+                        )
+                    )
+                )
+                if safe_pre_delivery_wait:
+                    now = time.monotonic()
+                    if write_ready_deadline is None:
+                        write_ready_deadline = min(
+                            deadline,
+                            now + CONTENT_SCRIPT_WRITE_READY_TIMEOUT_SECONDS,
+                        )
+                    if now < write_ready_deadline:
+                        pending_sleep = self._retry_sleep(
+                            min(
+                                CONTENT_SCRIPT_RETRY_DELAY_SECONDS,
+                                write_ready_deadline - now,
+                            )
+                        )
+                        if pending_sleep is not None:
+                            await pending_sleep
+                        continue
                 if (
                     code == "TAB_UNAVAILABLE"
                     and action in CONTENT_SCRIPT_READ_ACTIONS
                     and remaining > CONTENT_SCRIPT_RETRY_DELAY_SECONDS
                 ):
+                    unavailable_failures += 1
+                    if (
+                        recoverable_read
+                        and unavailable_failures >= CONTENT_SCRIPT_RECOVERY_FAILURES
+                    ):
+                        await self._recover_read_session(deadline)
+                        recovery_attempted = True
+                        continue
                     pending_sleep = self._retry_sleep(
                         min(CONTENT_SCRIPT_RETRY_DELAY_SECONDS, remaining)
                     )
@@ -109,7 +165,27 @@ class ChromeExtensionBrowserDriver:
                     raise error from exc
                 raise
 
+    async def _recover_read_session(self, deadline: float) -> None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0 or not self.target_url:
+            raise DriverError("TAB_UNAVAILABLE: no time or canonical URL for recovery")
+        try:
+            await self.manager.command(
+                self.session,
+                "navigate",
+                {"url": self.target_url},
+                remaining,
+            )
+        except Exception as exc:
+            code = getattr(exc, "code", None)
+            if code:
+                error = DriverError(f"{code}: {exc}")
+                error.code = code
+                raise error from exc
+            raise
+
     async def navigate(self, url: str) -> None:
+        self.selection_used_full_navigation = True
         result = await self._command("navigate", {"url": url}, timeout=10)
         self.target_url = str((result or {}).get("url") or url)
         await self._wait_until_page_ready(timeout=10)
@@ -146,24 +222,40 @@ class ChromeExtensionBrowserDriver:
         return list(result or [])
 
     async def spa_navigate(self, url: str) -> bool:
+        self.selection_used_full_navigation = False
         try:
             result = await self._command("spa_navigate", {"url": url}, timeout=10)
         except TabClosedError:
             # Selection is read-only at this point. Recreate the dedicated
-            # tab before any user message is attempted.
-            await self.navigate(url)
+            # tab before any user message is attempted. Do not wait for the
+            # composer here: the adapter's identity poll is the authoritative
+            # readiness check and shares the same absolute 10 s budget.
+            result = await self._command("navigate", {"url": url}, timeout=10)
+            self.target_url = str((result or {}).get("url") or url)
+            self.selection_used_full_navigation = True
             return True
         except DriverError as exc:
             if getattr(exc, "code", None) != "TAB_UNAVAILABLE":
                 raise
             # A fresh writer session has no tab yet. Full navigation safely
-            # creates its dedicated tab; no user message is involved.
-            await self.navigate(url)
+            # creates its dedicated tab; no user message is involved. The
+            # adapter immediately polls the exact conversation identity, so a
+            # second composer-readiness loop here only burns the same budget.
+            result = await self._command("navigate", {"url": url}, timeout=10)
+            self.target_url = str((result or {}).get("url") or url)
+            self.selection_used_full_navigation = True
             return True
         handled = bool((result or {}).get("handled"))
         if handled:
             self.target_url = url
-        return handled
+            return True
+        # A new Cortex-owned writer tab may not have the target conversation
+        # in its currently rendered sidebar. Direct navigation is still safe:
+        # no user message has been prepared or activated at this point.
+        result = await self._command("navigate", {"url": url}, timeout=10)
+        self.target_url = str((result or {}).get("url") or url)
+        self.selection_used_full_navigation = True
+        return True
 
     async def get_state(self) -> dict[str, Any]:
         result = await self._command("get_state", timeout=10)
@@ -230,20 +322,31 @@ class ChromeExtensionBrowserDriver:
         return resolved
 
     async def upload_files(self, selector: str, paths: list[str]) -> None:
+        await self.upload_files_named(selector, paths, None)
+
+    async def upload_files_named(
+        self,
+        selector: str,
+        paths: list[str],
+        name: str | None,
+    ) -> None:
         del selector
         if len(paths) != 1:
             raise DriverError("the Chrome extension accepts one attachment at a time")
         path = self._managed_file(paths[0])
+        display_name = str(name or path.name).strip()
+        if not display_name or Path(display_name).name != display_name:
+            raise DriverError("attachment display name must be a plain filename")
         size = path.stat().st_size
         if size > EXTENSION_FILE_LIMIT_BYTES:
             raise DriverError("attachment exceeds the 25 MiB Chrome bridge limit")
         transfer_id = uuid.uuid4().hex
-        mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        mime = mimetypes.guess_type(display_name)[0] or "application/octet-stream"
         await self._command(
             "attachment_begin",
             {
                 "transfer_id": transfer_id,
-                "name": path.name,
+                "name": display_name,
                 "mime": mime,
                 "size": size,
             },
@@ -265,9 +368,16 @@ class ChromeExtensionBrowserDriver:
             {"transfer_id": transfer_id},
             timeout=30,
         )
+        self._pending_attachment_name = display_name
 
     async def await_attachment(self) -> dict[str, Any]:
-        result = await self._command("await_attachment", timeout=70)
+        result = await self._command(
+            "await_attachment",
+            {"name": self._pending_attachment_name} if self._pending_attachment_name else {},
+            timeout=70,
+        )
+        if isinstance(result, dict) and result.get("ok"):
+            self._pending_attachment_name = None
         return dict(result or {})
 
     async def send_bare(self) -> dict[str, Any]:
@@ -360,29 +470,54 @@ class ChromeExtensionBrowserDriver:
         self.target_url = None
 
     async def close(self) -> None:
-        # Closing a logical Cortex transport must never close or poison the
-        # person's real Chrome tab. ``close_tab`` remains an explicit action.
-        return None
+        if self._closed:
+            return
+        try:
+            # Release only Cortex's logical binding. The Chrome tab remains
+            # open and can be reused by the next writer session; close_tab is
+            # still reserved for an explicit user action.
+            await self._command("release_session", timeout=5)
+        finally:
+            self._closed = True
+            self.target_url = None
 
     async def open_login(self) -> dict[str, Any]:
         opened = await self._command("open_chatgpt", timeout=10)
         self.target_url = str((opened or {}).get("url") or "https://chatgpt.com/")
         deadline = time.monotonic() + 10
         last_error: DriverError | None = None
+        last_probe: dict[str, Any] | None = None
+
+        def connection_payload(probe: dict[str, Any]) -> dict[str, Any]:
+            return {
+                "connected": True,
+                "tabs": 1,
+                "driver": self.driver_name,
+                "session": self.session,
+                "tab_id": (opened or {}).get("tab_id"),
+                "window_id": (opened or {}).get("window_id"),
+                "url": (opened or {}).get("url"),
+                "probe": probe,
+            }
+
         while time.monotonic() < deadline:
             try:
                 probe = await self.probe()
-                return {
-                    "connected": True,
-                    "tabs": 1,
-                    "driver": self.driver_name,
-                    "session": self.session,
-                    "tab_id": (opened or {}).get("tab_id"),
-                    "window_id": (opened or {}).get("window_id"),
-                    "url": (opened or {}).get("url"),
-                    "probe": probe,
+                last_probe = probe
+                blocker = str(probe.get("blocker") or "").lower()
+                failures = {
+                    str(value).lower() for value in probe.get("failures") or []
                 }
+                if (
+                    probe.get("ok") is True
+                    and probe.get("composer_present") is True
+                ) or blocker in {"login", "captcha", "rate_limit"} or failures.intersection(
+                    {"login", "captcha", "rate_limit"}
+                ):
+                    return connection_payload(probe)
             except DriverError as exc:
                 last_error = exc
-                await asyncio.sleep(0.25)
+            await asyncio.sleep(0.25)
+        if last_probe is not None:
+            return connection_payload(last_probe)
         raise last_error or DriverError("ChatGPT did not become ready within 10 seconds")

@@ -442,6 +442,55 @@ class ChatRouteSessionIsolationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(snapshot["conversation_id"], "recovered-view")
         self.assertEqual(len(created), 2)
 
+    async def test_concurrent_snapshots_cannot_retarget_the_shared_view_session(self) -> None:
+        snapshot_started = asyncio.Event()
+        release_first = asyncio.Event()
+
+        class SharedViewTransport:
+            def __init__(self) -> None:
+                self.lock = None
+                self.snapshot_calls = 0
+
+            async def select_conversation(self, url: str):
+                self.lock = SimpleNamespace(url=url, identity=url.rsplit("/", 1)[-1])
+                return self.lock
+
+            async def snapshot(self, *, verify_lock: bool = True) -> dict:
+                del verify_lock
+                self.snapshot_calls += 1
+                if self.snapshot_calls == 1:
+                    snapshot_started.set()
+                    await release_first.wait()
+                return {
+                    "url": self.lock.url,
+                    "conversation_id": self.lock.identity,
+                    "title": "Shared view",
+                    "messages": [],
+                }
+
+            async def close(self) -> None:
+                return None
+
+        shared = SharedViewTransport()
+        chat_api.ui_transport_factory = lambda _session_id=None: shared
+        chat_api._view_transport = None
+        chat_api._view_url = None
+
+        first = asyncio.create_task(
+            chat_api.conversation_snapshot("https://chatgpt.com/c/view-a")
+        )
+        await snapshot_started.wait()
+        second = asyncio.create_task(
+            chat_api.conversation_snapshot("https://chatgpt.com/c/view-b")
+        )
+        await asyncio.sleep(0)
+        release_first.set()
+
+        result_a, result_b = await asyncio.gather(first, second)
+
+        self.assertEqual(result_a["conversation_id"], "view-a")
+        self.assertEqual(result_b["conversation_id"], "view-b")
+
     async def test_invalid_settings_fail_run_and_release_exact_writer_capacity(self) -> None:
         invalid_settings = Path(self.tmp.name) / "invalid-settings.json"
         invalid_settings.write_text(json.dumps({

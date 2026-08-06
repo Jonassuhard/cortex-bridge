@@ -204,19 +204,40 @@ class StateMachine:
 
     # -- decision intake (§10 + §14) ---------------------------------------------------
 
-    def process_decision(self, decision: dict) -> dict:
+    def process_decision(self, decision: dict, *, allow_forward_by: int = 0) -> dict:
         """Validate a parsed decision against mission state; record it.
 
         Enforces mission id / action id / iteration checks and detects
         repeated identical decisions (REPETITION_LOOP after the threshold).
+
+        ``allow_forward_by`` is a fail-closed recovery window supplied only
+        after malformed decision payloads.  A fully valid decision may then
+        advance the protocol cursor by at most that many positions; backward
+        and arbitrary forward jumps remain invalid.
         """
+        expected_iteration = self.expected_iteration
+        candidate_iteration = decision.get("iteration") if isinstance(decision, dict) else None
+        validation_iteration = expected_iteration
+        if (
+            allow_forward_by > 0
+            and isinstance(candidate_iteration, int)
+            and not isinstance(candidate_iteration, bool)
+            and expected_iteration < candidate_iteration <= expected_iteration + allow_forward_by
+            and candidate_iteration <= self.budgets.max_iterations
+        ):
+            validation_iteration = candidate_iteration
         seen = self.store.seen_action_ids(self.mission_id)
         validated = protocol.validate_decision(
             decision,
             expected_mission_id=self.mission_id,
-            expected_iteration=self.expected_iteration,
+            expected_iteration=validation_iteration,
             seen_action_ids=seen,
         )
+        if validation_iteration != expected_iteration:
+            # The cursor stores the last consumed protocol iteration.  Move it
+            # immediately before the recovered decision; finalization will
+            # consume the recovered iteration itself.
+            self.store.set_iteration(self.mission_id, validation_iteration - 1)
         self.store.record_decision(
             str(uuid.uuid4()),
             self.mission_id,

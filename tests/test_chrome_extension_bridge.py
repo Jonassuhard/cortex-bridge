@@ -36,6 +36,100 @@ class HangingConnection(FakeConnection):
 
 
 class ChromeExtensionPairingTest(unittest.TestCase):
+    def test_pairing_message_rejects_an_outdated_extension_without_spending_the_ticket(self) -> None:
+        manager = ChromeExtensionManager()
+        connection = FakeConnection()
+        ticket = manager.issue_pairing_token()
+
+        self.assertTrue(hasattr(manager, "consume_pairing_message"))
+        paired, code = manager.consume_pairing_message(
+            {
+                "type": "pair",
+                "token": ticket.value,
+                "protocol_version": 1,
+            },
+            connection,
+        )
+
+        self.assertFalse(paired)
+        self.assertEqual(code, "EXTENSION_PROTOCOL_MISMATCH")
+        self.assertEqual(
+            manager.public_status(),
+            {
+                "state": "extension_outdated",
+                "extension_connected": False,
+                "paired": False,
+                "pending_commands": 0,
+                "protocol_compatible": False,
+                "extension_protocol_version": 1,
+                "required_protocol_version": 2,
+            },
+        )
+        paired, code = manager.consume_pairing_message(
+            {
+                "type": "pair",
+                "token": ticket.value,
+                "protocol_version": 2,
+            },
+            connection,
+        )
+        self.assertTrue(paired)
+        self.assertEqual(code, "PAIRED")
+
+    def test_pairing_message_requires_an_explicit_protocol_version(self) -> None:
+        manager = ChromeExtensionManager()
+        ticket = manager.issue_pairing_token()
+
+        self.assertTrue(hasattr(manager, "consume_pairing_message"))
+        paired, code = manager.consume_pairing_message(
+            {"type": "pair", "token": ticket.value},
+            FakeConnection(),
+        )
+
+        self.assertFalse(paired)
+        self.assertEqual(code, "EXTENSION_PROTOCOL_MISMATCH")
+        self.assertEqual(manager.public_status()["state"], "extension_outdated")
+
+    def test_outdated_second_extension_cannot_corrupt_an_active_pairing_status(self) -> None:
+        manager = ChromeExtensionManager()
+        active_connection = FakeConnection()
+        active_ticket = manager.issue_pairing_token()
+        paired, code = manager.consume_pairing_message(
+            {
+                "type": "pair",
+                "token": active_ticket.value,
+                "protocol_version": 2,
+            },
+            active_connection,
+        )
+        self.assertTrue(paired)
+        self.assertEqual(code, "PAIRED")
+
+        replacement_ticket = manager.issue_pairing_token()
+        paired, code = manager.consume_pairing_message(
+            {
+                "type": "pair",
+                "token": replacement_ticket.value,
+                "protocol_version": 1,
+            },
+            FakeConnection(),
+        )
+
+        self.assertFalse(paired)
+        self.assertEqual(code, "EXTENSION_PROTOCOL_MISMATCH")
+        self.assertEqual(
+            manager.public_status(),
+            {
+                "state": "paired",
+                "extension_connected": True,
+                "paired": True,
+                "pending_commands": 0,
+                "protocol_compatible": True,
+                "extension_protocol_version": 2,
+                "required_protocol_version": 2,
+            },
+        )
+
     def test_pairing_token_has_256_bits_of_entropy_and_is_single_use(self) -> None:
         now = [100.0]
         manager = ChromeExtensionManager(clock=lambda: now[0])
@@ -69,6 +163,9 @@ class ChromeExtensionPairingTest(unittest.TestCase):
 
 
 class ChromeExtensionCommandTest(unittest.IsolatedAsyncioTestCase):
+    async def test_release_session_is_allowlisted_by_local_manager(self) -> None:
+        self.assertIn("release_session", ALLOWED_ACTIONS)
+
     async def test_command_requires_a_paired_connection(self) -> None:
         manager = ChromeExtensionManager()
 

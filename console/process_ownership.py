@@ -20,6 +20,11 @@ REQUIRED_FIELDS = {
     "instance_token",
     "port",
 }
+LISTENER_PROBE_TIMEOUT_SECONDS = 10
+
+
+class ListenerProbeError(RuntimeError):
+    pass
 
 
 @dataclass(frozen=True)
@@ -58,13 +63,20 @@ def capture_identity(pid: int, port: int, instance_token: str) -> dict[str, Any]
 
 
 def listener_pids(port: int) -> list[int]:
-    result = subprocess.run(
-        ["lsof", "-nP", f"-iTCP:{int(port)}", "-sTCP:LISTEN", "-t"],
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=3,
-    )
+    try:
+        result = subprocess.run(
+            ["lsof", "-nP", f"-iTCP:{int(port)}", "-sTCP:LISTEN", "-t"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=LISTENER_PROBE_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise ListenerProbeError("listener probe timed out") from exc
+    except OSError as exc:
+        raise ListenerProbeError("listener probe failed") from exc
+    if result.returncode not in {0, 1}:
+        raise ListenerProbeError("listener probe failed")
     pids = {int(line) for line in result.stdout.splitlines() if line.strip().isdigit()}
     return sorted(pids)
 
@@ -80,7 +92,11 @@ def _valid_record(record: dict[str, Any] | None) -> bool:
 
 
 def classify(record: dict[str, Any] | None, port: int) -> ProcessStatus:
-    listeners = listener_pids(port)
+    try:
+        listeners = listener_pids(port)
+    except ListenerProbeError as exc:
+        pid = record.get("pid") if isinstance(record, dict) else None
+        return ProcessStatus("unknown", pid, [], str(exc))
     if record is None:
         return ProcessStatus("foreign" if listeners else "stopped", listener_pids=listeners)
     if not _valid_record(record) or record["port"] != int(port):

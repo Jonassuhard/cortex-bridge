@@ -8,12 +8,50 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "console"))
 
 
 class ProcessOwnershipTest(unittest.TestCase):
+    def test_listener_probe_timeout_is_structured_unknown_state(self):
+        from process_ownership import classify
+
+        with mock.patch(
+            "process_ownership.subprocess.run",
+            side_effect=subprocess.TimeoutExpired(["lsof"], 10),
+        ):
+            result = classify(None, 8420)
+
+        self.assertEqual(result.state, "unknown")
+        self.assertEqual(result.listener_pids, [])
+        self.assertIn("timed out", result.reason or "")
+
+    def test_missing_listener_probe_is_structured_unknown_state(self):
+        from process_ownership import classify
+
+        with mock.patch(
+            "process_ownership.subprocess.run",
+            side_effect=FileNotFoundError("lsof"),
+        ):
+            result = classify(None, 8420)
+
+        self.assertEqual(result.state, "unknown")
+        self.assertEqual(result.listener_pids, [])
+        self.assertIn("failed", result.reason or "")
+
+    def test_abnormal_listener_probe_exit_is_structured_unknown_state(self):
+        from process_ownership import classify
+
+        failed = subprocess.CompletedProcess(["lsof"], 2, stdout="", stderr="failure")
+        with mock.patch("process_ownership.subprocess.run", return_value=failed):
+            result = classify(None, 8420)
+
+        self.assertEqual(result.state, "unknown")
+        self.assertEqual(result.listener_pids, [])
+        self.assertIn("failed", result.reason or "")
+
     def test_identity_contains_every_required_field_and_exact_owner_is_owned(self):
         from process_ownership import capture_identity, classify
 
@@ -249,6 +287,52 @@ class CortexScriptOwnershipTest(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("foreign", (result.stdout + result.stderr).lower())
             self.assertFalse(kill_log.exists(), "stop attempted to signal a foreign pid")
+
+    def test_start_refuses_an_unknown_ownership_probe(self):
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            bin_dir = root_path / "bin"
+            bin_dir.mkdir()
+            for name, body in {
+                "lsof": "#!/bin/sh\nexit 0\n",
+                "curl": "#!/bin/sh\nexit 1\n",
+                "seq": "#!/bin/sh\necho 1\n",
+                "sleep": "#!/bin/sh\nexit 0\n",
+            }.items():
+                target = bin_dir / name
+                target.write_text(body, encoding="utf-8")
+                target.chmod(0o755)
+            python_wrapper = root_path / "python"
+            python_wrapper.write_text(
+                "#!/bin/sh\n"
+                "if [ \"$1\" = -c ] && [ \"$2\" = \"import fastapi,uvicorn,playwright,websockets\" ]; then exit 0; fi\n"
+                "case \"$1\" in\n"
+                " */process_ownership.py) printf '%s\\n' '{\"state\":\"unknown\",\"pid\":null,\"listener_pids\":[],\"reason\":\"listener probe timed out\"}'; exit 0;;\n"
+                " server.py) exit 1;;\n"
+                "esac\n"
+                f"exec {sys.executable!r} \"$@\"\n",
+                encoding="utf-8",
+            )
+            python_wrapper.chmod(0o755)
+            environment = {
+                **os.environ,
+                "PATH": f"{bin_dir}:{os.environ['PATH']}",
+                "CORTEX_HOME": str(root_path / "cortex-home"),
+                "PYTHON_BIN": str(python_wrapper),
+                "PORT": "58421",
+            }
+
+            result = subprocess.run(
+                ["bash", str(ROOT / "scripts" / "cortex.sh"), "start"],
+                cwd=ROOT,
+                env=environment,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("unknown", (result.stdout + result.stderr).lower())
 
 
 if __name__ == "__main__":

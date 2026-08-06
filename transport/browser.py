@@ -111,7 +111,7 @@ def create_browser_driver(
         key = (selected, "extension", session, None)
         with _driver_cache_lock:
             cached = _driver_cache.get(key)
-            if cached is not None:
+            if cached is not None and cached.live:
                 return cached
             driver = ChromeExtensionBrowserDriver(session=session)
             _driver_cache[key] = driver

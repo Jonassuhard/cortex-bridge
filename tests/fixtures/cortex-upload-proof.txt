@@ -1,0 +1,2 @@
+CORTEX_UPLOAD_PROOF_20260805
+Synthetic QA fixture. Contains no personal data.

@@ -54,3 +54,4 @@ if [[ -x scripts/check-public-privacy.sh ]]; then
     --fingerprints scripts/privacy-fingerprints.json \
     --url-allowlist scripts/public-url-allowlist.txt
 fi
+"$PYTHON" scripts/verify-release-evidence.py docs/verification/v0.5.0.json

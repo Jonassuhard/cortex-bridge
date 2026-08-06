@@ -95,6 +95,7 @@ class FakeManager:
             },
             "list_models": {"selected": "GPT-5", "models": ["GPT-5"]},
             "select_model": {"selected": "GPT-5"},
+            "release_session": {"released": True, "tab_id": 42},
             "close_tab": {"closed": True},
             "navigate": {"tab_id": 42, "url": "https://chatgpt.com/c/abc"},
         }
@@ -111,6 +112,8 @@ class FakeManager:
     async def command(self, session: str, action: str, payload: dict, timeout: float):
         self.calls.append((session, action, payload, timeout))
         response = self.responses[action]
+        if isinstance(response, list):
+            response = response.pop(0)
         if isinstance(response, Exception):
             raise response
         return response
@@ -154,6 +157,32 @@ class ChromeExtensionDriverContractTest(unittest.IsolatedAsyncioTestCase):
             ["open_chatgpt", "probe"],
         )
 
+    async def test_open_login_waits_until_the_reloaded_chatgpt_composer_is_ready(self) -> None:
+        self.manager.responses["probe"] = [
+            {
+                "ok": False,
+                "url": "https://chatgpt.com/",
+                "composer_present": False,
+                "blocker": None,
+                "failures": ["composer"],
+            },
+            {
+                "ok": True,
+                "url": "https://chatgpt.com/",
+                "composer_present": True,
+                "blocker": None,
+                "failures": [],
+            },
+        ]
+
+        result = await self.driver.open_login()
+
+        self.assertTrue(result["probe"]["composer_present"])
+        self.assertEqual(
+            [call[1] for call in self.manager.calls],
+            ["open_chatgpt", "probe", "probe"],
+        )
+
     async def test_structured_state_navigation_and_send_contract(self) -> None:
         await self.driver.navigate("https://chatgpt.com/c/abc")
         self.assertTrue(await self.driver.spa_navigate("https://chatgpt.com/c/abc"))
@@ -166,6 +195,87 @@ class ChromeExtensionDriverContractTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls["navigate"], {"url": "https://chatgpt.com/c/abc"})
         self.assertEqual(calls["send_text"], {"text": "hello"})
 
+    async def test_spa_navigation_falls_back_to_full_navigation_when_target_is_absent(self) -> None:
+        self.manager.responses["spa_navigate"] = {"handled": False}
+        self.manager.responses["navigate"] = {
+            "tab_id": 42,
+            "url": "https://chatgpt.com/c/target",
+        }
+
+        handled = await self.driver.spa_navigate("https://chatgpt.com/c/target")
+
+        self.assertTrue(handled)
+        self.assertTrue(self.driver.selection_used_full_navigation)
+        self.assertEqual(self.driver.target_url, "https://chatgpt.com/c/target")
+        self.assertEqual(
+            [call[1] for call in self.manager.calls],
+            ["spa_navigate", "navigate"],
+        )
+
+    async def test_send_waits_for_a_proven_missing_content_script_before_delivery(self) -> None:
+        from console.chrome_extension import BridgeProtocolError
+
+        self.manager.responses["send_text"] = [
+            BridgeProtocolError(
+                "TAB_UNAVAILABLE",
+                "The ChatGPT content script is not available yet",
+            ),
+            {"ok": True},
+        ]
+        driver = ChromeExtensionBrowserDriver(
+            session="session-a",
+            manager=self.manager,
+            allowed_root=self.root,
+            retry_sleep=lambda _delay: None,
+        )
+
+        await driver.send_message("CORTEX-CONTENT-SCRIPT-READY")
+
+        sends = [call for call in self.manager.calls if call[1] == "send_text"]
+        self.assertEqual(len(sends), 2)
+
+    async def test_send_waits_for_a_transient_pre_delivery_composer(self) -> None:
+        from console.chrome_extension import BridgeProtocolError
+
+        self.manager.responses["send_text"] = [
+            BridgeProtocolError(
+                "PRE_DELIVERY_NOT_READY",
+                "COMPOSER_MISSING: ChatGPT composer not found",
+            ),
+            {"ok": True},
+        ]
+        driver = ChromeExtensionBrowserDriver(
+            session="session-a",
+            manager=self.manager,
+            allowed_root=self.root,
+            retry_sleep=lambda _delay: None,
+        )
+
+        await driver.send_message("CORTEX-COMPOSER-READY")
+
+        sends = [call for call in self.manager.calls if call[1] == "send_text"]
+        self.assertEqual(len(sends), 2)
+
+    async def test_send_never_retries_an_ambiguous_tab_error(self) -> None:
+        from console.chrome_extension import BridgeProtocolError
+
+        self.manager.responses["send_text"] = BridgeProtocolError(
+            "TAB_UNAVAILABLE",
+            "The bound tab is not ChatGPT",
+        )
+        driver = ChromeExtensionBrowserDriver(
+            session="session-a",
+            manager=self.manager,
+            allowed_root=self.root,
+            retry_sleep=lambda _delay: None,
+        )
+
+        with self.assertRaises(DriverError):
+            await driver.send_message("CORTEX-DO-NOT-RETRY")
+
+        sends = [call for call in self.manager.calls if call[1] == "send_text"]
+        self.assertEqual(len(sends), 1)
+
     async def test_raw_javascript_evaluation_is_never_available(self) -> None:
         with self.assertRaisesRegex(DriverError, "raw evaluation is unavailable"):
             await self.driver.evaluate("document.cookie")
@@ -176,13 +286,30 @@ class ChromeExtensionDriverContractTest(unittest.IsolatedAsyncioTestCase):
         staged.write_bytes(b"a" * 600_000)
 
         await self.driver.upload_files("form input[type=file]", [str(staged)])
+        await self.driver.await_attachment()
 
         actions = [call[1] for call in self.manager.calls]
         self.assertEqual(actions[0], "attachment_begin")
-        self.assertEqual(actions[-1], "attachment_commit")
+        self.assertEqual(actions[-1], "await_attachment")
         self.assertGreater(actions.count("attachment_chunk"), 1)
+        self.assertEqual(self.manager.calls[-1][2], {"name": "small.txt"})
         wire = repr(self.manager.calls)
         self.assertNotIn(str(staged), wire)
+
+    async def test_named_upload_keeps_the_user_filename_off_the_staging_prefix(self) -> None:
+        staged = self.root / "cortex-attachment-1234-report.txt"
+        staged.write_text("synthetic", encoding="utf-8")
+
+        await self.driver.upload_files_named(
+            "form input[type=file]",
+            [str(staged)],
+            "report.txt",
+        )
+        await self.driver.await_attachment()
+
+        begin = next(call for call in self.manager.calls if call[1] == "attachment_begin")
+        self.assertEqual(begin[2]["name"], "report.txt")
+        self.assertEqual(self.manager.calls[-1][2], {"name": "report.txt"})
 
     async def test_upload_rejects_outside_and_oversized_files_before_sending(self) -> None:
         outside = Path(self.tmp.name).parent / "outside-cortex.txt"
@@ -220,12 +347,12 @@ class ChromeExtensionDriverContractTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(TabClosedError):
             await self.driver.probe()
 
-    async def test_logical_close_does_not_close_or_poison_the_users_tab(self) -> None:
+    async def test_logical_close_releases_binding_without_closing_users_tab(self) -> None:
+        await self.driver.close()
         await self.driver.close()
 
-        probe = await self.driver.probe()
-
-        self.assertTrue(probe["ok"])
+        actions = [call[1] for call in self.manager.calls]
+        self.assertEqual(actions.count("release_session"), 1)
         self.assertNotIn("close_tab", [call[1] for call in self.manager.calls])
 
     async def test_structured_upload_failure_never_falls_back_to_raw_evaluation(self) -> None:
@@ -260,6 +387,21 @@ class ChromeExtensionFactoryTest(unittest.TestCase):
             settings={"browser_transport": "chrome_extension"},
         )
         self.assertEqual(driver.driver_name, "chrome_extension")
+
+    def test_chrome_extension_factory_replaces_a_closed_cached_session(self) -> None:
+        first = create_browser_driver(
+            "factory-recreate-closed",
+            settings={"browser_transport": "chrome_extension"},
+        )
+        first._closed = True
+
+        second = create_browser_driver(
+            "factory-recreate-closed",
+            settings={"browser_transport": "chrome_extension"},
+        )
+
+        self.assertIsNot(first, second)
+        self.assertTrue(second.live)
 
     def test_legacy_development_transports_remain_explicit(self) -> None:
         for name in ("playwright", "webbridge"):

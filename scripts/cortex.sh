@@ -76,6 +76,10 @@ case "$COMMAND" in
       echo "Refusing to start: port $PORT is owned by a foreign process." >&2
       exit 1
     fi
+    if [ "$state" != "stopped" ] && [ "$state" != "stale" ]; then
+      echo "Refusing to start: process ownership state is $state." >&2
+      exit 1
+    fi
     if [ "$state" = "stale" ] && [ -n "$(_port_pid)" ]; then
       echo "Refusing to start: stale identity and an unverified listener on port $PORT." >&2
       exit 1

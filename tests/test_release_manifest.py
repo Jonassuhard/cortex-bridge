@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import subprocess
 import tempfile
 import unittest
@@ -91,7 +92,9 @@ def valid_payload() -> dict[str, object]:
             )
         }
         | {"consoleErrors": 0},
-        "artifacts": {"release.tar.gz": "a" * 64},
+        "artifacts": {
+            "VERSION": hashlib.sha256((REPO_ROOT / "VERSION").read_bytes()).hexdigest(),
+        },
         "verdict": "RELEASE_CANDIDATE_READY_FOR_OWNER_APPROVAL",
     }
 
@@ -299,6 +302,15 @@ class ReleaseManifestTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("commit_format", result.stdout)
         self.assertIn("artifact_hash", result.stdout)
+
+    def test_artifact_digest_must_match_the_repository_file(self) -> None:
+        payload = valid_payload()
+        payload["artifacts"] = {"VERSION": "a" * 64}
+
+        result = self.run_validation(payload)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("artifact_hash_mismatch", result.stdout)
 
 
 if __name__ == "__main__":

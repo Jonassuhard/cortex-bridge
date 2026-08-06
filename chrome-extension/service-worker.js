@@ -2,13 +2,14 @@ import {
   HEARTBEAT_INTERVAL_MS,
   routeCommand,
 } from "./service-worker-core.js";
-import { commandError, isChatGPTUrl } from "./protocol.js";
+import { commandError, createPairMessage, isChatGPTUrl } from "./protocol.js";
 
 const SOCKET_URL = "ws://127.0.0.1:8420/api/chrome-extension/ws";
 const context = {
   chrome,
   cortexTab: null,
   sessionTabs: new Map(),
+  reusableWriterTabs: new Set(),
   pendingCapture: null,
 };
 
@@ -40,12 +41,15 @@ function scheduleReconnect() {
 
 function connect() {
   if (socket && [WebSocket.OPEN, WebSocket.CONNECTING].includes(socket.readyState)) return;
-  socket = new WebSocket(SOCKET_URL);
-  socket.addEventListener("open", () => {
+  const activeSocket = new WebSocket(SOCKET_URL);
+  socket = activeSocket;
+  activeSocket.addEventListener("open", () => {
+    if (socket !== activeSocket) return;
     startHeartbeat();
-    if (pendingPair) send({ type: "pair", token: pendingPair });
+    if (pendingPair) send(createPairMessage(pendingPair));
   });
-  socket.addEventListener("message", async (event) => {
+  activeSocket.addEventListener("message", async (event) => {
+    if (socket !== activeSocket) return;
     let message;
     try {
       message = JSON.parse(event.data);
@@ -74,16 +78,25 @@ function connect() {
       });
     }
   });
-  socket.addEventListener("close", () => {
+  activeSocket.addEventListener("close", () => {
+    if (socket !== activeSocket) return;
     clearInterval(heartbeatTimer);
     heartbeatTimer = null;
     socket = null;
     scheduleReconnect();
   });
-  socket.addEventListener("error", () => socket?.close());
+  activeSocket.addEventListener("error", () => {
+    if (socket !== activeSocket) return;
+    clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
+    socket = null;
+    activeSocket.close();
+    scheduleReconnect();
+  });
 }
 
 chrome.action.onClicked.addListener(async (tab) => {
+  connect();
   if (
     !Number.isInteger(tab?.id)
     || !Number.isInteger(tab?.windowId)
@@ -124,7 +137,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   };
   pendingPair = message.token;
   connect();
-  if (send({ type: "pair", token: pendingPair })) {
+  if (send(createPairMessage(pendingPair))) {
     sendResponse({ ok: true, state: "pairing" });
   } else {
     sendResponse({ ok: true, state: "connecting" });
