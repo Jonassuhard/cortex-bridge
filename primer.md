@@ -32,14 +32,18 @@
   unverified process.
 - Release evidence now hashes real repository artifacts instead of accepting
   any well-formed fake digest.
-- Fresh complete gate passed: 416 backend tests, 44 extension tests, 125
+- Fresh complete gate passed: 417 backend tests, 44 extension tests, 125
   frontend unit tests, 35 frontend contracts, typecheck, lint, production
   build, 12 E2E tests with one documented skip, 4 accessibility tests, runtime
   verification, privacy and release-evidence validation.
-- Final synthetic performance: cached usability 147.9 ms; ten-switch p95 and
-  maximum 64.8 ms.
-- Static gates passed: ShellCheck, Gitleaks, npm/Python audits, 70 documentation
-  links including 31 external, and privacy over 293 files and 41 images.
+- Final synthetic performance: cached usability 145.9 ms; ten-switch p95 and
+  maximum 74.9 ms.
+- Static gates passed: ShellCheck, Gitleaks, npm/Python audits, 71 documentation
+  links including 32 external, and privacy over 293 files and 41 images.
+- The August 10 publication gate found and fixed a new high-severity `nanoid`
+  advisory by pinning the compatible patched 3.3.18 release. It also fixed the
+  test runner so a relative `PYTHON=.venv/bin/python` remains valid inside the
+  frontend subshell, with a red/green regression contract.
 - Earlier owner-authorized Chrome observations are historical technical data,
   not compliant release acceptance. The latest new-chat attempt failed at the
   10-second navigation deadline before the final no-wait extension fix was
@@ -55,14 +59,14 @@
   `952ac88a626737d69fe38ec2fe5bb1dcca6ab69df466e8df4314b64ab30fac90`;
   300 MiB estimate, no sudo. Apply, doctor, start/stop, reinstall and uninstall
   require explicit approval of that exact hash.
-- Source commit `9445b080653c5853a4aa921651d5529b208e4731` contains the
-  hardened bridge and release gates. `docs/verification/v0.5.0.json` references
-  that exact commit, real artifact hashes and the truthful
+- Source commit `4c2e22342b414e8641ff7582a51511591b05946d` contains the
+  hardened bridge, dependency patch and release gates.
+  `docs/verification/v0.5.0.json` references that exact commit, real artifact
+  hashes and the truthful
   `RELEASE_BLOCKED_BY_PROVIDER_TERMS` verdict.
-- Three audited commits are still local, including the committed
-  supported-transport clarification; the current candidate is not pushed. User
-  authorization covers push after the stated gates pass, not merge, tag,
-  release or social publication.
-- Exact next action: choose between implementing an officially supported
-  provider transport or publishing the branch explicitly as a blocked technical
-  preview; separately approve the exact lifecycle hash if that test should run.
+- The user explicitly requested publication of the current branch. Publication
+  is limited to a blocked technical-preview PR: no merge, tag, GitHub release or
+  social publication is authorized.
+- Publication contract: push `codex/v050-release-qa` without force, replace the
+  stale PR claims with the truthful blocked evidence, keep the PR in draft and
+  verify the remote SHA and checks.
