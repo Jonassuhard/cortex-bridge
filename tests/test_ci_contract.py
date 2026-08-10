@@ -59,6 +59,19 @@ class CiContractTest(unittest.TestCase):
 
         self.assertIn(".venv/bin/python -m playwright install chromium", source)
 
+    def test_test_all_resolves_relative_python_before_frontend_subshell(self):
+        source = (ROOT / "scripts/test-all.sh").read_text(encoding="utf-8")
+
+        self.assertRegex(
+            source,
+            re.compile(
+                r'if \[\[ -x "\$PYTHON" \]\]; then\s+'
+                r'PYTHON="\$\(cd "\$\(dirname "\$PYTHON"\)" && pwd\)/'
+                r'\$\(basename "\$PYTHON"\)"',
+                re.MULTILINE,
+            ),
+        )
+
     def test_public_tree_installs_every_required_image_scanner(self):
         source = WORKFLOWS[1].read_text(encoding="utf-8")
 

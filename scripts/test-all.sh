@@ -4,7 +4,11 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 PYTHON="${PYTHON:-$ROOT/.venv/bin/python}"
-if [[ ! -x "$PYTHON" ]]; then PYTHON=python3; fi
+if [[ -x "$PYTHON" ]]; then
+  PYTHON="$(cd "$(dirname "$PYTHON")" && pwd)/$(basename "$PYTHON")"
+else
+  PYTHON="$(command -v python3)"
+fi
 
 "$PYTHON" -m unittest discover -s tests -v
 "$PYTHON" -m py_compile \
