@@ -8,6 +8,7 @@ https://developer.chrome.com/docs/extensions/develop/concepts/declare-permission
 https://developer.chrome.com/docs/extensions/get-started/tutorial/hello-world#load-unpacked
 https://developer.chrome.com/docs/extensions/how-to/web-platform/websockets
 https://developer.chrome.com/docs/extensions/reference/api/tabs
+https://developers.openai.com/api/docs/guides/secure-mcp-tunnels
 https://git-scm.com/download/mac
 https://github.com/aaif-goose/goose
 https://github.com/browser-use/browser-use
