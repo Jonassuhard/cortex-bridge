@@ -1212,3 +1212,110 @@ test("assistant markdown remains visible as response text", async () => {
 
   assert.equal(state.messages[0].text, "REÇU-CORTEX");
 });
+
+async function runSelectModel({ label, beforeLabel, afterLabel }) {
+  const source = await readFile(join(EXTENSION_ROOT, "chatgpt-content.js"), "utf8");
+  let listener = null;
+  let clock = 0;
+  class FakeDate extends Date {
+    static now() { return clock; }
+  }
+  class FakeElement {
+    constructor(text = "") {
+      this.innerText = text;
+      this.textContent = text;
+    }
+  }
+  const TRIGGER_SELECTORS = [
+    "button[data-testid*='model-switcher']",
+    "button[aria-label*='model']",
+    "button[aria-label*='modèle']",
+  ];
+  let currentTrigger = new FakeElement(beforeLabel);
+  const option = new FakeElement(label);
+  option.click = () => {
+    // Radix re-renders the switcher after a selection: the previous trigger
+    // node is detached and replaced. afterLabel === null simulates a click
+    // that ChatGPT silently ignored (trigger never updates).
+    if (afterLabel !== null) currentTrigger = new FakeElement(afterLabel);
+  };
+  const document = {
+    body: { innerText: "" },
+    title: "Model switch regression - ChatGPT",
+    querySelector(selector) {
+      return TRIGGER_SELECTORS.includes(selector) ? currentTrigger : null;
+    },
+    querySelectorAll(selector) {
+      if (selector === "[role=menuitem], [role=option], button") return [option];
+      return [];
+    },
+  };
+  const chrome = {
+    runtime: {
+      onMessage: {
+        addListener(callback) { listener = callback; },
+      },
+    },
+  };
+  runInNewContext(source, {
+    chrome,
+    document,
+    location: {
+      href: "https://chatgpt.com/c/model-switch-regression",
+      origin: "https://chatgpt.com",
+      pathname: "/c/model-switch-regression",
+    },
+    Element: FakeElement,
+    HTMLTextAreaElement: class {},
+    HTMLInputElement: class {},
+    getComputedStyle: () => ({ display: "block", visibility: "visible" }),
+    URL,
+    Map,
+    Promise,
+    Date: FakeDate,
+    setTimeout: (callback) => { clock += 100; callback(); },
+    clearTimeout,
+  });
+  assert.equal(typeof listener, "function");
+  return new Promise((resolve) => {
+    listener(
+      { source: "cortex-bridge-extension", action: "select_model", payload: { label } },
+      {},
+      resolve,
+    );
+  });
+}
+
+test("select_model confirms from the rerendered Radix trigger, never a stale node", async () => {
+  const response = await runSelectModel({
+    label: "Instantanée 5.5",
+    beforeLabel: "Pro",
+    afterLabel: "Instantanée 5.5",
+  });
+
+  assert.equal(response.ok, true);
+  assert.equal(response.result.selected, "Instantanée 5.5");
+  assert.equal(response.result.confirmed, true);
+});
+
+test("select_model fails closed when ChatGPT silently ignores the click", async () => {
+  const response = await runSelectModel({
+    label: "Instantanée 5.5",
+    beforeLabel: "Pro",
+    afterLabel: null,
+  });
+
+  assert.equal(response.ok, false);
+  assert.equal(response.error.code, "MODEL_CONFIRM_FAILED");
+});
+
+test("select_model confirms immediately when the requested model is already active", async () => {
+  const response = await runSelectModel({
+    label: "Pro",
+    beforeLabel: "Pro",
+    afterLabel: null,
+  });
+
+  assert.equal(response.ok, true);
+  assert.equal(response.result.selected, "Pro");
+});

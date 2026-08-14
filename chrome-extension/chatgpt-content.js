@@ -103,6 +103,12 @@
     messages: messages(),
   });
 
+  const modelSwitchTrigger = () => queryFirst([
+    "button[data-testid*='model-switcher']",
+    "button[aria-label*='model']",
+    "button[aria-label*='modèle']",
+  ]);
+
   const operations = {
     probe() {
       const state = pageShellState();
@@ -377,24 +383,43 @@
       return { ok: true };
     },
     list_models() {
-      const trigger = queryFirst([
-        "button[data-testid*='model-switcher']",
-        "button[aria-label*='model']",
-        "button[aria-label*='modèle']",
-      ]);
+      const trigger = modelSwitchTrigger();
       return {
         selected: trigger?.innerText?.trim() || null,
         models: [],
       };
     },
-    select_model(payload) {
+    async select_model(payload) {
       const label = String(payload.label || "").trim();
       if (!label) throw Object.assign(new Error("Model label is required"), { code: "MODEL_REQUIRED" });
       const option = Array.from(document.querySelectorAll("[role=menuitem], [role=option], button"))
         .find((node) => visible(node) && node.textContent?.trim() === label);
       if (!option) throw Object.assign(new Error(`ChatGPT model not found: ${label}`), { code: "MODEL_NOT_FOUND" });
+      const normalize = (value) => String(value || "").toLowerCase().replace(/\s+/g, " ").trim();
+      const expected = normalize(label);
+      const before = normalize(
+        modelSwitchTrigger()?.innerText || modelSwitchTrigger()?.textContent,
+      );
       option.click();
-      return { selected: label };
+      // Radix re-renders the switcher after a selection: any node captured
+      // before the click may be detached. Confirm only from a freshly
+      // reacquired trigger whose label moved toward the requested model —
+      // never from a stale node (historical model-switch confirmation bug).
+      const matches = (current) => Boolean(current)
+        && (current === expected || current.includes(expected) || expected.includes(current));
+      const deadline = Date.now() + 5_000;
+      while (Date.now() < deadline) {
+        const trigger = modelSwitchTrigger();
+        const current = normalize(trigger?.innerText || trigger?.textContent);
+        if (matches(current) && (expected === before || current !== before)) {
+          return { selected: label, confirmed: true };
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      throw Object.assign(
+        new Error(`ChatGPT model switch could not be confirmed: ${label}`),
+        { code: "MODEL_CONFIRM_FAILED" },
+      );
     },
   };
 
