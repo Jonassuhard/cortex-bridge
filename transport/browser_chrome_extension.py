@@ -186,9 +186,15 @@ class ChromeExtensionBrowserDriver:
 
     async def navigate(self, url: str) -> None:
         self.selection_used_full_navigation = True
-        result = await self._command("navigate", {"url": url}, timeout=10)
+        # A session's first navigation opens its dedicated tab. Inside the
+        # extension, tab allocations are serialized across writer sessions, so
+        # this command may legitimately queue behind another writer's open on
+        # the real site. Give the initial open a bounded 30 s budget; existing
+        # conversation switches keep the strict 10 s contract.
+        budget = 30 if self.target_url is None else 10
+        result = await self._command("navigate", {"url": url}, timeout=budget)
         self.target_url = str((result or {}).get("url") or url)
-        await self._wait_until_page_ready(timeout=10)
+        await self._wait_until_page_ready(timeout=budget)
 
     async def _wait_until_page_ready(self, *, timeout: float) -> dict[str, Any]:
         deadline = time.monotonic() + timeout

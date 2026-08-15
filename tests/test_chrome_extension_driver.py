@@ -133,6 +133,22 @@ class ChromeExtensionDriverContractTest(unittest.IsolatedAsyncioTestCase):
     def tearDown(self) -> None:
         self.tmp.cleanup()
 
+    async def test_first_navigation_gets_a_bounded_30s_budget_behind_serialized_allocation(self) -> None:
+        # Regression: two writers opening their dedicated tabs concurrently
+        # serialize on the extension's tab-allocation lock; the queued
+        # writer's 10 s deadline expired while it was still waiting, killing
+        # a healthy open (real-Chrome QA 2026-08-14, SELECTION_FAILED with
+        # EXTENSION_TIMEOUT). The initial open gets 30 s; switches keep 10 s.
+        await self.driver.navigate("https://chatgpt.com/")
+        first = [call for call in self.manager.calls if call[1] == "navigate"]
+        self.assertGreater(first[0][3], 29)
+        self.assertLessEqual(first[0][3], 30)
+
+        await self.driver.navigate("https://chatgpt.com/c/abc")
+        later = [call for call in self.manager.calls if call[1] == "navigate"]
+        self.assertGreater(later[-1][3], 9)
+        self.assertLessEqual(later[-1][3], 10)
+
     async def test_health_is_true_only_for_a_paired_extension(self) -> None:
         health = await self.driver.health()
         self.assertTrue(health["connected"])
