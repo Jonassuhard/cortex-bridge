@@ -1,22 +1,22 @@
 {
   "schemaVersion": 1,
   "release": "0.5.0",
-  "commit": "4c2e22342b414e8641ff7582a51511591b05946d",
-  "generatedAt": "2026-08-10T20:51:45Z",
+  "commit": "ffc279593027a1663ce4a4cbe6832ea3a2570e59",
+  "generatedAt": "2026-08-15T18:45:00Z",
   "environment": {
     "os": "macOS 26.5.1",
-    "python": "3.14.5",
+    "python": "3.12.1 (.venv)",
     "node": "25.8.2",
-    "browserDriver": "Cortex Chrome extension 0.5.0 protocol 2 with Chrome 150.0.7871.187; Playwright 1.62.0 fixtures",
-    "executorKind": "deterministic executor; consumer ChatGPT live gate blocked",
+    "browserDriver": "Cortex Chrome extension 0.5.0 protocol 2 with Chrome 151.0.7922.138; Playwright 1.62.0 fixtures",
+    "executorKind": "deterministic executor; consumer ChatGPT live runs executed under owner-assumed opt-in (technical preview)",
     "simulation": true
   },
   "suites": {
-    "backend": {"passed": 417, "failed": 0, "skipped": 0},
-    "frontendUnit": {"passed": 125, "failed": 0, "skipped": 0},
+    "backend": {"passed": 421, "failed": 0, "skipped": 0},
+    "frontendUnit": {"passed": 127, "failed": 0, "skipped": 0},
     "e2e": {"passed": 12, "failed": 0, "skipped": 1},
     "a11y": {"passed": 4, "failed": 0, "skipped": 0},
-    "extension": {"passed": 44, "failed": 0, "skipped": 0}
+    "extension": {"passed": 47, "failed": 0, "skipped": 0}
   },
   "performance": {
     "cachedUsabilityMs": 145.9,
@@ -33,11 +33,11 @@
     "coldDualRuns": {"runs": 10, "passed": 10},
     "crashPoints": {"runs": 6, "passed": 6},
     "liveChatGPT": {
-      "status": "BLOCKED_BY_PROVIDER_TERMS",
-      "singleConversation": {"runs": 0, "passed": 0},
-      "dualConversations": {"runs": 0, "passed": 0, "crossovers": null},
-      "thirdWriterRefused": false,
-      "fileUpload": false,
+      "status": "PARTIAL_PASS_OPT_IN",
+      "singleConversation": {"runs": 1, "passed": 1},
+      "dualConversations": {"runs": 2, "passed": 2, "crossovers": 0},
+      "thirdWriterRefused": true,
+      "fileUpload": true,
       "screenshotUpload": false,
       "personalDataRecorded": false
     },
@@ -63,7 +63,7 @@
     "miniSites": {
       "runs": 0,
       "passed": 0,
-      "status": "BLOCKED_BY_PROVIDER_TERMS"
+      "status": "NOT_RUN"
     }
   },
   "gates": {
@@ -80,7 +80,7 @@
     "consoleErrors": 0
   },
   "artifacts": {
-    "frontend/out/index.html": "3019027033511e58de8408819e43770db637ee87bd99c808b89dfd4a59201bdf",
+    "frontend/out/index.html": "3cac4f642ab4fe8188566236fc22fcefe061949a7cd44872fa27e9bfaa8ee13d",
     "docs/media/architecture-flow.png": "83213c2182b5d2dcba691d0628dde8e9a5489f327362c069340dc3eee217dc8a",
     "docs/media/architecture-flow.gif": "39c9a1ad5bee1cd218af5e1aae1f2c6dcf6841f0b410abaa1f05a238c4a156da",
     "docs/screenshots/v0.5.0/375/10-info-diagramme.png": "632afc793b5207a87b516609594a2a22220c78aa8480d2b45ed10f8c55554254",
@@ -90,5 +90,5 @@
     "docs/screenshots/v0.5.0/proofs/mission-protocol-expanded.jpg": "20ff475063ba786322310fb962f5456bd29edb50b351f1278d3a288111daadf8",
     "docs/screenshots/v0.5.0/proofs/mission-protocol-mobile.jpg": "6cd4b33e846510e5198eb1f53bdab3f1c01b96075ded012f2be339fe4b55212c"
   },
-  "verdict": "RELEASE_BLOCKED_BY_PROVIDER_TERMS"
+  "verdict": "OPT_IN_TECHNICAL_PREVIEW"
 }
