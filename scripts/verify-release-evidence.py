@@ -31,6 +31,7 @@ REQUIRED_GATES = (
 READY = "RELEASE_CANDIDATE_READY_FOR_OWNER_APPROVAL"
 PENDING = "PENDING_OWNER_APPROVAL_FOR_LIVE_GATES"
 PROVIDER_BLOCKED = "RELEASE_BLOCKED_BY_PROVIDER_TERMS"
+OPT_IN_PREVIEW = "OPT_IN_TECHNICAL_PREVIEW"
 
 
 class EvidenceValidator:
@@ -174,6 +175,25 @@ class EvidenceValidator:
             and screenshot_upload is False
             and personal_data is False
         )
+        # Owner-assumed opt-in preview: every recorded live run must have
+        # passed with zero crossover and zero personal data; unobserved
+        # behaviors (e.g. screenshot upload) stay honestly false.
+        live_partial_opt_in = (
+            live_status == "PARTIAL_PASS_OPT_IN"
+            and self.nonnegative_int(single_runs)
+            and self.nonnegative_int(single_passed)
+            and single_runs >= 1
+            and single_passed == single_runs
+            and self.nonnegative_int(live_dual_runs)
+            and self.nonnegative_int(live_dual_passed)
+            and live_dual_runs >= 2
+            and live_dual_passed == live_dual_runs
+            and live_crossovers == 0
+            and third_refused is True
+            and file_upload is True
+            and isinstance(screenshot_upload, bool)
+            and personal_data is False
+        )
 
         lifecycle_status = self.get("acceptance.cleanMacosLifecycle.status")
         lifecycle_boolean_fields = (
@@ -256,6 +276,21 @@ class EvidenceValidator:
                 self.report("live_chatgpt_evidence", "acceptance.liveChatGPT")
             if verdict == PROVIDER_BLOCKED and live_status != "BLOCKED_BY_PROVIDER_TERMS":
                 self.report("live_chatgpt_evidence", "acceptance.liveChatGPT.status")
+            if not (clean_lifecycle_pass or clean_lifecycle_not_run):
+                self.report(
+                    "clean_macos_lifecycle",
+                    "acceptance.cleanMacosLifecycle",
+                )
+        elif verdict == OPT_IN_PREVIEW:
+            if not (
+                valid_mini_counts
+                and mini_status in {"NOT_RUN", "PENDING_OWNER_APPROVAL"}
+                and mini_runs == 0
+                and mini_passed == 0
+            ):
+                self.report("live_gate_verdict", "acceptance.miniSites")
+            if not live_partial_opt_in:
+                self.report("live_chatgpt_evidence", "acceptance.liveChatGPT")
             if not (clean_lifecycle_pass or clean_lifecycle_not_run):
                 self.report(
                     "clean_macos_lifecycle",

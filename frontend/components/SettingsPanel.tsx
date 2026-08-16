@@ -82,7 +82,40 @@ export function SettingsPanel({
   const [labConfirmation, setLabConfirmation] = useState("");
   const [diagTesting, setDiagTesting] = useState<string | null>(null);
   const [diagResult, setDiagResult] = useState<{ label: string; state: string; detail: string } | null>(null);
+  const [transportOptIn, setTransportOptIn] = useState<boolean | null>(null);
+  const [optInBusy, setOptInBusy] = useState(false);
   const dialogRef = useAccessibleDialog<HTMLDivElement>({ open, onClose });
+
+  useEffect(() => {
+    if (!open || tab !== "transport") return;
+    let cancelled = false;
+    fetch("/api/transport/status")
+      .then((response) => (response.ok ? response.json() : null))
+      .then((payload) => {
+        if (!cancelled && payload) setTransportOptIn(Boolean(payload.opt_in_accepted));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [open, tab]);
+
+  const toggleTransportOptIn = async (accepted: boolean) => {
+    setOptInBusy(true);
+    try {
+      const response = await fetch("/api/transport/opt-in", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ accepted }),
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      setTransportOptIn(accepted);
+    } catch {
+      // Keep the previous state: the backend stays the source of truth.
+    } finally {
+      setOptInBusy(false);
+    }
+  };
 
   useEffect(() => {
     if (!open) {
@@ -226,6 +259,15 @@ export function SettingsPanel({
               <div className="settings-section-stack">
                 <div className="settings-section-title"><h3>Transport ChatGPT</h3><p>Le bridge contrôle les onglets ChatGPT du Chrome de l’utilisateur, sans API OpenAI.</p></div>
                 <div className="settings-notice"><GlobeIcon /><span><strong>Transport expérimental</strong><small>La compatibilité dépend du DOM de ChatGPT. Aucun CAPTCHA, identifiant ou mécanisme anti-bot n'est contourné.</small></span></div>
+                <div className="settings-notice is-danger"><AlertIcon /><span><strong>Bridge non autorisé par OpenAI — risque pour ton compte</strong><small>Les conditions d'utilisation européennes de ChatGPT interdisent d'extraire automatiquement des données ou des réponses du service. Cortex Bridge n'est ni affilié à OpenAI ni autorisé par OpenAI : activer ce bridge se fait sous ta seule responsabilité et peut entraîner la restriction ou la suspension de ton compte ChatGPT. Les missions locales déterministes fonctionnent sans ce bridge.</small></span></div>
+                <Toggle
+                  checked={transportOptIn === true}
+                  disabled={optInBusy || transportOptIn === null}
+                  danger
+                  onChange={(checked) => void toggleTransportOptIn(checked)}
+                  label="J'ai compris le risque — activer le bridge ChatGPT"
+                  description="Lecture et écriture automatisées dans les onglets ChatGPT réels de ce Chrome. Aucun CAPTCHA, identifiant ou protection n'est contourné. Désactivation immédiate, à tout moment."
+                />
                 <div className="settings-grid two">
                   <label><span>Driver navigateur</span><select value={draft.browser_transport} onChange={(e) => patch("browser_transport", e.target.value as CortexSettings["browser_transport"])}><option value="chrome_extension">Extension Chrome — recommandée</option><option value="playwright">Playwright — développement uniquement</option><option value="webbridge">WebBridge — compatibilité historique</option></select></label>
                   <label><span>Racine Playwright</span><input value={draft.browser_profile_root} onChange={(e) => patch("browser_profile_root", e.target.value)} disabled={draft.browser_transport === "chrome_extension"} /></label>

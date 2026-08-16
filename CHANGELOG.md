@@ -2,6 +2,32 @@
 
 All notable changes are recorded here.
 
+## Unreleased
+
+### Added
+
+- Explicit contractual-risk opt-in control in Settings → Transport: the bridge
+  is labeled as not authorized by OpenAI, with the account-suspension risk
+  stated in French before activation (the opt-in API existed without any UI).
+- Live QA evidence document `docs/verification/v1-live-qa-2026-08-15.md` and a
+  local-models restore plan `docs/local-models.md`.
+
+### Fixed
+
+- `select_model` on the Chrome-extension transport now confirms the switch from
+  a freshly reacquired trigger and fails closed with `MODEL_CONFIRM_FAILED`
+  instead of reporting success unconditionally (stale-node bug class).
+- A writer session's first navigation now has a bounded 30 s budget so two
+  concurrent writers no longer race the 10 s deadline through the extension's
+  serialized tab allocation; conversation switches keep the strict 10 s
+  contract. Validated live with two concurrent writers, zero crossover.
+
+### Changed
+
+- Public status wording: the project is presented as an opt-in technical
+  preview with an explicit non-authorization and account-risk notice, instead
+  of a permanently blocked preview.
+
 ## 0.5.0 - release candidate
 
 ### Added

@@ -685,6 +685,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .settings-toggle-row.is-disabled input:checked + i { background: var(--green); }
 .settings-toggle-row.is-danger { border-color: rgba(239,68,68,.22); background: var(--red-soft); }
 .settings-notice { display: flex; gap: 10px; align-items: flex-start; padding: 12px; color: #bfdbfe; border: 1px solid rgba(96,165,250,.2); border-radius: 11px; background: var(--blue-soft); }
+.settings-notice.is-danger { color: #fecaca; border-color: rgba(239,68,68,.28); background: var(--red-soft); }
 .settings-notice > span { display: flex; flex-direction: column; }
 .settings-notice strong { font-size: 9px; }
 .settings-notice small { margin-top: 4px; color: #91a4bd; font-size: 8px; line-height: 1.45; }

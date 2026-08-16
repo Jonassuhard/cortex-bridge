@@ -5,13 +5,15 @@ executor on your Mac. Chat messages remain ordinary ChatGPT messages. Local
 execution starts only after a separate preflight shows the workspace,
 capabilities, approvals, and limits.
 
-> **Release status:** v0.5 is a blocked technical preview, not a release-ready
-> integration. The consumer-site adapter automatically reads ChatGPT Output,
-> while the current
+> **Release status:** opt-in technical preview. Cortex Bridge is **not
+> affiliated with, endorsed, or authorized by OpenAI**. The consumer-site
+> adapter reads and writes the ChatGPT web interface automatically, which
+> conflicts with the current
 > [OpenAI Europe Terms of Use](https://openai.com/policies/eu-terms-of-use/)
-> prohibit automatic or programmatic extraction. Owner approval does not lift
-> that provider restriction. The fixture, security and automated lifecycle
-> evidence remains useful, but the live gate cannot support a `READY` verdict.
+> prohibition on automatic or programmatic extraction. Enabling the bridge is
+> a personal decision made at your own risk: OpenAI may restrict or suspend
+> your account. If that risk is not acceptable, do not enable the transport —
+> local deterministic missions work without it.
 
 ![Animated Cortex Bridge architecture](docs/media/architecture-flow.gif)
 
@@ -90,12 +92,17 @@ Full instructions:
 
 Automated gates cover the backend, extension protocol, frontend, responsive
 views, accessibility, two-writer isolation, 10-second switching, installation,
-process ownership, dependencies, and privacy. The authenticated consumer-site
-gate is blocked by the provider terms above. Earlier owner-authorized technical
-observations cannot be relabelled as compliant release acceptance.
+process ownership, dependencies, and privacy. On 2026-08-15 an owner-authorized
+live pass ran in real Chrome with synthetic markers: one conversation, two
+concurrent writers with zero crossover, third-writer refusal, existing-
+conversation switching in 1.8 s, and a synthetic attachment all passed — see
+[live QA evidence](docs/verification/v1-live-qa-2026-08-15.md). These runs
+prove technical behavior only; they do not lift the provider-terms conflict
+above and are not presented as provider-authorized acceptance.
 
-See [release evidence](docs/verification/v0.5.0.json). A compliant live release
-requires an officially supported transport.
+See [release evidence](docs/verification/v0.5.0.json) for the automated gates.
+An officially supported transport remains the only route to a provider-
+authorized live release.
 
 OpenAI documents two supported MCP routes for ChatGPT: a stable public HTTPS
 endpoint, or a private server reached through
@@ -157,8 +164,9 @@ docs/              Architecture, user, security and release documentation
 - The v0.5 extension transfer limit is 25 MiB per file.
 - ChatGPT DOM changes can temporarily break selectors; Cortex reports the
   failure and never substitutes another browser.
-- Live acceptance remains blocked until an officially supported provider
-  transport can pass it.
+- The bridge is an opt-in technical preview (see the release status above);
+  only an officially supported provider transport could lift the terms
+  conflict.
 
 ## Contributing and license
 

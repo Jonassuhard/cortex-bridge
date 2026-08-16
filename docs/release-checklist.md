@@ -60,7 +60,7 @@ Every item must link to evidence from one release commit. A previous branch or a
 - [ ] Self-diagnostic mission runs in a disposable worktree and does not merge itself.
 - [ ] A provider-authorized transport passes every live ChatGPT and mini-site gate.
 - [x] The consumer-site terms blocker is explicit and cannot be overridden by owner approval.
-- [x] `docs/verification/v0.5.0.json` matches the audited source commit and artifact hashes with a provider-blocked verdict.
+- [x] `docs/verification/v0.5.0.json` matches the audited source commit and artifact hashes with the owner-assumed `OPT_IN_TECHNICAL_PREVIEW` verdict (the provider-terms conflict stays documented; owner approval does not lift it).
 
 ## External actions
 

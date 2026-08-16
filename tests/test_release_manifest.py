@@ -99,6 +99,40 @@ def valid_payload() -> dict[str, object]:
     }
 
 
+def opt_in_preview_payload() -> dict[str, object]:
+    """Owner-assumed opt-in preview: partial live evidence, honestly recorded."""
+    payload = valid_payload()
+    acceptance = payload["acceptance"]
+    assert isinstance(acceptance, dict)
+    acceptance["miniSites"] = {"runs": 0, "passed": 0, "status": "NOT_RUN"}
+    acceptance["liveChatGPT"] = {
+        "status": "PARTIAL_PASS_OPT_IN",
+        "singleConversation": {"runs": 1, "passed": 1},
+        "dualConversations": {"runs": 2, "passed": 2, "crossovers": 0},
+        "thirdWriterRefused": True,
+        "fileUpload": True,
+        "screenshotUpload": False,
+        "personalDataRecorded": False,
+    }
+    acceptance["cleanMacosLifecycle"] = {
+        "status": "NOT_RUN",
+        "realCommands": False,
+        "install": False,
+        "browserLaunch": False,
+        "serviceLifecycle": False,
+        "doctor": False,
+        "reinstall": False,
+        "uninstall": False,
+        "foreignSentinelPreserved": False,
+        "attempts": 0,
+        "failedAttempts": 0,
+        "failedAttemptsRetained": False,
+        "planHashes": {"install": None, "reinstall": None, "uninstall": None},
+    }
+    payload["verdict"] = "OPT_IN_TECHNICAL_PREVIEW"
+    return payload
+
+
 class ReleaseManifestTest(unittest.TestCase):
     def run_validation(self, payload: dict[str, object]) -> subprocess.CompletedProcess[str]:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -302,6 +336,46 @@ class ReleaseManifestTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("commit_format", result.stdout)
         self.assertIn("artifact_hash", result.stdout)
+
+    def test_opt_in_preview_verdict_accepts_partial_live_evidence(self) -> None:
+        payload = opt_in_preview_payload()
+
+        result = self.run_validation(payload)
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_opt_in_preview_still_forbids_personal_data(self) -> None:
+        payload = opt_in_preview_payload()
+        acceptance = payload["acceptance"]
+        assert isinstance(acceptance, dict)
+        live = acceptance["liveChatGPT"]
+        assert isinstance(live, dict)
+        live["personalDataRecorded"] = True
+
+        result = self.run_validation(payload)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("live_chatgpt_evidence", result.stdout)
+
+    def test_opt_in_preview_rejects_unobserved_success_claims(self) -> None:
+        mutations = {
+            "singleConversation": {"runs": 1, "passed": 0},
+            "dualConversations": {"runs": 2, "passed": 2, "crossovers": 1},
+            "thirdWriterRefused": False,
+        }
+        for field, invalid in mutations.items():
+            with self.subTest(field=field):
+                payload = opt_in_preview_payload()
+                acceptance = payload["acceptance"]
+                assert isinstance(acceptance, dict)
+                live = acceptance["liveChatGPT"]
+                assert isinstance(live, dict)
+                live[field] = invalid
+
+                result = self.run_validation(payload)
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("live_chatgpt_evidence", result.stdout)
 
     def test_artifact_digest_must_match_the_repository_file(self) -> None:
         payload = valid_payload()
