@@ -6,6 +6,24 @@ All notable changes are recorded here.
 
 ### Added
 
+- Classic-Chat-only surface guard: ChatGPT now exposes two surfaces (classic
+  Chat and Work) behind the same `/c/<id>` URL scheme, distinguishable only in
+  the DOM (", Work" suffix on the sidebar self-link, Chat/Work radiogroup on
+  the home page). Every delivery-sensitive action (`prepare_text`,
+  `attachment_begin`, `send_bare`) now fails closed with
+  `WORK_SURFACE_REJECTED` on a Work surface, and a brand-new chat started on
+  the Work home automatically switches back to the Chat radio. The current
+  surface is reported as `surface` in `probe` and state payloads so drift is
+  visible to the DOM probe. Validated live: a Work conversation refused
+  delivery while a classic chat completed end to end.
+- Click-free screenshot capture: when no fresh toolbar-click authorization
+  (`pendingCapture`) is available, `capture_screenshot` now falls back to an
+  immediate CDP capture of the Cortex-bound tab via the `debugger` permission
+  (`Page.captureScreenshot`), so unattended local automation never depends on
+  a physical icon click. The toolbar-click path remains primary and its
+  60-second same-conversation scope is unchanged; the debugger session is
+  detached immediately after capture. Validated live: ChatGPT confirmed it
+  received the captured image.
 - Explicit contractual-risk opt-in control in Settings → Transport: the bridge
   is labeled as not authorized by OpenAI, with the account-suspension risk
   stated in French before activation (the opt-in API existed without any UI).

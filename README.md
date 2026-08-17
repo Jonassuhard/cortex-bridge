@@ -37,6 +37,12 @@ capabilities, approvals, and limits.
   audit.
 - Supports staged files up to the Chrome bridge's 25 MiB v0.5 transfer limit
   and visible ChatGPT-tab screenshots. ChatGPT may enforce stricter limits.
+- Writes only to classic ChatGPT chats: since ChatGPT's Chat/Work split, Work
+  surfaces are detected in the DOM and refused (`WORK_SURFACE_REJECTED`), and
+  new chats are always started on the classic Chat home.
+- Captures the bound ChatGPT tab without any physical icon click: the
+  toolbar-click authorization remains the primary path, with an immediate CDP
+  capture (Chrome `debugger` permission) as the automatic fallback.
 - Stores mutable runtime state under `CORTEX_HOME`, outside the repository.
 
 The deterministic executor works without Ollama. Ollama is optional. No OpenAI
