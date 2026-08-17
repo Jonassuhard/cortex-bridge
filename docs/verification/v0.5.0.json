@@ -1,18 +1,18 @@
 {
   "schemaVersion": 1,
   "release": "0.5.0",
-  "commit": "ffc279593027a1663ce4a4cbe6832ea3a2570e59",
-  "generatedAt": "2026-08-15T18:45:00Z",
+  "commit": "c4b1ace9a12deff0cddb2a5630b509439cc0b93b",
+  "generatedAt": "2026-08-17T09:30:48Z",
   "environment": {
     "os": "macOS 26.5.1",
     "python": "3.12.1 (.venv)",
     "node": "25.8.2",
     "browserDriver": "Cortex Chrome extension 0.5.0 protocol 2 with Chrome 151.0.7922.138; Playwright 1.62.0 fixtures",
-    "executorKind": "deterministic executor; consumer ChatGPT live runs executed under owner-assumed opt-in (technical preview)",
+    "executorKind": "deterministic executor; consumer ChatGPT live runs executed under owner-assumed opt-in (technical preview); local Ollama executors available on external volume",
     "simulation": true
   },
   "suites": {
-    "backend": {"passed": 421, "failed": 0, "skipped": 0},
+    "backend": {"passed": 426, "failed": 0, "skipped": 0},
     "frontendUnit": {"passed": 127, "failed": 0, "skipped": 0},
     "e2e": {"passed": 12, "failed": 0, "skipped": 1},
     "a11y": {"passed": 4, "failed": 0, "skipped": 0},
@@ -42,28 +42,28 @@
       "personalDataRecorded": false
     },
     "cleanMacosLifecycle": {
-      "status": "NOT_RUN",
-      "realCommands": false,
-      "install": false,
-      "browserLaunch": false,
-      "serviceLifecycle": false,
-      "doctor": false,
-      "reinstall": false,
-      "uninstall": false,
-      "foreignSentinelPreserved": false,
-      "attempts": 0,
-      "failedAttempts": 0,
-      "failedAttemptsRetained": false,
+      "status": "PASS",
+      "realCommands": true,
+      "install": true,
+      "browserLaunch": true,
+      "serviceLifecycle": true,
+      "doctor": true,
+      "reinstall": true,
+      "uninstall": true,
+      "foreignSentinelPreserved": true,
+      "attempts": 3,
+      "failedAttempts": 1,
+      "failedAttemptsRetained": true,
       "planHashes": {
-        "install": null,
-        "reinstall": null,
-        "uninstall": null
+        "install": "99991c908839c0fda2db9160fb76f6f022115633ddc6f2d5a8b5d4f755165e91",
+        "reinstall": "ab48f8c195d2679e06df8857416c2ca5e5886edc3da7f972ddf9b6cbbfeda735",
+        "uninstall": "73c0b22f0824eab664f0591ccf26cd2c5c1af7c604846f1cf952fe4e957e476d"
       }
     },
     "miniSites": {
-      "runs": 0,
-      "passed": 0,
-      "status": "NOT_RUN"
+      "runs": 3,
+      "passed": 3,
+      "status": "PASS"
     }
   },
   "gates": {
