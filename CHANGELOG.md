@@ -21,12 +21,25 @@ All notable changes are recorded here.
   concurrent writers no longer race the 10 s deadline through the extension's
   serialized tab allocation; conversation switches keep the strict 10 s
   contract. Validated live with two concurrent writers, zero crossover.
+- The mission decision parser now accepts the whole-message bare
+  `cortex-decision` form, because ChatGPT's DOM rendering strips code fences
+  from the extracted text; embedded or repeated blocks remain protocol
+  violations. Found and validated by a live mini-site mission.
 
 ### Changed
 
 - Public status wording: the project is presented as an opt-in technical
   preview with an explicit non-authorization and account-risk notice, instead
   of a permanently blocked preview.
+- Live acceptance now covers: deletion sync (ChatGPT → Cortex), three
+  disposable mini-site missions verified by `scripts/acceptance-mini-site.py`
+  (one axe contrast finding self-corrected by a follow-up mission), a
+  self-diagnostic mission that queries the service's own loopback APIs through
+  approved `run_process` calls, the isolated macOS install/doctor/service/
+  reinstall/uninstall lifecycle with a foreign-sentinel check, and a fresh
+  local-models gate (granite4.1:8b primary + qwen3.5:9b fallback on an external
+  volume, fresh 10/10 benchmark).
+
 
 ## 0.5.0 - release candidate
 

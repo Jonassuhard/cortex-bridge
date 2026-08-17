@@ -282,12 +282,19 @@ class EvidenceValidator:
                     "acceptance.cleanMacosLifecycle",
                 )
         elif verdict == OPT_IN_PREVIEW:
-            if not (
+            mini_honestly_not_run = (
                 valid_mini_counts
                 and mini_status in {"NOT_RUN", "PENDING_OWNER_APPROVAL"}
                 and mini_runs == 0
                 and mini_passed == 0
-            ):
+            )
+            mini_completed = (
+                valid_mini_counts
+                and mini_status == "PASS"
+                and mini_runs >= 3
+                and mini_passed == mini_runs
+            )
+            if not (mini_honestly_not_run or mini_completed):
                 self.report("live_gate_verdict", "acceptance.miniSites")
             if not live_partial_opt_in:
                 self.report("live_chatgpt_evidence", "acceptance.liveChatGPT")

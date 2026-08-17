@@ -1,61 +1,47 @@
 # Local models (Ollama) — state and restore plan
 
-Last verified: 2026-08-15, on the owner's Mac (Apple Silicon, 16 GiB unified memory).
+Last verified: 2026-08-17, on the owner's Mac (Apple Silicon, 16 GiB unified memory).
 
 ## Current verified state
 
 | Item | State | Evidence |
 |---|---|---|
 | Ollama binary | installed | `/opt/homebrew/bin/ollama` |
-| Model storage symlink | **dangling** | `~/.ollama/models` → `<external-volume>/AI/Ollama/models` (volume not mounted) |
-| External volume | **not connected** | its mount point is absent |
-| `orchestra-executor` profiles | **absent** | `ollama list` fails (storage path not traversable) |
-| `granite4.1:8b`, `qwen3.5:9b` | **not present locally** | no manifests under `~/.ollama`, none found on other mounted volumes |
-| Internal disk free | **4.1 GiB** | `df -h /` — too small for any serious model |
-| Doctor | `ollama: false` | `./scripts/cortex.sh doctor --json` |
+| Model storage symlink | **active** | `~/.ollama/models` → `<external-volume>/AI/Ollama/models`; `~/.ollama` holds 8 KB on the internal disk |
+| External volume | **connected** | models and profiles live there; the volume must stay mounted while Ollama runs |
+| `orchestra-executor` profile | **present** | created from `executor/configs/Modelfile.orchestra-executor` on `granite4.1:8b` |
+| `orchestra-executor-fallback` profile | **present** | created from `executor/configs/Modelfile.orchestra-executor-fallback` on `qwen3.5:9b` |
+| `granite4.1:8b`, `qwen3.5:9b` | **installed** | `ollama list`; 5.3 GiB + 6.6 GiB on the external volume |
+| Fresh 10-case benchmark | **PASS 10/10** | schema 1.0, tool selection 1.0, scope 1.0, zero false success, median 4.73 s (2026-08-17, `orchestra-executor`) |
+| Positive/negative probes | **pass** | `write_file` inside `/workspace` requested correctly; `/etc/passwd` answered BLOCKED with null tool |
+| RAM watch | no swap storm | 17 % free at peak with macOS + Chrome + Ollama coexisting |
+| Doctor | `ok: true` | `/api/status`: `ollama_up: true`, `executor_available: true`, storage on the external volume |
 | Deterministic executor | available without Ollama | Doctor `deterministic: pass` |
 
 The deterministic executor remains the default for missions and needs none of
-this. Everything below is optional model support.
+this. Everything above is optional model support.
 
-## Decision required from the owner (before any download)
+## Owner decision (taken 2026-08-16)
 
-1. Reconnect the external volume, then either
-   a. keep the symlink (models live on the external volume, which must stay
-      connected while Ollama runs), or
-   b. remove the symlink and free internal disk space first (4.1 GiB free is
-      not enough for any candidate model).
-2. No model is downloaded or deleted without explicit approval: downloads are
-   5–13 GiB and modify external storage.
+The owner reconnected an external volume and approved the restore: the symlink
+was re-pointed to `<external-volume>/AI/Ollama/models` (the original target
+volume name was absent) and both models were pulled there. No model lives on
+the internal disk. Rule kept: no model is downloaded or deleted without
+explicit approval.
 
-## Recommended candidates for 16 GiB unified memory
+## Acceptance gate — all items passed 2026-08-17
 
-Historical conversation claims, to re-verify at install time (tags change):
-
-| Model | Approx. size | Role |
-|---|---|---|
-| `granite4.1:8b` (Q4_K_M) | ~5 GiB | primary `orchestra-executor`; disciplined tool calls |
-| `qwen3.5:9b` | ~6.6 GiB | fallback; multimodal + tools |
-| `glm-4.7-flash` | ~8 GiB | lighter, faster alternative |
-| `gpt-oss:20b` | ~13 GiB | strongest reasoning that still fits; 8K–16K context only |
-
-Do not reuse the historical benchmark claims (Granite 10/10, Qwen tool-call
-mismatch) as current facts: re-run the acceptance gate below on the actual
-downloaded models.
-
-## Acceptance gate (must pass before a model is advertised as ready)
-
-1. `ollama list` shows the exact tag; `ollama show` confirms the quantization.
-2. The 10-case deterministic benchmark passes against the freshly created
-   `orchestra-executor` profile (prompt contract: JSON-in-content tool calls).
-3. A positive live task (create a file in a disposable workspace) and a
-   negative task (refuse reading `/etc/passwd`) both behave.
-4. RAM watch during a real mission: no swap storm (16 GiB total budget with
+1. ✅ `ollama list` shows the exact tags; `ollama show` confirms Q4_K_M.
+2. ✅ Fresh 10-case deterministic benchmark against the freshly created
+   `orchestra-executor` profile: 10/10, zero false success.
+3. ✅ Positive probe (`write_file` in `/workspace`) and negative probe
+   (`/etc/passwd` → BLOCKED, null tool) both behave.
+4. ✅ RAM watch during the benchmark: no swap storm (16 GiB total budget with
    macOS + Chrome + Ollama coexisting).
-5. `./scripts/cortex.sh doctor --json` reports `ollama: true` and the selected
-   executor as ready.
+5. ✅ Runtime status reports `ollama_up: true`, `executor_available: true`,
+   storage on the external volume.
 
-## One-command restore (once the external volume is connected and decision 1 is taken)
+## Restore procedure (if the volume is absent again)
 
 ```bash
 # verify the symlink resolves again
@@ -64,5 +50,5 @@ ls ~/.ollama/models/manifests/registry.ollama.ai/library
 ollama pull granite4.1:8b   # ~5 GiB, requires the volume mounted when the symlink is kept
 ```
 
-Then re-create the `orchestra-executor` Modelfile profile (16K context cap for
-this machine) and run the acceptance gate above.
+Then re-create the `orchestra-executor` Modelfile profile (8K context cap for
+this machine) and re-run the acceptance gate above.

@@ -88,9 +88,17 @@ class DecisionError(Exception):
 
 # ---------------------------------------------------------------------------
 # Extraction (§9): exactly one ```cortex-decision fenced block.
+# The ChatGPT DOM renderer moves code fences out of the extracted text, so a
+# response that is exactly one decision code block arrives as the bare form
+# "cortex-decision\n{...}" with no backticks.  Accept that bare form only when
+# it is the whole message; anything ambiguous stays a protocol violation.
 # ---------------------------------------------------------------------------
 
 _DECISION_BLOCK_RE = re.compile(r"```cortex-decision[ \t]*\r?\n(.*?)```", re.DOTALL)
+_BARE_DECISION_RE = re.compile(
+    r"\A[ \t]*cortex-decision[ \t]*\r?\n(\{.*?)[ \t]*(?:```[ \t]*)?\Z",
+    re.DOTALL,
+)
 _REPORT_FENCE = "```cortex-report"
 
 
@@ -104,7 +112,11 @@ def extract_decision_block(message: str) -> dict:
         raise DecisionError("INVALID_MESSAGE", "assistant message must be text")
     blocks = _DECISION_BLOCK_RE.findall(message)
     if len(blocks) == 0:
-        raise DecisionError("NO_DECISION_BLOCK", "no ```cortex-decision block found")
+        bare = _BARE_DECISION_RE.match(message)
+        if bare is not None and "cortex-decision" not in bare.group(1):
+            blocks = [bare.group(1)]
+        else:
+            raise DecisionError("NO_DECISION_BLOCK", "no ```cortex-decision block found")
     if len(blocks) > 1:
         raise DecisionError(
             "MULTIPLE_DECISION_BLOCKS",

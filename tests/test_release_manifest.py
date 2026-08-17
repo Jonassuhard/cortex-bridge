@@ -377,6 +377,27 @@ class ReleaseManifestTest(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("live_chatgpt_evidence", result.stdout)
 
+    def test_opt_in_preview_accepts_completed_mini_sites(self) -> None:
+        payload = opt_in_preview_payload()
+        acceptance = payload["acceptance"]
+        assert isinstance(acceptance, dict)
+        acceptance["miniSites"] = {"runs": 3, "passed": 3, "status": "PASS"}
+
+        result = self.run_validation(payload)
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_opt_in_preview_rejects_partially_passed_mini_sites(self) -> None:
+        payload = opt_in_preview_payload()
+        acceptance = payload["acceptance"]
+        assert isinstance(acceptance, dict)
+        acceptance["miniSites"] = {"runs": 3, "passed": 2, "status": "PASS"}
+
+        result = self.run_validation(payload)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("live_gate_verdict", result.stdout)
+
     def test_artifact_digest_must_match_the_repository_file(self) -> None:
         payload = valid_payload()
         payload["artifacts"] = {"VERSION": "a" * 64}
