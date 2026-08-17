@@ -32,6 +32,11 @@ All notable changes are recorded here.
 
 ### Fixed
 
+- A definitive pre-delivery refusal from the driver (`WORK_SURFACE_REJECTED`,
+  `PRE_DELIVERY_NOT_READY`) now surfaces with its own clean code instead of
+  being wrapped as `DELIVERY_UNCERTAIN` and pausing the transport: nothing was
+  composed, so the delivery was never uncertain and no human resolution is
+  needed.
 - `select_model` on the Chrome-extension transport now confirms the switch from
   a freshly reacquired trigger and fails closed with `MODEL_CONFIRM_FAILED`
   instead of reporting success unconditionally (stale-node bug class).
