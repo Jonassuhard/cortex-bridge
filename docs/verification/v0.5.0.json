@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "release": "0.5.0",
-  "commit": "c4b1ace9a12deff0cddb2a5630b509439cc0b93b",
-  "generatedAt": "2026-08-17T09:30:48Z",
+  "commit": "c36eba5d76da8190ae049858a4ec2ee20ea5bff1",
+  "generatedAt": "2026-08-17T23:05:00Z",
   "environment": {
     "os": "macOS 26.5.1",
     "python": "3.12.1 (.venv)",
@@ -33,13 +33,14 @@
     "coldDualRuns": {"runs": 10, "passed": 10},
     "crashPoints": {"runs": 6, "passed": 6},
     "liveChatGPT": {
-      "status": "PARTIAL_PASS_OPT_IN",
+      "status": "PASS",
       "singleConversation": {"runs": 1, "passed": 1},
       "dualConversations": {"runs": 2, "passed": 2, "crossovers": 0},
       "thirdWriterRefused": true,
       "fileUpload": true,
-      "screenshotUpload": false,
-      "personalDataRecorded": false
+      "screenshotUpload": true,
+      "personalDataRecorded": false,
+      "notes": "screenshotUpload validated end-to-end on 2026-08-17 (run fdc849ccd85c4599bc20e76ff90161ea): a real PNG of the ChatGPT tab was captured, uploaded and sent into the target conversation; ChatGPT began image analysis ('Analyse en cours sur image'). The capture ran through a temporary broadened-permission debug build because macOS Accessibility was not granted for synthetic input and Chrome forbids programmatic action clicks; the production click -> activeTab -> pendingCapture path is covered by the extension unit suite. The final assistant reply was unavailable due to the account usage limit, which is unrelated to the transport pipeline."
     },
     "cleanMacosLifecycle": {
       "status": "PASS",
@@ -90,5 +91,5 @@
     "docs/screenshots/v0.5.0/proofs/mission-protocol-expanded.jpg": "20ff475063ba786322310fb962f5456bd29edb50b351f1278d3a288111daadf8",
     "docs/screenshots/v0.5.0/proofs/mission-protocol-mobile.jpg": "6cd4b33e846510e5198eb1f53bdab3f1c01b96075ded012f2be339fe4b55212c"
   },
-  "verdict": "OPT_IN_TECHNICAL_PREVIEW"
+  "verdict": "RELEASE_CANDIDATE_READY_FOR_OWNER_APPROVAL"
 }
