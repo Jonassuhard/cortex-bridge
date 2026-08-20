@@ -1,5 +1,13 @@
 # Cortex Bridge
 
+**Automate ChatGPT from your Mac — no OpenAI API key, no cloud agent.**
+Cortex Bridge is a local-first AI agent that turns an ordinary ChatGPT
+conversation in Google Chrome into a controlled automation loop: ChatGPT
+plans, a deterministic executor acts on your files, and every write or command
+waits for your explicit approval. ChatGPT automation through a Chrome
+extension, a local FastAPI console, and an optional Ollama local LLM —
+privacy-first, human-in-the-loop, fully auditable.
+
 Cortex Bridge links a real ChatGPT conversation in Google Chrome to a reviewed
 executor on your Mac. Chat messages remain ordinary ChatGPT messages. Local
 execution starts only after a separate preflight shows the workspace,
