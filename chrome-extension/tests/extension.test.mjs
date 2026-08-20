@@ -1069,7 +1069,7 @@ test("a debugger attach failure is reported as a capture failure", async () => {
   );
 });
 
-async function runSurfaceGuardAction({ pathname, links = [], radios = [], action = "prepare_text" }) {
+async function runSurfaceGuardAction({ pathname, links = [], radios = [], action = "prepare_text", bodyText = "" }) {
   const source = await readFile(join(EXTENSION_ROOT, "chatgpt-content.js"), "utf8");
   let listener = null;
   class FakeElement {
@@ -1096,7 +1096,7 @@ async function runSurfaceGuardAction({ pathname, links = [], radios = [], action
   const sidebarLinks = links.map((link) => new FakeElement(link));
   const radioNodes = radios.map((radio) => new FakeElement(radio));
   const document = {
-    body: { innerText: "" },
+    body: { innerText: bodyText },
     title: "Surface Guard - ChatGPT",
     querySelector() {
       return null;
@@ -1185,6 +1185,24 @@ test("the Work home is rejected when no Chat radio is available", async () => {
 
   assert.equal(response.ok, false);
   assert.equal(response.error.code, "WORK_SURFACE_REJECTED");
+});
+
+test("usage-limit banners are classified as a rate_limit blocker", async () => {
+  for (const bodyText of [
+    "You've hit your usage limit. Try again later.",
+    "Vous avez atteint votre limite d'utilisation. Réessayez plus tard.",
+  ]) {
+    const response = await runSurfaceGuardAction({
+      pathname: "/c/classic-conversation",
+      links: [{ href: "/c/classic-conversation", ariaLabel: "Weekend plans" }],
+      action: "probe",
+      bodyText,
+    });
+
+    assert.equal(response.ok, true);
+    assert.equal(response.result.blocker, "rate_limit");
+    assert.ok(response.result.failures.includes("rate_limit"));
+  }
 });
 
 test("the surface guard is wired into every delivery-sensitive action", async () => {

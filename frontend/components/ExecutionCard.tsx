@@ -55,6 +55,27 @@ function stateLabel(state?: string) {
   return labels[state || ""] || state || "Exécution locale";
 }
 
+function pauseReasonMessage(reason?: string | null): string | null {
+  if (!reason) return null;
+  const code = reason.toUpperCase();
+  if (code.includes("RATE_LIMIT") || code.includes("USAGE_LIMIT")) {
+    return "ChatGPT a atteint sa limite d'utilisation. C'est temporaire : attends la fin de la limitation, puis appuie sur Reprendre.";
+  }
+  if (code.includes("LOGIN")) {
+    return "ChatGPT demande une connexion. Connecte-toi dans l'onglet ChatGPT de Chrome, puis appuie sur Reprendre.";
+  }
+  if (code.includes("CAPTCHA")) {
+    return "ChatGPT demande une vérification humaine. Termine-la dans l'onglet ChatGPT, puis appuie sur Reprendre.";
+  }
+  if (code.includes("WORK_SURFACE")) {
+    return "Cortex n'écrit que sur un chat ChatGPT classique, jamais sur une surface Work. Ouvre un chat classique, puis appuie sur Reprendre.";
+  }
+  if (code.includes("TAB_CLOSED")) {
+    return "L'onglet ChatGPT a été fermé. Rouvre et connecte ChatGPT, puis appuie sur Reprendre.";
+  }
+  return reason;
+}
+
 export function ExecutionCard({ mission, pipeline, expanded, onToggle, onApprove, onReject }: ExecutionCardProps) {
   const active = mission?.mission;
   const missionState = active?.state || pipeline.active_mission_state || "EXECUTING_LOCAL_ACTION";
@@ -122,6 +143,15 @@ export function ExecutionCard({ mission, pipeline, expanded, onToggle, onApprove
         <div className="execution-progress-track"><span style={{ width: terminal ? "100%" : waitingApproval ? "48%" : "67%" }} /></div>
         <span>{terminalLabel || (waitingApproval ? "En attente de validation humaine" : "Boucle autonome en cours")}</span>
       </div>
+
+      {(missionState === "PAUSED" || missionState === "PAUSED_RECOVERY_REQUIRED") && pauseReasonMessage(active?.pause_reason) && (
+        <div className="inline-approval pause-reason-banner">
+          <div>
+            <ClockIcon size={18} />
+            <span><strong>{missionState === "PAUSED" ? "Pause expliquée" : "Action requise"}</strong><small>{pauseReasonMessage(active?.pause_reason)}</small></span>
+          </div>
+        </div>
+      )}
 
       {waitingApproval && (
         <div className="inline-approval">

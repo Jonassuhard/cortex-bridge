@@ -281,18 +281,55 @@ def doctor() -> dict[str, Any]:
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
         pass
     checks = [
-        {"id": "python", "status": "pass" if sys.version_info >= (3, 11) else "fail", "required": True, "detail": sys.version.split()[0]},
-        {"id": "cortex_home", "status": "pass" if paths.home.is_absolute() else "fail", "required": True, "detail": str(paths.home)},
-        {"id": "deterministic", "status": "pass", "required": True, "detail": "available without Ollama"},
+        {
+            "id": "python",
+            "label": "Python 3.11 ou plus récent",
+            "status": "pass" if sys.version_info >= (3, 11) else "fail",
+            "required": True,
+            "detail": sys.version.split()[0],
+            "hint": "Installe Python 3.11+ depuis https://www.python.org/downloads/macos/",
+        },
+        {
+            "id": "cortex_home",
+            "label": "Dossier de données CORTEX_HOME",
+            "status": "pass" if paths.home.is_absolute() else "fail",
+            "required": True,
+            "detail": str(paths.home),
+            "hint": "Définis CORTEX_HOME avec un chemin absolu, ou laisse la valeur par défaut.",
+        },
+        {
+            "id": "deterministic",
+            "label": "Exécuteur déterministe local",
+            "status": "pass",
+            "required": True,
+            "detail": "available without Ollama",
+            "hint": "",
+        },
         {
             "id": "chrome_extension",
+            "label": "Extension Chrome Cortex Bridge",
             "status": "pass" if extension_ok else "fail",
             "required": True,
             "detail": extension_detail,
             "path": str(extension_path),
+            "hint": "Lance scripts/install-extension.sh : il ouvre chrome://extensions et copie le chemin à charger.",
         },
-        {"id": "installation", "status": "pass" if _installed() else "warning", "required": False, "detail": "installed" if _installed() else "not installed"},
-        {"id": "console_process", "status": process.state, "required": False, "detail": process.reason or process.state},
+        {
+            "id": "installation",
+            "label": "Installation du moteur (venv + dépendances)",
+            "status": "pass" if _installed() else "warning",
+            "required": False,
+            "detail": "installed" if _installed() else "not installed",
+            "hint": "Lance ./scripts/install.sh --dry-run --json, relis le plan, puis ./scripts/install.sh --approve-plan HASH --json",
+        },
+        {
+            "id": "console_process",
+            "label": "Console locale en cours d'exécution",
+            "status": process.state,
+            "required": False,
+            "detail": process.reason or process.state,
+            "hint": "Lance scripts/cortex.sh start puis ouvre http://127.0.0.1:8420",
+        },
     ]
     return {
         "schema_version": 1,
@@ -310,9 +347,52 @@ def doctor() -> dict[str, Any]:
     }
 
 
-def _print(payload: dict[str, Any], as_json: bool) -> None:
+_CONSOLE_STATE_LABELS = {
+    "owned": "pass",
+    "stopped": "warning",
+    "stale": "warning",
+    "foreign": "warning",
+    "unknown": "warning",
+}
+
+_CONSOLE_STATE_HINTS = {
+    "foreign": "Un autre processus utilise le port. Vois le détail avec : scripts/cortex.sh status",
+    "stale": "Fiche processus périmée : scripts/cortex.sh status la nettoie, puis scripts/cortex.sh start",
+    "unknown": "Vérification du port impossible — réessaie dans quelques secondes.",
+}
+
+
+def _print_doctor_text(payload: dict[str, Any]) -> None:
+    print(f"Cortex Bridge {payload.get('version', '')} — vérification de l'installation")
+    print()
+    icons = {"pass": "✅", "warning": "⚠️ ", "fail": "❌"}
+    missing = 0
+    for check in payload.get("checks", []):
+        status = str(check.get("status"))
+        mapped = _CONSOLE_STATE_LABELS.get(status, status) if check.get("id") == "console_process" else status
+        icon = icons.get(mapped, "❓")
+        print(f"{icon} {check.get('label', check.get('id'))} : {check.get('detail', '')}")
+        hint = check.get("hint") or ""
+        if check.get("id") == "console_process":
+            hint = _CONSOLE_STATE_HINTS.get(status, hint)
+        if mapped != "pass":
+            missing += 1
+            if hint:
+                print(f"   → {hint}")
+    print()
+    if payload.get("ok") and missing == 0:
+        print("Tout est prêt ✅  Ouvre http://127.0.0.1:8420 pour utiliser Cortex.")
+    elif payload.get("ok"):
+        print("Cortex peut fonctionner, mais regarde les points ⚠️  ci-dessus.")
+    else:
+        print("Il manque des éléments ❌  Suis les flèches → ci-dessus, puis relance scripts/cortex.sh doctor")
+
+
+def _print(payload: dict[str, Any], as_json: bool, *, kind: str = "generic") -> None:
     if as_json:
         print(json.dumps(payload, sort_keys=True))
+    elif kind == "doctor":
+        _print_doctor_text(payload)
     else:
         print(json.dumps(payload, indent=2, sort_keys=True))
 
@@ -335,7 +415,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.action == "doctor":
-            _print(doctor(), args.json)
+            _print(doctor(), args.json, kind="doctor")
             return 0
         if args.action == "install":
             plan = build_install_plan(rebuild_ui=args.rebuild_ui, ollama_model=args.with_ollama_model)

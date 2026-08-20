@@ -44,6 +44,7 @@ import { ConversationSidebar } from "./ConversationSidebar";
 import { ChatWorkspace, type WorkspaceAvailability } from "./ChatWorkspace";
 import { PipelineInspector } from "./PipelineInspector";
 import { SettingsPanel } from "./SettingsPanel";
+import { HistoryPanel } from "./HistoryPanel";
 import { OnboardingPanel } from "./OnboardingPanel";
 import { ChatGPTConnectionDialog } from "./ChatGPTConnectionDialog";
 
@@ -236,6 +237,7 @@ export function CortexApp() {
   const [ollamaModels, setOllamaModels] = useState<OllamaModelInfo[]>([]);
   const [chatgptModels, setChatGPTModels] = useState<ChatGPTModelInfo[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [capabilities, setCapabilities] = useState<{ upload_file: boolean; take_screenshot: boolean }>({ upload_file: false, take_screenshot: false });
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -972,6 +974,7 @@ export function CortexApp() {
         onRefresh={() => void refreshConversations()}
         onNewConversation={() => newConversation()}
         onOpenSettings={() => setSettingsOpen(true)}
+        onOpenHistory={() => setHistoryOpen(true)}
       />
 
       <ChatWorkspace
@@ -1050,6 +1053,8 @@ export function CortexApp() {
         onSave={saveSettings}
         onSelectChatGPTModel={selectChatGPTModel}
       />
+
+      <HistoryPanel open={historyOpen} onClose={() => setHistoryOpen(false)} />
 
       {!settingsOpen && <OnboardingPanel onOpenSettings={() => setSettingsOpen(true)} />}
 

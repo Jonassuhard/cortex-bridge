@@ -48,10 +48,32 @@ _status_text() {
   state="$(_json_field "$payload" state)"
   pid="$(_json_field "$payload" pid)"
   reason="$(_json_field "$payload" reason)"
-  printf 'Cortex Bridge: %s (port %s' "$state" "$PORT"
-  [ -n "$pid" ] && printf ', pid %s' "$pid"
-  printf ')\n'
-  [ -n "$reason" ] && printf 'Reason: %s\n' "$reason"
+  case "$state" in
+    owned)
+      printf 'Cortex Bridge fonctionne : http://127.0.0.1:%s (pid %s)\n' "$PORT" "$pid"
+      ;;
+    stopped)
+      printf 'Cortex Bridge est arrêté.\nPour le lancer : scripts/cortex.sh start\n'
+      ;;
+    stale)
+      printf 'Aucune instance active : la fiche processus était périmée et a été nettoyée.\nPour lancer : scripts/cortex.sh start\n'
+      ;;
+    foreign)
+      printf 'Le port %s est utilisé par un autre processus :\n' "$PORT"
+      "$PYTHON" -c '
+import json, sys
+payload = json.loads(sys.argv[1])
+commands = payload.get("listener_commands") or {}
+for pid in payload.get("listener_pids") or []:
+    command = commands.get(str(pid)) or commands.get(pid) or ""
+    print(f"  pid {pid} : {command or chr(63)}")
+' "$payload"
+      printf "Si c'est une console Cortex lancée à la main : kill <pid>, puis scripts/cortex.sh start\n"
+      ;;
+    *)
+      printf 'État du serveur incertain : %s (%s)\n' "$state" "$reason"
+      ;;
+  esac
 }
 
 case "$COMMAND" in
@@ -142,12 +164,17 @@ case "$COMMAND" in
 
   status)
     status_json="$(_ownership_status)"
+    state="$(_json_field "$status_json" state)"
+    # A stale record whose process and listener are both gone only creates
+    # confusion: clean it up so the next start never sees it.
+    if [ "$state" = "stale" ] && [ -z "$(_port_pid)" ]; then
+      rm -f "$PID_RECORD"
+    fi
     if [ "$OUTPUT_MODE" = "--json" ]; then
       printf '%s\n' "$status_json"
     else
       _status_text "$status_json"
     fi
-    state="$(_json_field "$status_json" state)"
     [ "$state" = "owned" ]
     ;;
 

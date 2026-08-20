@@ -63,7 +63,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "fallback_executor": "orchestra-executor-fallback",
     "approval_policy": "workspace-write-with-approvals",
     "access_profile": "workspace",
-    "default_workspace": str(RUNTIME_PATHS.home / "workspaces"),
+    "default_workspace": str(Path.home() / "cortex-workspaces"),
     "max_iterations": 25,
     "max_duration_minutes": 60,
     "ollama_context": 8192,
@@ -108,12 +108,39 @@ class ChatGPTModelSelectIn(BaseModel):
     label: str
 
 
+# A default workspace under a volatile temp directory gets purged by macOS,
+# which used to leave the console with a missing workspace (ready: false).
+# Reset those to the stable, visible default and make sure it exists.
+_TEMP_WORKSPACE_PREFIXES = ("/tmp", "/private/tmp", "/var/folders", "/private/var/folders")
+
+
+def _sanitize_default_workspace(value: Any) -> str:
+    default = DEFAULT_SETTINGS["default_workspace"]
+    raw = str(value or "").strip()
+    path = Path(raw).expanduser() if raw else Path(default)
+    if (
+        not raw
+        or not path.is_absolute()
+        or (any(str(path).startswith(prefix) for prefix in _TEMP_WORKSPACE_PREFIXES) and not path.is_dir())
+    ):
+        path = Path(default)
+    if str(path) == default:
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+    return str(path)
+
+
 def load_settings() -> dict[str, Any]:
     try:
         raw = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         raw = {}
     result = {**DEFAULT_SETTINGS, **raw}
+    result["default_workspace"] = _sanitize_default_workspace(
+        result.get("default_workspace")
+    )
     # This is an invariant, not a preference.
     result["never_delete_files"] = True
     load_browser_settings(result)

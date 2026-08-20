@@ -1243,7 +1243,7 @@ _STATE_JS = r"""
   if (loginControl || (!composer && /log in|sign up|se connecter|inscrivez-vous/i.test(text))) blocker = 'login';
   if (/verify you are human|v\u00e9rifiez que vous \u00eates humain|cf-chl|challenge-platform/i.test(text)
       || q('#cf-chl-widget, .cf-turnstile')) blocker = 'captcha';
-  if (/rate limit|too many requests|limite de requ\u00eates/i.test(text)) blocker = 'rate_limit';
+  if (/rate limit|too many requests|limite de requ\u00eates|usage limit|limite d'utilisation|limite d\u2019utilisation|you've hit|vous avez atteint/i.test(text)) blocker = 'rate_limit';
   const convMatch = location.pathname.match(/\/c\/([A-Za-z0-9-]+)/);
   // Code blocks are CodeMirror viewers (pre.cm-content); NO language label
   // exists in the header on this build -> cortex-decision is content-sniffed.

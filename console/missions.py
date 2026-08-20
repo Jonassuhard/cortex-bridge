@@ -22,6 +22,7 @@ import re
 import sys
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -61,9 +62,19 @@ import write_slots  # noqa: E402
 import attachments  # noqa: E402
 
 CONSOLE_DIR = Path(__file__).resolve().parent
-DATA_DIR = CONSOLE_DIR / "data"
-OPTIN_FILE = DATA_DIR / "transport-optin.json"
-DB_PATH = DATA_DIR / "cortex.db"
+from cortex_paths import build_paths  # noqa: E402
+
+RUNTIME_PATHS = build_paths()
+
+# Mutable runtime state lives under CORTEX_HOME (never inside the repository).
+# migrate_legacy_state() in server.py copies a legacy console/data store into
+# CORTEX_HOME on startup, so existing installs keep their history.
+DATA_DIR = RUNTIME_PATHS.home
+OPTIN_FILE = RUNTIME_PATHS.transport_optin
+DB_PATH = RUNTIME_PATHS.database
+# Legacy history sources (read-only; pre-mission-API runs).
+LEGACY_CHAT_RUNS_FILE = RUNTIME_PATHS.chat_runs
+LEGACY_ITERATIONS_FILE = RUNTIME_PATHS.iterations
 
 router = APIRouter(prefix="/api")
 
@@ -829,13 +840,151 @@ def active_mission_conversations() -> list[str]:
 
 @router.get("/missions")
 async def list_missions() -> list[dict]:
-    return get_store().rows("missions", order_by="created_at DESC")
+    rows = get_store().rows("missions", order_by="created_at DESC")
+    known = {str(row.get("id") or "") for row in rows}
+    legacy = [entry for entry in _legacy_history_entries() if entry["id"] not in known]
+    legacy.sort(key=lambda entry: entry.get("created_at") or 0, reverse=True)
+    return rows + legacy
+
+
+# ------------------------------------------------------------- legacy history
+#
+# Before the mission API, runs were persisted in chat-runs.json (chat sends)
+# and iterations.json (console tasks). They remain the user's history: the
+# listing below merges them read-only so the UI shows one continuous past.
+
+_LEGACY_TERMINAL_STATES = {
+    "completed": "COMPLETED",
+    "done": "COMPLETED",
+    "failed": "FAILED",
+    "blocked": "BLOCKED",
+    "cancelled": "CANCELLED",
+}
+
+
+def _epoch(value) -> float:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
+    except (ValueError, TypeError):
+        return 0.0
+
+
+def _read_legacy_file(path: Path) -> list[dict]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    if isinstance(payload, dict):
+        payload = payload.get("runs") or payload.get("iterations") or []
+    return [item for item in payload if isinstance(item, dict)] if isinstance(payload, list) else []
+
+
+def _legacy_entry(
+    *,
+    run_id: str,
+    objective: str,
+    state: str,
+    created_at: float,
+    updated_at: float,
+    source: str,
+    detail: dict,
+) -> dict:
+    return {
+        "id": run_id,
+        "objective": objective[:500],
+        "workspace": str(detail.get("workspace") or ""),
+        "state": state,
+        "pause_reason": None,
+        "iteration": 0,
+        "max_iterations": 0,
+        "max_duration_seconds": 0,
+        "failure_counts": {},
+        "executor_kind": f"legacy-{source}",
+        "executor_model_used": detail.get("executor_model_used"),
+        "runtime_mode": str(detail.get("runtime_mode") or "live"),
+        "release_eligible": False,
+        "created_at": created_at,
+        "started_at": created_at,
+        "updated_at": updated_at or created_at,
+        "legacy": True,
+        "legacy_source": source,
+        "legacy_detail": detail,
+    }
+
+
+def _legacy_history_entries() -> list[dict]:
+    entries: list[dict] = []
+    for run in _read_legacy_file(LEGACY_CHAT_RUNS_FILE):
+        state = _LEGACY_TERMINAL_STATES.get(str(run.get("state") or "").lower(), "FAILED")
+        entries.append(_legacy_entry(
+            run_id=str(run.get("id") or ""),
+            objective=str(run.get("text") or "(envoi chat)"),
+            state=state,
+            created_at=_epoch(run.get("created_at")),
+            updated_at=_epoch(run.get("completed_at") or run.get("delivered_at") or run.get("created_at")),
+            source="chat-run",
+            detail={
+                "conversation_url": run.get("canonical_url") or run.get("conversation_url") or "",
+                "response_text": str(run.get("response_text") or "")[:2000],
+                "error": run.get("error"),
+                "attachment_name": run.get("attachment_name"),
+            },
+        ))
+    for task in _read_legacy_file(LEGACY_ITERATIONS_FILE):
+        report = task.get("report") if isinstance(task.get("report"), dict) else {}
+        state = _LEGACY_TERMINAL_STATES.get(str(task.get("status") or "").lower(), "FAILED")
+        entries.append(_legacy_entry(
+            run_id=str(task.get("id") or ""),
+            objective=str(task.get("goal") or "(tâche console)"),
+            state=state,
+            created_at=_epoch(task.get("started_at")),
+            updated_at=_epoch(task.get("finished_at") or task.get("started_at")),
+            source="console-task",
+            detail={
+                "workspace": task.get("workspace") or "",
+                "runtime_mode": task.get("runtime_mode") or "live",
+                "executor_model_used": task.get("executor_model_used"),
+                "summary": str(report.get("summary") or "")[:500],
+                "files_changed": report.get("files_changed") or [],
+                "blockers": report.get("blockers") or [],
+                "logs": [
+                    {"ts": str(log.get("ts") or ""), "text": str(log.get("text") or "")[:300],
+                     "kind": str(log.get("kind") or "info")}
+                    for log in (task.get("logs") or [])[-50:] if isinstance(log, dict)
+                ],
+            },
+        ))
+    return [entry for entry in entries if entry["id"]]
 
 
 @router.get("/missions/{mission_id}")
 async def get_mission(mission_id: str) -> dict:
     store = get_store()
-    mission = _mission_or_404(store, mission_id)
+    try:
+        mission = store.get_mission(mission_id)
+    except StoreError:
+        legacy = next(
+            (entry for entry in _legacy_history_entries() if entry["id"] == mission_id),
+            None,
+        )
+        if legacy is None:
+            raise HTTPException(status_code=404, detail="mission not found")
+        return {
+            "mission": legacy,
+            "timeline": {
+                table: []
+                for table in (
+                    "conversation_bindings", "iterations", "orchestrator_decisions",
+                    "policy_decisions", "approvals", "tool_executions",
+                    "validation_results", "transport_events", "artifacts",
+                )
+            },
+            "awaiting_approval": False,
+            "stopped": False,
+            "legacy": True,
+        }
     timeline = {
         table: store.rows(table, mission_id, order_by="rowid")
         for table in (

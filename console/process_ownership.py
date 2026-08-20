@@ -134,12 +134,23 @@ def write_record(path: Path, record: dict[str, Any]) -> None:
     temporary.replace(path)
 
 
+def _listener_commands(pids: list[int]) -> dict[int, str]:
+    commands: dict[int, str] = {}
+    for pid in pids:
+        try:
+            commands[pid] = _ps_value(pid, "command")[:200]
+        except (OSError, ProcessLookupError, subprocess.SubprocessError):
+            commands[pid] = ""
+    return commands
+
+
 def _status_payload(record_path: Path, port: int) -> dict[str, Any]:
     status = classify(load_record(record_path), port)
     return {
         "state": status.state,
         "pid": status.pid,
         "listener_pids": status.listener_pids,
+        "listener_commands": _listener_commands(status.listener_pids),
         "reason": status.reason,
         "port": port,
         "record": str(record_path),

@@ -19,6 +19,22 @@ capabilities, approvals, and limits.
 
 [Static architecture image](docs/media/architecture-flow.png)
 
+## Démarrage rapide (FR)
+
+```bash
+./scripts/install.sh --dry-run --json          # 1. lire le plan d'installation
+./scripts/install.sh --approve-plan HASH --json # 2. approuver ce plan exact
+scripts/install-extension.sh                    # 3. extension Chrome (3 gestes guidés)
+```
+
+Puis double-clique **`Cortex Bridge.command`** — la console démarre et
+l'interface s'ouvre. Une seule commande te dit à tout moment ce qui manque
+et comment le réparer : `scripts/cortex.sh doctor`.
+
+Guides en français : [démarrage](docs/fr/DEMARRAGE.md) ·
+[utilisation](docs/fr/UTILISATION.md) · [mise à jour](docs/fr/MISE-A-JOUR.md) ·
+[dépannage](docs/fr/DEPANNAGE.md)
+
 ## What v0.5 does
 
 - Uses the person's existing Google Chrome profile through a packaged local

@@ -6,6 +6,7 @@ import { groupConversations } from "@/lib/conversations";
 import {
   ArchiveIcon,
   ChevronDownIcon,
+  ClockIcon,
   MenuIcon,
   MessageIcon,
   GlobeIcon,
@@ -27,6 +28,7 @@ interface ConversationSidebarProps {
   onRefresh: () => void;
   onNewConversation: () => void;
   onOpenSettings: () => void;
+  onOpenHistory?: () => void;
 }
 
 function formatTimestamp(value?: string): string {
@@ -71,7 +73,7 @@ function ConversationRow({ conversation, selectedKey, onSelect }: {
   );
 }
 
-export function ConversationSidebar({ conversations, selectedKey, loading, collapsed, onCollapse, onSelect, onRefresh, onNewConversation, onOpenSettings }: ConversationSidebarProps) {
+export function ConversationSidebar({ conversations, selectedKey, loading, collapsed, onCollapse, onSelect, onRefresh, onNewConversation, onOpenSettings, onOpenHistory }: ConversationSidebarProps) {
   const [query, setQuery] = useState("");
   const filtered = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -92,6 +94,7 @@ export function ConversationSidebar({ conversations, selectedKey, loading, colla
           ))}
         </nav>
         <div className="collapsed-spacer" />
+        {onOpenHistory && <button className="sidebar-icon-button" onClick={onOpenHistory} title="Historique des missions" aria-label="Historique des missions"><ClockIcon /></button>}
         <button className="sidebar-icon-button" onClick={onOpenSettings} title="Paramètres" aria-label="Paramètres"><SettingsIcon /></button>
       </aside>
     );
@@ -130,6 +133,7 @@ export function ConversationSidebar({ conversations, selectedKey, loading, colla
       </nav>
       <button className="archived-button"><ArchiveIcon size={16} /><span>Conversations archivées</span></button>
       <div className="sidebar-bottom">
+        {onOpenHistory && <button className="settings-entry" onClick={onOpenHistory}><span className="settings-entry-icon"><ClockIcon /></span><span className="settings-entry-copy"><strong>Historique</strong><small>Missions et exécutions passées</small></span><ChevronDownIcon size={15} /></button>}
         <button className="settings-entry" onClick={onOpenSettings}><span className="settings-entry-icon"><SettingsIcon /></span><span className="settings-entry-copy"><strong>Paramètres</strong><small>Modèles, permissions, transport</small></span><ChevronDownIcon size={15} /></button>
         <div className="account-row"><span className="account-avatar">CL</span><span><strong>Compte local</strong><small>Session locale</small></span></div>
       </div>
