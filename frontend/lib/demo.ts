@@ -11,10 +11,10 @@ import type {
 
 export const demoConversations: ConversationSummary[] = [
   {
-    url: "https://chatgpt.com/c/demo-cool-bank",
-    identity: "demo-cool-bank",
-    title: "COOL BANK V3",
-    preview: "Audit du parcours d'inscription et correction des tests…",
+    url: "https://chatgpt.com/c/demo-release-checklist",
+    identity: "demo-release-checklist",
+    title: "Release checklist",
+    preview: "Vérifier les critères de publication et les tests…",
     timestamp: "10:24",
     pinned: true,
     status: "mission",
@@ -29,10 +29,10 @@ export const demoConversations: ConversationSummary[] = [
     status: "generating",
   },
   {
-    url: "https://chatgpt.com/c/demo-preuvia",
-    identity: "demo-preuvia",
+    url: "https://chatgpt.com/c/demo-research",
+    identity: "demo-research",
     title: "Analyse et évaluation",
-    preview: "Revoir l'interface locale et le design Preuvia…",
+    preview: "Revoir l'interface locale et synthétiser la recherche…",
     timestamp: "Hier",
     pinned: true,
   },
@@ -81,13 +81,15 @@ export const demoRuntime: RuntimeStatus = {
   ollama_up: true,
   ollama_status: "healthy",
   endpoint: "http://127.0.0.1:11434",
-  storage_path: "/Volumes/DJO/AI/Ollama/models",
+  storage_path: "/tmp/cortex-demo-workspace/models",
   volume_mounted: true,
   storage_status: "OK",
   primary: { name: "orchestra-executor", state: "loaded" },
-  fallback: { name: "orchestra-executor-fallback", state: "installed" },
-  mode: "live",
-  model: "orchestra-executor",
+  executor_available: true,
+  executor_kind: "unavailable",
+  executor_model_used: null,
+  runtime_mode: "development_fixture",
+  release_eligible: false,
 };
 
 export const demoTransport: TransportStatus = {
@@ -103,6 +105,16 @@ export const demoPipeline: PipelineStatus = {
   active_mission_id: "demo-mission",
   active_mission_state: "EXECUTING_LOCAL_ACTION",
   queue_pending: 0,
+  runtime_execution: {
+    task_id: "demo-mission",
+    executor_kind: "deterministic",
+    executor_model_used: null,
+    runtime_mode: "development_fixture",
+    release_eligible: false,
+    state: "EXECUTING_LOCAL_ACTION",
+    active: true,
+    observed_at: new Date().toISOString(),
+  },
   latency: { transport_ms: 128, local_model_ms: 3700, total_iteration_ms: 12800 },
   components: [
     { id: "transport", label: "Transport ChatGPT", state: "connected", detail: "Conversation verrouillée", latency_ms: 128 },
@@ -111,7 +123,8 @@ export const demoPipeline: PipelineStatus = {
     { id: "chrome", label: "Chrome Research", state: "running", detail: "Page locale chargée" },
     { id: "screenshots", label: "Captures", state: "healthy", detail: "3 preuves enregistrées" },
     { id: "filesystem", label: "Fichiers", state: "healthy", detail: "Lecture / écriture workspace" },
-    { id: "ollama", label: "Ollama", state: "healthy", detail: "Granite chargé" },
+    { id: "ollama", label: "Disponibilité Ollama", state: "available", detail: "daemon fixture · candidat installé" },
+    { id: "executor", label: "Exécuteur réellement utilisé", state: "running", detail: "deterministic · fixture de développement" },
     { id: "approvals", label: "Approbations", state: "idle", detail: "Aucune en attente" },
     { id: "queue", label: "File d'attente", state: "idle", detail: "0 action" },
     { id: "database", label: "Persistance", state: "healthy", detail: "SQLite synchronisé" },
@@ -128,10 +141,14 @@ export const demoMissions: MissionSummary[] = [
   {
     id: "demo-mission",
     objective: "Auditer le checkout et valider le parcours de bout en bout",
-    workspace: "/Users/asterion/Projects/checkout",
+    workspace: "/tmp/cortex-demo-workspace",
     state: "EXECUTING_LOCAL_ACTION",
     created_at: Date.now() / 1000 - 140,
     max_iterations: 25,
+    executor_kind: "deterministic",
+    executor_model_used: null,
+    runtime_mode: "development_fixture",
+    release_eligible: false,
   },
 ];
 
@@ -160,7 +177,7 @@ export const demoSettings: CortexSettings = {
   fallback_executor: "orchestra-executor-fallback",
   approval_policy: "workspace-write-with-approvals",
   access_profile: "workspace",
-  default_workspace: "/Users/asterion/Documents/kimi/workspace/e2e-sandbox",
+  default_workspace: "/tmp/cortex-demo-workspace",
   max_iterations: 25,
   max_duration_minutes: 60,
   ollama_context: 8192,
@@ -171,4 +188,6 @@ export const demoSettings: CortexSettings = {
   persist_conversation_history: false,
   response_stability_seconds: 2,
   chat_timeout_seconds: 300,
+  browser_transport: "chrome_extension",
+  browser_profile_root: "console/data/browser-profiles",
 };

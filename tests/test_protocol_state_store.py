@@ -170,6 +170,16 @@ class ProtocolTestCase(unittest.TestCase):
             protocol.validate_decision(d, expected_mission_id=MISSION_ID, expected_iteration=1)
         self.assertEqual(cm.exception.code, "PATH_TRAVERSAL")
 
+    def test_run_tests_requires_structured_argv(self):
+        malformed = make_decision(tool="run_tests", arguments={"command": "python3 -m unittest"})
+        with self.assertRaises(DecisionError) as cm:
+            protocol.validate_decision(
+                malformed, expected_mission_id=MISSION_ID, expected_iteration=1
+            )
+        self.assertEqual(cm.exception.code, "MALFORMED_ARGUMENTS")
+        valid = make_decision(tool="run_tests", arguments={"argv": ["python3", "-m", "unittest"]})
+        protocol.validate_decision(valid, expected_mission_id=MISSION_ID, expected_iteration=1)
+
     # extraction helper (§9): exactly one fenced block, other JSON ignored
     def test_extract_decision_block(self):
         decision = make_decision()
@@ -190,6 +200,31 @@ class ProtocolTestCase(unittest.TestCase):
         with self.assertRaises(DecisionError) as cm2:
             protocol.extract_decision_block(block + "\n" + block)
         self.assertEqual(cm2.exception.code, "MULTIPLE_DECISION_BLOCKS")
+
+    # Live ChatGPT DOM extraction drops code fences: accept the whole-message
+    # bare form, keep rejecting embedded or ambiguous blocks.
+    def test_extract_accepts_dom_stripped_bare_block(self):
+        decision = make_decision()
+        message = "cortex-decision\n" + json.dumps(decision, indent=2)
+        extracted = protocol.extract_decision_block(message)
+        self.assertEqual(extracted["actionId"], decision["actionId"])
+
+    def test_extract_accepts_bare_block_with_trailing_fence_remnant(self):
+        decision = make_decision()
+        message = "cortex-decision\n" + json.dumps(decision) + "\n```"
+        extracted = protocol.extract_decision_block(message)
+        self.assertEqual(extracted["actionId"], decision["actionId"])
+
+    def test_extract_rejects_bare_block_with_surrounding_prose(self):
+        decision = make_decision()
+        bare = "cortex-decision\n" + json.dumps(decision)
+        with self.assertRaises(DecisionError) as cm:
+            protocol.extract_decision_block("Let me explain.\n" + bare)
+        self.assertEqual(cm.exception.code, "NO_DECISION_BLOCK")
+        with self.assertRaises(DecisionError) as cm2:
+            protocol.extract_decision_block(bare + "\n" + bare)
+        self.assertEqual(cm2.exception.code, "NO_DECISION_BLOCK")
+
 
     # terminal COMPLETE without validation instructions (§10)
     def test_complete_without_validation_instructions(self):

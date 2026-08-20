@@ -18,6 +18,7 @@ sys.path.insert(0, str(REPO_ROOT / "console"))
 import chat as chat_api  # noqa: E402
 import missions as missions_api  # noqa: E402
 import write_slots  # noqa: E402
+from conversation_sessions import ConversationSessionRegistry  # noqa: E402
 
 CONV_A = "https://chatgpt.com/c/aaa-111"
 CONV_B = "https://chatgpt.com/c/bbb-222"
@@ -34,6 +35,8 @@ class WriteSlotsTest(unittest.TestCase):
     def setUp(self) -> None:
         self._saved_runs = dict(chat_api._runs)
         self._saved_urls = dict(missions_api._mission_write_urls)
+        self._saved_registry = write_slots._registry
+        write_slots._registry = ConversationSessionRegistry(capacity=2)
         chat_api._runs.clear()
         missions_api._mission_write_urls.clear()
 
@@ -42,6 +45,7 @@ class WriteSlotsTest(unittest.TestCase):
         chat_api._runs.update(self._saved_runs)
         missions_api._mission_write_urls.clear()
         missions_api._mission_write_urls.update(self._saved_urls)
+        write_slots._registry = self._saved_registry
 
     def test_no_active_run_means_free_slot(self) -> None:
         ok, active = write_slots.write_slot_available(CONV_A)
@@ -88,6 +92,20 @@ class WriteSlotsTest(unittest.TestCase):
     def test_refusal_message_is_french_and_mentions_draft(self) -> None:
         self.assertIn("deux conversations", write_slots.REFUSAL_MESSAGE)
         self.assertIn("brouillon est conservé", write_slots.REFUSAL_MESSAGE)
+
+    def test_durable_registry_wrappers_are_available(self) -> None:
+        missing = [
+            name
+            for name in (
+                "acquire_writer",
+                "rekey",
+                "release_writer",
+                "restore_writer",
+                "new_conversation_key",
+            )
+            if not hasattr(write_slots, name)
+        ]
+        self.assertEqual(missing, [])
 
 
 if __name__ == "__main__":

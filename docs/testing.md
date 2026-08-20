@@ -1,79 +1,90 @@
 # Testing
 
-## Automated suite
+## Complete local gate
 
 ```bash
-cd cortex-bridge
-python3 -m unittest discover -s tests
+PYTHON=$HOME/.local/share/cortex-bridge/venv/bin/python ./scripts/test-all.sh
 ```
 
-**114 tests, all passing** (2026-07-25). They cover:
+The gate runs backend tests, Python compilation, Manifest V3 protocol tests,
+fallback syntax, dependency audit, frontend unit/runtime/coverage/type/lint,
+static build, Playwright E2E and accessibility fixtures, runtime verification,
+and public privacy checks.
 
-- `test_protocol_state_store.py` — cortex.v1 extraction/validation, state
-  machine adjacency, budgets, fingerprints, SQLite store
-- `test_loop_mock.py` — the full mission loop against a mock orchestrator:
-  execution, violations, duplicates, approvals, recovery
-- `test_runner_mode_a.py` — ModeARunner end-to-end against the fixture
-- `test_transport_fixture.py` — transport behaviors: lock, mismatch, tab
-  closure, blockers, streaming, browser-restart re-attach, stop
-- `test_missions_api.py` — the console API over HTTP (uvicorn thread +
-  fixture): opt-in gate, full mission, approval flow, pause/resume/cancel,
-  crash-safety (missions can always reach FAILED), stop-everything
-- `test_probe.py` — DOM probe summary semantics, transport delegation,
-  console endpoint
-- `test_empty_reply_grace.py` — thinking-model empty-shell grace window,
-  code-block stability signature, streaming resets
+Playwright is the synthetic browser test tool. It is not the product transport.
 
-No test touches the network, a real browser, or the real chatgpt.com.
+## v0.5 release test matrix
 
-## Live verification matrix (real chatgpt.com, 2026-07-24)
+Every row is a separate release zone. A synthetic result may prove local logic,
+but it never replaces a required observation in the owner's signed-in Chrome
+profile.
 
-Missions run against the production UI through WebBridge, workspace
-`e2e-sandbox`, policy `workspace-write-with-approvals` unless noted.
+| Zone | Automated evidence | Required real evidence | Release condition |
+| --- | --- | --- | --- |
+| Installer consent | dry run, immutable hash, wrong-hash rejection, rollback | apply one reviewed hash in an isolated macOS home | install and idempotent reinstall succeed without `sudo` |
+| Process ownership | PID identity, stale PID and foreign-port tests | start, HTTP 200, status, stop and released port | no foreign process is signalled or removed |
+| Chrome extension protocol | allowlist, pairing expiry/replay, protocol attestation, competing-extension isolation, heartbeat, reconnect and bounded commands | unpacked extension pairs in the same Chrome window | protocol generation matches, a stale second extension cannot corrupt the active status, then the probe reports the real composer and zero pending commands |
+| Conversation discovery | deduplication, 50-item cap and truthful metadata fixtures | refresh a pinned, project and recent conversation; remove one and refresh | no fabricated category, duplicate or deleted conversation remains |
+| Navigation | cached UI, pending-target detection, separate composer readiness and ten A/B fixture switches | cold and warm switches between two neutral conversations | Chrome exposes the requested URL without consuming the composer budget; p95 remains below 3 seconds, hard maximum 10 seconds, no crossover |
+| Message delivery | prepare, activation, visible-marker confirmation and no-resend tests | one neutral exact-response message | visible sent state precedes the reply; ambiguous delivery is never retried |
+| Two writers | lease isolation and third-writer fixture scenarios | two simultaneous neutral sends plus a third attempt | A and B finish in their own tabs; the third draft is preserved and refused |
+| File upload | MIME, size, symlink, staging-token and duplicate-name tests | one small synthetic text file | exact public filename is visible and one response is returned |
+| Screenshot upload | one-shot permission, target match and atomic PNG tests | one explicitly authorized synthetic browser capture | the capture targets the selected conversation and is consumed once |
+| Mission protocol | parser, sequence, resynchronization, approvals and terminal validation | three disposable mini-sites and one self-diagnostic run | artifacts validate, processes stop, no mission merges or pushes itself |
+| Executor policy | workspace boundary, process allowlist, timeout and secret-free environment | one approved local write and one approved local process | no action exceeds the displayed workspace or capability scope |
+| Recovery | restart, database failure, closed-tab and content-script recovery tests | close a Cortex-owned ChatGPT tab after delivery | reading recovers without a second user message |
+| Interface quality | component, E2E, console, keyboard, reduced-motion and Axe tests | inspect the shipped UI at 375, 768 and 1440 pixels | no blocker, horizontal overflow, console error or Axe violation |
+| Documentation and privacy | link checker, runtime verifier, marker scan, OCR, metadata and Gitleaks | review only synthetic/redacted evidence | public tree contains no account data, private title, cookie, path or secret |
+| Dependencies and package | hashed Python lock, locked npm audit, build reproducibility and CI contracts | clean lifecycle uses the packaged extension | no high-severity npm finding; every shipped artifact hash matches evidence |
+| Provider compliance | evidence-validator blocker states and current official-terms link | provider authorization for the intended transport | owner approval alone never changes a provider-blocked gate to pass |
+| Release integrity | evidence-schema and artifact-hash tests | inspect the exact source commit and PR checks | all rows are green before the evidence verdict becomes ready |
 
-| Test | Scenario | Expected | Result |
-|---|---|---|---|
-| A | Transport echo: contract in, one terminal BLOCKED decision out | 1 send, 0 tool execs, 1 valid decision | ✅ PASS (after send-mechanics fixes) |
-| B | Read-only "list the workspace files" | list_directory executed, COMPLETED | ✅ PASS |
-| C | Write `witness-c.txt` with human approval | WAITING_FOR_APPROVAL → approve → write → COMPLETED | ✅ PASS |
-| D | Multi-iteration repair of `broken.py` | run → read → write → run → COMPLETE, prints `CORTEX_REPAIR_OK` | ✅ PASS (5 valid decisions) |
-| E | "Read /etc/passwd" | Refusal: terminal BLOCKED, 0 tool execs | ✅ PASS (refused at layer 1) |
-| F | Tab/conversation switch mid-mission | CONVERSATION_MISMATCH pause | ✅ Covered: fixture `test_16` + live identity checks in A–E |
-| G | Browser refresh after a report | No duplicate execution (fingerprints) | ✅ Covered: duplicate-response tests + REPORT_RESEND_IGNORED paths |
-| H | STOP EVERYTHING mid-mission | Mission CANCELLED (`STOP_EVERYTHING`), writes stop immediately | ✅ PASS (h3.txt never written) |
-| **Final acceptance** | scan.py mission, zero copy-paste | scan.py created, run, rapport.txt non-empty, COMPLETED | ✅ PASS (4 valid decisions) |
-| F (organic) | Human yanked the tab to another chat mid-mission | CONVERSATION_MISMATCH pause, no leak into the wrong chat; fast detection while awaiting | ✅ PASS (happened for real, twice) |
-| I | Reuse an existing conversation (attach, no new chat) | Contract into the locked chat, self-heal after 2 context-confusion violations, COMPLETED | ✅ PASS |
-| J | Harder task: zip `cortex-bridge` via `run_process`, verify contents + size | cortex-backup.zip (551 files) created and verified, COMPLETED | ✅ PASS (4 valid decisions) |
-| K (2026-07-25) | Echo on a **thinking model** (gpt-5.6-thinking slug) | First run FAILED: empty assistant shell extracted during the paint gap → 3 false NO_DECISION_BLOCK (replies were perfect, verified by screenshot + later DOM read). After the empty-reply-grace fix: **COMPLETED, valid decision `ECHO-GRACE-OK`, terminal** | ✅ PASS after fix |
-| L (2026-07-25) | Live DOM probe `GET /api/transport/probe` | composer `#prompt-textarea` ok, messages `[data-message-author-role]` ok (8 nodes), send/stop warnings only (idle page) | ✅ PASS |
-| M (2026-07-25) | v0.2.0 console UI: sidebar conversations + UI-driven simple chat | 31 conversations listed (pinned/unread/preview); message sent by driving the real Next.js UI via WebBridge, run COMPLETED (`UI-DRIVE-OK`), latency tracked | ✅ PASS |
-| N (2026-07-25) | Full autonomous mission launched from the real UI ("Nouvelle mission") | WAITING_FOR_CHATGPT → WAITING_FOR_APPROVAL → approve → COMPLETED, `ui-acceptance.txt` (`ACCEPTANCE-OK`) created in 2 iterations | ✅ PASS ([screenshots](screenshots/)) |
-| O (2026-07-25) | ChatGPT model switch via `GET/PUT /api/models/chatgpt` | 6 models detected (FR Radix pill), round-trip Pro → Instantanée → Pro confirmed against the live switcher | ✅ PASS (after switcher fix) |
+## Focused commands
 
-Notable real-world defects found by this matrix and fixed the same day:
+```bash
+python -m unittest tests.test_chrome_extension_bridge -v
+python -m unittest tests.test_chrome_extension_driver -v
+node --test chrome-extension/tests/extension.test.mjs
+cd frontend
+../scripts/npmw run test:unit
+../scripts/npmw run typecheck
+../scripts/npmw run lint
+../scripts/npmw run build
+../scripts/npmw run test:e2e
+../scripts/npmw run test:a11y
+```
 
-1. ProseMirror requires `execCommand('insertText')` (silent no-op otherwise).
-2. Voice-mode button matched the old send fallback selector.
-3. Post-send verification raced the SPA render (false DELIVERY_UNCERTAIN).
-4. Markdown consumes report fences — delivery markers must skip them.
-5. Transient `/c/WEB:<uuid>` URLs broke resume re-attach.
-6. `REQUEST_CONTEXT` with a null action crashed the loop.
-7. ChatGPT guessed tool argument names — the contract now embeds schemas.
-8. (2026-07-25) Thinking models paint an empty assistant shell before the
-   reply: empty == empty was read as "stable" and extracted. Fix: 45 s
-   empty-reply grace + stability signature covering code blocks.
-9. (2026-07-25) The FR Radix model switcher (`button.__composer-pill`, label
-   "Pro"/"Instantanée", no testid) was invisible to the old selector; plain
-   `.click()` does not open Radix menus; React detaches the pill node after
-   selection (stale-ref confirmation). Fix: pill selector + full pointer
-   sequence + post-navigation polling + re-query after selection.
+## Fixture proof
 
-## Reproducing the live tests
+Fixtures prove pairing expiry/replay, command allowlisting, same-window tab
+creation logic, connection dialog states, stale-extension isolation, automatic
+Cortex-page recovery after an extension reload, exact send lifecycle, two
+writers and third rejection, target-URL navigation followed by separate
+composer readiness, 10-second selection, attachments, screenshots, restart,
+responsive layouts, keyboard behavior, Axe, reduced motion, and absence of
+unexpected browser errors.
 
-1. Chrome with WebBridge connected to a ChatGPT session; Ollama running.
-2. `cd console && python3 server.py`, open `http://127.0.0.1:8420`, opt in.
-3. Launch missions per scenario above; approve writes when prompted.
-4. Audit: `sqlite3 console/data/cortex.db` — tables `missions`,
-   `orchestrator_decisions`, `tool_executions`, `approvals`,
-   `transport_events`, `validation_results`.
+Fixtures do not prove current compatibility with a real authenticated ChatGPT
+account.
+
+## Provider-compliance boundary
+
+The intended live gate would check one conversation, two isolated
+conversations, third rejection, a small redacted file, a redacted screenshot,
+tab-close recovery, and three disposable mini-site missions. The v0.5
+consumer-site adapter automatically reads ChatGPT Output, so that gate is
+blocked by the current provider terms even when the account owner approves a
+technical test.
+
+Evidence stores aggregate results and hashes, never account identity, cookies,
+conversation text, or unredacted media. While this blocker remains, the status
+is `BLOCKED_BY_PROVIDER_TERMS`; fixture success and owner approval cannot change
+it to `PASS`.
+
+## Release evidence
+
+Validate `docs/verification/v0.5.0.json` with:
+
+```bash
+./scripts/verify-release-evidence.py docs/verification/v0.5.0.json
+```

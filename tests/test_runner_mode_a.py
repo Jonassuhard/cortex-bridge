@@ -23,7 +23,9 @@ from orchestration.runner import (  # noqa: E402
 from orchestration.store import Store  # noqa: E402
 from transport.chatgpt_web.adapter import (  # noqa: E402
     ChatGPTWebTransport,
+    DELIVERY_UNCERTAIN,
     LocalFixtureDriver,
+    TransportError,
 )
 from transport.chatgpt_web.fixture import FixtureServer  # noqa: E402
 
@@ -141,6 +143,32 @@ class ModeARunnerTestCase(unittest.IsolatedAsyncioTestCase):
         # verify_lock enforced: every assistant reply fingerprinted once.
         self.assertEqual(self.store.count("chatgpt_messages", mission_id), 2)
 
+    async def test_transport_pause_records_the_safe_error_detail(self):
+        async def rejected_send(_text):
+            raise TransportError(
+                DELIVERY_UNCERTAIN,
+                "synthetic new-chat submitter became detached",
+            )
+
+        self.transport.send_message = rejected_send
+        mission_id = str(uuid.uuid4())
+        runner = self.make_runner()
+
+        mission = await runner.run_mission(
+            "Exercise a rejected delivery.",
+            conversation_url=self.conv_url,
+            mission_id=mission_id,
+        )
+
+        self.assertEqual(mission["state"], "PAUSED")
+        event = self.store.rows("transport_events", mission_id)[-1]
+        detail = json.loads(event["detail_json"])
+        self.assertEqual(detail["reason"], DELIVERY_UNCERTAIN)
+        self.assertEqual(
+            detail["error"],
+            "DELIVERY_UNCERTAIN: synthetic new-chat submitter became detached",
+        )
+
     # §8: list candidate conversations from the fixture sidebar equivalent
     async def test_list_conversation_candidates(self):
         await self.transport.select_conversation(self.conv_url)
@@ -177,6 +205,7 @@ class ModeARunnerTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertIn("objective text", contract)
         self.assertIn("/some/workspace", contract)
         self.assertIn("run_process", contract)  # allowed tools enumerated
+        self.assertIn("Recorded local execution evidence", contract)
 
 
 if __name__ == "__main__":

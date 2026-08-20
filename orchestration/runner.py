@@ -81,7 +81,8 @@ Rules:
 - REQUEST_CONTEXT: a read-only tool (or null) when you need more context.
 - COMPLETE: only when every acceptance criterion of the objective is met;
   set "terminal": true and put the final validation instructions in
-  acceptanceCriteria.
+  acceptanceCriteria. Recorded local execution evidence, not this text, is
+  required for completion.
 - BLOCKED: when you cannot proceed; set "terminal": true.
 - After each EXECUTE or REQUEST_CONTEXT you receive exactly one
   ```cortex-report fenced block with the validated tool result
@@ -179,6 +180,15 @@ class ModeARunner:
     experimental_transport_accepted: bool = False  # §6: default OFF
     max_cycles: int = MAX_CYCLES
 
+    def _persist_runtime_truth(self, mission_id: str, result: dict) -> dict:
+        return self.store.record_runtime_truth(
+            mission_id,
+            executor_kind="deterministic",
+            executor_model_used=None,
+            runtime_mode="live",
+            release_eligible=result.get("state") == "COMPLETED",
+        )
+
     async def run_mission(
         self,
         objective: str,
@@ -205,6 +215,16 @@ class ModeARunner:
             str(self.tools.workspace),
             max_iterations=(self.budgets or Budgets()).max_iterations,
             max_duration_seconds=(self.budgets or Budgets()).max_duration_seconds,
+            executor_kind="deterministic",
+            executor_model_used=None,
+            runtime_mode="live",
+        )
+        self.store.record_runtime_truth(
+            mission_id,
+            executor_kind="deterministic",
+            executor_model_used=None,
+            runtime_mode="live",
+            release_eligible=False,
         )
 
         # §8: lock exactly one conversation (or capture a brand-new one).
@@ -233,19 +253,33 @@ class ModeARunner:
             contract=render_contract(objective, mission_id, str(self.tools.workspace)),
         )
         try:
-            return await loop.run(max_cycles=self.max_cycles)
+            return self._persist_runtime_truth(
+                mission_id, await loop.run(max_cycles=self.max_cycles)
+            )
         except BlockerDetected as exc:
             # §5: login/CAPTCHA/rate-limit — pause safely, never bypass.
-            return self._pause_mission(loop, exc.code)
+            return self._persist_runtime_truth(
+                mission_id, self._pause_mission(loop, exc.code, str(exc))
+            )
         except TransportError as exc:
-            return self._pause_mission(loop, exc.code)
+            return self._persist_runtime_truth(
+                mission_id, self._pause_mission(loop, exc.code, str(exc))
+            )
 
-    def _pause_mission(self, loop: MissionLoop, reason: str) -> dict:
+    def _pause_mission(
+        self,
+        loop: MissionLoop,
+        reason: str,
+        error: str | None = None,
+    ) -> dict:
         try:
             loop.sm.transition("PAUSED", pause_reason=reason)
         except StoreError:
             pass
+        detail = {"reason": reason}
+        if error:
+            detail["error"] = error[:500]
         self.store.record_transport_event(
-            str(uuid.uuid4()), loop.mission_id, "TRANSPORT_PAUSED", {"reason": reason}
+            str(uuid.uuid4()), loop.mission_id, "TRANSPORT_PAUSED", detail
         )
         return self.store.get_mission(loop.mission_id)

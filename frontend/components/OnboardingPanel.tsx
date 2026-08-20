@@ -2,7 +2,7 @@
 /* eslint-disable react-hooks/set-state-in-effect */
 
 import { useCallback, useEffect, useState } from "react";
-import { api, postJson } from "@/lib/api";
+import { ApiError, api, postJson } from "@/lib/api";
 import { AlertIcon, CheckIcon, RefreshIcon, XIcon } from "./Icons";
 
 interface OnboardingCheck {
@@ -27,6 +27,8 @@ export function OnboardingPanel({ onOpenSettings }: { onOpenSettings: () => void
   const [state, setState] = useState<OnboardingState | null>(null);
   const [hidden, setHidden] = useState(false);
   const [checking, setChecking] = useState(false);
+  const [openingBrowser, setOpeningBrowser] = useState(false);
+  const [browserError, setBrowserError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     setChecking(true);
@@ -54,14 +56,37 @@ export function OnboardingPanel({ onOpenSettings }: { onOpenSettings: () => void
     setHidden(true);
   };
 
+  const openBrowser = async () => {
+    setOpeningBrowser(true);
+    setBrowserError(null);
+    try {
+      await postJson("/api/onboarding/browser/open", {});
+      await refresh();
+    } catch (error) {
+      if (error instanceof ApiError) {
+        const envelope = error.detail as { detail?: { error?: string } } | undefined;
+        setBrowserError(
+          envelope?.detail?.error
+            ? `Le profil navigateur n’a pas pu être ouvert : ${envelope.detail.error}`
+            : "Le profil navigateur n’a pas pu être ouvert. Vérifie l’installation de Chromium."
+        );
+      } else {
+        setBrowserError("Le profil navigateur n’a pas pu être ouvert.");
+      }
+    } finally {
+      setOpeningBrowser(false);
+    }
+  };
+
   return (
+    // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role -- This styled overlay is controlled by React and does not use the native dialog lifecycle.
     <div className="settings-overlay" role="dialog" aria-modal="true" aria-label="Bienvenue dans Cortex Bridge">
       <div className="settings-backdrop" />
       <section className="settings-panel onboarding-panel">
         <header className="settings-head">
           <div>
             <span className="panel-eyebrow">Cortex Bridge</span>
-            <h2>Bienvenue 👋</h2>
+            <h2>Bienvenue</h2>
             <p>Vérifions ensemble que tout est prêt. ChatGPT planifie, Ollama exécute sur ta machine.</p>
           </div>
           <button className="icon-button" onClick={() => void dismiss()} aria-label="Fermer l'assistant"><XIcon /></button>
@@ -77,10 +102,16 @@ export function OnboardingPanel({ onOpenSettings }: { onOpenSettings: () => void
               </span>
             </div>
           ))}
+          {browserError ? (
+            <p className="diagnostic-result failed" role="alert">{browserError}</p>
+          ) : null}
         </div>
         <footer className="settings-footer">
-          <span>{state.ready ? "✅ Tout est prêt." : "Certains prérequis manquent — tu peux quand même explorer."}</span>
+          <span>{state.ready ? "Tout est prêt." : "Certains prérequis manquent — tu peux quand même explorer."}</span>
           <div>
+            <button className="secondary-button" disabled={openingBrowser} onClick={() => void openBrowser()}>
+              {openingBrowser ? "Ouverture…" : "Ouvrir le profil de connexion"}
+            </button>
             <button className="secondary-button" onClick={onOpenSettings}>Ouvrir les paramètres</button>
             <button className="secondary-button" disabled={checking} onClick={() => void refresh()}>
               <RefreshIcon size={13} /> {checking ? "Vérification…" : "Revérifier"}

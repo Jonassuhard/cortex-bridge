@@ -3,59 +3,90 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   ChatRun,
+  ConversationKey,
   ConversationMessage,
   ConversationSummary,
   CortexSettings,
+  ExecutionPreflight,
+  HealthState,
   MissionDetail,
   PipelineStatus,
 } from "@/lib/types";
 import { formatDuration, shortTime } from "@/lib/api";
+import { executorDisplay } from "@/lib/runtimeTruth";
 import {
   ActivityIcon,
   BrowserIcon,
   CheckIcon,
+  ChevronDownIcon,
   ClockIcon,
   CopyIcon,
   DoubleCheckIcon,
-  EyeIcon,
   FolderIcon,
   MenuIcon,
   MoreIcon,
   PanelIcon,
-  PaperclipIcon,
-  PauseIcon,
   PlayIcon,
-  SendIcon,
   ShieldIcon,
   SparkIcon,
   StopIcon,
   TerminalIcon,
 } from "./Icons";
 import { ExecutionCard } from "./ExecutionCard";
+import { Composer } from "./Composer";
+import { ExecutionPreflightDialog } from "./ExecutionPreflightDialog";
+import { StatusRail } from "./StatusRail";
+import type { RekeyConflict } from "@/lib/conversation-state";
+
+export interface WorkspaceAvailability {
+  chatState: HealthState;
+  agentState: HealthState;
+  transportLatencyMs: number | null;
+}
 
 interface ChatWorkspaceProps {
+  conversationKey: ConversationKey | null;
   conversation: ConversationSummary | null;
   messages: ConversationMessage[];
   loadingMessages: boolean;
+  sending: boolean;
+  cancelPending: boolean;
+  recoveryPending: boolean;
+  draft: string;
+  attachment: File | null;
   chatRun: ChatRun | null;
   mission: MissionDetail | null;
   pipeline: PipelineStatus;
+  availability: WorkspaceAvailability;
   settings: CortexSettings;
   inspectorOpen: boolean;
   sidebarCollapsed: boolean;
   capabilities: { upload_file: boolean; take_screenshot: boolean };
+  rekeyConflict: RekeyConflict | null;
+  rekeyResolutionAllowed: boolean;
+  onDraftChange: (key: ConversationKey, draft: string) => void;
+  onAttachmentStaged: (key: ConversationKey, attachment: File | null) => void;
   onToggleSidebar: () => void;
   onToggleInspector: () => void;
-  onSendChat: (text: string) => Promise<boolean>;
-  onSendAttachment: (text: string, file: File) => Promise<boolean>;
-  onSendScreenshot: (text: string) => Promise<boolean>;
-  onStartMission: (text: string) => Promise<boolean>;
-  onCancelChat: () => void;
-  onPauseMission: () => void;
-  onResumeMission: () => void;
-  onCancelMission: () => void;
-  onApprove: (scope: "once" | "tool" | "all-writes") => void;
-  onReject: () => void;
+  onOpenChatGPTProfile?: () => void;
+  chatGPTConnecting?: boolean;
+  onSendChat: (key: ConversationKey, text: string) => Promise<boolean>;
+  onSendAttachment: (key: ConversationKey, text: string, file: File) => Promise<boolean>;
+  onSendScreenshot: (key: ConversationKey, text: string) => Promise<boolean>;
+  onStartMission: (key: ConversationKey, text: string, preflight: ExecutionPreflight) => Promise<boolean>;
+  onCancelChat: (key: ConversationKey) => void;
+  onRetryChatRecovery: (key: ConversationKey) => void;
+  onReloadConversation: (key: ConversationKey) => void;
+  onResolveRekeyConflict: (
+    fromKey: ConversationKey,
+    toKey: ConversationKey,
+    choice: "source" | "target",
+  ) => void;
+  onPauseMission: (key: ConversationKey) => void;
+  onResumeMission: (key: ConversationKey) => void;
+  onCancelMission: (key: ConversationKey) => void;
+  onApprove: (key: ConversationKey, scope: "once" | "tool" | "all-writes") => void;
+  onReject: (key: ConversationKey) => void;
 }
 
 function cleanMessageText(text: string): string {
@@ -64,6 +95,70 @@ function cleanMessageText(text: string): string {
     .replace(/Réfléchi pendant\s+\d+[smh]\s*/gi, "")
     .replace(/Thinking completed/gi, "")
     .trim();
+}
+
+function isMissionProtocolMessage(message: ConversationMessage): boolean {
+  const text = cleanMessageText(message.text).trimStart();
+  const codeLanguages = (message.code_blocks || [])
+    .map((block) => block.lang?.trim().toLowerCase())
+    .filter(Boolean);
+
+  if (message.role === "user") {
+    return text.startsWith("You are the cloud orchestrator for Cortex Bridge.")
+      || text.startsWith("cortex-report")
+      || text.startsWith("```cortex-report")
+      || codeLanguages.includes("cortex-report");
+  }
+  if (message.role === "assistant") {
+    return text.startsWith("cortex-decision")
+      || text.startsWith("```cortex-decision")
+      || codeLanguages.includes("cortex-decision");
+  }
+  return false;
+}
+
+function MissionProtocolDisclosure({
+  messages,
+  expanded,
+  onToggle,
+}: {
+  messages: ConversationMessage[];
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const countLabel = `${messages.length} échange${messages.length > 1 ? "s" : ""} technique${messages.length > 1 ? "s" : ""}`;
+  return (
+    <section className={`mission-protocol ${expanded ? "is-expanded" : ""}`} aria-label="Protocole technique de la mission">
+      <button
+        className="mission-protocol-toggle"
+        type="button"
+        aria-expanded={expanded}
+        aria-label={expanded ? "Masquer le protocole" : `Voir le protocole (${countLabel})`}
+        onClick={onToggle}
+      >
+        <span className="mission-protocol-icon"><TerminalIcon size={14} /></span>
+        <span>
+          <strong>{expanded ? "Masquer le protocole" : "Voir le protocole"}</strong>
+          <small>{countLabel} entre ChatGPT et Cortex</small>
+        </span>
+        <ChevronDownIcon className={expanded ? "is-rotated" : ""} size={16} />
+      </button>
+      {expanded && (
+        <div className="mission-protocol-content">
+          <p>Ces informations permettent à Cortex de décider et de vérifier chaque action. Elles sont conservées pour l’audit.</p>
+          {messages.map((message) => (
+            <article key={message.id} className="mission-protocol-entry">
+              <header>
+                <strong>{message.role === "user" ? "Cortex → ChatGPT" : "ChatGPT → Cortex"}</strong>
+                {message.created_at && <time>{shortTime(message.created_at)}</time>}
+              </header>
+              <pre>{cleanMessageText(message.text)}</pre>
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
+  );
 }
 
 function MessageActions({ text }: { text: string }) {
@@ -108,19 +203,23 @@ function CodeBlock({ language, text }: { language?: string; text: string }) {
 }
 
 function UserMessage({ message }: { message: ConversationMessage }) {
+  const deliveryLabel: Record<NonNullable<ConversationMessage["delivery"]>, string> = {
+    queued: "En attente locale",
+    sending: "Envoi à ChatGPT",
+    sent: "Envoyé",
+    visible: "Visible dans ChatGPT",
+    waiting: "En attente de réponse",
+    received: "Réponse reçue",
+    uncertain: "Livraison incertaine",
+    failed: "Échec de l’envoi",
+  };
   return (
     <article className="message-row message-user">
       <div className="user-bubble">
         <p>{cleanMessageText(message.text)}</p>
         <div className="user-message-meta">
           <span>
-            {message.delivery === "failed"
-              ? "Échec de l'envoi"
-              : message.delivery === "queued"
-                ? "Envoi en cours…"
-                : message.delivery === "sending"
-                  ? "Envoi en cours…"
-                  : "Envoyé ✓"}
+            {deliveryLabel[message.delivery || "sent"]}
           </span>
           <time>{shortTime(message.created_at)}</time>
           {message.delivery === "received" || message.delivery === "visible" ? <DoubleCheckIcon size={14} /> : <CheckIcon size={14} />}
@@ -172,7 +271,7 @@ function EmptyConversation({ onExample }: { onExample: (text: string) => void })
     <div className="empty-conversation">
       <div className="empty-orb"><SparkIcon size={26} /></div>
       <h1>Que doit accomplir Cortex Bridge&nbsp;?</h1>
-      <p>Écris une mission complète. ChatGPT planifie, le bridge autorise, Ollama exécute et les preuves reviennent automatiquement dans la conversation.</p>
+      <p>Écris une mission complète. ChatGPT planifie, le bridge autorise, l&apos;exécuteur déterministe agit et les preuves reviennent automatiquement dans la conversation.</p>
       <div className="empty-examples">
         {examples.map((example) => (
           <button key={example.label} onClick={() => onExample(example.text)}>
@@ -187,42 +286,62 @@ function EmptyConversation({ onExample }: { onExample: (text: string) => void })
 }
 
 export function ChatWorkspace({
+  conversationKey,
   conversation,
   messages,
   loadingMessages,
+  sending,
+  cancelPending,
+  recoveryPending,
+  draft,
+  attachment,
   chatRun,
   mission,
   pipeline,
+  availability,
   settings,
   inspectorOpen,
   sidebarCollapsed,
   capabilities,
+  rekeyConflict,
+  rekeyResolutionAllowed,
+  onDraftChange,
+  onAttachmentStaged,
   onToggleSidebar,
   onToggleInspector,
+  onOpenChatGPTProfile,
+  chatGPTConnecting = false,
   onSendChat,
   onSendAttachment,
   onSendScreenshot,
   onStartMission,
   onCancelChat,
-  onPauseMission,
+  onRetryChatRecovery,
+  onReloadConversation,
+  onResolveRekeyConflict,
   onResumeMission,
   onCancelMission,
   onApprove,
   onReject,
 }: ChatWorkspaceProps) {
-  const [draft, setDraft] = useState("");
-  const [mode, setMode] = useState<"chat" | "mission">("mission");
-  const [sending, setSending] = useState(false);
-  const [stagedFile, setStagedFile] = useState<File | null>(null);
-  const [executionExpanded, setExecutionExpanded] = useState(true);
+  const [executionExpanded, setExecutionExpanded] = useState(false);
+  const [preflightOpen, setPreflightOpen] = useState(false);
+  const [preflightConfirming, setPreflightConfirming] = useState(false);
+  const [preflight, setPreflight] = useState<ExecutionPreflight | null>(null);
+  const [protocolExpanded, setProtocolExpanded] = useState(false);
   const viewportRef = useRef<HTMLDivElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const nearBottomRef = useRef(true);
 
   const activeMissionState = mission?.mission.state;
   const missionRunning = !!activeMissionState && !["COMPLETED", "FAILED", "BLOCKED", "CANCELLED"].includes(activeMissionState);
-  const chatActive = !!chatRun && !["COMPLETED", "FAILED", "CANCELLED"].includes(chatRun.state);
-  const busy = missionRunning || chatActive || sending;
+  const chatActive = !!chatRun && !["COMPLETED", "FAILED", "CANCELLED", "DELIVERY_UNCERTAIN"].includes(chatRun.state);
+  const ambiguousProvisional = !!conversationKey && rekeyConflict?.fromKey === conversationKey;
+  const composerBlocked = !conversationKey || sending || ambiguousProvisional;
+  const executionBlocked = composerBlocked
+    || missionRunning
+    || chatActive
+    || cancelPending
+    || recoveryPending;
 
   const mergedMessages = useMemo(() => {
     const source = [...messages];
@@ -237,8 +356,14 @@ export function ChatWorkspace({
           delivery:
             chatRun.state === "FAILED"
               ? "failed"
-              : ["VISIBLE_IN_CHATGPT", "WAITING_FOR_CHATGPT", "CHATGPT_STREAMING", "COMPLETED"].includes(chatRun.state)
-                ? "visible"
+              : chatRun.state === "DELIVERY_UNCERTAIN"
+                ? "uncertain"
+                : chatRun.state === "COMPLETED"
+                  ? "received"
+                  : ["WAITING_FOR_CHATGPT", "CHATGPT_STREAMING"].includes(chatRun.state)
+                    ? "waiting"
+                    : chatRun.state === "VISIBLE_IN_CHATGPT"
+                      ? "visible"
                 : chatRun.state === "SENDING_TO_CHATGPT"
                   ? "sending"
                   : "queued",
@@ -258,97 +383,84 @@ export function ChatWorkspace({
     return source;
   }, [messages, chatRun]);
 
+  const { protocolMessages, visibleMessages } = useMemo(() => {
+    const protocol: ConversationMessage[] = [];
+    const visible: ConversationMessage[] = [];
+    for (const message of mergedMessages) {
+      if (isMissionProtocolMessage(message)) protocol.push(message);
+      else visible.push(message);
+    }
+    return { protocolMessages: protocol, visibleMessages: visible };
+  }, [mergedMessages]);
+
+  useEffect(() => {
+    setProtocolExpanded(false);
+  }, [conversationKey]);
+
   useEffect(() => {
     if (!nearBottomRef.current) return;
     const viewport = viewportRef.current;
     if (!viewport) return;
     window.requestAnimationFrame(() => viewport.scrollTo({ top: viewport.scrollHeight, behavior: "smooth" }));
-  }, [mergedMessages.length, chatRun?.response_text, mission?.mission.state]);
+  }, [visibleMessages.length, protocolMessages.length, chatRun?.response_text, mission?.mission.state]);
 
   async function submit() {
-    const text = draft.trim();
-    if ((!text && !stagedFile) || sending) return;
-    setSending(true);
-    try {
-      // P2b: the draft is only cleared on success — a refused send (e.g.
-      // third write conversation) must never lose what the user typed.
-      const ok = stagedFile
-        ? await onSendAttachment(text, stagedFile)
-        : mode === "mission"
-          ? await onStartMission(text)
-          : await onSendChat(text);
-      if (ok) {
-        setDraft("");
-        setStagedFile(null);
-      }
-    } finally {
-      setSending(false);
-    }
+    const key = conversationKey;
+    const text = draft;
+    const stagedFile = attachment;
+    if (!key || (!text.trim() && !stagedFile) || executionBlocked) return;
+    if (stagedFile) await onSendAttachment(key, text, stagedFile);
+    else await onSendChat(key, text);
   }
 
   async function submitScreenshot() {
-    if (sending) return;
-    setSending(true);
-    try {
-      const ok = await onSendScreenshot(draft.trim());
-      if (ok) setDraft("");
-    } finally {
-      setSending(false);
-    }
+    const key = conversationKey;
+    if (!key || executionBlocked) return;
+    await onSendScreenshot(key, draft);
+  }
+
+  function prepareExecution() {
+    if (!conversationKey || (!draft.trim() && !attachment) || executionBlocked) return;
+    setPreflight({
+      conversationKey,
+      workspace: settings.default_workspace,
+      executorKind: settings.primary_executor.toLowerCase().includes("ollama") ? "ollama" : "deterministic",
+      capabilities: { read: true, write: false, processes: false, network: false, delete: false },
+      approvalPolicy: "read-only",
+      maxIterations: settings.max_iterations,
+      maxDurationMinutes: settings.max_duration_minutes,
+      attachmentTokens: [],
+    });
+    setPreflightOpen(true);
   }
 
   const title = conversation?.title || "Nouvelle conversation";
-  const online = pipeline.overall !== "failed" && pipeline.overall !== "disconnected";
-  const latency = pipeline.latency?.transport_ms;
-  const activeLabel = chatRun?.state === "CHATGPT_STREAMING"
-    ? "Réponse en cours"
-    : chatActive
-      ? "Message en cours"
-      : online
-        ? "Connecté"
-        : "Connexion dégradée";
-  // P1a: the agent executor status sits next to the ChatGPT status.
-  const ollamaComponent = pipeline.components?.find((component) => component.id === "ollama");
-  const agentUp = ollamaComponent ? ollamaComponent.state === "healthy" : online;
-  const agentLabel = missionRunning
-    ? "en cours"
-    : activeMissionState === "PAUSED" || activeMissionState === "PAUSED_RECOVERY_REQUIRED"
-      ? "en pause"
-      : agentUp
-        ? "prêt"
-        : "hors ligne";
-
   return (
     <section className="chat-workspace">
       <div className="conversation-toolbar">
         <div className="toolbar-left">
-          {!sidebarCollapsed && <button className="toolbar-icon-button mobile-only" onClick={onToggleSidebar}><MenuIcon /></button>}
-          {sidebarCollapsed && <button className="toolbar-icon-button" onClick={onToggleSidebar} title="Afficher les conversations"><MenuIcon /></button>}
+          {!sidebarCollapsed && <button className="toolbar-icon-button mobile-only" onClick={onToggleSidebar} title="Masquer les conversations" aria-label="Masquer les conversations"><MenuIcon /></button>}
+          {sidebarCollapsed && <button className="toolbar-icon-button" onClick={onToggleSidebar} title="Afficher les conversations" aria-label="Afficher les conversations"><MenuIcon /></button>}
           <div className="conversation-title-block">
-            <div><h2>{title}</h2><button aria-label="Options de conversation"><MoreIcon size={17} /></button></div>
+            <div><h1>{title}</h1><button aria-label="Options de conversation"><MoreIcon size={17} /></button></div>
             <p>
               <span>{settings.planner_model}</span>
               <i />
-              <span>{settings.primary_executor}</span>
+              <span>{executorDisplay(mission?.mission || pipeline.runtime_execution)}</span>
+              {conversation?.sync_state === "stale" && <><i /><span className="warning-label" title={conversation.sync_error || undefined}>Cache obsolète · synchronisation en échec</span></>}
               <i />
               <span className={settings.never_delete_files ? "safe-label" : "warning-label"}><ShieldIcon size={12} /> {settings.never_delete_files ? "Aucune suppression" : "Suppression non protégée"}</span>
             </p>
           </div>
+          {conversation?.sync_state === "stale" && conversationKey && (
+            <button className="reload-conversation-button" onClick={() => onReloadConversation(conversationKey)}>
+              Recharger la conversation
+            </button>
+          )}
+          {conversation?.url && <a className="open-chatgpt-link" href={conversation.url} target="_blank" rel="noreferrer">Ouvrir dans ChatGPT</a>}
         </div>
-        <div className="toolbar-center-status">
-          <span className={`status-pill ${online ? "is-online" : "is-offline"}`} title="Statut de la connexion ChatGPT">
-            <span className={`presence-dot ${online ? "is-online" : "is-offline"}`} />
-            <span>ChatGPT</span>
-            <strong>{activeLabel}</strong>
-          </span>
-          <span className={`status-pill ${agentUp ? "is-online" : "is-offline"}`} title="Statut de l'agent exécutif local">
-            <span className={`presence-dot ${agentUp ? "is-online" : "is-offline"}`} />
-            <span>Agent {settings.primary_executor}</span>
-            <strong>{agentLabel}</strong>
-          </span>
-        </div>
+        <StatusRail transport={chatActive ? "running" : availability.chatState} executor={availability.agentState} execution={mission?.mission.state || null} latencyMs={availability.transportLatencyMs} onOpenChatGPTProfile={onOpenChatGPTProfile} connecting={chatGPTConnecting} />
         <div className="toolbar-right">
-          <span className="latency-badge"><ActivityIcon size={14} /><span>Latence</span><strong>{latency == null ? "—" : formatDuration(latency)}</strong></span>
           <button className={`toolbar-icon-button ${inspectorOpen ? "is-active" : ""}`} onClick={onToggleInspector} title="Détails du bridge (pipeline, logs, transport)"><PanelIcon /></button>
         </div>
       </div>
@@ -364,17 +476,31 @@ export function ChatWorkspace({
         <div className="chat-background-grid" aria-hidden="true" />
         <div className="chat-blue-signal" aria-hidden="true" />
         <div className="message-column">
-          {loadingMessages && mergedMessages.length === 0 && (
+          {loadingMessages && visibleMessages.length === 0 && protocolMessages.length === 0 && (
             <div className="message-loading-state"><span className="thinking-spinner" /><p>Synchronisation de « {title} »…</p></div>
           )}
-          {!loadingMessages && mergedMessages.length === 0 && <EmptyConversation onExample={setDraft} />}
-          {mergedMessages.map((message) => {
+          {!loadingMessages && visibleMessages.length === 0 && protocolMessages.length === 0 && (
+            <EmptyConversation
+              onExample={(text) => {
+                if (conversationKey) onDraftChange(conversationKey, text);
+              }}
+            />
+          )}
+          {visibleMessages.map((message) => {
             if (message.role === "user") return <UserMessage key={message.id} message={message} />;
             if (message.role === "assistant") return <AssistantMessage key={message.id} message={message} />;
             return null;
           })}
 
-          {(mission || pipeline.active_mission_id) && (
+          {protocolMessages.length > 0 && (
+            <MissionProtocolDisclosure
+              messages={protocolMessages}
+              expanded={protocolExpanded}
+              onToggle={() => setProtocolExpanded((value) => !value)}
+            />
+          )}
+
+          {mission && (
             <div className="message-row message-cortex">
               <div className="assistant-avatar cortex-avatar"><ActivityIcon size={15} /></div>
               <div className="assistant-content execution-content">
@@ -384,8 +510,12 @@ export function ChatWorkspace({
                   pipeline={pipeline}
                   expanded={executionExpanded}
                   onToggle={() => setExecutionExpanded((value) => !value)}
-                  onApprove={onApprove}
-                  onReject={onReject}
+                  onApprove={(scope) => {
+                    if (conversationKey) onApprove(conversationKey, scope);
+                  }}
+                  onReject={() => {
+                    if (conversationKey) onReject(conversationKey);
+                  }}
                 />
               </div>
             </div>
@@ -394,85 +524,111 @@ export function ChatWorkspace({
           {chatRun?.state === "FAILED" && (
             <div className="inline-chat-error"><ShieldIcon size={17} /><span><strong>Transport interrompu</strong><small>{chatRun.error || "Le message n'a pas pu être confirmé dans ChatGPT."}</small></span></div>
           )}
+          {chatRun?.state === "DELIVERY_UNCERTAIN" && (
+            <output className="inline-chat-error">
+              <ShieldIcon size={17} />
+              <span>
+                <strong>Livraison incertaine</strong>
+                <small>{chatRun.error || "Le bridge ne peut pas confirmer la réception. Le contenu reste dans le composer et ne sera pas renvoyé automatiquement."}</small>
+              </span>
+              <button
+                disabled={recoveryPending}
+                onClick={() => conversationKey && onRetryChatRecovery(conversationKey)}
+              >
+                {recoveryPending ? "Synchronisation en cours…" : "Réessayer la synchronisation"}
+              </button>
+            </output>
+          )}
+          {chatActive && (
+            <output className="inline-chat-status">
+              Une réponse est déjà en cours pour cette conversation.
+            </output>
+          )}
+          {ambiguousProvisional && rekeyConflict && (
+            <div className="inline-chat-error" role="alert">
+              <ShieldIcon size={17} />
+              <span>
+                <strong>Identité de conversation ambiguë</strong>
+                <small>La conversation canonique existe déjà. Aucun envoi ni aucune exécution ne démarrera depuis cette copie provisoire.</small>
+              </span>
+              <div>
+                <button
+                  disabled={!rekeyResolutionAllowed}
+                  onClick={() => onResolveRekeyConflict(
+                    rekeyConflict.fromKey,
+                    rekeyConflict.toKey,
+                    "source",
+                  )}
+                >
+                  Conserver le brouillon provisoire
+                </button>
+                <button
+                  disabled={!rekeyResolutionAllowed}
+                  onClick={() => onResolveRekeyConflict(
+                    rekeyConflict.fromKey,
+                    rekeyConflict.toKey,
+                    "target",
+                  )}
+                >
+                  Conserver le brouillon canonique
+                </button>
+              </div>
+            </div>
+          )}
           <div className="scroll-anchor" />
         </div>
       </div>
 
       <div className="composer-shell">
-        <div className="composer-mode-tabs" role="tablist">
-          <button className={mode === "mission" ? "is-active" : ""} onClick={() => setMode("mission")}><SparkIcon size={14} /> Mission autonome</button>
-          <button className={mode === "chat" ? "is-active" : ""} onClick={() => setMode("chat")}><EyeIcon size={14} /> Message simple</button>
-        </div>
-        <div className={`composer-box ${busy ? "is-busy" : ""}`}>
-          <textarea
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey && !event.metaKey) {
-                event.preventDefault();
-                void submit();
-              }
-            }}
-            placeholder={mode === "mission" ? "Décris l'objectif. Cortex planifie, exécute et valide automatiquement…" : "Écrire dans la conversation ChatGPT sélectionnée…"}
-            rows={1}
-            disabled={sending}
-          />
-          <div className="composer-controls">
-            <div className="composer-left-actions">
-              <input
-                ref={fileInputRef}
-                type="file"
-                style={{ display: "none" }}
-                onChange={(event) => {
-                  const file = event.target.files?.[0] || null;
-                  setStagedFile(file);
-                  event.target.value = "";
-                }}
-              />
-              <button
-                title={capabilities.upload_file ? "Joindre un fichier ou une image (512 Mo / 20 Mo max)" : "Pièces jointes non confirmées par ce transport"}
-                disabled={!capabilities.upload_file}
-                onClick={() => fileInputRef.current?.click()}
-              >
-                <PaperclipIcon size={18} />
-              </button>
-              {capabilities.take_screenshot && (
-                <button title="Capturer l'onglet ChatGPT et l'envoyer" onClick={() => void submitScreenshot()} disabled={sending}>
-                  <BrowserIcon size={17} />
-                </button>
-              )}
-              {stagedFile && (
-                <span className="staged-file-pill">
-                  <PaperclipIcon size={12} /> {stagedFile.name}
-                  <button onClick={() => setStagedFile(null)} aria-label="Retirer la pièce jointe">×</button>
-                </span>
-              )}
-              <span className="workspace-pill"><FolderIcon size={13} /> {settings.default_workspace.split("/").filter(Boolean).at(-1) || "workspace"}</span>
-            </div>
-            <div className="composer-right-actions">
-              <span className="composer-shortcut">Entrée pour envoyer · ⇧ Entrée pour une ligne</span>
-              {chatActive ? (
-                <button className="send-button is-stop" onClick={onCancelChat} title="Arrêter la réponse"><StopIcon size={17} /></button>
-              ) : missionRunning ? (
-                <button className="send-button is-stop" onClick={onPauseMission} title="Mettre la mission en pause"><PauseIcon size={17} /></button>
-              ) : (
-                <button className="send-button" onClick={() => void submit()} disabled={!draft.trim() || sending} title="Envoyer"><SendIcon size={17} /></button>
-              )}
-            </div>
-          </div>
-        </div>
+        <Composer
+          value={draft}
+          attachment={attachment}
+          blocked={composerBlocked}
+          executionBlocked={executionBlocked}
+          chatActive={chatActive}
+          cancelPending={cancelPending}
+          capabilities={capabilities}
+          workspaceLabel={settings.default_workspace.split("/").filter(Boolean).at(-1) || "workspace"}
+          onChange={(value) => conversationKey && onDraftChange(conversationKey, value)}
+          onAttachmentStaged={(file) => conversationKey && onAttachmentStaged(conversationKey, file)}
+          onSend={() => void submit()}
+          onScreenshot={() => void submitScreenshot()}
+          onPrepareExecution={prepareExecution}
+          onCancelChat={() => conversationKey && onCancelChat(conversationKey)}
+        />
         <div className="composer-footer">
           <span><ShieldIcon size={12} /> Profil {settings.access_profile} · suppression remplacée par archivage</span>
           <div>
             {activeMissionState === "PAUSED" || activeMissionState === "PAUSED_RECOVERY_REQUIRED" ? (
-              <button onClick={onResumeMission}><PlayIcon size={13} /> Reprendre</button>
+              <button onClick={() => {
+                if (conversationKey) onResumeMission(conversationKey);
+              }}><PlayIcon size={13} /> Reprendre</button>
             ) : missionRunning ? (
-              <button onClick={onCancelMission}><StopIcon size={13} /> Annuler la mission</button>
+              <button onClick={() => {
+                if (conversationKey) onCancelMission(conversationKey);
+              }}><StopIcon size={13} /> Annuler la mission</button>
             ) : null}
             <label className="mini-toggle"><span>Auto-continue</span><input type="checkbox" checked={settings.auto_continue} readOnly /><i /></label>
           </div>
         </div>
       </div>
+      {preflight && (
+        <ExecutionPreflightDialog
+          open={preflightOpen}
+          value={preflight}
+          attachmentName={attachment?.name || null}
+          confirming={preflightConfirming}
+          onChange={setPreflight}
+          onClose={() => setPreflightOpen(false)}
+          onConfirm={() => {
+            if (!conversationKey) return;
+            setPreflightConfirming(true);
+            void onStartMission(conversationKey, draft, preflight).then((accepted) => {
+              if (accepted) setPreflightOpen(false);
+            }).finally(() => setPreflightConfirming(false));
+          }}
+        />
+      )}
     </section>
   );
 }

@@ -1,56 +1,59 @@
 # Contributing to Cortex Bridge
 
-Thanks for your interest! Cortex Bridge is a small, local-first project and
-contributions of every size are welcome.
+Cortex Bridge touches browser sessions, local files and processes. Small diffs still need serious evidence.
 
-## Ways to contribute
+## Before opening a change
 
-### 1. Suggest an improvement
+1. Open an issue for behavior, protocol or security changes.
+2. Work from a clean branch or worktree.
+3. Keep real account data, browser profiles, screenshots, logs and local paths out of fixtures.
+4. Write a failing test before changing behavior.
+5. Preserve the existing safety defaults unless the issue explicitly changes the product contract.
 
-Open an issue with the **Feature request / Improvement idea** template:
-<https://github.com/Jonassuhard/cortex-bridge/issues/new?template=feature_request.md>
+## Local setup
 
-Ideas are tracked with the `enhancement` label. You can also browse existing
-ideas and vote with a 👍 reaction — the most-upvoted ones get prioritized.
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install --require-hashes -r requirements.lock
+corepack enable
+cd frontend && corepack npm ci && cd ..
+```
 
-### 2. Report a bug
+## Required verification
 
-Use the **Bug report** template:
-<https://github.com/Jonassuhard/cortex-bridge/issues/new?template=bug_report.md>
+```bash
+PYTHON=.venv/bin/python ./scripts/test-all.sh
+git diff --check
+gitleaks detect --source . --no-banner --redact
+```
 
-Please remove personal information (paths, conversation content) from logs
-before pasting them.
+Browser tests use synthetic fixtures only. Do not attach a contributor’s live ChatGPT session to CI or a pull-request test.
 
-### 3. Submit code
+## Code expectations
 
-1. Fork the repository and create a branch from `main`.
-2. Keep changes focused: one feature or one fix per pull request.
-3. Run the test suite before opening the PR:
+- Fail closed on an unknown browser, workspace, token, process or delivery state.
+- Never resend automatically after an uncertain send.
+- Never signal a PID without proving process identity.
+- Never accept client-provided filesystem paths for attachments.
+- Keep the application interface French and public repository prose English.
+- Keep action and dependency versions pinned.
+- Avoid broad refactors inside a security fix.
 
-   ```bash
-   python3 -m unittest discover -s tests
-   ```
+## Pull request evidence
 
-   All 120+ tests must pass. If you change the frontend, also run:
+Include:
 
-   ```bash
-   cd frontend && npx tsc --noEmit && npm run lint && npm run build
-   ```
+- the user-visible behavior changed;
+- the RED test and why it failed;
+- exact GREEN commands and counts;
+- performance or responsive evidence when relevant;
+- privacy and migration impact;
+- any live gate intentionally left for a maintainer.
 
-4. Write commit messages in English. Documentation lives in English;
-   the product UI is French — keep both as they are.
-5. A pre-commit hook runs `gitleaks` on staged changes. Never commit
-   tokens, cookies, or local paths with personal data.
+## Documentation and media
 
-### 4. Improve the documentation
+Documentation screenshots must come from synthetic fixtures. Remove metadata, run OCR in English and French, and verify all links before committing media.
 
-Typos, clearer quickstarts, better diagrams — small doc PRs are merged fast.
+## Security reports
 
-## Ground rules
-
-- **Local-first and loopback-only.** No code that phones home, no telemetry,
-  no external API keys required to run the core loop.
-- **No OpenAI API.** The whole point is driving the ChatGPT web UI through a
-  real browser session. Do not add code paths that call OpenAI's API.
-- **Be kind.** First-time contributors are welcome; ask questions in your PR
-  or issue rather than staying stuck.
+Do not open a public issue for a vulnerability. Follow [SECURITY.md](SECURITY.md).

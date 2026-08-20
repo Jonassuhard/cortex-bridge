@@ -1,11 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PYTHON_BIN="${PYTHON_BIN:-python3}"
+CORTEX_HOME="${CORTEX_HOME:-$HOME/.local/share/cortex-bridge}"
+export PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-$CORTEX_HOME/browser-cache}"
+export PYTHONPATH="$ROOT/console:$ROOT${PYTHONPATH:+:$PYTHONPATH}"
+PYTHON="${PYTHON_BIN:-$CORTEX_HOME/venv/bin/python}"
 PORT="${PORT:-8420}"
-cd "$ROOT/console"
-if ! "$PYTHON_BIN" -c 'import fastapi, uvicorn' >/dev/null 2>&1; then
-  "$PYTHON_BIN" -m pip install -r requirements.txt
+if [ ! -x "$PYTHON" ]; then
+  echo "Cortex Bridge runtime is not installed. Run scripts/install.sh --dry-run --json first." >&2
+  exit 1
 fi
-export PORT
-exec "$PYTHON_BIN" server.py
+if ! "$PYTHON" -c 'import fastapi,uvicorn,playwright,websockets'; then
+  echo "Cortex Bridge dependencies are incomplete. Re-run the approved installer plan." >&2
+  exit 1
+fi
+cd "$ROOT/console"
+export PORT CORTEX_HOME
+exec "$PYTHON" server.py

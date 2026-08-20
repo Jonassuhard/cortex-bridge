@@ -1,135 +1,43 @@
 # Conversation-first interface
 
-## Product objective
+## Product contract
 
-Cortex Bridge should feel like a local conversation client with execution
-capabilities, not like a generic observability dashboard. The user chooses a
-ChatGPT conversation, writes in the center composer and follows the complete
-orchestration loop without manually moving payloads between products.
+Cortex Bridge is a local ChatGPT conversation client with an optional, separately approved execution path. The main interface must explain what is happening without exposing an operations dashboard by default.
 
 ## Layout
 
-### Left — conversations
+### Conversation sidebar
 
-The fixed sidebar contains:
+- New ChatGPT conversation at the top.
+- Search over at most the latest 50 conversations.
+- Pinned, Projects and Recent groups only when the transport provides that metadata.
+- Message counts only when available; the UI never invents them.
+- One unambiguous collapse and expand control.
 
-- Cortex Bridge identity
-- sidebar collapse control
-- search
-- new ChatGPT conversation
-- new autonomous mission
-- project shortcuts
-- recent/pinned conversations
-- archived-conversation entry
-- settings and local account information at the bottom
+### Conversation workspace
 
-Rows can communicate idle, unread, generating, mission-running, approval and
-transport-error states.
+- Visible user and ChatGPT messages.
+- Exact composer draft; `Enter` sends and `Shift+Enter` inserts a line.
+- Sending, delivered, uncertain and failed states remain visible.
+- ChatGPT and executor status appear next to each other.
+- Two conversation writers may send independently. A third keeps its draft and attachment but cannot send until a slot is released.
+- Conversation selection has one absolute 10-second budget and exposes a retry action on failure.
 
-### Center — conversation
+### Secondary surfaces
 
-The center panel is the primary surface. It contains:
+Pipeline detail, settings, diagnostics and the animated architecture explanation stay behind explicit buttons. The center conversation retains priority at 375, 768 and 1440 pixels.
 
-- visible ChatGPT and user messages
-- response streaming
-- delivery confirmation
-- first-response and total latency
-- code and image rendering
-- execution cards
-- policy and approval states
-- file/test/browser evidence
-- final validation
-- a fixed message/mission composer
+## Chat versus execution
 
-The UI does not claim to expose private chain-of-thought. It displays only
-observable states such as “ChatGPT is generating”, the visible response,
-structured decision summaries, active tools and validated evidence.
+There is no persistent Chat/Mission mode. A normal send always sends the exact text to ChatGPT. When the user requests local work, the interface opens a preflight that shows workspace, capabilities, approvals and limits. Execution begins only after explicit confirmation.
 
-### Right — pipeline inspector
+This removes a mode whose meaning had to be remembered and replaces it with a visible decision at the moment it matters. Quite a luxury: the button now says what it does.
 
-The right inspector is collapsible and contains concise operational state for:
+## Accessibility and motion
 
-- ChatGPT transport
-- conversation lock
-- protocol parser
-- policy engine
-- active mission/action
-- approvals
-- Granite/Qwen and Ollama
-- model storage volume
-- filesystem access
-- persistence
-- queue and recent events
-
-Raw DOM diagnostics, full protocol JSON and verbose process logs belong in the
-Diagnostics settings tab rather than the main conversation.
-
-## Message lifecycle
-
-Outbound messages expose these states:
-
-```text
-LOCAL_QUEUED
-SENDING_TO_CHATGPT
-VISIBLE_IN_CHATGPT
-ACKNOWLEDGED
-DELIVERY_UNCERTAIN
-FAILED
-```
-
-Responses expose:
-
-```text
-WAITING
-GENERATION_STARTED
-STREAMING
-STABLE
-PARSED
-INVALID_PROTOCOL
-TIMED_OUT
-BLOCKED_BY_LOGIN
-BLOCKED_BY_CAPTCHA
-BLOCKED_BY_RATE_LIMIT
-```
-
-Delivery is confirmed by observing the expected message fingerprint in the
-locked conversation; a click alone is not considered proof.
-
-## Animation language
-
-Animations are functional rather than decorative:
-
-- slow grid drift and restrained blue halo on the application background
-- short message reveal transitions
-- spinner for active observable phases
-- indeterminate progress for tasks without measurable completion
-- state transitions for approvals and validation
-- skeletons while a conversation snapshot is loading
-
-`prefers-reduced-motion` disables non-essential animation.
-
-## Settings
-
-Settings are anchored at the bottom of the conversation sidebar and divided
-into:
-
-- General
-- Models
-- Permissions
-- Transport
-- Runtime
-- Storage
-- Diagnostics
-
-Model settings include the visible ChatGPT planner model, local Ollama primary
-and fallback executors, context and routing. Permission settings keep
-`never_delete_files` enforced by the backend.
-
-## Responsive behavior
-
-- Desktop: three columns.
-- Medium widths: right inspector becomes an overlay/drawer.
-- Small widths: both side panels become drawers and the conversation fills the
-  viewport.
-
-The center conversation remains usable at every breakpoint.
+- Keyboard-visible controls and focus restoration.
+- Accessible names for icon-only actions.
+- Escape closes dialogs and drawers where safe.
+- Status is conveyed by text, not color alone.
+- Non-essential motion is disabled by `prefers-reduced-motion`.
+- Loading, empty, offline, timeout and retry states are explicit.

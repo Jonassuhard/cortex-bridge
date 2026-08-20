@@ -11,11 +11,11 @@ the tests pass."*
 {
   "goal": "Add email and password validation to the signup form",
   "constraints": [
-    "stay inside ~/projects/myapp",
+    "stay inside the approved workspace",
     "use the existing validation helpers in src/lib if present",
     "do not add new dependencies"
   ],
-  "workspace": "/Users/me/projects/myapp",
+  "workspace": "/tmp/cortex-demo-workspace",
   "context": "Signup form lives in src/components/SignupForm.tsx. Tests run with `npm test`."
 }
 ```
@@ -39,7 +39,7 @@ the tests pass."*
 {
   "goal": "Read the failing test and align the error messages with its expectations",
   "constraints": ["do not modify the test file"],
-  "workspace": "/Users/me/projects/myapp",
+  "workspace": "/tmp/cortex-demo-workspace",
   "context": "Previous iteration: validation added, 2 tests fail on error message format."
 }
 ```

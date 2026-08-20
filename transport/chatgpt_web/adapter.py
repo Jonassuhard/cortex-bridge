@@ -33,6 +33,7 @@ import inspect
 import json
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
 from typing import Any
@@ -55,10 +56,17 @@ GENERATION_CANCELLED = "GENERATION_CANCELLED"
 STATE_UNREADABLE = "STATE_UNREADABLE"
 SEND_REJECTED = "SEND_REJECTED"
 STREAM_TIMEOUT = "STREAM_TIMEOUT"
+SELECTION_TIMEOUT = "SELECTION_TIMEOUT"
+SELECTION_FAILED = "SELECTION_FAILED"
+SELECTION_SUPERSEDED = "SELECTION_SUPERSEDED"
+
+DEFAULT_SELECTION_BUDGET = 10.0
+MAX_CONVERSATIONS = 50
 
 BLOCKER_CODES = {"login": LOGIN_REQUIRED, "captcha": CAPTCHA, "rate_limit": RATE_LIMIT}
 
 DEFAULT_STABILITY_INTERVAL = 2.0  # §13: message stable for 2 seconds
+DEFAULT_POST_STREAM_STABILITY_INTERVAL = 5.0
 DEFAULT_MAX_WAIT = 300.0  # §13: 5 minutes per ChatGPT response
 DEFAULT_POLL_INTERVAL = 0.5
 # Thinking models render an EMPTY assistant shell while reasoning, with a
@@ -216,10 +224,77 @@ def perf_stats(limit: int = 200) -> dict:
 
 
 class TransportError(Exception):
-    def __init__(self, code: str, message: str):
+    def __init__(self, code: str, message: str, *, details: dict | None = None):
         super().__init__(f"{code}: {message}")
         self.code = code
         self.message = message
+        self.details = dict(details or {})
+
+
+class SelectionTimeoutError(TransportError):
+    def __init__(self, message: str):
+        super().__init__(
+            SELECTION_TIMEOUT,
+            message,
+            details={"reload_required": True},
+        )
+
+
+def _clean_text(value: Any) -> str | None:
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _conversation_identity(item: dict) -> str | None:
+    identity = _clean_text(item.get("identity"))
+    if identity:
+        return identity
+    url = _clean_text(item.get("url"))
+    if not url or "/c/" not in url:
+        return None
+    identity = url.rsplit("/c/", 1)[-1].split("?", 1)[0].split("#", 1)[0].strip("/")
+    return identity or None
+
+
+def normalize_conversations(
+    items: list[dict] | None,
+    limit: int = MAX_CONVERSATIONS,
+) -> list[dict]:
+    """Return stable, truthful, deduplicated conversation metadata."""
+    normalized: list[dict] = []
+    seen: set[str] = set()
+    for raw in items or []:
+        if not isinstance(raw, dict):
+            continue
+        identity = _conversation_identity(raw)
+        if not identity or identity in seen:
+            continue
+        seen.add(identity)
+        project_id = _clean_text(raw.get("project_id"))
+        project_title = _clean_text(raw.get("project_title"))
+        message_count = raw.get("message_count")
+        if isinstance(message_count, bool) or not isinstance(message_count, int) or message_count < 0:
+            message_count = None
+        updated_at = _clean_text(raw.get("updated_at")) or _clean_text(raw.get("timestamp"))
+        url = _clean_text(raw.get("url")) or f"https://chatgpt.com/c/{identity}"
+        normalized.append({
+            "identity": identity,
+            "url": url,
+            "title": _clean_text(raw.get("title")) or "Conversation",
+            "pinned": bool(raw.get("pinned")),
+            "project": bool(project_id or project_title),
+            "project_id": project_id,
+            "project_title": project_title,
+            "updated_at": updated_at,
+            "timestamp": updated_at,
+            "preview": _clean_text(raw.get("preview")),
+            "message_count": message_count,
+            "unread": raw.get("unread") if isinstance(raw.get("unread"), int) else 0,
+            "archived": bool(raw.get("archived")),
+            "status": _clean_text(raw.get("status")) or "idle",
+        })
+        if len(normalized) >= max(0, limit):
+            break
+    return normalized
 
 
 class ConversationMismatch(TransportError):
@@ -275,7 +350,23 @@ def protocol_text(message: dict) -> str:
     blocks = message.get("code_blocks") or []
     if not blocks:
         return message.get("text", "")
-    return "\n".join(f"```{b.get('lang', '')}\n{b.get('text', '')}\n```" for b in blocks)
+    visible_lines = [
+        line.strip()
+        for line in str(message.get("text", "")).splitlines()
+        if line.strip()
+    ]
+    visible_protocol_label = (
+        visible_lines[0]
+        if len(blocks) == 1
+        and visible_lines
+        and visible_lines[0] in {"cortex-decision", "cortex-report"}
+        else ""
+    )
+    rebuilt = []
+    for block in blocks:
+        language = str(block.get("lang") or "").strip() or visible_protocol_label
+        rebuilt.append(f"```{language}\n{block.get('text', '')}\n```")
+    return "\n".join(rebuilt)
 
 
 class ChatGPTWebTransport:
@@ -289,12 +380,16 @@ class ChatGPTWebTransport:
         max_wait: float = DEFAULT_MAX_WAIT,
         poll_interval: float = DEFAULT_POLL_INTERVAL,
         empty_reply_grace: float = DEFAULT_EMPTY_REPLY_GRACE,
+        selection_budget: float = DEFAULT_SELECTION_BUDGET,
+        post_stream_stability_interval: float = DEFAULT_POST_STREAM_STABILITY_INTERVAL,
     ):
         self.driver = driver
         self.stability_interval = stability_interval
+        self.post_stream_stability_interval = post_stream_stability_interval
         self.max_wait = max_wait
         self.poll_interval = poll_interval
         self.empty_reply_grace = empty_reply_grace
+        self.selection_budget = selection_budget
         self.lock: ConversationLock | None = None
         self.paused = False
         self.pause_reason: str | None = None
@@ -304,6 +399,13 @@ class ChatGPTWebTransport:
         self._baseline: set[str] = set()
         self._cancel_requested = False
         self._pending_new_chat = False
+        self._selection_generation = 0
+
+    async def close(self) -> None:
+        """Release the logical browser page owned by this transport."""
+        closer = getattr(self.driver, "close", None)
+        if closer is not None:
+            await closer()
 
     # -- pause/resume (§5: pause safely on any blocker) ------------------------------
 
@@ -320,7 +422,7 @@ class ChatGPTWebTransport:
     async def list_conversations(self) -> list[dict]:
         """Candidate conversations (title + /c/<uuid> identity) for the user
         to pick from. Sidebar DOM on real ChatGPT; registry on the fixture."""
-        return await self.driver.list_conversations()
+        return normalize_conversations(await self.driver.list_conversations())
 
     async def probe(self) -> dict:
         """Read-only DOM health check: which adaptive selector currently
@@ -332,48 +434,138 @@ class ChatGPTWebTransport:
                     "failures": ["unsupported-driver"], "warnings": []}
         return await probe()
 
-    async def _await_conversation(self, want_identity: str | None, timeout: float = 25.0) -> dict:
+    @staticmethod
+    def _remaining(deadline: float) -> float:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise SelectionTimeoutError("conversation selection exceeded its absolute budget")
+        return remaining
+
+    async def _selection_await(self, awaitable, deadline: float):
+        try:
+            return await asyncio.wait_for(awaitable, timeout=self._remaining(deadline))
+        except asyncio.TimeoutError as exc:
+            raise SelectionTimeoutError(
+                "conversation selection exceeded its absolute budget"
+            ) from exc
+
+    def _assert_current_selection(self, generation: int) -> None:
+        if generation != self._selection_generation:
+            raise TransportError(
+                SELECTION_SUPERSEDED,
+                "a newer conversation selection superseded this one",
+                details={"reload_required": False},
+            )
+
+    async def _await_conversation(
+        self,
+        want_identity: str | None,
+        timeout: float = 25.0,
+        *,
+        deadline: float | None = None,
+    ) -> dict:
         """Poll until the SPA actually shows the requested conversation.
 
         Navigation resolves before chatgpt.com finishes its client-side
         route change — a single immediate state read can still show the
         PREVIOUS conversation and cause a false CONVERSATION_MISMATCH."""
-        deadline = time.monotonic() + timeout
+        poll_deadline = deadline if deadline is not None else time.monotonic() + timeout
         state: dict = {}
-        while time.monotonic() < deadline:
-            state = await self._state()
+        while time.monotonic() < poll_deadline:
+            state = await self._state(deadline=deadline)
             identity = state.get("conversation_id")
             if want_identity is None:
                 if identity:
                     return state
             elif identity == want_identity:
                 return state
-            await asyncio.sleep(self.poll_interval)
+            if deadline is not None:
+                await self._selection_await(
+                    asyncio.sleep(min(self.poll_interval, self._remaining(deadline))),
+                    deadline,
+                )
+            else:
+                await asyncio.sleep(self.poll_interval)
         return state
 
-    async def select_conversation(self, url: str) -> ConversationLock:
+    async def select_conversation(
+        self,
+        url: str,
+        *,
+        budget: float | None = None,
+        _force_reload: bool = False,
+    ) -> ConversationLock:
         """Navigate to a user-chosen conversation and lock the mission to it.
 
         P0: prefer an in-app SPA switch (sidebar link click, no page reload)
         when the driver supports it; fall back to full navigation."""
+        selection_budget = self.selection_budget if budget is None else budget
+        if selection_budget <= 0:
+            raise SelectionTimeoutError("conversation selection budget must be positive")
+        deadline = time.monotonic() + selection_budget
+        self._selection_generation += 1
+        generation = self._selection_generation
         want = url.rsplit("/c/", 1)[-1] if "/c/" in url else None
+        if hasattr(self.driver, "selection_used_full_navigation"):
+            self.driver.selection_used_full_navigation = False
         spa_nav = getattr(self.driver, "spa_navigate", None)
         spa_done = False
-        if want and spa_nav is not None:
+        if want and spa_nav is not None and not _force_reload:
             try:
-                spa_done = bool(await spa_nav(url))
-            except Exception:
-                spa_done = False  # any SPA failure → full navigation below
+                spa_done = bool(await self._selection_await(spa_nav(url), deadline))
+            except SelectionTimeoutError:
+                raise
+            except Exception as exc:
+                raise TransportError(
+                    SELECTION_FAILED,
+                    f"in-app conversation selection failed: {exc}",
+                    details={"reload_required": True},
+                ) from exc
+            if not spa_done:
+                raise TransportError(
+                    SELECTION_FAILED,
+                    "in-app conversation selection failed",
+                    details={"reload_required": True},
+                )
+        self._assert_current_selection(generation)
         if not spa_done:
-            await self.driver.navigate(url)
-        state = await self._await_conversation(want)
+            await self._selection_await(self.driver.navigate(url), deadline)
+        self._assert_current_selection(generation)
+        state = await self._await_conversation(want, deadline=deadline)
+        self._assert_current_selection(generation)
+        # A hard navigation can expose the final /c/<id> URL before React has
+        # mounted the composer. Identity alone is therefore insufficient for
+        # a writer session: wait inside the same absolute selection budget so
+        # the following send cannot race into COMPOSER_MISSING. This is a
+        # readiness poll, not the heavier SPA content-stability loop below.
+        if (
+            want
+            and state.get("conversation_id") == want
+            and getattr(self.driver, "selection_used_full_navigation", False)
+            and not state.get("composer_present")
+            and not state.get("blocker")
+        ):
+            while not state.get("composer_present"):
+                await self._selection_await(
+                    asyncio.sleep(min(self.poll_interval, self._remaining(deadline))),
+                    deadline,
+                )
+                state = await self._state(deadline=deadline)
+                self._assert_current_selection(generation)
+                if state.get("conversation_id") != want:
+                    continue
         # SPA route change updates the URL BEFORE the message DOM is replaced:
         # identity already matches while the old conversation's messages are
         # still painted, and a stable empty skeleton appears while the new one
         # loads (both observed live 2026-07-25). An existing /c/ conversation
         # always has >= 1 message, so require: identity match AND messages
         # present AND two identical consecutive LIGHT reads — before locking.
-        if want and state.get("conversation_id") == want:
+        if (
+            want
+            and state.get("conversation_id") == want
+            and getattr(self.driver, "requires_content_stability", True)
+            and not getattr(self.driver, "selection_used_full_navigation", False)
+        ):
             def _sig(s: dict) -> tuple:
                 return (
                     s.get("conversation_id"),
@@ -382,12 +574,12 @@ class ChatGPTWebTransport:
                     s.get("first_id"),
                 )
 
-            stable_deadline = time.monotonic() + 3.0
+            stable_deadline = min(deadline, time.monotonic() + 3.0)
             loaded_since: float | None = None
-            previous = _sig(await self._light_state())
+            previous = _sig(await self._light_state(deadline=deadline))
             while time.monotonic() < stable_deadline:
-                await asyncio.sleep(0.4)
-                light = await self._light_state()
+                await self._selection_await(asyncio.sleep(0.4), deadline)
+                light = await self._light_state(deadline=deadline)
                 current = _sig(light)
                 loaded = (
                     current[0] == want
@@ -401,13 +593,28 @@ class ChatGPTWebTransport:
                 if loaded_since is not None and time.monotonic() - loaded_since > 1.2:
                     break  # clearly loaded; virtualized threads never fully stabilize
                 previous = current
-            state = await self._state()  # full read once stable, for the lock baseline
+            state = await self._state(deadline=deadline)
+        self._remaining(deadline)
+        self._assert_current_selection(generation)
         identity = state.get("conversation_id")
         if not identity:
             raise TransportError(NO_CONVERSATION, f"no conversation at {url}")
         self.lock = ConversationLock(url, identity, state.get("title"), time.time())
         self._baseline = {m["id"] for m in state.get("messages", []) if m["role"] == "assistant"}
         return self.lock
+
+    async def recover_selection_with_reload(
+        self,
+        url: str,
+        *,
+        budget: float | None = None,
+    ) -> ConversationLock:
+        """Explicit operator-approved recovery path using full navigation."""
+        return await self.select_conversation(
+            url,
+            budget=self.selection_budget if budget is None else budget,
+            _force_reload=True,
+        )
 
     async def attach(self, lock: ConversationLock) -> None:
         """Re-attach to a previously locked conversation (e.g. after a
@@ -427,7 +634,24 @@ class ChatGPTWebTransport:
         """§8 brand-new chat case: navigate to a fresh chat surface. The
         /c/<id> identity only exists after the first send; the lock is
         captured by send_message → _capture_new_lock()."""
-        await self.driver.navigate(url)
+        try:
+            await self.driver.navigate(url)
+        except TabClosedError as exc:
+            raise TransportError(
+                TAB_CLOSED,
+                "new conversation tab closed before delivery",
+                details={"reload_required": True},
+            ) from exc
+        except DriverError as exc:
+            driver_code = getattr(exc, "code", None)
+            details = {"reload_required": True}
+            if driver_code:
+                details["driver_code"] = driver_code
+            raise TransportError(
+                SELECTION_FAILED,
+                f"new conversation navigation failed: {exc}",
+                details=details,
+            ) from exc
         state = await self._state()
         if state.get("conversation_id"):
             # The URL already is a conversation — lock it normally.
@@ -488,29 +712,41 @@ class ChatGPTWebTransport:
 
     # -- internal state access with blocker/tab handling --------------------------------
 
-    async def _state(self) -> dict:
+    async def _state(self, *, deadline: float | None = None) -> dict:
         try:
-            state = await self.driver.get_state()
+            if deadline is None:
+                state = await self.driver.get_state()
+            else:
+                state = await self._selection_await(self.driver.get_state(), deadline)
         except TabClosedError as exc:
             self.pause(TAB_CLOSED)
             raise TransportError(TAB_CLOSED, "browser tab was closed") from exc
+        except DriverError as exc:
+            driver_code = getattr(exc, "code", None)
+            raise TransportError(
+                STATE_UNREADABLE,
+                str(exc),
+                details={"driver_code": driver_code} if driver_code else None,
+            ) from exc
         blocker = state.get("blocker")
         if blocker:
             self.pause(BLOCKER_CODES.get(blocker, blocker.upper()))
             raise BlockerDetected(blocker)
         return state
 
-    async def _light_state(self) -> dict:
+    async def _light_state(self, *, deadline: float | None = None) -> dict:
         """Cheap poll read when the driver supports it (P0c); fixture drivers
         fall back to a full state mapped onto the light shape."""
         getter = getattr(self.driver, "get_light_state", None)
         if getter is not None:
             try:
-                return await getter()
+                if deadline is None:
+                    return await getter()
+                return await self._selection_await(getter(), deadline)
             except TabClosedError as exc:
                 self.pause(TAB_CLOSED)
                 raise TransportError(TAB_CLOSED, "browser tab was closed") from exc
-        s = await self._state()
+        s = await self._state(deadline=deadline)
         msgs = s.get("messages") or []
         return {
             "url": s.get("url"),
@@ -525,7 +761,16 @@ class ChatGPTWebTransport:
 
     # -- sending (§7.1) ----------------------------------------------------------------------
 
-    async def send_with_attachment(self, text: str | None, path: str, *, image: bool, raw_url: str | None = None) -> dict:
+    async def send_with_attachment(
+        self,
+        text: str | None,
+        path: str,
+        *,
+        image: bool,
+        raw_url: str | None = None,
+        mime: str | None = None,
+        name: str | None = None,
+    ) -> dict:
         """Attach a local file/image to the composer, then send (P3).
 
         Flow: verify lock → attach (CDP upload first, fetch+DataTransfer
@@ -550,24 +795,34 @@ class ChatGPTWebTransport:
         selector = 'form input[type="file"]'
         attached = False
         try:
-            await uploader(selector, [path])
+            named_uploader = getattr(self.driver, "upload_files_named", None)
+            if name and callable(named_uploader):
+                await named_uploader(selector, [path], name)
+            else:
+                await uploader(selector, [path])
             attached = True
         except DriverError as cdp_exc:
+            if getattr(self.driver, "supports_raw_evaluation", True) is False:
+                raise TransportError(
+                    "ATTACHMENT_FAILED",
+                    f"structured upload rejected: {cdp_exc}",
+                ) from cdp_exc
             # Primary fallback: base64 injection — no CDP, no network.
             import base64
             import mimetypes
             import os
-            mime = mimetypes.guess_type(path)[0] or "application/octet-stream"
+            effective_mime = mime or mimetypes.guess_type(path)[0] or "application/octet-stream"
+            effective_name = name or os.path.basename(path)
             size = os.path.getsize(path)
             if size <= INJECT_MAX_BYTES:
                 with open(path, "rb") as fh:
                     b64 = base64.b64encode(fh.read()).decode("ascii")
-                code = f"{_ATTACH_B64_JS}({json.dumps(b64)}, {json.dumps(os.path.basename(path))}, {json.dumps(mime)})"
+                code = f"{_ATTACH_B64_JS}({json.dumps(b64)}, {json.dumps(effective_name)}, {json.dumps(effective_mime)})"
             elif raw_url:
-                code = f"{_ATTACH_FETCH_JS}({json.dumps(raw_url)}, {json.dumps(os.path.basename(path))}, {json.dumps(mime)})"
+                code = f"{_ATTACH_FETCH_JS}({json.dumps(raw_url)}, {json.dumps(effective_name)}, {json.dumps(effective_mime)})"
             else:
                 raise TransportError("ATTACHMENT_FAILED", f"upload rejected: {cdp_exc}") from cdp_exc
-            raw = await asyncio.to_thread(self.driver._command, "evaluate", {"code": code}, 90)
+            raw = await self.driver.evaluate(code, timeout=90)
             if isinstance(raw, dict) and "value" in raw:
                 raw = raw["value"]
             result = json.loads(raw) if isinstance(raw, str) else (raw or {})
@@ -711,6 +966,7 @@ class ChatGPTWebTransport:
         last_emit: tuple | None = None
         stable_since: float | None = None
         empty_since: float | None = None
+        final_paint_requested = False
 
         async def emit(payload: dict) -> None:
             if on_update is None:
@@ -741,6 +997,19 @@ class ChatGPTWebTransport:
                 self.streaming_observed = True
                 stable_since = None
                 empty_since = None
+            elif (
+                self.streaming_observed
+                and not final_paint_requested
+                and getattr(self.driver, "requires_content_stability", True)
+            ):
+                focus_tab = getattr(self.driver, "focus_tab", None)
+                if focus_tab is not None:
+                    await focus_tab()
+                    final_paint_requested = True
+                    last_sig = None
+                    stable_since = None
+                    await asyncio.sleep(self.poll_interval)
+                    continue
             new_msgs = [
                 m
                 for m in state.get("messages", [])
@@ -783,7 +1052,15 @@ class ChatGPTWebTransport:
                         empty_since = None
                     if sig == last_sig:
                         stable_since = stable_since if stable_since is not None else now
-                        if now - stable_since >= self.stability_interval:
+                        required_stability = (
+                            self.post_stream_stability_interval
+                            if (
+                                self.streaming_observed
+                                and getattr(self.driver, "requires_content_stability", True)
+                            )
+                            else self.stability_interval
+                        )
+                        if now - stable_since >= required_stability:
                             if latest["id"] in self._extracted_ids:
                                 raise TransportError(
                                     DUPLICATE_EXTRACTION,
@@ -843,6 +1120,8 @@ class LocalFixtureDriver:
     """Drives the §22 local fixture over HTTP (mirrors WebBridge semantics:
     navigating makes a conversation the 'current tab')."""
 
+    requires_content_stability = False
+
     def __init__(self, base_url: str):
         self.base_url = base_url.rstrip("/")
 
@@ -852,7 +1131,9 @@ class LocalFixtureDriver:
             with urllib.request.urlopen(url, timeout=5) as resp:
                 resp.read()
         except urllib.error.HTTPError as exc:
-            raise DriverError(f"GET {url} -> {exc.code}") from exc
+            code = exc.code
+            exc.close()
+            raise DriverError(f"GET {url} -> {code}") from exc
         except (urllib.error.URLError, OSError) as exc:
             raise DriverError(f"GET {url} failed: {exc}") from exc
 
@@ -862,7 +1143,9 @@ class LocalFixtureDriver:
             with urllib.request.urlopen(url, timeout=5) as resp:
                 return json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
-            raise DriverError(f"GET {url} -> {exc.code}") from exc
+            code = exc.code
+            exc.close()
+            raise DriverError(f"GET {url} -> {code}") from exc
         except (urllib.error.URLError, OSError, json.JSONDecodeError) as exc:
             raise DriverError(f"GET {url} failed: {exc}") from exc
 
@@ -875,8 +1158,12 @@ class LocalFixtureDriver:
             with urllib.request.urlopen(req, timeout=5) as resp:
                 return json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")[:200]
-            raise DriverError(f"POST {url} -> {exc.code} {detail}") from exc
+            code = exc.code
+            try:
+                detail = exc.read().decode("utf-8", errors="replace")[:200]
+            finally:
+                exc.close()
+            raise DriverError(f"POST {url} -> {code} {detail}") from exc
         except (urllib.error.URLError, OSError) as exc:
             raise DriverError(f"POST {url} failed: {exc}") from exc
 
@@ -929,9 +1216,17 @@ _STATE_JS = r"""
   const text = document.body ? document.body.innerText.slice(0, 8000) : '';
   const composerSel = first(COMPOSER_CANDIDATES);
   const composer = composerSel ? q(composerSel) : null;
+  const isLoginControl = (el) => {
+    const testid = (el.getAttribute('data-testid') || '').trim();
+    const label = ((el.getAttribute('aria-label') || '') + ' ' + (el.textContent || ''))
+      .replace(/\s+/g, ' ').trim();
+    return /(^|[-_])(login|sign[-_]?up)([-_]|$)/i.test(testid)
+      || /^(login|log in|sign up|se connecter|connexion|s['’]inscrire|créer un compte)$/i.test(label);
+  };
+  const loginControl = qAll('a, button').find(isLoginControl);
   // Blockers (conservative; see docs/phase5-dom-contract.md §f):
   let blocker = null;
-  if (!composer && /log in|sign up|se connecter|inscrivez-vous/i.test(text)) blocker = 'login';
+  if (loginControl || (!composer && /log in|sign up|se connecter|inscrivez-vous/i.test(text))) blocker = 'login';
   if (/verify you are human|v\u00e9rifiez que vous \u00eates humain|cf-chl|challenge-platform/i.test(text)
       || q('#cf-chl-widget, .cf-turnstile')) blocker = 'captcha';
   if (/rate limit|too many requests|limite de requ\u00eates/i.test(text)) blocker = 'rate_limit';
@@ -1042,7 +1337,7 @@ _CONVERSATIONS_JS = r"""
     if (unchanged >= 3 || container.scrollTop + container.clientHeight >= container.scrollHeight - 4) break;
   }
   if (container) container.scrollTop = 0;
-  // Sidebar order is recency order: keep the 50 most recent (Jonas spec P1d).
+  // Sidebar order is recency order: keep the 50 most recent conversations.
   return JSON.stringify(Array.from(seen.values()).slice(0, 50));
 })()
 """
@@ -1294,6 +1589,20 @@ _PROBE_JS = r"""
     type: b.getAttribute('type'),
     disabled: !!b.disabled,
   }));
+  const controls = Array.from(document.querySelectorAll('a, button'));
+  const isLoginControl = (el) => {
+    const testid = (el.getAttribute('data-testid') || '').trim();
+    const label = ((el.getAttribute('aria-label') || '') + ' ' + (el.textContent || ''))
+      .replace(/\s+/g, ' ').trim();
+    return /(^|[-_])(login|sign[-_]?up)([-_]|$)/i.test(testid)
+      || /^(login|log in|sign up|se connecter|connexion|s['’]inscrire|créer un compte)$/i.test(label);
+  };
+  const loginControls = controls.filter(isLoginControl).length;
+  const accountControls = controls.filter((el) =>
+    /profile|profil|account|compte/i.test(
+      [el.getAttribute('data-testid') || '', el.getAttribute('aria-label') || ''].join(' ')
+    )
+  ).length;
   return JSON.stringify({
     url: location.href,
     title: document.title,
@@ -1303,6 +1612,10 @@ _PROBE_JS = r"""
       contenteditables: qCount('[contenteditable="true"]'),
       textareas: qCount('textarea'),
       message_nodes: qCount('[data-message-author-role]'),
+      conversation_links: qCount('a[href^="/c/"]'),
+      sidebar_conversation_links: qCount('nav a[href^="/c/"], aside a[href^="/c/"]'),
+      login_controls: loginControls,
+      account_controls: accountControls,
     },
   });
 })()
@@ -1312,14 +1625,28 @@ _PROBE_JS = r"""
 def _summarize_probe(result: dict) -> dict:
     """Add the top-level ok/failures/warnings summary to a raw probe payload.
 
-    The transport is considered healthy when the composer and message list
-    resolve. Send/stop buttons are contextual — the send button only exists
-    once the composer holds text (a read-only probe cannot type), and stop
-    only while streaming — so they are reported as warnings, never failures.
+    The transport is considered healthy when the composer resolves. Message
+    nodes are also required inside an existing ``/c/`` conversation, but not
+    on the valid ChatGPT home/new-chat page. Send/stop buttons are contextual
+    and therefore remain warnings.
     """
     roles = result.get("roles") or {}
-    failures = [name for name in ("composer", "messages") if not (roles.get(name) or {}).get("ok")]
+    parsed_url = urllib.parse.urlparse(str(result.get("url") or ""))
+    on_chatgpt_home = (
+        (parsed_url.hostname or "").lower() in {"chatgpt.com", "www.chatgpt.com"}
+        and parsed_url.path in {"", "/"}
+    )
+    failures = []
+    if not (roles.get("composer") or {}).get("ok"):
+        failures.append("composer")
+    if not on_chatgpt_home and not (roles.get("messages") or {}).get("ok"):
+        failures.append("messages")
     warnings = [name for name in ("send", "stop") if not (roles.get(name) or {}).get("ok")]
+    if on_chatgpt_home and not (roles.get("messages") or {}).get("ok"):
+        warnings.insert(0, "messages")
+    if int((result.get("diagnostics") or {}).get("login_controls") or 0) > 0:
+        result["blocker"] = "login"
+        failures.append("login")
     result["failures"] = failures
     result["warnings"] = warnings
     result["ok"] = not failures
@@ -1334,8 +1661,12 @@ class WebBridgeDriver:
     """
 
     def __init__(self, daemon: str = "http://127.0.0.1:10086", session: str = "cortex-bridge"):
+        self.driver_name = "webbridge"
         self.daemon = daemon.rstrip("/")
         self.session = session
+        self.target_url: str | None = None
+        self._closed = False
+        self._close_lock = asyncio.Lock()
 
     def _command(self, action: str, args: dict | None = None, timeout: float = 30) -> Any:
         payload = {"action": action, "args": args or {}, "session": self.session}
@@ -1371,11 +1702,26 @@ class WebBridgeDriver:
                 await asyncio.to_thread(
                     self._command, "navigate", {"url": url, "newTab": False}, 90
                 )
+                self.target_url = url
                 return
             except DriverError as exc:
                 last = exc
                 await asyncio.sleep(1.5)
         raise last  # type: ignore[misc]
+
+    async def evaluate(self, code: str, timeout: float = 30) -> Any:
+        raw = await asyncio.to_thread(
+            self._command, "evaluate", {"code": code}, timeout
+        )
+        if isinstance(raw, dict) and "value" in raw:
+            return raw["value"]
+        return raw
+
+    async def list_tabs(self) -> list[dict]:
+        raw = await asyncio.to_thread(self._command, "list_tabs", {}, 5)
+        if isinstance(raw, dict):
+            return list(raw.get("tabs", []))
+        return list(raw or [])
 
     async def spa_navigate(self, url: str) -> bool:
         """Client-side conversation switch via the sidebar link (no reload).
@@ -1393,7 +1739,10 @@ class WebBridgeDriver:
             result = json.loads(raw) if isinstance(raw, str) else (raw or {})
         except json.JSONDecodeError:
             return False
-        return bool(result.get("ok"))
+        handled = bool(result.get("ok"))
+        if handled:
+            self.target_url = url
+        return handled
 
     async def get_state(self) -> dict:
         raw = await asyncio.to_thread(self._command, "evaluate", {"code": _STATE_JS})
@@ -1509,11 +1858,21 @@ class WebBridgeDriver:
 
     async def health(self) -> dict:
         try:
-            tabs = await asyncio.to_thread(self._command, "list_tabs", {}, 5)
-            tab_list = tabs.get("tabs", []) if isinstance(tabs, dict) else []
-            return {"connected": True, "tabs": len(tab_list)}
+            tabs = await self.list_tabs()
+            return {
+                "connected": True,
+                "tabs": len(tabs),
+                "driver": self.driver_name,
+                "session": self.session,
+            }
         except DriverError as exc:
-            return {"connected": False, "tabs": 0, "error": str(exc)}
+            return {
+                "connected": False,
+                "tabs": 0,
+                "driver": self.driver_name,
+                "session": self.session,
+                "error": str(exc),
+            }
 
     async def list_models(self) -> dict:
         raw = await asyncio.to_thread(self._command, "evaluate", {"code": _MODELS_JS}, 30)
@@ -1536,3 +1895,15 @@ class WebBridgeDriver:
 
     async def close_tab(self) -> None:
         await asyncio.to_thread(self._command, "close_tab", {})
+        self.target_url = None
+
+    async def close(self) -> None:
+        async with self._close_lock:
+            if self._closed:
+                return
+            await self.close_tab()
+            self._closed = True
+
+    async def open_login(self) -> dict:
+        await self.navigate("https://chatgpt.com/")
+        return await self.health()

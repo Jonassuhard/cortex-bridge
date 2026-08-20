@@ -123,6 +123,11 @@ CREATE TABLE IF NOT EXISTS missions (
     max_iterations INTEGER NOT NULL DEFAULT 25,
     max_duration_seconds INTEGER NOT NULL DEFAULT 3600,
     failure_counts TEXT NOT NULL DEFAULT '{}',
+    executor_kind TEXT NOT NULL DEFAULT 'unavailable',
+    executor_model_used TEXT,
+    runtime_mode TEXT NOT NULL DEFAULT 'live',
+    release_eligible INTEGER NOT NULL DEFAULT 0,
+    runtime_observed_at REAL,
     created_at REAL NOT NULL,
     started_at REAL,
     updated_at REAL NOT NULL
@@ -133,6 +138,8 @@ CREATE TABLE IF NOT EXISTS conversation_bindings (
     conversation_url TEXT NOT NULL,
     conversation_title TEXT,
     browser_target_id TEXT,
+    session_id TEXT,
+    conversation_target TEXT,
     selected_at REAL NOT NULL
 );
 CREATE TABLE IF NOT EXISTS iterations (
@@ -244,10 +251,58 @@ class Store:
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON")
         self._conn.executescript(_SCHEMA)
+        self._migrate_conversation_bindings()
+        self._migrate_mission_runtime_truth()
         self._recover_interrupted_missions()
+        self._closed = False
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
 
     def close(self) -> None:
+        if self._closed:
+            return
         self._conn.close()
+        self._closed = True
+
+    def _migrate_conversation_bindings(self) -> None:
+        """Add v0.5 lease fields without invalidating an existing evidence DB."""
+        columns = {
+            row["name"]
+            for row in self._conn.execute(
+                "PRAGMA table_info(conversation_bindings)"
+            ).fetchall()
+        }
+        with self._conn:
+            if "session_id" not in columns:
+                self._conn.execute(
+                    "ALTER TABLE conversation_bindings ADD COLUMN session_id TEXT"
+                )
+            if "conversation_target" not in columns:
+                self._conn.execute(
+                    "ALTER TABLE conversation_bindings ADD COLUMN conversation_target TEXT"
+                )
+
+    def _migrate_mission_runtime_truth(self) -> None:
+        """Add durable runtime evidence fields without replacing old databases."""
+        columns = {
+            row["name"]
+            for row in self._conn.execute("PRAGMA table_info(missions)").fetchall()
+        }
+        additions = {
+            "executor_kind": "TEXT NOT NULL DEFAULT 'unavailable'",
+            "executor_model_used": "TEXT",
+            "runtime_mode": "TEXT NOT NULL DEFAULT 'live'",
+            "release_eligible": "INTEGER NOT NULL DEFAULT 0",
+            "runtime_observed_at": "REAL",
+        }
+        with self._conn:
+            for name, definition in additions.items():
+                if name not in columns:
+                    self._conn.execute(
+                        f"ALTER TABLE missions ADD COLUMN {name} {definition}"
+                    )
 
     # -- §18 restart recovery -------------------------------------------------
 
@@ -285,14 +340,19 @@ class Store:
         max_iterations: int = 25,
         max_duration_seconds: int = 3600,
         started_at: float | None = None,
+        executor_kind: str = "unavailable",
+        executor_model_used: str | None = None,
+        runtime_mode: str = "live",
+        release_eligible: bool = False,
     ) -> dict:
         now = time.time()
         with self._conn:
             self._conn.execute(
                 "INSERT INTO missions (id, objective, workspace, state, pause_reason,"
                 " iteration, max_iterations, max_duration_seconds, failure_counts,"
-                " created_at, started_at, updated_at)"
-                " VALUES (?,?,?,?,?,0,?,?,'{}',?,?,?)",
+                " executor_kind, executor_model_used, runtime_mode, release_eligible,"
+                " runtime_observed_at, created_at, started_at, updated_at)"
+                " VALUES (?,?,?,?,?,0,?,?,'{}',?,?,?,?,?,?,?,?)",
                 (
                     mission_id,
                     objective,
@@ -301,11 +361,49 @@ class Store:
                     None,
                     max_iterations,
                     max_duration_seconds,
+                    executor_kind,
+                    executor_model_used,
+                    runtime_mode,
+                    1 if release_eligible else 0,
+                    now,
                     now,
                     started_at if started_at is not None else now,
                     now,
                 ),
             )
+        return self.get_mission(mission_id)
+
+    def record_runtime_truth(
+        self,
+        mission_id: str,
+        *,
+        executor_kind: str,
+        executor_model_used: str | None,
+        runtime_mode: str,
+        release_eligible: bool,
+    ) -> dict:
+        if executor_kind not in {"deterministic", "ollama", "unavailable"}:
+            raise StoreError(f"unknown executor kind {executor_kind}")
+        if runtime_mode not in {"live", "development_fixture"}:
+            raise StoreError(f"unknown runtime mode {runtime_mode}")
+        now = time.time()
+        with self._conn:
+            cursor = self._conn.execute(
+                "UPDATE missions SET executor_kind = ?, executor_model_used = ?,"
+                " runtime_mode = ?, release_eligible = ?, runtime_observed_at = ?,"
+                " updated_at = ? WHERE id = ?",
+                (
+                    executor_kind,
+                    executor_model_used,
+                    runtime_mode,
+                    1 if release_eligible else 0,
+                    now,
+                    now,
+                    mission_id,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise StoreError(f"unknown mission {mission_id}")
         return self.get_mission(mission_id)
 
     def get_mission(self, mission_id: str) -> dict:
@@ -316,6 +414,7 @@ class Store:
             raise StoreError(f"unknown mission {mission_id}")
         data = dict(row)
         data["failure_counts"] = json.loads(data["failure_counts"] or "{}")
+        data["release_eligible"] = bool(data.get("release_eligible", False))
         return data
 
     def transition(self, mission_id: str, new_state: str, *, pause_reason: str | None = None) -> str:
@@ -493,18 +592,23 @@ class Store:
         conversation_url: str,
         conversation_title: str | None = None,
         browser_target_id: str | None = None,
+        session_id: str | None = None,
+        conversation_target: str | None = None,
     ) -> None:
         with self._conn:
             self._conn.execute(
                 "INSERT INTO conversation_bindings (id, mission_id, conversation_url,"
-                " conversation_title, browser_target_id, selected_at)"
-                " VALUES (?,?,?,?,?,?)",
+                " conversation_title, browser_target_id, session_id,"
+                " conversation_target, selected_at)"
+                " VALUES (?,?,?,?,?,?,?,?)",
                 (
                     binding_id,
                     mission_id,
                     conversation_url,
                     conversation_title,
                     browser_target_id,
+                    session_id,
+                    conversation_target or conversation_url,
                     time.time(),
                 ),
             )
@@ -515,6 +619,8 @@ class Store:
         conversation_url: str,
         conversation_title: str | None = None,
         browser_target_id: str | None = None,
+        session_id: str | None = None,
+        conversation_target: str | None = None,
     ) -> None:
         """Refresh a mission's binding once the real /c/<id> identity is known
         (new-chat case: the binding is first stored with the bare chatgpt.com
@@ -524,9 +630,18 @@ class Store:
             self._conn.execute(
                 "UPDATE conversation_bindings SET conversation_url=?,"
                 " conversation_title=COALESCE(?, conversation_title),"
-                " browser_target_id=?"
+                " browser_target_id=?,"
+                " session_id=COALESCE(?, session_id),"
+                " conversation_target=COALESCE(?, conversation_target)"
                 " WHERE mission_id=?",
-                (conversation_url, conversation_title, browser_target_id, mission_id),
+                (
+                    conversation_url,
+                    conversation_title,
+                    browser_target_id,
+                    session_id,
+                    conversation_target or conversation_url,
+                    mission_id,
+                ),
             )
 
     def record_policy_decision(
@@ -665,7 +780,11 @@ class Store:
             params = (mission_id,)
         if order_by is not None:
             sql += f" ORDER BY {order_by}"
-        return [dict(r) for r in self._conn.execute(sql, params).fetchall()]
+        rows = [dict(r) for r in self._conn.execute(sql, params).fetchall()]
+        if table == "missions":
+            for row in rows:
+                row["release_eligible"] = bool(row.get("release_eligible", False))
+        return rows
 
     def table_names(self) -> list[str]:
         rows = self._conn.execute(

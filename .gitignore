@@ -28,3 +28,11 @@ sessions/
 # Frontend build artifacts
 frontend/node_modules/
 frontend/.next/
+frontend/coverage/
+frontend/playwright-report/
+frontend/test-results/
+frontend/tsconfig.tsbuildinfo
+
+# Isolated implementation and review workspaces
+.worktrees/
+.superpowers/

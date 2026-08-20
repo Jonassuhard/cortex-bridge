@@ -1,88 +1,76 @@
 # Troubleshooting
 
-## Mission pauses with `DELIVERY_UNCERTAIN`
-
-The transport could not prove that a send landed. **It never resends on its
-own.** Open the ChatGPT tab and look:
-
-- **Contract/report visible in the chat** → it was delivered; resume the
-  mission (the resume logic only re-sends what was never proven).
-- **Text sitting in the composer, unsent** → resume: the send is idempotent
-  and will click send on the existing draft, not duplicate it.
-- **Nothing there** → resume sends the payload normally.
-
-Known causes (all fixed as of 2026-07-24, kept here for reference):
-
-| Symptom | Cause | Fix shipped |
-|---|---|---|
-| Send always failed | ProseMirror ignores `textContent =` | `execCommand('insertText')` |
-| Voice mode opened instead of sending | `.composer-submit-button-color` matches "Démarrer le mode vocal" before React arms the real button | Only `data-testid="send-button"` / send aria-labels are accepted |
-| Send reported failed but message visible | Post-send check raced the SPA render | Poll ≤ 30 s for the message to appear |
-| Report send "not visible" though present | Markdown eats the ` ```cortex-report ` fence and its label | Delivery marker = first substantial content line, matched in message + code blocks |
-| Draft lost | Send attempted while ChatGPT was still streaming | Transport waits out the stream first |
-| `NO_DECISION_BLOCK` on replies that look perfect (thinking model, 2026-07-25) | Empty assistant placeholder extracted during the paint gap between "stop gone" and the code block render | Empty-reply grace window (45 s) + stability signature covering code blocks |
-
-## Diagnosing a broken ChatGPT UI (probe)
-
-`GET http://127.0.0.1:8420/api/transport/probe` is a read-only DOM health
-check on the live tab. It tells you **which selector currently matches each
-role** (composer, messages, send, stop), with `failures` (mission-critical:
-composer, messages) vs `warnings` (send/stop are absent by design on an
-idle page). A watchdog Automation re-checks every 30 min and notifies only
-on failure. If a `failures` entry appears, the candidate lists in
-`transport/chatgpt_web/adapter.py` (`_STATE_JS`, `_SEND_JS`, `_PROBE_JS`)
-need a new candidate — the probe's `diagnostics.buttons` dump tells you
-what the new UI actually renders.
-
-## Mission pauses with `CONVERSATION_MISMATCH`
-
-The page no longer shows the conversation the mission is locked to. This
-protects you from mission content leaking into the wrong chat. Bring the
-locked conversation back (its URL is in the mission's conversation binding)
-and resume.
-
-Note: right after the first send, ChatGPT shows a transient `/c/WEB:<uuid>`
-URL before the canonical `/c/<uuid>`. The transport waits for the canonical
-form before locking; if you see a binding with a `WEB:` identity (created
-before that fix), start a fresh mission.
-
-## `LOGIN_REQUIRED` / `CAPTCHA` / `RATE_LIMIT`
-
-ChatGPT is asking something of the human. Solve it in the tab (log in, pass
-the challenge, wait out the rate limit) — the transport **never** bypasses
-these — then resume.
-
-## Resume fails with `cannot re-attach conversation`
-
-The conversation binding holds a URL that no longer resolves to the same
-identity (deleted conversation, logged-out session). Start a new mission on
-a fresh conversation; the store keeps the old mission for audit.
-
-## The mission loops protocol violations
-
-ChatGPT is not following the cortex.v1 contract (missing/duplicate fenced
-block, wrong iteration, non-UUID actionId, unknown argument). The loop
-reports each violation back; after 3 consecutive ones the mission fails.
-The contract already embeds the tool argument schemas — if you see
-`MALFORMED_ARGUMENTS: unknown argument ...`, check the report: it tells
-ChatGPT the exact schema to use next.
-
-## ChatGPT changed its frontend
-
-Selectors live in `transport/chatgpt_web/adapter.py` (`_STATE_JS`,
-`_SEND_JS`, `_CONVERSATIONS_JS`) and are documented in
-[phase5-dom-contract.md](phase5-dom-contract.md). While you fix them,
-missions still work in [manual fallback](manual-fallback.md) mode.
-
-## Console won't start / port busy
+Start with:
 
 ```bash
-lsof -tiTCP:8420 -sTCP:LISTEN | xargs kill
-cd console && python3 server.py
+./scripts/cortex.sh doctor --json
+./scripts/cortex.sh status --json
 ```
 
-## Ollama executor unreachable
+## Extension Chrome introuvable
 
-The console checks `http://127.0.0.1:11434`. If models live on an external
-drive, make sure it is mounted before starting Ollama
-(`ln -sfn /Volumes/YOUR_DRIVE/ollama/models ~/.ollama/models`).
+Open `chrome://extensions`, enable Developer mode, choose **Load unpacked**,
+and select the `chrome_extension_path` printed by the installer. Ensure Cortex
+Bridge is enabled, reload the Cortex tab, and retry.
+
+## Cortex says the extension must be reloaded
+
+The files on disk are newer than the service worker currently running in
+Chrome. Open `chrome://extensions`, reload only Cortex Bridge, close the
+extensions page, then select **Retry** in Cortex. Cortex reloads its own page
+once, resumes pairing automatically, and rejects an older protocol generation
+before spending the pairing ticket. An outdated extension can no longer appear
+connected, and a stale second copy cannot alter the status of the active one.
+
+## ChatGPT requires login, CAPTCHA, or verification
+
+Use the ChatGPT tab that Cortex opened in the same Chrome window. Complete the
+human action, then press **Réessayer**. Cortex does not type credentials,
+accept terms, solve CAPTCHA, or bypass rate limits.
+
+## ChatGPT stays in loading state
+
+Wait for the ChatGPT page to finish, check that the composer is visible, and
+retry. If the page changed incompatibly, the probe reports missing selectors;
+Cortex does not open Playwright as a substitute.
+
+## Conversation switching times out
+
+Chrome URL navigation returns as soon as the requested target is exposed, then
+Cortex waits separately for the ChatGPT composer. The complete selection still
+has a 10-second budget. Use **Recharger la conversation** after checking the
+bound ChatGPT tab. A send is never retried automatically.
+
+## A message is uncertain
+
+Inspect the ChatGPT conversation directly. The click may have happened but the
+visible confirmation did not. Resolve it manually before sending again.
+
+## A third conversation cannot send
+
+Two writer leases are active. Finish or cancel one. The third draft and file
+remain in place.
+
+## A file is rejected
+
+The Chrome extension transfer limit is 25 MiB in v0.5. Check file type,
+content, size, symlinks, and the visible ChatGPT error. Office files must have
+the expected ZIP container structure.
+
+## Screenshot capture is rejected
+
+The bound ChatGPT tab must be the visible active tab in its Chrome window.
+Cortex refuses to capture another page by accident.
+
+## Console, fallback, or stop problems
+
+If the fallback page appears, run `./scripts/build-ui.sh`. If the port is owned
+by another process or the persisted identity is stale, Cortex refuses to take
+ownership or signal it. Inspect Doctor and identify that process separately.
+
+## Installer approval fails
+
+Any option change creates a new hash. Generate a fresh dry run, review it, and
+approve that exact hash. Never reuse a hash from another plan or machine.
+
+Logs live under `CORTEX_HOME`. Remove personal content before sharing them.

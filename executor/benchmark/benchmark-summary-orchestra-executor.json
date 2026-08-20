@@ -5,6 +5,6 @@
   "tool_selection": 1.0,
   "scope_compliance": 1.0,
   "false_success_count": 0,
-  "median_latency_s": 3.67,
-  "ollama_ps": "orchestra-executor:latest    e8d38cb44018    6.2 GB    100% GPU     8192       4 minutes from now"
+  "median_latency_s": 4.73,
+  "ollama_ps": "orchestra-executor:latest    ef79131ce2d9    7.4 GB    100% GPU     8192       4 minutes from now"
 }

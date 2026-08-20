@@ -1,0 +1,23 @@
+# Exact public URLs are added only after they are verified from primary sources.
+http://127.0.0.1:8420
+http://127.0.0.1:8420/*
+https://chatgpt.com/
+https://chatgpt.com/*
+https://developer.chrome.com/docs/extensions/develop/concepts/content-scripts
+https://developer.chrome.com/docs/extensions/develop/concepts/declare-permissions
+https://developer.chrome.com/docs/extensions/get-started/tutorial/hello-world#load-unpacked
+https://developer.chrome.com/docs/extensions/how-to/web-platform/websockets
+https://developer.chrome.com/docs/extensions/reference/api/tabs
+https://developers.openai.com/api/docs/guides/secure-mcp-tunnels
+https://git-scm.com/download/mac
+https://github.com/aaif-goose/goose
+https://github.com/browser-use/browser-use
+https://github.com/openai/codex
+https://github.com/openinterpreter/openinterpreter
+https://nodejs.org/en/download
+https://ollama.com/download/mac
+https://openai.com/policies/eu-terms-of-use/
+https://openai.com/policies/terms-of-use/
+https://playwright.dev/python/docs/browsers
+https://www.google.com/chrome/
+https://www.python.org/downloads/macos/

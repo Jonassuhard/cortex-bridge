@@ -30,6 +30,7 @@ import socket
 import threading
 import time
 import uuid
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
@@ -68,6 +69,11 @@ class Conversation:
         self.stream_chunks = 6
         self.stream_interval = 0.15
         self.streaming = False
+        self.pinned = False
+        self.project_id: str | None = None
+        self.project_title: str | None = None
+        self.preview: str | None = None
+        self.updated_at = datetime.now(timezone.utc).isoformat()
         self._stop = False
         self._seq = 0
         self._lock = threading.Lock()
@@ -281,9 +287,16 @@ class FixtureServer:
                                 "url": f"{server_state.base_url}/c/{c.id}",
                                 "identity": c.id,
                                 "title": c.title,
+                                "pinned": c.pinned,
+                                "project_id": c.project_id,
+                                "project_title": c.project_title,
+                                "updated_at": c.updated_at,
+                                "preview": c.preview,
+                                "message_count": len(c.messages),
                             }
                             for c in server_state.conversations.values()
                         ]
+                    convs.sort(key=lambda item: item["updated_at"], reverse=True)
                     self._json(convs)
                     return
                 if path == "/":
@@ -408,6 +421,28 @@ class FixtureServer:
         if mode not in ("normal", *BLOCKER_MODES):
             raise ValueError(f"unknown mode {mode!r}")
         self.conversation(cid or self.current or "default").mode = mode
+
+    def set_metadata(self, cid: str, **fields) -> None:
+        allowed = {
+            "title",
+            "pinned",
+            "project_id",
+            "project_title",
+            "preview",
+            "updated_at",
+        }
+        unknown = set(fields) - allowed
+        if unknown:
+            raise ValueError(f"unknown metadata fields: {sorted(unknown)}")
+        conversation = self.conversation(cid)
+        for key, value in fields.items():
+            setattr(conversation, key, value)
+
+    def delete_conversation(self, cid: str) -> None:
+        with self._lock:
+            self.conversations.pop(cid, None)
+            if self.current == cid:
+                self.current = None
 
     def queue_replies(self, replies: list[str], cid: str | None = None) -> None:
         self.conversation(cid or self.current or "default").replies.extend(replies)

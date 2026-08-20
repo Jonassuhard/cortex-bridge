@@ -28,15 +28,19 @@ import missions as missions_api
 import write_slots
 import attachments
 from transport.chatgpt_web.adapter import (
+    CONVERSATION_MISMATCH,
     GENERATION_CANCELLED,
+    TAB_CLOSED,
     ChatGPTWebTransport,
     TransportError,
-    WebBridgeDriver,
 )
+from transport.browser import create_transport
+from cortex_paths import build_paths
 
 router = APIRouter(prefix="/api")
-DATA_DIR = Path(__file__).resolve().parent / "data"
-CHAT_RUNS_FILE = DATA_DIR / "chat-runs.json"
+RUNTIME_PATHS = build_paths()
+DATA_DIR = RUNTIME_PATHS.home
+CHAT_RUNS_FILE = RUNTIME_PATHS.chat_runs
 
 
 def _now() -> str:
@@ -68,11 +72,17 @@ class ChatRunRuntime:
     attachment_path: str | None = None
     attachment_image: bool = False
     attachment_name: str | None = None
+    attachment_token: str | None = None
+    attachment_owner: str | None = None
+    attachment_mime: str | None = None
+    attachment_kind: str | None = None
+    attachment_size_bytes: int | None = None
     created_at: str = field(default_factory=_now)
     delivered_at: str | None = None
     first_response_at: str | None = None
     completed_at: str | None = None
     error: str | None = None
+    error_details: dict[str, Any] | None = None
     latency: dict[str, int | None] = field(default_factory=lambda: {
         "delivery_ms": None,
         "first_response_ms": None,
@@ -81,6 +91,9 @@ class ChatRunRuntime:
     events: list[dict[str, Any]] = field(default_factory=list)
     event_seq: int = 0
     cancelled: bool = False
+    conversation_key: str | None = None
+    session_id: str | None = None
+    lease: Any | None = None
     transport: ChatGPTWebTransport | None = None
     task: asyncio.Task | None = None
 
@@ -98,8 +111,26 @@ class ChatRunRuntime:
             "first_response_at": self.first_response_at,
             "completed_at": self.completed_at,
             "error": self.error,
+            "error_details": self.error_details,
             "latency": self.latency,
         }
+
+    def persisted(self) -> dict[str, Any]:
+        payload = self.public()
+        payload.update({
+            "new_conversation": self.new_conversation,
+            "conversation_key": self.conversation_key,
+            "session_id": self.session_id,
+            "attachment_path": self.attachment_path,
+            "attachment_image": self.attachment_image,
+            "attachment_name": self.attachment_name,
+            "attachment_token": self.attachment_token,
+            "attachment_owner": self.attachment_owner,
+            "attachment_mime": self.attachment_mime,
+            "attachment_kind": self.attachment_kind,
+            "attachment_size_bytes": self.attachment_size_bytes,
+        })
+        return payload
 
 
 class ChatSendIn(BaseModel):
@@ -133,23 +164,126 @@ class ChatCancelIn(BaseModel):
     reason: str = "USER_CANCEL"
 
 
-# A dedicated WebBridge session prevents UI browsing from moving the mission runner tab.
-ui_transport_factory = lambda: ChatGPTWebTransport(  # noqa: E731
-    WebBridgeDriver(session="cortex-bridge-ui")
-)
+# Read-only browsing always uses a session outside the bounded writer registry.
+READ_ONLY_SESSION_ID = "cortex-view-read-only"
+SCREENSHOT_SESSION_ID = "cortex-capture-read-only"
+ui_transport_factory = create_transport
 
 _runs: dict[str, ChatRunRuntime] = {}
 _view_transport: ChatGPTWebTransport | None = None
 _view_url: str | None = None
 _view_mutex = asyncio.Lock()
+_view_operation_mutex = asyncio.Lock()
+
+
+def _make_transport(session_id: str) -> ChatGPTWebTransport:
+    """Keep zero-argument fixture factories compatible at the API boundary."""
+    try:
+        return ui_transport_factory(session_id)
+    except TypeError:
+        return ui_transport_factory()
 
 
 def _persist_runs() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    payload = [run.public() for run in list(_runs.values())[-100:]]
+    runs = list(_runs.values())
+    terminal_states = {"COMPLETED", "FAILED", "CANCELLED"}
+    retained_ids = {
+        run.id for run in runs if run.state not in terminal_states
+    }
+    retained_ids.update(
+        run.id for run in [r for r in runs if r.state in terminal_states][-100:]
+    )
+    payload = [run.persisted() for run in runs if run.id in retained_ids]
     tmp = CHAT_RUNS_FILE.with_suffix(".tmp")
     tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     tmp.replace(CHAT_RUNS_FILE)
+
+
+def _load_persisted_runs() -> None:
+    """Restore history and reserve leases for interrupted chat writers."""
+    try:
+        payload = json.loads(CHAT_RUNS_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    if not isinstance(payload, list):
+        return
+    for item in payload:
+        if not isinstance(item, dict) or not item.get("id") or not item.get("conversation_url"):
+            continue
+        run = ChatRunRuntime(
+            id=str(item["id"]),
+            conversation_url=str(item["conversation_url"]),
+            text=str(item.get("text") or ""),
+            new_conversation=bool(item.get("new_conversation")),
+            state=str(item.get("state") or "FAILED"),
+            canonical_url=item.get("canonical_url"),
+            response_text=str(item.get("response_text") or ""),
+            attachment_path=item.get("attachment_path"),
+            attachment_image=bool(item.get("attachment_image")),
+            attachment_name=item.get("attachment_name"),
+            attachment_token=item.get("attachment_token"),
+            attachment_owner=item.get("attachment_owner"),
+            attachment_mime=item.get("attachment_mime"),
+            attachment_kind=item.get("attachment_kind"),
+            attachment_size_bytes=item.get("attachment_size_bytes"),
+            created_at=str(item.get("created_at") or _now()),
+            delivered_at=item.get("delivered_at"),
+            first_response_at=item.get("first_response_at"),
+            completed_at=item.get("completed_at"),
+            error=item.get("error"),
+            error_details=item.get("error_details"),
+            latency=dict(item.get("latency") or {
+                "delivery_ms": None,
+                "first_response_ms": None,
+                "total_ms": None,
+            }),
+            conversation_key=item.get("conversation_key"),
+            session_id=item.get("session_id"),
+        )
+        if (
+            run.state not in {"COMPLETED", "FAILED", "CANCELLED"}
+            and run.conversation_key
+            and run.session_id
+        ):
+            try:
+                run.lease = write_slots.restore_writer(
+                    run.conversation_key,
+                    run.session_id,
+                    run.canonical_url or run.conversation_url,
+                )
+            except (
+                ValueError,
+                write_slots.SessionCapacityError,
+                write_slots.SessionRekeyError,
+            ):
+                run.state = "FAILED"
+                run.error = "SESSION_RESTORE_FAILED: persisted writer capacity is inconsistent"
+        _runs[run.id] = run
+    terminal_states = {"COMPLETED", "FAILED", "CANCELLED"}
+    preserve: set[str] = set()
+    for run in _runs.values():
+        if run.state in terminal_states or not run.attachment_path:
+            continue
+        descriptor = {
+            "token": run.attachment_token,
+            "owner": run.attachment_owner,
+            "name": run.attachment_name,
+            "path": run.attachment_path,
+            "size_bytes": run.attachment_size_bytes,
+            "mime": run.attachment_mime,
+            "kind": run.attachment_kind,
+        }
+        try:
+            attachments.restore_descriptor(descriptor)
+            preserve.add(run.attachment_path)
+        except ValueError as exc:
+            run.state = "FAILED"
+            run.error = f"ATTACHMENT_RESTORE_FAILED: {exc}"
+    attachments.cleanup_abandoned(preserve)
+
+
+_load_persisted_runs()
 
 
 def _emit(run: ChatRunRuntime, event_type: str, payload: dict[str, Any]) -> None:
@@ -173,26 +307,40 @@ def _set_state(run: ChatRunRuntime, state: str) -> None:
     _emit(run, "status", {"state": state})
 
 
-async def _ensure_view_transport(url: str) -> ChatGPTWebTransport:
+async def _ensure_view_transport(
+    url: str,
+    *,
+    force_recreate: bool = False,
+) -> ChatGPTWebTransport:
     global _view_transport, _view_url
     async with _view_mutex:
-        if _view_transport is not None and _view_url == url:
+        if (
+            not force_recreate
+            and _view_transport is not None
+            and _view_url == url
+        ):
             return _view_transport
-        transport = ui_transport_factory()
+        previous = _view_transport
+        transport = _make_transport(READ_ONLY_SESSION_ID)
         if url.rstrip("/") == "https://chatgpt.com":
             await transport.start_new_conversation(url)
         else:
             await transport.select_conversation(url)
         _view_transport = transport
         _view_url = url
+        if previous is not None and previous is not transport:
+            await previous.close()
         return transport
 
 
 async def _run_chat(run: ChatRunRuntime) -> None:
     started = time.monotonic()
-    transport = ui_transport_factory()
-    run.transport = transport
+    transport: ChatGPTWebTransport | None = None
     try:
+        if run.lease is None:
+            raise RuntimeError("chat writer started without a conversation lease")
+        transport = _make_transport(run.lease.session_id)
+        run.transport = transport
         if run.cancelled:
             raise TransportError(GENERATION_CANCELLED, "cancelled before send")
         _set_state(run, "SELECTING_CONVERSATION")
@@ -208,16 +356,34 @@ async def _run_chat(run: ChatRunRuntime) -> None:
             import os
             from urllib.parse import quote
 
-            port = os.environ.get("PORT", "8420")
-            raw_url = f"http://127.0.0.1:{port}/api/chat/attachments/raw?path={quote(run.attachment_path)}"
+            raw_url = None
+            if run.attachment_token:
+                port = os.environ.get("PORT", "8420")
+                raw_url = (
+                    "http://127.0.0.1:"
+                    f"{port}/api/chat/attachments/raw?token={quote(run.attachment_token)}"
+                )
             await transport.send_with_attachment(
-                run.text, run.attachment_path, image=run.attachment_image, raw_url=raw_url
+                run.text,
+                run.attachment_path,
+                image=run.attachment_image,
+                raw_url=raw_url,
+                mime=run.attachment_mime,
+                name=run.attachment_name,
             )
         else:
             await transport.send_message(run.text)
         run.delivered_at = _now()
         run.latency["delivery_ms"] = _monotonic_ms(started)
         run.canonical_url = transport.lock.url if transport.lock else run.conversation_url
+        if (
+            run.conversation_key
+            and run.conversation_key.startswith("provisional:")
+            and run.canonical_url
+            and "/c/" in run.canonical_url
+        ):
+            run.lease = await write_slots.rekey(run.conversation_key, run.canonical_url)
+            run.conversation_key = run.lease.conversation_key
         _set_state(run, "VISIBLE_IN_CHATGPT")
         _emit(run, "delivery", {
             "delivered_at": run.delivered_at,
@@ -273,6 +439,7 @@ async def _run_chat(run: ChatRunRuntime) -> None:
         _emit(run, "cancelled", {"error": run.error})
     except TransportError as exc:
         run.error = f"{exc.code}: {exc.message}"
+        run.error_details = exc.details or None
         run.completed_at = _now()
         run.latency["total_ms"] = _monotonic_ms(started)
         if exc.code == GENERATION_CANCELLED or run.cancelled:
@@ -280,7 +447,11 @@ async def _run_chat(run: ChatRunRuntime) -> None:
             _emit(run, "cancelled", {"error": run.error})
         else:
             _set_state(run, "FAILED")
-            _emit(run, "error", {"error": run.error, "code": exc.code})
+            _emit(
+                run,
+                "error",
+                {"error": run.error, "code": exc.code, "details": exc.details},
+            )
     except Exception as exc:  # never leave a UI chat stuck forever
         run.error = f"CHAT_RUN_CRASHED: {exc}"
         run.completed_at = _now()
@@ -288,6 +459,13 @@ async def _run_chat(run: ChatRunRuntime) -> None:
         _set_state(run, "FAILED")
         _emit(run, "error", {"error": run.error, "code": "CHAT_RUN_CRASHED"})
     finally:
+        if transport is not None:
+            try:
+                await transport.close()
+            except Exception:
+                pass
+        if run.lease is not None:
+            await run.lease.release()
         _persist_runs()
 
 
@@ -298,8 +476,8 @@ async def conversation_snapshot(url: str = Query(..., min_length=1), light: int 
     light=1 returns identity/count/streaming only (P0c) — the UI polls this
     cheaply and fetches the full snapshot only when the signature changes."""
     clean_url = _validate_chatgpt_url(url)
-    try:
-        transport = await _ensure_view_transport(clean_url)
+
+    async def read_snapshot(transport: ChatGPTWebTransport) -> dict[str, Any]:
         if light:
             light_state = await transport._light_state()
             return {
@@ -313,7 +491,9 @@ async def conversation_snapshot(url: str = Query(..., min_length=1), light: int 
                 "last_id": light_state.get("last_id"),
                 "light": True,
             }
-        state = await transport.snapshot(verify_lock=clean_url.rstrip("/") != "https://chatgpt.com")
+        state = await transport.snapshot(
+            verify_lock=clean_url.rstrip("/") != "https://chatgpt.com"
+        )
         # Do not expose protocol reconstruction or any browser-level secret.
         return {
             "url": state.get("url", clean_url),
@@ -327,6 +507,20 @@ async def conversation_snapshot(url: str = Query(..., min_length=1), light: int 
             "model_label": state.get("model_label"),
             "messages": state.get("messages", []),
         }
+
+    try:
+        async with _view_operation_mutex:
+            transport = await _ensure_view_transport(clean_url)
+            try:
+                return await read_snapshot(transport)
+            except TransportError as exc:
+                if exc.code not in {TAB_CLOSED, CONVERSATION_MISMATCH}:
+                    raise
+                recovered = await _ensure_view_transport(
+                    clean_url,
+                    force_recreate=True,
+                )
+                return await read_snapshot(recovered)
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"cannot read conversation: {exc}")
 
@@ -341,15 +535,24 @@ async def send_chat(body: ChatSendIn) -> dict[str, Any]:
     if not text:
         raise HTTPException(status_code=422, detail="message text must not be empty")
     url = _validate_chatgpt_url(body.conversation_url)
-    # P2b: at most two WRITE conversations at once (reading is unlimited).
-    allowed, _active = write_slots.write_slot_available(url)
-    if not allowed:
+    missions_api.get_store()  # restore durable mission leases before capacity admission
+    conversation_key = (
+        write_slots.new_conversation_key()
+        if body.new_conversation or url.rstrip("/") == "https://chatgpt.com"
+        else url
+    )
+    try:
+        lease = await write_slots.acquire_writer(conversation_key)
+    except write_slots.SessionCapacityError:
         raise HTTPException(status_code=409, detail=write_slots.REFUSAL_MESSAGE)
     run = ChatRunRuntime(
         id=uuid.uuid4().hex,
         conversation_url=url,
         text=text,
         new_conversation=body.new_conversation,
+        conversation_key=conversation_key,
+        session_id=lease.session_id,
+        lease=lease,
     )
     _runs[run.id] = run
     _emit(run, "status", {"state": run.state})
@@ -362,11 +565,29 @@ def list_active_runs() -> list[ChatRunRuntime]:
     return [run for run in _runs.values() if run.state not in {"COMPLETED", "FAILED", "CANCELLED"}]
 
 
-def _start_attachment_run(
-    *, url: str, text: str, path: str, image: bool, name: str | None, new_conversation: bool
+async def _start_attachment_run(
+    *,
+    url: str,
+    text: str,
+    path: str,
+    image: bool,
+    name: str | None,
+    new_conversation: bool,
+    token: str | None = None,
+    owner: str | None = None,
+    mime: str | None = None,
+    kind: str | None = None,
+    size_bytes: int | None = None,
 ) -> dict[str, Any]:
-    allowed, _active = write_slots.write_slot_available(url)
-    if not allowed:
+    missions_api.get_store()  # restore durable mission leases before capacity admission
+    conversation_key = (
+        write_slots.new_conversation_key()
+        if new_conversation or url.rstrip("/") == "https://chatgpt.com"
+        else url
+    )
+    try:
+        lease = await write_slots.acquire_writer(conversation_key)
+    except write_slots.SessionCapacityError:
         raise HTTPException(status_code=409, detail=write_slots.REFUSAL_MESSAGE)
     run = ChatRunRuntime(
         id=uuid.uuid4().hex,
@@ -376,6 +597,14 @@ def _start_attachment_run(
         attachment_path=path,
         attachment_image=image,
         attachment_name=name,
+        attachment_token=token,
+        attachment_owner=owner,
+        attachment_mime=mime,
+        attachment_kind=kind,
+        attachment_size_bytes=size_bytes,
+        conversation_key=conversation_key,
+        session_id=lease.session_id,
+        lease=lease,
     )
     _runs[run.id] = run
     _emit(run, "status", {"state": run.state})
@@ -390,7 +619,7 @@ async def upload_attachment(body: AttachmentUploadIn) -> dict[str, Any]:
     pre-checked; the error is precise and in French."""
     try:
         if body.path:
-            return attachments.describe_path(body.path)
+            return attachments.stage_path(body.path)
         if body.name and body.data_b64:
             return attachments.store_upload(body.name, body.data_b64)
     except ValueError as exc:
@@ -399,20 +628,23 @@ async def upload_attachment(body: AttachmentUploadIn) -> dict[str, Any]:
 
 
 @router.get("/chat/attachments/raw")
-async def attachment_raw(path: str = Query(..., min_length=1)) -> Any:
+async def attachment_raw(token: str = Query(..., min_length=1)) -> Any:
     """Serve registered attachment bytes for the fetch-injection fallback.
 
     Only paths that passed validate_size this session are served (registry),
     with permissive CORS so the chatgpt.com page can fetch from loopback."""
     from fastapi.responses import FileResponse
 
-    name = attachments.allowed_name(path)
-    if name is None:
-        raise HTTPException(status_code=404, detail="attachment not registered")
+    descriptor = attachments.resolve_token(token)
+    if descriptor is None:
+        raise HTTPException(status_code=404, detail="attachment token unknown or expired")
     return FileResponse(
-        path,
-        filename=name,
-        headers={"Access-Control-Allow-Origin": "*", "Cache-Control": "no-store"},
+        descriptor["path"],
+        filename=descriptor["name"],
+        headers={
+            "Access-Control-Allow-Origin": "https://chatgpt.com",
+            "Cache-Control": "no-store",
+        },
     )
 
 
@@ -424,45 +656,76 @@ async def send_with_attachment(body: ChatSendAttachmentIn) -> dict[str, Any]:
         raise HTTPException(status_code=403, detail="Experimental ChatGPT Web Transport is not enabled")
     url = _validate_chatgpt_url(body.conversation_url)
     try:
-        descriptor = attachments.describe_path(body.path)
+        descriptor = attachments.stage_path(body.path)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
-    return _start_attachment_run(
+    return await _start_attachment_run(
         url=url,
         text=body.text,
         path=descriptor["path"],
         image=body.image or descriptor["kind"] == "image",
-        name=body.name or descriptor["name"],
+        name=descriptor["name"],
         new_conversation=body.new_conversation,
+        token=descriptor["token"],
+        owner=descriptor["owner"],
+        mime=descriptor["mime"],
+        kind=descriptor["kind"],
+        size_bytes=descriptor["size_bytes"],
     )
 
 
 @router.post("/chat/send-screenshot", status_code=202)
 async def send_screenshot(body: ChatScreenshotIn) -> dict[str, Any]:
-    """Capture the current ChatGPT tab and send it as an image (P3)."""
+    """Select the requested target, validate its driver capture, then send."""
     if missions_api._global_stop:
         raise HTTPException(status_code=409, detail="STOP EVERYTHING is active; reset it first")
     if not missions_api.optin_accepted():
         raise HTTPException(status_code=403, detail="Experimental ChatGPT Web Transport is not enabled")
     url = _validate_chatgpt_url(body.conversation_url)
-    transport = ui_transport_factory()
-    shooter = getattr(transport.driver, "take_screenshot", None)
-    if shooter is None:
-        raise HTTPException(status_code=422, detail="ce transport ne sait pas capturer d'écran")
-    attachments.ATTACHMENTS_DIR.mkdir(parents=True, exist_ok=True)
-    target = attachments.ATTACHMENTS_DIR / f"screenshot-{uuid.uuid4().hex[:8]}.png"
+    transport = _make_transport(SCREENSHOT_SESSION_ID)
     try:
-        await shooter(str(target))
-        descriptor = attachments.describe_path(str(target))
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"capture impossible: {exc}")
-    return _start_attachment_run(
+        shooter = getattr(transport.driver, "take_screenshot", None)
+        if shooter is None:
+            raise HTTPException(status_code=422, detail="ce transport ne sait pas capturer d'écran")
+        try:
+            if url.rstrip("/") == "https://chatgpt.com":
+                await transport.start_new_conversation(url)
+            else:
+                await transport.select_conversation(url)
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail=f"conversation cible introuvable: {exc}")
+        attachments.ATTACHMENTS_DIR.mkdir(parents=True, exist_ok=True)
+        target = attachments.ATTACHMENTS_DIR / f"cortex-screenshot-{uuid.uuid4().hex[:8]}.png"
+        try:
+            result = await shooter(str(target))
+            if not isinstance(result, dict) or not result.get("path"):
+                raise ValueError("le pilote n'a pas confirmé le chemin de capture")
+            descriptor = attachments.describe_screenshot(
+                str(result["path"]),
+                expected_path=str(target),
+            )
+        except Exception as exc:
+            target.unlink(missing_ok=True)
+            raise HTTPException(status_code=503, detail=f"capture impossible: {exc}")
+    finally:
+        closer = getattr(transport, "close", None)
+        if callable(closer):
+            try:
+                await closer()
+            except Exception:
+                pass
+    return await _start_attachment_run(
         url=url,
         text=body.text,
         path=descriptor["path"],
         image=True,
         name=descriptor["name"],
         new_conversation=body.new_conversation,
+        token=descriptor["token"],
+        owner=descriptor["owner"],
+        mime=descriptor["mime"],
+        kind=descriptor["kind"],
+        size_bytes=descriptor["size_bytes"],
     )
 
 
@@ -471,7 +734,7 @@ async def transport_capabilities() -> dict[str, Any]:
     """What the active transport can do (P3) — the UI adapts from this."""
     from transport.chatgpt_web import adapter as adapter_mod
 
-    transport = ui_transport_factory()
+    transport = _make_transport(READ_ONLY_SESSION_ID)
     caps_fn = getattr(transport.driver, "capabilities", None)
     caps = caps_fn() if caps_fn else {"send_text": True, "upload_file": False, "upload_image": False, "take_screenshot": False}
     caps.setdefault("limits", {"file_bytes": adapter_mod.MAX_FILE_BYTES, "image_bytes": adapter_mod.MAX_IMAGE_BYTES})
@@ -527,6 +790,8 @@ async def cancel_chat_run(run_id: str, body: ChatCancelIn | None = None) -> dict
     if run is None:
         raise HTTPException(status_code=404, detail="chat run not found")
     if run.state in {"COMPLETED", "FAILED", "CANCELLED"}:
+        if run.lease is not None:
+            await run.lease.release()
         return run.public()
     run.cancelled = True
     if run.transport is not None:
@@ -535,4 +800,8 @@ async def cancel_chat_run(run_id: str, body: ChatCancelIn | None = None) -> dict
         run.task.cancel()
     _set_state(run, "CANCELLED")
     _emit(run, "cancelled", {"reason": body.reason if body else "USER_CANCEL"})
+    if run.task is not None:
+        await asyncio.gather(run.task, return_exceptions=True)
+    elif run.lease is not None:
+        await run.lease.release()
     return run.public()

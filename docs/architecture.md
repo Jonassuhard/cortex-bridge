@@ -1,121 +1,92 @@
 # Architecture
 
-## The two halves
+## Runtime flow
 
-Cortex Bridge splits an agentic workflow across two models with different
-strengths:
-
-| Role | Runs where | Model | Does |
-|---|---|---|---|
-| **Orchestrator** | Cloud | Frontier model (ChatGPT / API) | Plans, decomposes, reviews, decides next steps |
-| **Executor** | Your machine | Local Ollama model (gpt-oss:20b by default) | Runs code, edits files, executes shell commands, reports results |
-
-## One loop iteration
-
-```
-1. Orchestrator writes a task message (goal + constraints + workspace)
-2. Bridge delivers it to the executor on the local machine
-3. Executor (Codex CLI profile → Ollama OpenAI-compatible API) acts locally:
-   shell commands, file edits, builds, tests
-4. Executor produces a structured report: what was done, what failed, logs
-5. Bridge posts the report back into the orchestrator conversation
-6. Orchestrator reads the report and either continues, corrects, or finishes
+```text
+Cortex tab on 127.0.0.1:8420
+    | one-time pairing token
+    v
+Chrome MV3 extension <---- authenticated loopback WebSocket ----> FastAPI
+    | structured allowlisted DOM commands
+    v
+ChatGPT tab in the same Chrome window
+    | exact message or explicit execution preflight
+    v
+mission protocol ----> deterministic executor / optional Ollama ----> workspace
+    |
+    +---- scoped status, evidence and approvals ----> selected conversation UI
 ```
 
-## Why Ollama as the executor backend
+The Chrome extension is the default product transport. Playwright is an
+explicit development and fixture transport, never a silent fallback.
 
-- OpenAI-compatible API out of the box (`http://127.0.0.1:11434/v1`) — any
-  agent harness that can point at a custom `base_url` can drive it.
-- Native tool calling on recent models (gpt-oss, qwen3, glm-4.x flash).
-- Zero per-token cost; fully offline; code never leaves the machine.
+## Components
 
-## Memory budget (Apple Silicon)
+### `chrome-extension/`
 
-Unified memory is the real constraint — not disk. Tested reference: M1 Pro
-16 GB.
+Manifest V3 service worker and content scripts. The service worker opens or
+focuses ChatGPT in the Cortex tab's `windowId`, maintains the loopback
+WebSocket, binds logical sessions to tab IDs, and accepts structured commands
+only. Host access is limited to ChatGPT and Cortex loopback.
 
-| Model | Download | RAM behavior | Verdict for 16 GB |
-|---|---|---|---|
-| `gpt-oss:20b` | ~13 GB | MoE + MXFP4, fits 16 GB | ✅ Default choice |
-| `glm-4.7-flash` | ~8 GB | Light, fast, strong tool calling | ✅ Best speed |
-| `qwen3:14b` | ~10 GB | Dense, good tool calling | ✅ Solid |
-| `devstral:24b` | ~14 GB | Benchmarked agentic (46.8% SWE-Bench) | ⚠️ Very tight |
-| `qwen3-coder:30b` | ~19 GB | Best local coder — needs 24–32 GB | ❌ Swaps on 16 GB |
+### `frontend/`
 
-**Context tuning matters**: advertised 128K contexts are unusable on 16 GB.
-The executor ships a Modelfile capping context at 16K tokens, which leaves
-headroom for macOS, the browser and the Ollama runtime.
+React and Next.js static UI. It creates the pairing token, explains connection
+states in French, and keeps conversation state reduced per identity. Late
+responses cannot overwrite a newer selection. Strict Cortex protocol markers
+are grouped into a collapsed audit disclosure instead of being rendered as
+ordinary chat messages.
 
-## Storage on an external drive
+### `console/`
 
-Models can live on an external SSD via a symlink:
+Loopback FastAPI service with HTTP APIs, WebSocket pairing, settings, ChatGPT
+chat, attachments, missions, health, pipeline status, and diagnostics.
 
-```bash
-ln -sfn /Volumes/YOUR_DRIVE/ollama/models ~/.ollama/models
-```
+### `transport/`
 
-Disk speed only affects model *load* time — once weights are in RAM,
-generation speed is identical to internal storage.
+Structured Chrome-extension driver, legacy compatibility driver, Playwright
+development driver, and deterministic fixtures. Selection shares one
+monotonic 10-second deadline across navigation and state reads.
 
-## The autonomous mission loop (Mode A)
+### `orchestration/` and `executor/`
 
-Since Phase 6/7 the loop runs **without any human copy-paste**. Components:
+The mission state machine stores `cortex.v1` decisions and evidence in SQLite.
+Workspace-confined file and process tools execute only after policy and
+preflight checks. Ollama is optional and is reported active only after a real
+model call.
 
-```
-console/server.py + console/missions.py     FastAPI cockpit (loopback only)
-orchestration/runner.py                     ModeARunner — wires everything
-orchestration/loop.py                       MissionLoop — one decision per cycle
-orchestration/state.py                      State machine + budgets + fingerprints
-orchestration/protocol.py                   cortex.v1 fences, validation, reports
-orchestration/store.py                      SQLite audit (11 tables, WAL)
-transport/chatgpt_web/adapter.py            ChatGPTWebTransport + drivers
-transport/chatgpt_web/fixture.py            In-process fake chatgpt.com (tests)
-executor/tools.py + executor/policy.py      Sandboxed tools + approval policy
-```
+## Pairing protocol
 
-One cycle:
+1. Cortex issues a 256-bit token that expires after 60 seconds.
+2. The Cortex page passes it to the localhost content script.
+3. The extension presents it over its outbound WebSocket.
+4. The backend consumes it once and enables the command channel.
+5. Every command has a random request ID, session ID, allowlisted action, and
+   structured payload.
+6. One serialized writer sends commands over the WebSocket; the command
+   deadline covers both the send and correlated result.
+7. Disconnects, timeouts, unknown actions, oversized payloads, and replays fail
+   closed.
 
-```
-1. The console sends the mission contract (objective, workspace, cortex.v1
-   rules, per-tool argument schemas) into the chosen ChatGPT conversation.
-2. ChatGPT answers with exactly one ```cortex-decision fenced block:
-   EXECUTE (one tool call) | REQUEST_CONTEXT | COMPLETE | BLOCKED.
-3. The loop validates the decision (protocol, iteration, UUID actionId,
-   argument schema, path safety), evaluates it against the policy engine,
-   asks the human when the policy requires approval, and executes the tool
-   against the workspace.
-4. The validated result goes back into the same conversation as exactly one
-   ```cortex-report fenced block.
-5. Repeat until COMPLETE/BLOCKED, budget exhaustion, pause or failure.
-```
+## Conversation isolation
 
-Guarantees enforced by the state machine and store (§14):
+Each writer owns a lease tied to a conversation identity, logical session, and
+Chrome tab. Two leases may be active. A third is rejected with HTTP 409 before
+a tab opens or a message sends, while the client keeps its draft and file.
 
-- one pending message at a time — the loop never overlaps sends;
-- duplicate responses and duplicate reports are detected by content
-  fingerprints and ignored, never re-executed;
-- every delivery is proven (the sent message must appear in the DOM) before
-  the next step — uncertain delivery pauses the mission for human resolution;
-- pause/resume is exact: resume re-attaches the locked conversation and
-  either re-sends the undelivered payload or waits for the reply, never both.
+## Data and media
 
-## Conversation lock
+Mutable data lives under `CORTEX_HOME`, default
+`~/.local/share/cortex-bridge`. Attachments resolve from opaque tokens to
+validated managed paths. The extension transfer limit is 25 MiB in v0.5.
+Screenshots must come from the visible bound ChatGPT tab and are written
+atomically under `CORTEX_HOME`.
 
-A mission locks exactly one conversation identity (`/c/<uuid>`) before the
-first send. Every state read verifies the page still shows that identity —
-a mismatch pauses with CONVERSATION_MISMATCH instead of leaking a mission
-into the wrong chat. New conversations are locked as soon as ChatGPT assigns
-their canonical `/c/<uuid>` URL (the transient `/c/WEB:<uuid>` shown right
-after the first send is waited out).
+## Process ownership and release boundary
 
-## Trust boundaries
+Lifecycle records include PID, start time, executable, argument hash, instance
+token, and port. Stop signals only an exact match.
 
-- The console binds to 127.0.0.1 only; there is no remote access to missions.
-- The transport talks to chatgpt.com through the user's own Chrome via the
-  local WebBridge daemon (127.0.0.1:10086) — DOM only, never `/backend-api/`.
-- Tools are confined to the mission workspace: relative paths only, no `..`,
-  no symlink escapes, an allowlist of executables for `run_process`.
-- Write tools run under a policy: automatic, per-action approval, or denied.
-- The orchestrator never receives raw credentials; it only sees task results.
-- API keys live in environment variables or `~/.codex-cortex-bridge/auth.json`,
-  never in this repo (see `.gitignore`).
+CI uses synthetic pages and never an authenticated account. Real Chrome,
+ChatGPT, file, screenshot, dual-conversation, and mini-site gates require
+explicit owner approval and redacted evidence.

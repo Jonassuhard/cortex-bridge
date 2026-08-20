@@ -1,0 +1,2 @@
+# Synthetic CI sentinel. Owner-specific markers are represented by hashed fingerprints.
+cortex-bridge-release-ci-sentinel-not-public

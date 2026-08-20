@@ -1,15 +1,32 @@
-"""Two-write-conversation guard (P2b, Jonas spec).
+"""Durable two-writer conversation lease registry.
 
 Cortex Bridge may WRITE into at most two ChatGPT conversations at once
 (reading stays unlimited). A third write is refused with an explicit French
 message and the user's draft must be preserved by the UI.
 
-This guard is best-effort and in-memory: it tracks active (non-terminal) chat
-runs and missions. It never kills or replaces an existing session — it only
-refuses NEW writes.
+Admission and per-conversation serialization are owned by the tokenized
+ConversationSessionRegistry. The legacy active-run scan remains only for the
+read-only availability helper; production release paths require SessionLease.
 """
 
 from __future__ import annotations
+
+try:
+    from .conversation_sessions import (
+        ConversationSessionRegistry,
+        SessionCapacityError,
+        SessionLease,
+        SessionRekeyError,
+        new_conversation_key,
+    )
+except ImportError:
+    from conversation_sessions import (
+        ConversationSessionRegistry,
+        SessionCapacityError,
+        SessionLease,
+        SessionRekeyError,
+        new_conversation_key,
+    )
 
 MAX_WRITE_CONVERSATIONS = 2
 
@@ -20,6 +37,7 @@ REFUSAL_MESSAGE = (
 )
 
 TERMINAL_STATES = {"COMPLETED", "BLOCKED", "FAILED", "CANCELLED"}
+_registry = ConversationSessionRegistry(capacity=MAX_WRITE_CONVERSATIONS)
 
 
 def _normalize(url: str) -> str:
@@ -28,7 +46,7 @@ def _normalize(url: str) -> str:
 
 def active_write_conversations() -> set[str]:
     """Conversation URLs with at least one active chat run or mission."""
-    urls: set[str] = set()
+    urls = {_normalize(lease.conversation_key) for lease in _registry.active_leases()}
     try:
         import chat as chat_api  # late import: chat.py imports this module
 
@@ -54,3 +72,23 @@ def write_slot_available(conversation_url: str) -> tuple[bool, set[str]]:
     if key in active or len(active) < MAX_WRITE_CONVERSATIONS:
         return True, active
     return False, active
+
+
+async def acquire_writer(conversation_key: str) -> SessionLease:
+    return await _registry.acquire_writer(conversation_key)
+
+
+async def rekey(provisional_key: str, canonical_key: str) -> SessionLease:
+    return await _registry.rekey(provisional_key, canonical_key)
+
+
+async def release_writer(lease: SessionLease) -> None:
+    await _registry.release_writer(lease)
+
+
+def restore_writer(
+    conversation_key: str,
+    session_id: str,
+    target_url: str,
+) -> SessionLease:
+    return _registry.restore_writer(conversation_key, session_id, target_url)

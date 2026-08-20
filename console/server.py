@@ -16,20 +16,24 @@ from pathlib import Path
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from local_executor import STORAGE_UNAVAILABLE, detect_mode, runtime_status, run_task
+from local_executor import DEVELOPMENT_FIXTURE_ENV, runtime_status, run_task
+from missions import close_store as close_mission_store
 from missions import router as missions_router
 from chat import router as chat_router
 from settings import router as settings_router
 from onboarding import router as onboarding_router
+from chrome_extension import router as chrome_extension_router
+from cortex_paths import build_paths, migrate_legacy_state
+from version import current_version
 
 BASE_DIR = Path(__file__).resolve().parent
-STATIC_DIR = BASE_DIR / "static"
-DATA_DIR = BASE_DIR / "data"
-STORE_FILE = DATA_DIR / "iterations.json"
+RUNTIME_PATHS = build_paths()
+DATA_DIR = RUNTIME_PATHS.home
+STORE_FILE = RUNTIME_PATHS.iterations
 REPO_ROOT = BASE_DIR.parent
 FRONTEND_OUT = REPO_ROOT / "frontend" / "out"
 FRONTEND_FALLBACK = REPO_ROOT / "frontend" / "fallback"
@@ -46,6 +50,8 @@ app.include_router(missions_router)
 app.include_router(chat_router)
 app.include_router(settings_router)
 app.include_router(onboarding_router)
+app.include_router(chrome_extension_router)
+app.router.add_event_handler("shutdown", close_mission_store)
 
 if (FRONTEND_OUT / "_next").is_dir():
     app.mount("/_next", StaticFiles(directory=FRONTEND_OUT / "_next"), name="next-assets")
@@ -53,6 +59,10 @@ if (FRONTEND_OUT / "_next").is_dir():
 # ------------------------------------------------------------- persistence
 
 _iterations: list[dict] = []
+
+
+def _migrate_legacy_runtime() -> None:
+    migrate_legacy_state(BASE_DIR / "data", RUNTIME_PATHS)
 
 
 def _load_store() -> None:
@@ -79,6 +89,7 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+_migrate_legacy_runtime()
 _load_store()
 
 # ----------------------------------------------------------------- schemas
@@ -88,6 +99,8 @@ class TaskIn(BaseModel):
     goal: str
     constraints: list[str] = []
     workspace: str = "~/"
+    allow_processes: bool = False
+    development_fixture: bool = False
 
 
 class ReplyIn(BaseModel):
@@ -112,11 +125,18 @@ async def _run(task: dict) -> None:
             "files_changed": [],
             "blockers": [str(exc)],
             "suggested_next_step": "Check the console server log.",
-            "mode": detect_mode(),
+            "executor_kind": "unavailable",
+            "executor_model_used": None,
+            "runtime_mode": "live",
+            "release_eligible": False,
         }
         await _emit(task, f"executor crashed: {exc}", "error")
     task["report"] = report
     task["status"] = report["status"]
+    task["executor_kind"] = report["executor_kind"]
+    task["executor_model_used"] = report["executor_model_used"]
+    task["runtime_mode"] = report["runtime_mode"]
+    task["release_eligible"] = bool(report.get("release_eligible", False))
     task["finished_at"] = _now()
     _save_store()
 
@@ -132,56 +152,48 @@ async def index() -> FileResponse:
         return FileResponse(modern)
     if fallback.is_file():
         return FileResponse(fallback)
-    return FileResponse(STATIC_DIR / "index.html")
-
-
-@app.get("/style.css")
-async def style() -> FileResponse:
-    return FileResponse(STATIC_DIR / "style.css")
-
-
-@app.get("/app.js")
-async def script() -> FileResponse:
-    return FileResponse(STATIC_DIR / "app.js")
-
-
-@app.get("/missions.css")
-async def missions_style() -> FileResponse:
-    return FileResponse(STATIC_DIR / "missions.css")
-
-
-@app.get("/missions.js")
-async def missions_script() -> FileResponse:
-    return FileResponse(STATIC_DIR / "missions.js")
+    raise HTTPException(
+        status_code=503,
+        detail="No release frontend is installed; legacy simulated UI is disabled.",
+    )
 
 
 @app.get("/api/status")
 async def status() -> dict:
-    return runtime_status()
+    return {**runtime_status(), "version": current_version()}
 
 
 @app.post("/api/tasks", status_code=201)
 async def create_task(body: TaskIn) -> dict:
     if not body.goal.strip():
         raise HTTPException(status_code=422, detail="goal must not be empty")
-    if runtime_status()["storage_status"] == STORAGE_UNAVAILABLE:
-        return JSONResponse(
-            status_code=409,
-            content={
-                "error": STORAGE_UNAVAILABLE,
+    fixtures_allowed = os.environ.get(DEVELOPMENT_FIXTURE_ENV) == "1"
+    if body.development_fixture and not fixtures_allowed:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "DEVELOPMENT_FIXTURES_DISABLED",
                 "message": (
-                    "Local model storage unavailable; the remote Kimi/OpenCodex "
-                    "fallback remains available."
+                    "development_fixture requires "
+                    f"{DEVELOPMENT_FIXTURE_ENV}=1"
                 ),
             },
         )
+    requested_runtime_mode = (
+        "development_fixture" if body.development_fixture else "live"
+    )
     task = {
         "id": uuid.uuid4().hex[:12],
         "goal": body.goal.strip(),
         "constraints": [c.strip() for c in body.constraints if c.strip()],
         "workspace": body.workspace.strip() or "~/",
         "status": "running",
-        "mode": detect_mode(),
+        "executor_kind": "unavailable",
+        "executor_model_used": None,
+        "runtime_mode": requested_runtime_mode,
+        "release_eligible": False,
+        "allow_processes": body.allow_processes,
+        "development_fixture": body.development_fixture,
         "started_at": _now(),
         "finished_at": None,
         "logs": [],
@@ -191,7 +203,14 @@ async def create_task(body: TaskIn) -> dict:
     _iterations.insert(0, task)
     _save_store()
     asyncio.create_task(_run(task))
-    return {"id": task["id"], "status": task["status"], "mode": task["mode"]}
+    return {
+        "id": task["id"],
+        "status": "running",
+        "executor_kind": "unavailable",
+        "executor_model_used": None,
+        "runtime_mode": requested_runtime_mode,
+        "release_eligible": False,
+    }
 
 
 @app.get("/api/tasks")
@@ -201,7 +220,10 @@ async def list_tasks() -> list[dict]:
             "id": it["id"],
             "goal": it["goal"],
             "status": it["status"],
-            "mode": it["mode"],
+            "executor_kind": it.get("executor_kind", "unavailable"),
+            "executor_model_used": it.get("executor_model_used"),
+            "runtime_mode": it.get("runtime_mode", "live"),
+            "release_eligible": bool(it.get("release_eligible", False)),
             "started_at": it["started_at"],
         }
         for it in _iterations
@@ -276,5 +298,9 @@ async def frontend_fallback(full_path: str) -> FileResponse:
     raise HTTPException(status_code=404, detail="asset not found")
 
 
-if __name__ == "__main__":
+def main() -> None:
     uvicorn.run(app, host="127.0.0.1", port=int(os.environ.get("PORT", 8420)), log_level="info")
+
+
+if __name__ == "__main__":
+    main()
