@@ -405,6 +405,67 @@ class MissionsApiTestCase(unittest.TestCase):
         self.assertEqual(d["mission"]["state"], "FAILED")
         self.assertEqual(d["mission"]["pause_reason"], "simulated crash")
 
+    def test_11_legacy_history_merged_read_only(self):
+        # Pre-mission-API runs (chat-runs.json / iterations.json) appear in the
+        # unified listing and have a detail view, without touching the DB.
+        tmp = Path(self._tmp.name)
+        chat_runs = tmp / "legacy-chat-runs.json"
+        chat_runs.write_text(json.dumps([{
+            "id": "legacy-run-1",
+            "state": "completed",
+            "text": "dis bonjour",
+            "created_at": "2026-08-01T10:00:00+00:00",
+            "completed_at": "2026-08-01T10:01:00+00:00",
+            "response_text": "Bonjour",
+        }]), encoding="utf-8")
+        iterations = tmp / "legacy-iterations.json"
+        iterations.write_text(json.dumps([{
+            "id": "legacy-task-1",
+            "status": "done",
+            "goal": "crée un fichier",
+            "started_at": "2026-08-02T10:00:00+00:00",
+            "finished_at": "2026-08-02T10:02:00+00:00",
+            "workspace": str(self.ws),
+            "report": {"summary": "fait", "files_changed": ["a.txt"], "blockers": []},
+        }]), encoding="utf-8")
+        old_runs = missions_api.LEGACY_CHAT_RUNS_FILE
+        old_iterations = missions_api.LEGACY_ITERATIONS_FILE
+        missions_api.LEGACY_CHAT_RUNS_FILE = chat_runs
+        missions_api.LEGACY_ITERATIONS_FILE = iterations
+        try:
+            status, rows = self.get("/api/missions")
+            self.assertEqual(status, 200)
+            by_id = {row["id"]: row for row in rows}
+            self.assertEqual(by_id["legacy-run-1"]["state"], "COMPLETED")
+            self.assertTrue(by_id["legacy-run-1"]["legacy"])
+            self.assertEqual(by_id["legacy-run-1"]["legacy_source"], "chat-run")
+            self.assertEqual(by_id["legacy-task-1"]["state"], "COMPLETED")
+            self.assertEqual(by_id["legacy-task-1"]["legacy_source"], "console-task")
+            # DB missions stay first-class and unmodified.
+            self.assertEqual(
+                missions_api.get_store().count("missions"),
+                len([row for row in rows if not row.get("legacy")]),
+            )
+            # Legacy entries have a detail view.
+            status, detail = self.get("/api/missions/legacy-run-1")
+            self.assertEqual(status, 200)
+            self.assertTrue(detail["legacy"])
+            self.assertEqual(
+                detail["mission"]["legacy_detail"]["response_text"], "Bonjour"
+            )
+            status, detail = self.get("/api/missions/legacy-task-1")
+            self.assertEqual(status, 200)
+            self.assertEqual(
+                detail["mission"]["legacy_detail"]["files_changed"], ["a.txt"]
+            )
+            # Unknown ids still 404.
+            with self.assertRaises(urllib.error.HTTPError) as ctx:
+                self.get("/api/missions/does-not-exist")
+            self.assertEqual(ctx.exception.code, 404)
+        finally:
+            missions_api.LEGACY_CHAT_RUNS_FILE = old_runs
+            missions_api.LEGACY_ITERATIONS_FILE = old_iterations
+
 
 if __name__ == "__main__":
     unittest.main()

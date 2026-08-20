@@ -200,6 +200,15 @@ class InstallerTest(unittest.TestCase):
         self.assertEqual(extension["path"], str((ROOT / "chrome-extension").resolve()))
         self.assertIsInstance(payload["checks"], list)
 
+    def test_doctor_text_output_is_french_and_actionable(self):
+        result = self.run_script("cortex.sh", "doctor")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("vérification de l'installation", result.stdout)
+        self.assertIn("Extension Chrome Cortex Bridge", result.stdout)
+        self.assertIn("Python 3.11", result.stdout)
+        # Every failing or warning line must be followed by an actionable hint.
+        self.assertNotIn('"checks"', result.stdout)  # no raw JSON dump
+
     def test_public_install_docs_use_the_real_chrome_tab_flow(self):
         docs = [
             ROOT / "README.md",

@@ -264,6 +264,9 @@ export interface MissionSummary extends RuntimeTruth {
   max_iterations?: number;
   max_duration_seconds?: number;
   pause_reason?: string | null;
+  legacy?: boolean;
+  legacy_source?: string;
+  legacy_detail?: Record<string, unknown>;
 }
 
 export interface TimelineRow extends Record<string, unknown> {

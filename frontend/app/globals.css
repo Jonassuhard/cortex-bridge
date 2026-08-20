@@ -984,3 +984,26 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 }
 
 .sidebar-empty-guidance b { color: var(--ink); }
+
+/* ---- History panel -------------------------------------------------------- */
+.history-panel { width: min(760px, 96vw); }
+.history-panel .settings-head > div:last-child { display: flex; gap: 6px; }
+.history-content { position: relative; z-index: 1; min-height: 0; overflow-y: auto; padding: 14px 18px 22px; display: grid; gap: 8px; align-content: start; }
+.history-empty { margin: 18px 4px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.history-row { border: 1px solid var(--line); border-radius: 14px; background: rgba(255,255,255,.014); overflow: hidden; }
+.history-row.is-expanded { border-color: rgba(96,165,250,.22); }
+.history-row-main { display: flex; align-items: center; gap: 12px; width: 100%; padding: 11px 13px; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
+.history-row-main:hover { background: rgba(255,255,255,.035); }
+.history-row-main > svg { width: 14px; height: 14px; color: var(--muted); transition: transform .18s ease; }
+.history-row-main > svg.is-rotated { transform: rotate(180deg); }
+.history-state { flex-shrink: 0; padding: 3px 9px; border-radius: 999px; font-size: 10px; font-weight: 600; letter-spacing: .02em; border: 1px solid var(--line-strong); color: var(--muted); }
+.history-state.is-done { color: #4ade80; border-color: rgba(74,222,128,.3); background: rgba(74,222,128,.07); }
+.history-state.is-error { color: #f87171; border-color: rgba(248,113,113,.3); background: rgba(248,113,113,.07); }
+.history-state.is-active { color: #60a5fa; border-color: rgba(96,165,250,.3); background: rgba(96,165,250,.07); }
+.history-copy { min-width: 0; display: grid; gap: 2px; flex: 1; }
+.history-copy strong { font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.history-copy small { color: var(--muted); font-size: 10px; }
+.history-detail { padding: 4px 14px 13px 14px; border-top: 1px solid var(--line); display: grid; gap: 6px; }
+.history-detail p { margin: 0; font-size: 11px; line-height: 1.55; color: var(--muted); word-break: break-word; }
+.history-detail p strong { color: var(--ink); }
+.pause-reason-banner { margin-top: 10px; }

@@ -29,6 +29,36 @@ All notable changes are recorded here.
   stated in French before activation (the opt-in API existed without any UI).
 - Live QA evidence document `docs/verification/v1-live-qa-2026-08-15.md` and a
   local-models restore plan `docs/local-models.md`.
+- One-command owner experience: `Cortex Bridge.command` starts the console and
+  opens the UI by double-click, `scripts/install-autostart.sh` installs an
+  optional login LaunchAgent, `scripts/install-extension.sh` opens
+  `chrome://extensions` with the extension path already on the clipboard, and
+  `scripts/update.sh` pulls the latest code and prepares the re-install plan
+  (approval hash still required).
+- French operator guides under `docs/fr/` (démarrage, utilisation, mise à
+  jour, dépannage) and a French quickstart in the README.
+- `scripts/cortex.sh doctor` now prints an actionable French checklist
+  (✅ / ⚠️ / ❌ + one repair command per missing piece) instead of raw JSON;
+  `--json` output is unchanged for automation.
+- Unified mission history: `GET /api/missions` merges legacy `chat-runs.json`
+  and `iterations.json` runs read-only (flagged `legacy`), and
+  `GET /api/missions/{id}` serves a detail view for them, so the UI shows one
+  continuous past. A new **Historique** panel in the sidebar lists every
+  mission and archived run.
+- Paused missions now explain themselves in the UI: `RATE_LIMIT` renders as
+  "ChatGPT a atteint sa limite d'utilisation…" with a resume hint, and the
+  usage-limit banners ("You've hit your usage limit" / "limite d'utilisation")
+  are now detected by both the extension and adapter probes.
+
+### Changed
+
+- The default workspace is now the visible, auto-created
+  `~/cortex-workspaces`; a stored default pointing at a purged temp directory
+  (`/tmp`, `/private/tmp`, `/var/folders`) is reset to that stable default on
+  load. Custom existing paths are untouched.
+- The mission database and transport opt-in marker now live under
+  `CORTEX_HOME` (migrated by the existing legacy-state migration) instead of
+  inside the repository, matching the documented runtime-state rule.
 
 ### Fixed
 
@@ -47,7 +77,11 @@ All notable changes are recorded here.
 - The mission decision parser now accepts the whole-message bare
   `cortex-decision` form, because ChatGPT's DOM rendering strips code fences
   from the extracted text; embedded or repeated blocks remain protocol
-  violations. Found and validated by a live mini-site mission.
+  violations.
+- `scripts/cortex.sh status` now reports the real owner of the listening port
+  (pid + command) in French, and automatically cleans a stale pid record when
+  both the recorded process and the listener are gone — `status` and `doctor`
+  can no longer disagree about which instance is actually serving. Found and validated by a live mini-site mission.
 
 ### Changed
 

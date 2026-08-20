@@ -117,6 +117,7 @@ class ChatSettingsApiTestCase(unittest.TestCase):
         cls.original_onboarding_driver_factory = onboarding_api.browser_driver_factory
         cls.original_settings_file = settings_api.SETTINGS_FILE
         cls.original_settings_db = settings_api.DB_PATH
+        cls.original_task_store = settings_api.TASK_STORE_FILE
         cls.original_chat_runs_file = chat_api.CHAT_RUNS_FILE
         cls.original_store = missions_api._store
         cls.original_optin = missions_api.OPTIN_FILE
@@ -147,6 +148,7 @@ class ChatSettingsApiTestCase(unittest.TestCase):
 
         settings_api.SETTINGS_FILE = root / "settings.json"
         settings_api.DB_PATH = root / "cortex.db"
+        settings_api.TASK_STORE_FILE = root / "iterations.json"
         settings_api.browser_driver_factory = lambda **_kwargs: FakeBrowserDriver()
         onboarding_api.browser_driver_factory = lambda **_kwargs: FakeBrowserDriver()
 
@@ -182,6 +184,7 @@ class ChatSettingsApiTestCase(unittest.TestCase):
         missions_api.OPTIN_FILE = cls.original_optin
         settings_api.SETTINGS_FILE = cls.original_settings_file
         settings_api.DB_PATH = cls.original_settings_db
+        settings_api.TASK_STORE_FILE = cls.original_task_store
         settings_api.browser_driver_factory = cls.original_settings_driver_factory
         onboarding_api.browser_driver_factory = cls.original_onboarding_driver_factory
         chat_api.CHAT_RUNS_FILE = cls.original_chat_runs_file
@@ -847,7 +850,7 @@ class ChatSettingsApiTestCase(unittest.TestCase):
     def test_10d_loaded_invalid_browser_settings_fail_closed_and_external_paths_are_anonymized(self):
         self.assertEqual(
             settings_api.DEFAULT_SETTINGS["default_workspace"],
-            str(settings_api.RUNTIME_PATHS.home / "workspaces"),
+            str(Path.home() / "cortex-workspaces"),
         )
         settings_api.SETTINGS_FILE.write_text(json.dumps({
             "browser_transport": "selenium",
@@ -858,6 +861,28 @@ class ChatSettingsApiTestCase(unittest.TestCase):
         anonymized = settings_api._anonymize("/tmp/private-volume/browser-profile")
         self.assertNotIn("Volumes", anonymized)
         self.assertNotIn("private-volume", anonymized)
+
+    def test_10e_purged_temp_default_workspace_resets_to_stable_default(self):
+        settings_api.SETTINGS_FILE.write_text(json.dumps({
+            "default_workspace": "/private/tmp/cortex-purged-default-workspace",
+        }), encoding="utf-8")
+        loaded = settings_api.load_settings()
+        self.assertEqual(
+            loaded["default_workspace"],
+            str(Path.home() / "cortex-workspaces"),
+        )
+        # The stable default is auto-created so onboarding is green.
+        self.assertTrue(Path(loaded["default_workspace"]).is_dir())
+
+    def test_10f_existing_temp_workspace_is_kept(self):
+        # An existing directory under /tmp is a deliberate choice (tests use
+        # it); only *purged* temp paths are reset.
+        workspace = Path(self._tmp.name).resolve()
+        settings_api.SETTINGS_FILE.write_text(json.dumps({
+            "default_workspace": str(workspace),
+        }), encoding="utf-8")
+        loaded = settings_api.load_settings()
+        self.assertEqual(loaded["default_workspace"], str(workspace))
 
     def test_10e_onboarding_invalid_persisted_browser_settings_are_structured(self):
         settings_api.SETTINGS_FILE.write_text(json.dumps({

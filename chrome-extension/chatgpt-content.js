@@ -63,7 +63,7 @@
     if (/captcha|verify you are human|vérifiez que vous êtes humain|cloudflare/.test(body)) {
       return "captcha";
     }
-    if (/rate limit|too many requests|limite de requêtes/.test(body)) return "rate_limit";
+    if (/rate limit|too many requests|limite de requêtes|usage limit|limite d'utilisation|limite d’utilisation|you've hit|vous avez atteint/.test(body)) return "rate_limit";
     return null;
   };
 
