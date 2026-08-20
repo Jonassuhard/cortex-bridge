@@ -118,7 +118,7 @@
   },
   "artifacts": {
     "frontend/out/index.html": "79ce0977f121f73d3bab51ad8223bb9f610ca8e88cd791681b1b2023acb48504",
-    "docs/media/architecture-flow.png": "83213c2182b5d2dcba691d0628dde8e9a5489f327362c069340dc3eee217dc8a",
+    "docs/media/architecture-flow.png": "10db117e44d10b8f8afdf65fca2c5d91bfaeb1d38329ee2435a2f542a0e3bc6a",
     "docs/media/architecture-flow.gif": "39c9a1ad5bee1cd218af5e1aae1f2c6dcf6841f0b410abaa1f05a238c4a156da",
     "docs/screenshots/v0.5.0/375/10-info-diagramme.png": "632afc793b5207a87b516609594a2a22220c78aa8480d2b45ed10f8c55554254",
     "docs/screenshots/v0.5.0/768/04-preflight.png": "56d36d0628ad94c82031ebe4a7894f4697be00c35c8d87c47d2e2de2263b41f1",
