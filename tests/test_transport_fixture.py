@@ -30,6 +30,7 @@ from transport.chatgpt_web.adapter import (  # noqa: E402
     DriverError,
     TAB_CLOSED,
     TRANSPORT_PAUSED,
+    WORK_SURFACE_REJECTED,
     BlockerDetected,
     ChatGPTWebTransport,
     ConversationLock,
@@ -333,6 +334,25 @@ class FixtureTransportTestCase(unittest.IsolatedAsyncioTestCase):
         await self.transport.resolve_delivery()
         msg = await self.transport.await_response()
         self.assertEqual(msg["text"], "eventual reply")
+
+    # 19b. a definitive pre-delivery refusal is NOT an uncertain delivery
+    async def test_19b_work_surface_refusal_is_definitive(self):
+        self.server.queue_replies(["clean reply"], "conv-1")
+        await self._select()
+        refusal = DriverError(
+            "WORK_SURFACE_REJECTED: Cortex Bridge only operates on classic ChatGPT chats"
+        )
+        refusal.code = "WORK_SURFACE_REJECTED"
+        with patch.object(self.driver, "send_message", side_effect=refusal):
+            with self.assertRaises(TransportError) as cm:
+                await self.transport.send_message("must never be composed")
+        self.assertEqual(cm.exception.code, WORK_SURFACE_REJECTED)
+        self.assertFalse(self.transport.delivery_uncertain)
+        self.assertFalse(self.transport.paused)
+        self.assertEqual(len(self._user_messages()), 0)  # nothing was composed
+        # No human resolution needed: the transport stays immediately usable.
+        await self.transport.send_message("follow-up works")
+        self.assertEqual(len(self._user_messages()), 1)
 
     # 20. manual fallback generation
     async def test_20_manual_fallback_generation(self):

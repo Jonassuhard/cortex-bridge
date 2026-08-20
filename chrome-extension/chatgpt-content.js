@@ -69,6 +69,75 @@
 
   const conversationId = () => location.pathname.match(/\/c\/([^/?#]+)/)?.[1] || null;
 
+  const WORK_SURFACE_SUFFIX = /,\s*work\s*$/i;
+
+  // ChatGPT now offers two surfaces behind the same /c/<id> URL scheme:
+  // classic Chat and Work. They can only be told apart in the DOM: a sidebar
+  // conversation link carries a ", Work" suffix in its accessible name, and
+  // the home page exposes a Chat/Work radiogroup. Cortex Bridge is restricted
+  // to classic Chat and must never compose on a Work surface.
+  const surfaceMode = () => {
+    const id = conversationId();
+    if (id) {
+      const selfLink = Array.from(
+        document.querySelectorAll("nav a[href^='/c/'], aside a[href^='/c/']"),
+      ).find((node) => (node.getAttribute("href") || "").includes(`/c/${id}`));
+      if (!selfLink) return "unknown";
+      const label = `${
+        selfLink.getAttribute("aria-label") || ""
+      } ${selfLink.getAttribute("title") || ""}`;
+      return WORK_SURFACE_SUFFIX.test(label.trim()) ? "work" : "chat";
+    }
+    const radios = Array.from(
+      document.querySelectorAll("[role=radiogroup] [role=radio]"),
+    );
+    if (radios.length > 0) {
+      const checked = radios.find((node) => (
+        node.getAttribute("aria-checked") === "true"
+        || node.dataset?.state === "checked"
+      ));
+      const name = (checked?.innerText || checked?.textContent || "")
+        .trim()
+        .toLowerCase();
+      if (name === "work") return "work";
+      if (name === "chat") return "chat";
+    }
+    return "unknown";
+  };
+
+  const ensureClassicChatSurface = async () => {
+    const mode = surfaceMode();
+    if (mode !== "work") return mode;
+    if (!conversationId()) {
+      // A brand-new chat may simply sit on the Work home: switch back to Chat.
+      const chatRadio = Array.from(
+        document.querySelectorAll("[role=radiogroup] [role=radio]"),
+      ).find((node) => (
+        (node.innerText || node.textContent || "").trim().toLowerCase() === "chat"
+      ));
+      if (chatRadio) {
+        chatRadio.click();
+        const deadline = Date.now() + 5_000;
+        while (Date.now() < deadline) {
+          if (
+            chatRadio.getAttribute("aria-checked") === "true"
+            || chatRadio.dataset?.state === "checked"
+          ) {
+            return "chat";
+          }
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+      }
+    }
+    throw Object.assign(
+      new Error(
+        "Cortex Bridge only operates on classic ChatGPT chats, never on Work surfaces",
+      ),
+      { code: "WORK_SURFACE_REJECTED" },
+    );
+  };
+
+
   const messages = () => Array.from(
     document.querySelectorAll("[data-message-author-role]"),
   ).map((node, index) => {
@@ -92,6 +161,7 @@
       conversation_id: conversationId(),
       title: document.title.replace(/\s*[-–—]\s*ChatGPT\s*$/i, "").trim() || "ChatGPT",
       blocker: blocker(),
+      surface: surfaceMode(),
       composer_present: Boolean(composer()),
       send_button_present: Boolean(sendButton()),
       stop_button_present: Boolean(stopButton()),
@@ -226,6 +296,7 @@
       return Array.from(seen.values()).slice(0, MAX_CONVERSATIONS);
     },
     async prepare_text(payload) {
+      await ensureClassicChatSurface();
       const target = composer();
       if (!target) throw Object.assign(new Error("ChatGPT composer not found"), { code: "COMPOSER_MISSING" });
       const normalizeComposerText = (value) => String(value || "").replace(/\s+/g, " ").trim();
@@ -305,7 +376,8 @@
       if (button) button.click();
       return { stopped: Boolean(button) };
     },
-    attachment_begin(payload) {
+    async attachment_begin(payload) {
+      await ensureClassicChatSurface();
       if (!payload.transfer_id || payload.size < 0 || payload.size > MAX_TRANSFER_BYTES) {
         throw Object.assign(new Error("Attachment exceeds the 25 MiB bridge limit"), { code: "ATTACHMENT_TOO_LARGE" });
       }
@@ -376,7 +448,8 @@
       }
       return { ok: false, error: "Attachment did not become ready" };
     },
-    send_bare() {
+    async send_bare() {
+      await ensureClassicChatSurface();
       const button = sendButton();
       if (!button || button.disabled) return { ok: false, error: "Send button unavailable" };
       button.click();

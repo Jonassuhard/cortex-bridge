@@ -963,6 +963,246 @@ test("a matching action-authorized screenshot is consumed exactly once", async (
   assert.equal(context.pendingCapture, null);
 });
 
+test("a screenshot falls back to a CDP capture without any icon click", async () => {
+  const url = "https://chatgpt.com/c/screenshot-fallback";
+  const chrome = chromeWithTabs([
+    { id: 32, windowId: 7, index: 1, url },
+  ]);
+  const debuggerCalls = { attach: [], sendCommand: [], detach: [] };
+  chrome.api.debugger = {
+    async attach(target, version) {
+      debuggerCalls.attach.push({ target, version });
+    },
+    async sendCommand(target, method, params) {
+      debuggerCalls.sendCommand.push({ target, method, params });
+      return { data: "aGVsbG8td29ybGQ=" };
+    },
+    async detach(target) {
+      debuggerCalls.detach.push(target);
+    },
+  };
+  const context = {
+    chrome: chrome.api,
+    cortexTab: { id: 31, windowId: 7, index: 0 },
+    sessionTabs: new Map([["cortex-conv-screenshot", 32]]),
+    pendingCapture: null,
+  };
+
+  const result = await routeCommand(context, {
+    session: "cortex-conv-screenshot",
+    action: "capture_screenshot",
+    payload: {},
+  });
+
+  assert.equal(result.tab_id, 32);
+  assert.equal(result.data_url, "data:image/png;base64,aGVsbG8td29ybGQ=");
+  assert.deepEqual(debuggerCalls.attach, [{ target: { tabId: 32 }, version: "1.3" }]);
+  assert.deepEqual(debuggerCalls.sendCommand, [{
+    target: { tabId: 32 },
+    method: "Page.captureScreenshot",
+    params: { format: "png" },
+  }]);
+  assert.deepEqual(debuggerCalls.detach, [{ tabId: 32 }]);
+});
+
+test("a stale action capture is discarded before the CDP fallback runs", async () => {
+  const url = "https://chatgpt.com/c/screenshot-stale";
+  const chrome = chromeWithTabs([
+    { id: 32, windowId: 7, index: 1, url },
+  ]);
+  chrome.api.debugger = {
+    async attach() {},
+    async sendCommand() {
+      return { data: "ZnJlc2gtY2FwdHVyZQ==" };
+    },
+    async detach() {},
+  };
+  const context = {
+    chrome: chrome.api,
+    cortexTab: { id: 31, windowId: 7, index: 0 },
+    sessionTabs: new Map([["cortex-conv-screenshot", 32]]),
+    pendingCapture: {
+      data_url: "data:image/png;base64,c3RhbGU=",
+      tab_id: 32,
+      url,
+      captured_at: Date.now() - 120_000,
+    },
+  };
+
+  const result = await routeCommand(context, {
+    session: "cortex-conv-screenshot",
+    action: "capture_screenshot",
+    payload: {},
+  });
+
+  assert.equal(result.data_url, "data:image/png;base64,ZnJlc2gtY2FwdHVyZQ==");
+  assert.equal(context.pendingCapture, null);
+});
+
+test("a debugger attach failure is reported as a capture failure", async () => {
+  const chrome = chromeWithTabs([
+    { id: 32, windowId: 7, index: 1, url: "https://chatgpt.com/c/screenshot-fail" },
+  ]);
+  chrome.api.debugger = {
+    async attach() {
+      throw new Error("Another debugger is already attached");
+    },
+    async sendCommand() {
+      throw new Error("must not be reached");
+    },
+    async detach() {},
+  };
+  const context = {
+    chrome: chrome.api,
+    cortexTab: { id: 31, windowId: 7, index: 0 },
+    sessionTabs: new Map([["cortex-conv-screenshot", 32]]),
+    pendingCapture: null,
+  };
+
+  await assert.rejects(
+    routeCommand(context, {
+      session: "cortex-conv-screenshot",
+      action: "capture_screenshot",
+      payload: {},
+    }),
+    (error) => error.code === "SCREENSHOT_CAPTURE_FAILED",
+  );
+});
+
+async function runSurfaceGuardAction({ pathname, links = [], radios = [], action = "prepare_text" }) {
+  const source = await readFile(join(EXTENSION_ROOT, "chatgpt-content.js"), "utf8");
+  let listener = null;
+  class FakeElement {
+    constructor({ href = null, ariaLabel = null, name = "", checked = "false" } = {}) {
+      this.href = href;
+      this.ariaLabel = ariaLabel;
+      this.innerText = name;
+      this.textContent = name;
+      this.checked = checked;
+      this.dataset = {};
+    }
+
+    getAttribute(name) {
+      if (name === "href") return this.href;
+      if (name === "aria-label") return this.ariaLabel;
+      if (name === "aria-checked") return this.checked;
+      return null;
+    }
+
+    click() {
+      this.checked = "true";
+    }
+  }
+  const sidebarLinks = links.map((link) => new FakeElement(link));
+  const radioNodes = radios.map((radio) => new FakeElement(radio));
+  const document = {
+    body: { innerText: "" },
+    title: "Surface Guard - ChatGPT",
+    querySelector() {
+      return null;
+    },
+    querySelectorAll(selector) {
+      if (selector === "nav a[href^='/c/'], aside a[href^='/c/']") return sidebarLinks;
+      if (selector === "[role=radiogroup] [role=radio]") return radioNodes;
+      return [];
+    },
+  };
+  const chrome = {
+    runtime: {
+      onMessage: {
+        addListener(callback) {
+          listener = callback;
+        },
+      },
+    },
+  };
+  runInNewContext(source, {
+    chrome,
+    document,
+    location: {
+      href: `https://chatgpt.com${pathname}`,
+      origin: "https://chatgpt.com",
+      pathname,
+    },
+    Element: FakeElement,
+    HTMLInputElement: class {},
+    URL,
+    Map,
+    Promise,
+    setTimeout,
+    clearTimeout,
+  });
+  assert.equal(typeof listener, "function");
+  return new Promise((resolve) => {
+    listener(
+      { source: "cortex-bridge-extension", action, payload: { text: "surface guard probe" } },
+      {},
+      (response) => resolve(response),
+    );
+  });
+}
+
+test("a Work conversation refuses any composer preparation", async () => {
+  const response = await runSurfaceGuardAction({
+    pathname: "/c/work-conversation",
+    links: [{ href: "/c/work-conversation", ariaLabel: "Quarterly report, Work" }],
+  });
+
+  assert.equal(response.ok, false);
+  assert.equal(response.error.code, "WORK_SURFACE_REJECTED");
+});
+
+test("a classic chat conversation stays writable", async () => {
+  const response = await runSurfaceGuardAction({
+    pathname: "/c/classic-conversation",
+    links: [{ href: "/c/classic-conversation", ariaLabel: "Weekend plans" }],
+  });
+
+  // The guard must not fire; the flow then fails later on the missing fake
+  // composer, which proves it went past the surface check.
+  assert.equal(response.ok, false);
+  assert.equal(response.error.code, "COMPOSER_MISSING");
+});
+
+test("the Work home switches back to Chat instead of composing there", async () => {
+  const chatRadio = { name: "Chat", checked: "false" };
+  const response = await runSurfaceGuardAction({
+    pathname: "/",
+    radios: [chatRadio, { name: "Work", checked: "true" }],
+  });
+
+  // The auto-switch clicked Chat (fake click flips aria-checked), the guard
+  // passed, and the flow then failed later on the missing fake composer.
+  assert.equal(response.ok, false);
+  assert.equal(response.error.code, "COMPOSER_MISSING");
+});
+
+test("the Work home is rejected when no Chat radio is available", async () => {
+  const response = await runSurfaceGuardAction({
+    pathname: "/",
+    radios: [{ name: "Work", checked: "true" }],
+  });
+
+  assert.equal(response.ok, false);
+  assert.equal(response.error.code, "WORK_SURFACE_REJECTED");
+});
+
+test("the surface guard is wired into every delivery-sensitive action", async () => {
+  const source = await readFile(join(EXTENSION_ROOT, "chatgpt-content.js"), "utf8");
+
+  assert.match(source, /const surfaceMode = \(\)/);
+  assert.match(source, /WORK_SURFACE_SUFFIX/);
+  assert.match(source, /surface: surfaceMode\(\)/);
+  const guarded = ["prepare_text", "attachment_begin", "send_bare"];
+  for (const action of guarded) {
+    assert.match(
+      source,
+      new RegExp(`async ${action}\\([\\s\\S]{0,120}?ensureClassicChatSurface\\(\\)`),
+      `${action} must call ensureClassicChatSurface first`,
+    );
+  }
+});
+
 test("uses a 20 second WebSocket heartbeat", () => {
   assert.equal(HEARTBEAT_INTERVAL_MS, 20_000);
 });
@@ -978,7 +1218,7 @@ test("manifest limits hosts and requires Chrome 116", async () => {
     "http://127.0.0.1:8420/*",
     "https://chatgpt.com/*",
   ]);
-  assert.deepEqual(manifest.permissions, ["activeTab", "scripting", "storage"]);
+  assert.deepEqual(manifest.permissions, ["activeTab", "debugger", "scripting", "storage"]);
   assert.equal(JSON.stringify(manifest).includes("<all_urls>"), false);
   assert.equal(JSON.stringify(manifest).includes("cookies"), false);
   assert.equal(JSON.stringify(manifest).includes("history"), false);

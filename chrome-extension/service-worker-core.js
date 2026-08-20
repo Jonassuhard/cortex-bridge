@@ -239,6 +239,44 @@ async function sendToContentScript(context, session, action, payload) {
   );
 }
 
+async function captureViaDebugger(chromeApi, tab) {
+  const debuggerApi = chromeApi.debugger;
+  if (!debuggerApi?.attach || !debuggerApi?.sendCommand) {
+    throw new ExtensionCommandError(
+      "SCREENSHOT_PERMISSION_REQUIRED",
+      "Click the Cortex Bridge extension icon on the ChatGPT tab, then retry within 60 seconds",
+    );
+  }
+  try {
+    await debuggerApi.attach({ tabId: tab.id }, "1.3");
+  } catch (error) {
+    throw new ExtensionCommandError(
+      "SCREENSHOT_CAPTURE_FAILED",
+      `Chrome debugger attach failed: ${String(error?.message || error)}`,
+    );
+  }
+  try {
+    const result = await debuggerApi.sendCommand(
+      { tabId: tab.id },
+      "Page.captureScreenshot",
+      { format: "png" },
+    );
+    if (typeof result?.data !== "string" || result.data.length === 0) {
+      throw new ExtensionCommandError(
+        "SCREENSHOT_CAPTURE_FAILED",
+        "Chrome debugger returned no screenshot data",
+      );
+    }
+    return `data:image/png;base64,${result.data}`;
+  } finally {
+    try {
+      await debuggerApi.detach({ tabId: tab.id });
+    } catch {
+      // Detach is best effort: Chrome drops the session with the tab anyway.
+    }
+  }
+}
+
 async function reserveTabAllocation(work) {
   const previous = tabAllocationTail;
   let release;
@@ -501,18 +539,20 @@ export async function routeCommand(context, command) {
     const tab = await boundTab(context, session);
     const capture = context.pendingCapture;
     const captureAge = Date.now() - Number(capture?.captured_at || 0);
-    if (
-      !capture
-      || typeof capture.data_url !== "string"
-      || !capture.data_url.startsWith("data:image/png;base64,")
-      || captureAge < 0
-      || captureAge > SCREENSHOT_CAPTURE_TTL_MS
-    ) {
+    const captureValid = Boolean(
+      capture
+      && typeof capture.data_url === "string"
+      && capture.data_url.startsWith("data:image/png;base64,")
+      && captureAge >= 0
+      && captureAge <= SCREENSHOT_CAPTURE_TTL_MS
+    );
+    if (!captureValid) {
       context.pendingCapture = null;
-      throw new ExtensionCommandError(
-        "SCREENSHOT_PERMISSION_REQUIRED",
-        "Click the Cortex Bridge extension icon on the ChatGPT tab, then retry within 60 seconds",
-      );
+      // No fresh toolbar-click authorization: fall back to an immediate CDP
+      // capture of the Cortex-bound tab (debugger permission), so unattended
+      // local automation never depends on a physical icon click.
+      const dataUrl = await captureViaDebugger(context.chrome, tab);
+      return { data_url: dataUrl, tab_id: tab.id };
     }
     if (comparableChatGPTUrl(capture.url) !== comparableChatGPTUrl(tab.url || tab.pendingUrl)) {
       throw new ExtensionCommandError(

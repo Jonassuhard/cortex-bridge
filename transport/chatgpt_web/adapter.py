@@ -59,6 +59,15 @@ STREAM_TIMEOUT = "STREAM_TIMEOUT"
 SELECTION_TIMEOUT = "SELECTION_TIMEOUT"
 SELECTION_FAILED = "SELECTION_FAILED"
 SELECTION_SUPERSEDED = "SELECTION_SUPERSEDED"
+WORK_SURFACE_REJECTED = "WORK_SURFACE_REJECTED"
+
+# Driver errors carrying these codes are definitive pre-delivery refusals:
+# nothing was composed or sent, so the delivery is NOT uncertain and the
+# transport must not pause (§13 pause is reserved for ambiguous outcomes).
+DEFINITIVE_PRE_DELIVERY_CODES = frozenset({
+    WORK_SURFACE_REJECTED,
+    "PRE_DELIVERY_NOT_READY",
+})
 
 DEFAULT_SELECTION_BUDGET = 10.0
 MAX_CONVERSATIONS = 50
@@ -876,6 +885,11 @@ class ChatGPTWebTransport:
         try:
             await self.driver.send_message(text)
         except DriverError as exc:
+            if getattr(exc, "code", None) in DEFINITIVE_PRE_DELIVERY_CODES:
+                message = str(exc)
+                if message.startswith(f"{exc.code}: "):
+                    message = message[len(exc.code) + 2 :]
+                raise TransportError(exc.code, message) from exc
             self.delivery_uncertain = True
             self.pause(DELIVERY_UNCERTAIN)
             raise TransportError(DELIVERY_UNCERTAIN, f"send may have failed: {exc}") from exc
