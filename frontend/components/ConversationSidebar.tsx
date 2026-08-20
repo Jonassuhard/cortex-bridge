@@ -133,7 +133,7 @@ export function ConversationSidebar({ conversations, selectedKey, loading, colla
       </nav>
       <button className="archived-button"><ArchiveIcon size={16} /><span>Conversations archivées</span></button>
       <div className="sidebar-bottom">
-        {onOpenHistory && <button className="settings-entry" onClick={onOpenHistory}><span className="settings-entry-icon"><ClockIcon /></span><span className="settings-entry-copy"><strong>Historique</strong><small>Missions et exécutions passées</small></span><ChevronDownIcon size={15} /></button>}
+        {onOpenHistory && <button className="history-entry" onClick={onOpenHistory}><span className="history-entry-icon"><ClockIcon /></span><span className="history-entry-copy"><strong>Historique</strong><small>Missions et exécutions passées</small></span><ChevronDownIcon size={15} /></button>}
         <button className="settings-entry" onClick={onOpenSettings}><span className="settings-entry-icon"><SettingsIcon /></span><span className="settings-entry-copy"><strong>Paramètres</strong><small>Modèles, permissions, transport</small></span><ChevronDownIcon size={15} /></button>
         <div className="account-row"><span className="account-avatar">CL</span><span><strong>Compte local</strong><small>Session locale</small></span></div>
       </div>

@@ -287,7 +287,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .show-more-button svg:last-child { margin-left: auto; transition: transform 160ms ease; }
 .archived-button { border-top: 1px solid var(--line); border-radius: 0; margin-top: 3px; }
 .sidebar-bottom { flex: 0 0 auto; margin-top: 7px; padding-top: 8px; border-top: 1px solid var(--line); }
-.settings-entry {
+.settings-entry,
+.history-entry {
   display: grid;
   grid-template-columns: 35px minmax(0,1fr) 16px;
   align-items: center;
@@ -301,11 +302,16 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   text-align: left;
   cursor: pointer;
 }
-.settings-entry:hover { background: rgba(255,255,255,.05); border-color: var(--line); }
-.settings-entry-icon { width: 34px; height: 34px; display: grid; place-items: center; background: rgba(255,255,255,.05); border: 1px solid var(--line); border-radius: 10px; }
-.settings-entry-copy { min-width: 0; display: flex; flex-direction: column; }
-.settings-entry-copy strong { font-size: 11px; }
-.settings-entry-copy small { color: var(--muted); font-size: 9px; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.settings-entry:hover,
+.history-entry:hover { background: rgba(255,255,255,.05); border-color: var(--line); }
+.settings-entry-icon,
+.history-entry-icon { width: 34px; height: 34px; display: grid; place-items: center; background: rgba(255,255,255,.05); border: 1px solid var(--line); border-radius: 10px; }
+.settings-entry-copy,
+.history-entry-copy { min-width: 0; display: flex; flex-direction: column; }
+.settings-entry-copy strong,
+.history-entry-copy strong { font-size: 11px; }
+.settings-entry-copy small,
+.history-entry-copy small { color: var(--muted); font-size: 9px; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .account-row { display: grid; grid-template-columns: 31px minmax(0,1fr); align-items: center; gap: 9px; padding: 9px 8px 2px; color: var(--muted); }
 .account-avatar { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 999px; background: linear-gradient(145deg, #1d4ed8, #38bdf8); color: #fff; font-size: 10px; font-weight: 700; }
 .account-row > span:last-child { display: flex; flex-direction: column; min-width: 0; }
@@ -783,7 +789,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .settings-footer > span { display: none; }
 }
 
-.conversation-subline, .assistant-message-head, .user-message-meta, .panel-eyebrow, .settings-entry-copy small, .preflight-facts dt, .preflight-facts dd { font-size: 12px; line-height: 1.4; }
+.conversation-subline, .assistant-message-head, .user-message-meta, .panel-eyebrow, .settings-entry-copy small, .history-entry-copy small, .preflight-facts dt, .preflight-facts dd { font-size: 12px; line-height: 1.4; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
