@@ -1,0 +1,48 @@
+# Cortex Bridge
+
+> Cortex Bridge is a local-first bridge that connects the ChatGPT web interface (classic chat, in your own Chrome session) to a deterministic local executor on macOS. It lets ChatGPT trigger local actions — shell commands, file operations, browser tasks — with human approval on every step, without any OpenAI API key.
+
+## What it does
+
+- Connects the ChatGPT **classic chat** tab (not Work/business chats) to a local control server at `http://127.0.0.1:8420`
+- Executes missions through a deterministic local executor with human-in-the-loop approvals
+- Runs fully local: no OpenAI API key required; Ollama is optional for local model routing
+- Ships a Chrome extension (Manifest V3) paired with the local server via a handshake protocol
+- Keeps a unified mission history (JSON run log + SQLite database)
+- Provides self-diagnostics: `scripts/cortex.sh doctor` checks server, extension pairing, workspace, and permissions
+- Auto-creates a stable default workspace at `~/cortex-workspaces`
+
+## Quick start
+
+1. Install dependencies: Git, Node.js, and optionally Ollama for local models
+2. Start the console: `scripts/cortex.sh start`
+3. Load the Chrome extension from `extension/` in `chrome://extensions` (developer mode)
+4. Open a ChatGPT classic chat tab — the extension pairs automatically
+5. Verify everything: `scripts/cortex.sh doctor` (5/5 checks should be ready)
+
+## Docs
+
+- [README.md](README.md): project overview, features, install summary
+- [INSTALL.md](INSTALL.md): full installation guide
+- [docs/fr/DEMARRAGE.md](docs/fr/DEMARRAGE.md): guide de démarrage (français)
+- [docs/fr/UTILISATION.md](docs/fr/UTILISATION.md): guide d'utilisation (français)
+- [docs/fr/DEPANNAGE.md](docs/fr/DEPANNAGE.md): dépannage (français)
+- [docs/architecture.md](docs/architecture.md): system architecture (server, extension, executor)
+- [docs/security-model.md](docs/security-model.md): security and approval model
+- [docs/testing.md](docs/testing.md): test suite and how to run it
+- [docs/troubleshooting.md](docs/troubleshooting.md): troubleshooting (English)
+- [CHANGELOG.md](CHANGELOG.md): release history
+
+## Key entry points
+
+- `scripts/cortex.sh` — CLI: `start`, `stop`, `status`, `doctor`, `logs`
+- `server/` — local control server (Node.js)
+- `extension/` — Chrome extension (Manifest V3)
+- `frontend/` — console UI
+- Control endpoint: `http://127.0.0.1:8420`
+
+## Notes
+
+- Cortex Bridge only operates on the ChatGPT **classic chat** surface, never on Work/business chats.
+- Every local action requires explicit human approval; nothing executes silently.
+- This is an independent, unofficial project — not affiliated with or endorsed by OpenAI.
