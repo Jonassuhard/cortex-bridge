@@ -4,7 +4,7 @@ Every item must link to evidence from one release commit. A previous branch or a
 
 ## Source and package
 
-- [x] `VERSION`, Python metadata, frontend package and lock all report `0.5.0`.
+- [x] `VERSION`, Python metadata, frontend package and lock all report `0.5.2`.
 - [x] Python lock is exact and hashed.
 - [x] npm lock and package-manager version are respected through Corepack.
 - [x] Two consecutive static builds have identical hashes.

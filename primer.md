@@ -54,8 +54,8 @@ so any new session starts from facts, not from memory.
 
 ## Quality gates (all green on main)
 
-- 426 backend tests, 127 frontend unit tests, 47 extension tests, 12 E2E + 4
-  accessibility tests, typecheck, lint, deterministic build, privacy,
+- 431 backend tests, 127 frontend unit tests, 56 extension tests, 12 E2E + 1
+  documented skip, 4 accessibility tests, typecheck, lint, deterministic build, privacy,
   release-evidence and secret scans.
 - CI: `.github/workflows/ci.yml` (backend, frontend, release-gates) plus the
   Public documentation workflow. Release evidence:

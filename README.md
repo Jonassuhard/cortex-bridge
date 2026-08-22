@@ -152,7 +152,7 @@ conversation switching in 1.8 s, and a synthetic attachment all passed — see
 prove technical behavior only; they do not lift the provider-terms conflict
 above and are not presented as provider-authorized acceptance.
 
-See [release evidence](docs/verification/v0.5.0.json) for the automated gates.
+See [release evidence](docs/verification/v0.5.2.json) for the automated gates.
 An officially supported transport remains the only route to a provider-
 authorized live release.
 

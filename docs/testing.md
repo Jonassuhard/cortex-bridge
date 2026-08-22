@@ -83,8 +83,10 @@ it to `PASS`.
 
 ## Release evidence
 
-Validate `docs/verification/v0.5.0.json` with:
+Validate the evidence selected from the canonical `VERSION` file with:
 
 ```bash
-./scripts/verify-release-evidence.py docs/verification/v0.5.0.json
+./scripts/verify-release-evidence.py
 ```
+
+Pass an explicit manifest path only when auditing historical evidence.
