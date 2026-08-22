@@ -1,6 +1,6 @@
 # Cortex Bridge v0.5 verification map
 
-This file maps release-evidence counters to executable tests. The machine-readable result is `v0.5.0.json`.
+This archived file maps release-evidence counters to executable tests. The machine-readable result is `release-evidence.json` in the same directory.
 
 ## Automated suites
 
@@ -66,4 +66,4 @@ paths or logs are never committed.
 
 ## Commit convention
 
-The `commit` field in `v0.5.0.json` identifies the audited source commit. The manifest may be committed immediately afterward because a file cannot contain the hash of the commit that contains itself. A release tag should include both by pointing to the evidence commit whose first parent is the audited source commit.
+The `commit` field in `release-evidence.json` identifies the audited source commit. The manifest may be committed immediately afterward because a file cannot contain the hash of the commit that contains itself. A release tag should include both by pointing to the evidence commit whose first parent is the audited source commit.

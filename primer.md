@@ -1,6 +1,6 @@
 # Cortex Bridge session primer
 
-Current state as of 2026-08-22. This file is rewritten at each release close
+Current state as of 2026-08-23. This file is rewritten at each release close
 so any new session starts from facts, not from memory.
 
 ## Repository
@@ -14,8 +14,9 @@ so any new session starts from facts, not from memory.
   (simple onboarding, unified history, clear UI states, PR #3).
 - Merged topic branches are deleted after merge; only `main` lives on the
   remote. Work happens in short-lived branches or disposable worktrees.
-- Current closeout work is on `codex/v052-proof-closeout`; `main` remains at
-  `edd8554` until the owner explicitly approves integration.
+- The v0.5.2 closeout is integrated into `main`. Historical v0.5.0 release
+  documents are kept under `docs/archive/v0.5.0/`; signed tags and GitHub
+  releases remain available for traceability.
 - Commits are signed with the owner's GitHub identity. Older commits signed
   `Cortex Bridge <cortex-bridge@localhost>` are historical; see
   CONTRIBUTING.md.
@@ -54,7 +55,7 @@ so any new session starts from facts, not from memory.
   personal handle) must never enter the tree — that is why README badges are
   username-free and llms.txt uses relative links only.
 
-## Quality gates (all green on the closeout branch)
+## Quality gates (all green on `main`)
 
 - 434 backend tests, 127 frontend unit tests, 56 extension tests, 12 E2E + 1
   documented skip, 4 accessibility tests, typecheck, lint, deterministic build, privacy,

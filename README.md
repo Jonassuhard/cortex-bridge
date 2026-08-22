@@ -139,6 +139,7 @@ Full instructions:
 - [Testing](docs/testing.md)
 - [Security model](docs/security-model.md)
 - [Troubleshooting](docs/troubleshooting.md)
+- [Archived releases](docs/archive/README.md)
 
 ## Verification boundary
 
