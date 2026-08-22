@@ -20,6 +20,12 @@ mission protocol ----> deterministic executor / optional Ollama ----> workspace
 The Chrome extension is the default product transport. Playwright is an
 explicit development and fixture transport, never a silent fallback.
 
+> Historical note: an `orchestrator/` directory of design-stage notes for a
+> future official-API transport existed up to v0.5.1. It was never wired into
+> the runtime and was removed in v0.5.2; the content remains available in git
+> history. The implemented paths are `chrome-extension/` + `transport/` for
+> the browser transport and `orchestration/` for the execution state machine.
+
 ## Components
 
 ### `chrome-extension/`
