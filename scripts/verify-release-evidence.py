@@ -58,7 +58,8 @@ class EvidenceValidator:
     def validate(self) -> set[tuple[str, str]]:
         if self.get("schemaVersion") != 1:
             self.report("schema_version", "schemaVersion")
-        if self.get("release") != "0.5.0":
+        canonical = (REPO_ROOT / "VERSION").read_text(encoding="utf-8").strip()
+        if self.get("release") != canonical:
             self.report("release_version", "release")
         commit = self.get("commit")
         if not isinstance(commit, str) or not HEX40_RE.fullmatch(commit):
@@ -362,7 +363,7 @@ def main() -> int:
     if findings:
         print(f"[release-evidence] FAILED findings={len(findings)}")
         return 1
-    print("[release-evidence] PASS release=0.5.0")
+    print(f"[release-evidence] PASS release={payload.get('release')}")
     return 0
 
 

@@ -2,33 +2,10 @@
 
 All notable changes are recorded here.
 
-## Unreleased
+## 0.5.2 - 2026-08-20
 
 ### Added
 
-- Classic-Chat-only surface guard: ChatGPT now exposes two surfaces (classic
-  Chat and Work) behind the same `/c/<id>` URL scheme, distinguishable only in
-  the DOM (", Work" suffix on the sidebar self-link, Chat/Work radiogroup on
-  the home page). Every delivery-sensitive action (`prepare_text`,
-  `attachment_begin`, `send_bare`) now fails closed with
-  `WORK_SURFACE_REJECTED` on a Work surface, and a brand-new chat started on
-  the Work home automatically switches back to the Chat radio. The current
-  surface is reported as `surface` in `probe` and state payloads so drift is
-  visible to the DOM probe. Validated live: a Work conversation refused
-  delivery while a classic chat completed end to end.
-- Click-free screenshot capture: when no fresh toolbar-click authorization
-  (`pendingCapture`) is available, `capture_screenshot` now falls back to an
-  immediate CDP capture of the Cortex-bound tab via the `debugger` permission
-  (`Page.captureScreenshot`), so unattended local automation never depends on
-  a physical icon click. The toolbar-click path remains primary and its
-  60-second same-conversation scope is unchanged; the debugger session is
-  detached immediately after capture. Validated live: ChatGPT confirmed it
-  received the captured image.
-- Explicit contractual-risk opt-in control in Settings → Transport: the bridge
-  is labeled as not authorized by OpenAI, with the account-suspension risk
-  stated in French before activation (the opt-in API existed without any UI).
-- Live QA evidence document `docs/verification/v1-live-qa-2026-08-15.md` and a
-  local-models restore plan `docs/local-models.md`.
 - One-command owner experience: `Cortex Bridge.command` starts the console and
   opens the UI by double-click, `scripts/install-autostart.sh` installs an
   optional login LaunchAgent, `scripts/install-extension.sh` opens
@@ -62,6 +39,55 @@ All notable changes are recorded here.
 
 ### Fixed
 
+- `scripts/cortex.sh status` now reports the real owner of the listening port
+  (pid + command) in French, and automatically cleans a stale pid record when
+  both the recorded process and the listener are gone — `status` and `doctor`
+  can no longer disagree about which instance is actually serving. Found and validated by a live mini-site mission.
+
+## 0.5.1 - 2026-08-20
+
+### Added
+
+- Classic-Chat-only surface guard: ChatGPT now exposes two surfaces (classic
+  Chat and Work) behind the same `/c/<id>` URL scheme, distinguishable only in
+  the DOM (", Work" suffix on the sidebar self-link, Chat/Work radiogroup on
+  the home page). Every delivery-sensitive action (`prepare_text`,
+  `attachment_begin`, `send_bare`) now fails closed with
+  `WORK_SURFACE_REJECTED` on a Work surface, and a brand-new chat started on
+  the Work home automatically switches back to the Chat radio. The current
+  surface is reported as `surface` in `probe` and state payloads so drift is
+  visible to the DOM probe. Validated live: a Work conversation refused
+  delivery while a classic chat completed end to end.
+- Click-free screenshot capture: when no fresh toolbar-click authorization
+  (`pendingCapture`) is available, `capture_screenshot` now falls back to an
+  immediate CDP capture of the Cortex-bound tab via the `debugger` permission
+  (`Page.captureScreenshot`), so unattended local automation never depends on
+  a physical icon click. The toolbar-click path remains primary and its
+  60-second same-conversation scope is unchanged; the debugger session is
+  detached immediately after capture. Validated live: ChatGPT confirmed it
+  received the captured image.
+- Explicit contractual-risk opt-in control in Settings → Transport: the bridge
+  is labeled as not authorized by OpenAI, with the account-suspension risk
+  stated in French before activation (the opt-in API existed without any UI).
+- Live QA evidence document `docs/verification/v1-live-qa-2026-08-15.md` and a
+  local-models restore plan `docs/local-models.md`.
+
+### Changed
+
+- Public status wording: the project is presented as an opt-in technical
+  preview with an explicit non-authorization and account-risk notice, instead
+  of a permanently blocked preview.
+- Live acceptance now covers: deletion sync (ChatGPT → Cortex), three
+  disposable mini-site missions verified by `scripts/acceptance-mini-site.py`
+  (one axe contrast finding self-corrected by a follow-up mission), a
+  self-diagnostic mission that queries the service's own loopback APIs through
+  approved `run_process` calls, the isolated macOS install/doctor/service/
+  reinstall/uninstall lifecycle with a foreign-sentinel check, and a fresh
+  local-models gate (granite4.1:8b primary + qwen3.5:9b fallback on an external
+  volume, fresh 10/10 benchmark).
+
+### Fixed
+
 - A definitive pre-delivery refusal from the driver (`WORK_SURFACE_REJECTED`,
   `PRE_DELIVERY_NOT_READY`) now surfaces with its own clean code instead of
   being wrapped as `DELIVERY_UNCERTAIN` and pausing the transport: nothing was
@@ -78,24 +104,6 @@ All notable changes are recorded here.
   `cortex-decision` form, because ChatGPT's DOM rendering strips code fences
   from the extracted text; embedded or repeated blocks remain protocol
   violations.
-- `scripts/cortex.sh status` now reports the real owner of the listening port
-  (pid + command) in French, and automatically cleans a stale pid record when
-  both the recorded process and the listener are gone — `status` and `doctor`
-  can no longer disagree about which instance is actually serving. Found and validated by a live mini-site mission.
-
-### Changed
-
-- Public status wording: the project is presented as an opt-in technical
-  preview with an explicit non-authorization and account-risk notice, instead
-  of a permanently blocked preview.
-- Live acceptance now covers: deletion sync (ChatGPT → Cortex), three
-  disposable mini-site missions verified by `scripts/acceptance-mini-site.py`
-  (one axe contrast finding self-corrected by a follow-up mission), a
-  self-diagnostic mission that queries the service's own loopback APIs through
-  approved `run_process` calls, the isolated macOS install/doctor/service/
-  reinstall/uninstall lifecycle with a foreign-sentinel check, and a fresh
-  local-models gate (granite4.1:8b primary + qwen3.5:9b fallback on an external
-  volume, fresh 10/10 benchmark).
 
 
 ## 0.5.0 - release candidate

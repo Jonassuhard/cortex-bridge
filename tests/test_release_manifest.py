@@ -17,7 +17,7 @@ VALIDATOR = REPO_ROOT / "scripts" / "verify-release-evidence.py"
 def valid_payload() -> dict[str, object]:
     return {
         "schemaVersion": 1,
-        "release": "0.5.0",
+        "release": "0.5.2",
         "commit": "1" * 40,
         "generatedAt": "2026-07-29T12:00:00Z",
         "environment": {
