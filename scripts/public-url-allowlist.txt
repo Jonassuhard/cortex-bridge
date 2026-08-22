@@ -14,6 +14,9 @@ https://github.com/aaif-goose/goose
 https://github.com/browser-use/browser-use
 https://github.com/openai/codex
 https://github.com/openinterpreter/openinterpreter
+https://img.shields.io/badge/license-MIT-green.svg
+https://img.shields.io/badge/platform-macOS-lightgrey.svg
+https://img.shields.io/badge/version-0.5.2-blue.svg
 https://nodejs.org/en/download
 https://ollama.com/download/mac
 https://openai.com/policies/eu-terms-of-use/

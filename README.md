@@ -1,5 +1,9 @@
 # Cortex Bridge
 
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Version](https://img.shields.io/badge/version-0.5.2-blue.svg)](CHANGELOG.md)
+[![Platform](https://img.shields.io/badge/platform-macOS-lightgrey.svg)](INSTALL.md)
+
 ![Cortex Bridge — local-first ChatGPT automation banner](docs/media/hero-banner.png)
 
 **Automate ChatGPT from your Mac — no OpenAI API key, no cloud agent.**
@@ -28,6 +32,22 @@ capabilities, approvals, and limits.
 ![Animated Cortex Bridge architecture](docs/media/architecture-flow.gif)
 
 [Static architecture image](docs/media/architecture-flow.png)
+
+## Interface tour
+
+Synthetic captures of the real console at the 1440 px reference viewport —
+no personal data, ever (every published image passes OCR and metadata scans):
+
+| Onboarding | Execution preflight |
+|---|---|
+| ![Onboarding](docs/screenshots/v0.5.0/1440/01-onboarding.png) | ![Preflight](docs/screenshots/v0.5.0/1440/04-preflight.png) |
+
+| Two isolated conversations | Run with evidence |
+|---|---|
+| ![Two conversations](docs/screenshots/v0.5.0/1440/06-deux-conversations.png) | ![Execution](docs/screenshots/v0.5.0/1440/05-execution.png) |
+
+The full set (12 screens × 3 viewports) lives in
+[`docs/screenshots/v0.5.0/`](docs/screenshots/v0.5.0/).
 
 ## Démarrage rapide (FR)
 
