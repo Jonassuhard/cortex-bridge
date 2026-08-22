@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "release": "0.5.2",
-  "commit": "7d90c347317faa263ee9f6a50a9851b574dccf9f",
-  "generatedAt": "2026-08-22T19:12:00Z",
+  "commit": "44d2768e1b00673e57c217e3f25d9010dd5b19b5",
+  "generatedAt": "2026-08-22T21:54:29Z",
   "environment": {
     "os": "macOS 26.5.1",
     "python": "3.12.14 (.venv)",
@@ -13,7 +13,7 @@
   },
   "suites": {
     "backend": {
-      "passed": 431,
+      "passed": 434,
       "failed": 0,
       "skipped": 0
     },
@@ -76,7 +76,7 @@
       "fileUpload": true,
       "screenshotUpload": true,
       "personalDataRecorded": false,
-      "notes": "screenshotUpload validated end-to-end on 2026-08-17 (run fdc849ccd85c4599bc20e76ff90161ea): a real PNG of the ChatGPT tab was captured, uploaded and sent into the target conversation; ChatGPT began image analysis ('Analyse en cours sur image'). The capture ran through a temporary broadened-permission debug build because macOS Accessibility was not granted for synthetic input and Chrome forbids programmatic action clicks; the production click -> activeTab -> pendingCapture path is covered by the extension unit suite. The final assistant reply was unavailable due to the account usage limit, which is unrelated to the transport pipeline."
+      "notes": "Production-extension screenshot capture passed end-to-end on 2026-08-22 through the shipped debugger/CDP fallback with the paired protocol-v2 extension and no broadened debug build: the final run captured a fresh ChatGPT home, uploaded the PNG, sent it into a new classic chat, recorded a canonical /c/ lock and received a non-empty assistant response (delivery 12374 ms, first response 12380 ms, total 28353 ms). An earlier attempt correctly exposed two real regressions: stale previous-chat paint could satisfy new-chat readiness, and attachment-only sends did not capture the canonical lock. Both were fixed at commit 44d2768e1b00673e57c217e3f25d9010dd5b19b5 with failing-first tests before the passing rerun. The rejected raw artifact was quarantined outside Git; only a mechanically redacted local QA proof was retained, and no account data entered the public tree."
     },
     "cleanMacosLifecycle": {
       "status": "PASS",

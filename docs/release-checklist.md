@@ -58,6 +58,7 @@ Every item must link to evidence from one release commit. A previous branch or a
 - [x] Ten cold dual-conversation runs pass.
 - [x] Six crash points recover without duplicate send or execution.
 - [x] Self-diagnostic mission runs in a disposable worktree and does not merge itself (2026-08-22, see `docs/verification/self-diagnostic-2026-08-22.md`).
+- [x] The production Chrome extension captures a fresh ChatGPT home, uploads the PNG, records the canonical new-chat lock and receives a visible response (2026-08-22, see `docs/verification/v0.5.2.json`).
 - [ ] A provider-authorized transport passes every live ChatGPT and mini-site gate.
 - [x] The consumer-site terms blocker is explicit and cannot be overridden by owner approval.
 - [x] `docs/verification/v0.5.2.json` matches the audited source commit and artifact hashes with the owner-assumed `OPT_IN_TECHNICAL_PREVIEW` verdict (the provider-terms conflict stays documented; owner approval does not lift it).

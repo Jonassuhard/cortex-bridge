@@ -14,6 +14,8 @@ so any new session starts from facts, not from memory.
   (simple onboarding, unified history, clear UI states, PR #3).
 - Merged topic branches are deleted after merge; only `main` lives on the
   remote. Work happens in short-lived branches or disposable worktrees.
+- Current closeout work is on `codex/v052-proof-closeout`; `main` remains at
+  `edd8554` until the owner explicitly approves integration.
 - Commits are signed with the owner's GitHub identity. Older commits signed
   `Cortex Bridge <cortex-bridge@localhost>` are historical; see
   CONTRIBUTING.md.
@@ -52,9 +54,9 @@ so any new session starts from facts, not from memory.
   personal handle) must never enter the tree — that is why README badges are
   username-free and llms.txt uses relative links only.
 
-## Quality gates (all green on main)
+## Quality gates (all green on the closeout branch)
 
-- 431 backend tests, 127 frontend unit tests, 56 extension tests, 12 E2E + 1
+- 434 backend tests, 127 frontend unit tests, 56 extension tests, 12 E2E + 1
   documented skip, 4 accessibility tests, typecheck, lint, deterministic build, privacy,
   release-evidence and secret scans.
 - CI: `.github/workflows/ci.yml` (backend, frontend, release-gates) plus the
@@ -62,10 +64,12 @@ so any new session starts from facts, not from memory.
   `docs/verification/v0.5.2.json` (validated in CI by
   `scripts/verify-release-evidence.py`; the validator reads the canonical
   `VERSION`).
-- Known honest gap: the real screenshot capture was validated live through a
-  temporary broadened-permission debug build; the production
-  click → activeTab → pendingCapture path is covered by unit/E2E tests, not
-  by that same live run. Recorded in the release evidence notes.
+- Production capture closure: the paired protocol-v2 extension passed a real
+  debugger/CDP screenshot, PNG upload, canonical new-chat lock and visible
+  response on 2026-08-22. The first attempt exposed stale previous-chat paint
+  and a missing attachment-only canonical lock; both received failing-first
+  regression tests and were fixed before the passing rerun. Raw rejected
+  media stays quarantined outside Git; only redacted QA evidence is retained.
 
 ## Local runtime state
 

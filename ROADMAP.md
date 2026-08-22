@@ -11,8 +11,9 @@ Public, best-effort roadmap. Dates are indicative; scope beats schedule.
       capture, contractual-risk opt-in control.
 - [x] v0.5.2 — one-command onboarding, French guides, unified mission
       history, clear paused/limit states, stable default workspace.
-- [ ] Real-production-extension live capture E2E (currently covered by unit
-      and E2E suites plus a documented debug-build live run).
+- [x] Real-production-extension live capture E2E (2026-08-22: production
+      debugger/CDP capture, PNG upload, canonical new-chat lock and visible
+      response; stale-paint and attachment-lock regressions fixed first).
 - [ ] External tester feedback round (5 macOS testers — see
       `docs/launch-strategy.md`).
 
