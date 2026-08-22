@@ -104,7 +104,7 @@ jobs:
       - name: Run release scanner unit contracts
         run: python -m unittest tests.test_public_privacy tests.test_verify_links tests.test_acceptance_harness tests.test_release_manifest -v
       - name: Validate release evidence and artifact hashes
-        run: python scripts/verify-release-evidence.py docs/verification/v0.5.2.json
+        run: python scripts/verify-release-evidence.py
       - name: Run shell and secret gates
         run: |
           shellcheck scripts/*.sh scripts/npmw executor/scripts/*.sh

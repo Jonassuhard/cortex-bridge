@@ -344,11 +344,16 @@ class EvidenceValidator:
         return self.findings
 
 
+def default_manifest_path(repo_root: Path = REPO_ROOT) -> Path:
+    version = (repo_root / "VERSION").read_text(encoding="utf-8").strip()
+    return repo_root / "docs" / "verification" / f"v{version}.json"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("manifest")
+    parser.add_argument("manifest", nargs="?")
     args = parser.parse_args()
-    path = Path(args.manifest)
+    path = Path(args.manifest) if args.manifest else default_manifest_path()
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):

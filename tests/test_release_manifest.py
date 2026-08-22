@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -151,6 +152,37 @@ class ReleaseManifestTest(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("PASS", result.stdout)
+
+    def test_default_manifest_follows_canonical_version(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            version = "9.9.9"
+            scripts = root / "scripts"
+            verification = root / "docs" / "verification"
+            scripts.mkdir(parents=True)
+            verification.mkdir(parents=True)
+            shutil.copy2(VALIDATOR, scripts / VALIDATOR.name)
+            (root / "VERSION").write_text(f"{version}\n", encoding="utf-8")
+            payload = valid_payload()
+            payload["release"] = version
+            payload["artifacts"] = {
+                "VERSION": hashlib.sha256((root / "VERSION").read_bytes()).hexdigest()
+            }
+            (verification / f"v{version}.json").write_text(
+                json.dumps(payload),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                ["python3", str(scripts / VALIDATOR.name)],
+                cwd=root,
+                text=True,
+                capture_output=True,
+                timeout=15,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(f"PASS release={version}", result.stdout)
 
     def test_missing_required_metric_is_rejected(self) -> None:
         payload = valid_payload()
