@@ -222,4 +222,5 @@ docs/              Architecture, user, security and release documentation
 
 ## Contributing and license
 
-Read [CONTRIBUTING.md](CONTRIBUTING.md). MIT license; see [LICENSE](LICENSE).
+Read [CONTRIBUTING.md](CONTRIBUTING.md) and the public [ROADMAP.md](ROADMAP.md).
+MIT license; see [LICENSE](LICENSE).

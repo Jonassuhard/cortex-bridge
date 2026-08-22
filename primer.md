@@ -1,72 +1,77 @@
 # Cortex Bridge session primer
 
-- Active project: Cortex Bridge v0.5 release candidate on
-  `codex/v050-release-qa`; existing delivery is pull request #1.
-- Product rule: the intended product uses the real signed-in Chrome profile
-  through the local unpacked extension. It never substitutes the OpenAI API or
-  a separate browser profile without an explicit product decision.
-- Provider blocker: the OpenAI Europe Terms of Use updated January 16, 2026
-  prohibit automatic or programmatic extraction of data or Output. The v0.5
-  consumer adapter performs that extraction. Owner approval cannot turn this
-  route into compliant release acceptance, so no further authenticated sends
-  or `READY` verdict are allowed under the current design.
-- Official transport research: ChatGPT developer-mode plugins can call an MCP
-  server through a public HTTPS endpoint or Secure MCP Tunnel. The private
-  tunnel requires Platform permissions and a runtime API key. Neither route
-  preserves the current strict-local/no-API-credential constraint, so adopting
-  one is an explicit product architecture change.
-- Privacy rule: any technical observation uses neutral synthetic markers.
-  Never publish account details, sidebar titles, conversation contents,
-  conversation IDs, cookies, logs, or unredacted live captures.
-- Current source fixes content-script recovery, exact delivery confirmation,
-  dedicated reusable writer tabs, two-writer isolation, direct target-tab
-  creation, attachments, one-shot screenshots, protocol attestation, frontend
-  reload recovery, navigation deadlines and French UI state.
-- Chrome navigation now returns when Chrome accepts the requested target. It no
-  longer waits for `pendingUrl`, which Chrome does not guarantee with Cortex's
-  minimal permissions; composer readiness remains a separate backend check.
-- A stale second extension can no longer corrupt the status of an active valid
-  pairing.
-- Process ownership now treats a timed-out listener probe as structured
-  `unknown` and refuses start/stop actions. It never crashes or signals an
-  unverified process.
-- Release evidence now hashes real repository artifacts instead of accepting
-  any well-formed fake digest.
-- Fresh complete gate passed: 417 backend tests, 44 extension tests, 125
-  frontend unit tests, 35 frontend contracts, typecheck, lint, production
-  build, 12 E2E tests with one documented skip, 4 accessibility tests, runtime
-  verification, privacy and release-evidence validation.
-- Final synthetic performance: cached usability 145.9 ms; ten-switch p95 and
-  maximum 74.9 ms.
-- Static gates passed: ShellCheck, Gitleaks, npm/Python audits, 71 documentation
-  links including 32 external, and privacy over 293 files and 41 images.
-- The August 10 publication gate found and fixed a new high-severity `nanoid`
-  advisory by pinning the compatible patched 3.3.18 release. It also fixed the
-  test runner so a relative `PYTHON=.venv/bin/python` remains valid inside the
-  frontend subshell, with a red/green regression contract.
-- Earlier owner-authorized Chrome observations are historical technical data,
-  not compliant release acceptance. The latest new-chat attempt failed at the
-  10-second navigation deadline before the final no-wait extension fix was
-  loaded; it must not be reported as passed or retried while the provider
-  blocker remains.
-- The source extension and the local desktop deployment copy are synchronized.
-  The latest service-worker reload was not confirmed before the provider block
-  stopped live testing.
-- Cortex and the controlled Chrome QA session are stopped. No test server is
-  expected on loopback port 8420.
-- Fresh isolated install dry run target:
-  `/private/tmp/cortex-v050-clean-20260806`; plan hash
-  `952ac88a626737d69fe38ec2fe5bb1dcca6ab69df466e8df4314b64ab30fac90`;
-  300 MiB estimate, no sudo. Apply, doctor, start/stop, reinstall and uninstall
-  require explicit approval of that exact hash.
-- Source commit `4c2e22342b414e8641ff7582a51511591b05946d` contains the
-  hardened bridge, dependency patch and release gates.
-  `docs/verification/v0.5.0.json` references that exact commit, real artifact
-  hashes and the truthful
-  `RELEASE_BLOCKED_BY_PROVIDER_TERMS` verdict.
-- The user explicitly requested publication of the current branch. Publication
-  is limited to a blocked technical-preview PR: no merge, tag, GitHub release or
-  social publication is authorized.
-- Publication contract: push `codex/v050-release-qa` without force, replace the
-  stale PR claims with the truthful blocked evidence, keep the PR in draft and
-  verify the remote SHA and checks.
+Current state as of 2026-08-22. This file is rewritten at each release close
+so any new session starts from facts, not from memory.
+
+## Repository
+
+- Public repo `cortex-bridge`, default branch `main`, version **0.5.2**
+  (`VERSION` is the canonical source; pyproject, npm package + lock, Chrome
+  manifest and installer metadata must match — enforced by
+  `tests/test_version_consistency.py`).
+- Release line: v0.3.0 (first public) → v0.5.0 (release candidate, merged PR
+  #1) → v0.5.1 (classic-chat guard + click-free CDP capture, PR #2) → v0.5.2
+  (simple onboarding, unified history, clear UI states, PR #3).
+- Merged topic branches are deleted after merge; only `main` lives on the
+  remote. Work happens in short-lived branches or disposable worktrees.
+- Commits are signed with the owner's GitHub identity. Older commits signed
+  `Cortex Bridge <cortex-bridge@localhost>` are historical; see
+  CONTRIBUTING.md.
+
+## Product rules (unchanged)
+
+- The intended product uses the real signed-in Chrome profile through the
+  local unpacked extension. It never substitutes the OpenAI API or a separate
+  browser profile without an explicit product decision.
+- Cortex writes **only** on the ChatGPT classic-chat surface. The Work
+  surface is refused closed (`WORK_SURFACE_REJECTED`).
+- Every local action requires explicit human approval; nothing executes
+  silently.
+
+## Provider conflict (standing, documented, owner-assumed)
+
+- The OpenAI Terms of Use prohibit automatic or programmatic extraction. The
+  consumer-site transport conflicts with that text. The project is published
+  as an **opt-in technical preview**: the UI states the non-authorization and
+  the account-suspension risk in French before activation, and the README
+  carries the same notice. Owner approval does not lift the conflict; it is
+  assumed personally by the owner.
+- A compliant path would be an official transport (developer-mode plugin →
+  public HTTPS MCP endpoint or Secure MCP Tunnel). Both require Platform
+  permissions and credentials; adopting one is an explicit architecture
+  change tracked in ROADMAP.md, not a fallback.
+
+## Privacy rule (unchanged)
+
+- Any technical observation uses neutral synthetic markers. Never publish
+  account details, sidebar titles, conversation contents, conversation IDs,
+  cookies, logs, or unredacted live captures.
+- The public tree is gated by `scripts/check-public-privacy.sh` (markers,
+  fingerprints, URL allowlist, image EXIF + OCR). Personal names, local
+  usernames, external-drive names and the repo's own URL (it embeds a
+  personal handle) must never enter the tree — that is why README badges are
+  username-free and llms.txt uses relative links only.
+
+## Quality gates (all green on main)
+
+- 426 backend tests, 127 frontend unit tests, 47 extension tests, 12 E2E + 4
+  accessibility tests, typecheck, lint, deterministic build, privacy,
+  release-evidence and secret scans.
+- CI: `.github/workflows/ci.yml` (backend, frontend, release-gates) plus the
+  Public documentation workflow. Release evidence:
+  `docs/verification/v0.5.2.json` (validated in CI by
+  `scripts/verify-release-evidence.py`; the validator reads the canonical
+  `VERSION`).
+- Known honest gap: the real screenshot capture was validated live through a
+  temporary broadened-permission debug build; the production
+  click → activeTab → pendingCapture path is covered by unit/E2E tests, not
+  by that same live run. Recorded in the release evidence notes.
+
+## Local runtime state
+
+- Console: `scripts/cortex.sh start|status|doctor|stop`; UI on
+  `http://127.0.0.1:8420`. Default workspace: `~/cortex-workspaces`
+  (auto-created, stable).
+- Runtime state lives under `CORTEX_HOME`, not in the repo.
+- Ollama is optional and lives on an external volume; the deterministic
+  executor is the always-available default.
