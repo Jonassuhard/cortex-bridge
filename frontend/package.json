@@ -51,7 +51,7 @@
     "@types/react-dom": "^19",
     "@vitest/coverage-v8": "4.1.10",
     "axe-core": "4.12.1",
-    "jsdom": "26.1.0",
+    "jsdom": "30.0.1",
     "oxlint": "1.75.0",
     "tailwindcss": "^4",
     "tsx": "4.20.6",
