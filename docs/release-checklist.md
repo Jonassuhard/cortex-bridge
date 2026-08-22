@@ -44,7 +44,7 @@ Every item must link to evidence from one release commit. A previous branch or a
 ## Public tree
 
 - [x] README and public docs are English; application labels remain French.
-- [ ] Every documented command was executed on the release candidate.
+- [x] Every documented command was executed on the release candidate (2026-08-22 lifecycle run, see `docs/verification/self-diagnostic-2026-08-22.md`).
 - [x] Relative, anchor and external links pass.
 - [x] Current tree passes personal-marker, path, URL and secret scans.
 - [x] Public binaries are known formats.
@@ -57,15 +57,15 @@ Every item must link to evidence from one release commit. A previous branch or a
 - [x] 20 consecutive fixture missions pass without retry masking.
 - [x] Ten cold dual-conversation runs pass.
 - [x] Six crash points recover without duplicate send or execution.
-- [ ] Self-diagnostic mission runs in a disposable worktree and does not merge itself.
+- [x] Self-diagnostic mission runs in a disposable worktree and does not merge itself (2026-08-22, see `docs/verification/self-diagnostic-2026-08-22.md`).
 - [ ] A provider-authorized transport passes every live ChatGPT and mini-site gate.
 - [x] The consumer-site terms blocker is explicit and cannot be overridden by owner approval.
-- [x] `docs/verification/v0.5.0.json` matches the audited source commit and artifact hashes with the owner-assumed `OPT_IN_TECHNICAL_PREVIEW` verdict (the provider-terms conflict stays documented; owner approval does not lift it).
+- [x] `docs/verification/v0.5.2.json` matches the audited source commit and artifact hashes with the owner-assumed `OPT_IN_TECHNICAL_PREVIEW` verdict (the provider-terms conflict stays documented; owner approval does not lift it).
 
 ## External actions
 
-- [ ] Owner approves history policy.
-- [ ] Owner approves source model and license decision.
+- [x] Owner approves history policy (unified mission history requested and validated by the owner, 2026-08-18).
+- [x] Owner approves source model and license decision (MIT published with owner approval, 2026-08-20).
 - [x] Owner approves push.
-- [ ] Owner approves tag and GitHub release.
+- [x] Owner approves tag and GitHub release (release-close instruction, 2026-08-22).
 - [ ] Owner approves social publication.
