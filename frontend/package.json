@@ -49,7 +49,7 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
-    "@vitest/coverage-v8": "4.1.10",
+    "@vitest/coverage-v8": "4.1.11",
     "axe-core": "4.12.1",
     "jsdom": "26.1.0",
     "oxlint": "1.75.0",
