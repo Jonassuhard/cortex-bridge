@@ -524,6 +524,42 @@ class _AttachmentFallbackDriver:
         return {"ok": True}
 
 
+class _NewChatAttachmentDriver:
+    def __init__(self) -> None:
+        self.sent = False
+
+    async def navigate(self, _url: str) -> None:
+        return None
+
+    async def get_state(self) -> dict:
+        identity = "attachment-new-chat" if self.sent else None
+        return {
+            "url": (
+                "https://chatgpt.com/c/attachment-new-chat"
+                if identity
+                else "https://chatgpt.com/"
+            ),
+            "conversation_id": identity,
+            "title": "Attachment new chat" if identity else "ChatGPT",
+            "blocker": None,
+            "composer_present": True,
+            "send_button_present": False,
+            "stop_button_present": False,
+            "streaming": False,
+            "messages": [],
+        }
+
+    async def upload_files(self, _selector: str, _paths: list[str]) -> None:
+        return None
+
+    async def await_attachment(self) -> dict:
+        return {"ok": True, "label": "proof.png"}
+
+    async def send_bare(self) -> dict:
+        self.sent = True
+        return {"ok": True}
+
+
 class AdapterPublicDriverContractTest(unittest.IsolatedAsyncioTestCase):
     async def test_attachment_fallback_uses_public_evaluate_contract(self) -> None:
         driver = _AttachmentFallbackDriver()
@@ -558,6 +594,33 @@ class AdapterPublicDriverContractTest(unittest.IsolatedAsyncioTestCase):
             )
         self.assertIn("image/png", driver.code)
         self.assertIn("validated.png", driver.code)
+
+    # Regression: ISSUE-002 — attachment-only new chat kept the provisional URL
+    # Found by /qa on 2026-08-22
+    # Report: .gstack/qa-reports/qa-report-127.0.0.1-2026-08-22.md
+    async def test_attachment_only_new_chat_captures_its_canonical_lock(self) -> None:
+        driver = _NewChatAttachmentDriver()
+        transport = ChatGPTWebTransport(
+            driver,
+            max_wait=0.2,
+            poll_interval=0.01,
+            selection_budget=0.2,
+        )
+        await transport.start_new_conversation("https://chatgpt.com/")
+
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "proof.png"
+            path.write_bytes(b"synthetic image fixture")
+            result = await transport.send_with_attachment(
+                None,
+                str(path),
+                image=True,
+            )
+
+        self.assertTrue(result["sent"])
+        self.assertIsNotNone(transport.lock)
+        self.assertEqual(transport.lock.identity, "attachment-new-chat")
+        self.assertFalse(transport._pending_new_chat)
 
 
 class _CountingWebBridgeDriver(WebBridgeDriver):

@@ -661,11 +661,29 @@ class ChatGPTWebTransport:
                 f"new conversation navigation failed: {exc}",
                 details=details,
             ) from exc
-        state = await self._state()
-        if state.get("conversation_id"):
-            # The URL already is a conversation — lock it normally.
+        target = urllib.parse.urlparse(url)
+        target_path = target.path.rstrip("/") or "/"
+        if target_path != "/":
             await self.select_conversation(url)
             return
+        deadline = time.monotonic() + self.selection_budget
+        while True:
+            state = await self._state(deadline=deadline)
+            current = urllib.parse.urlparse(str(state.get("url") or ""))
+            current_path = current.path.rstrip("/") or "/"
+            fresh_home = (
+                current.scheme == target.scheme
+                and current.netloc == target.netloc
+                and current_path == target_path
+                and not state.get("conversation_id")
+                and bool(state.get("composer_present"))
+            )
+            if fresh_home:
+                break
+            await self._selection_await(
+                asyncio.sleep(min(self.poll_interval, self._remaining(deadline))),
+                deadline,
+            )
         self._pending_new_chat = True
         self._baseline = set()
 
@@ -853,6 +871,8 @@ class ChatGPTWebTransport:
             self.delivery_uncertain = True
             self.pause(DELIVERY_UNCERTAIN)
             raise TransportError(DELIVERY_UNCERTAIN, f"bare send failed: {result.get('error')}")
+        if self._pending_new_chat:
+            await self._capture_new_lock("")
         return {"sent": True, "attachment": chip.get("label")}
 
     async def send_message(self, text: str) -> dict:

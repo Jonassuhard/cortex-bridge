@@ -349,6 +349,48 @@ class FailingNewConversationDriver:
         raise error
 
 
+class StaleConversationAfterHomeNavigationDriver:
+    def __init__(self) -> None:
+        self.navigate_calls = 0
+        self.state_reads = 0
+
+    async def navigate(self, _url: str) -> None:
+        self.navigate_calls += 1
+
+    async def get_state(self) -> dict:
+        self.state_reads += 1
+        if self.state_reads <= 2:
+            return {
+                "url": "https://chatgpt.com/c/previous-chat",
+                "conversation_id": "previous-chat",
+                "title": "Previous chat",
+                "blocker": None,
+                "composer_present": True,
+                "send_button_present": False,
+                "stop_button_present": False,
+                "streaming": False,
+                "messages": [
+                    {
+                        "id": "assistant-previous",
+                        "role": "assistant",
+                        "text": "private previous content",
+                        "code_blocks": [],
+                    }
+                ],
+            }
+        return {
+            "url": "https://chatgpt.com/",
+            "conversation_id": None,
+            "title": "ChatGPT",
+            "blocker": None,
+            "composer_present": True,
+            "send_button_present": False,
+            "stop_button_present": False,
+            "streaming": False,
+            "messages": [],
+        }
+
+
 class ChromeExtensionReadinessRegressionTest(unittest.IsolatedAsyncioTestCase):
     async def test_new_conversation_navigation_uses_the_transport_error_taxonomy(self) -> None:
         transport = ChatGPTWebTransport(FailingNewConversationDriver())
@@ -361,6 +403,24 @@ class ChromeExtensionReadinessRegressionTest(unittest.IsolatedAsyncioTestCase):
             raised.exception.details,
             {"driver_code": "EXTENSION_TIMEOUT", "reload_required": True},
         )
+
+    # Regression: ISSUE-001 — new-chat screenshot captured stale conversation paint
+    # Found by /qa on 2026-08-22
+    # Report: .gstack/qa-reports/qa-report-127.0.0.1-2026-08-22.md
+    async def test_new_conversation_waits_until_the_previous_chat_is_gone(self) -> None:
+        driver = StaleConversationAfterHomeNavigationDriver()
+        transport = ChatGPTWebTransport(
+            driver,
+            selection_budget=0.2,
+            poll_interval=0.01,
+        )
+
+        await transport.start_new_conversation("https://chatgpt.com/")
+
+        self.assertEqual(driver.navigate_calls, 1)
+        self.assertEqual(driver.state_reads, 3)
+        self.assertIsNone(transport.lock)
+        self.assertTrue(transport._pending_new_chat)
 
     async def test_read_waits_for_content_script_after_navigation(self) -> None:
         manager = FlakyReadManager()
