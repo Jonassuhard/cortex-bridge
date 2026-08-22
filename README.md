@@ -14,6 +14,10 @@ waits for your explicit approval. ChatGPT automation through a Chrome
 extension, a local FastAPI console, and an optional Ollama local LLM —
 privacy-first, human-in-the-loop, fully auditable.
 
+Created and maintained by [Jonas Suhard](https://github.com/Jonassuhard).
+Project background and verified case study:
+[jonassuhard.com/projets/cortex-bridge](https://jonassuhard.com/projets/cortex-bridge).
+
 Cortex Bridge links a real ChatGPT conversation in Google Chrome to a reviewed
 executor on your Mac. Chat messages remain ordinary ChatGPT messages. Local
 execution starts only after a separate preflight shows the workspace,

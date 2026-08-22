@@ -44,16 +44,17 @@ so any new session starts from facts, not from memory.
   permissions and credentials; adopting one is an explicit architecture
   change tracked in ROADMAP.md, not a fallback.
 
-## Privacy rule (unchanged)
+## Privacy rule
 
 - Any technical observation uses neutral synthetic markers. Never publish
   account details, sidebar titles, conversation contents, conversation IDs,
   cookies, logs, or unredacted live captures.
 - The public tree is gated by `scripts/check-public-privacy.sh` (markers,
-  fingerprints, URL allowlist, image EXIF + OCR). Personal names, local
-  usernames, external-drive names and the repo's own URL (it embeds a
-  personal handle) must never enter the tree — that is why README badges are
-  username-free and llms.txt uses relative links only.
+  fingerprints, URL allowlist, image EXIF + OCR). The verified maintainer
+  identity is allowed only in `README.md` and `CITATION.cff`; the same
+  fingerprints remain forbidden in every other file. Local usernames,
+  external-drive names, private account data and runtime material remain
+  prohibited without exception.
 
 ## Quality gates (all green on `main`)
 

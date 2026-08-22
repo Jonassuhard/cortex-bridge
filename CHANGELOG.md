@@ -6,6 +6,10 @@ All notable changes are recorded here.
 
 ### Added
 
+- Public maintainer attribution in `README.md` and `CITATION.cff`, linked to
+  the verified portfolio case study. The privacy scanner permits those exact
+  identity fingerprints only in those two files and continues to reject them
+  everywhere else.
 - One-command owner experience: `Cortex Bridge.command` starts the console and
   opens the UI by double-click, `scripts/install-autostart.sh` installs an
   optional login LaunchAgent, `scripts/install-extension.sh` opens

@@ -102,6 +102,7 @@ else:
             length = item.get("length")
             digest = item.get("sha256")
             category = item.get("category")
+            allowed_paths = item.get("allowed_paths", [])
             if (
                 not isinstance(length, int)
                 or length < 1
@@ -109,9 +110,17 @@ else:
                 or not re.fullmatch(r"[0-9a-f]{64}", digest)
                 or not isinstance(category, str)
                 or not category.strip()
+                or not isinstance(allowed_paths, list)
+                or any(
+                    not isinstance(path, str)
+                    or not path
+                    or path.startswith("/")
+                    or ".." in Path(path).parts
+                    for path in allowed_paths
+                )
             ):
                 raise ValueError("invalid fingerprint entry")
-            fingerprints.append(item)
+            fingerprints.append({**item, "allowed_paths": allowed_paths})
     except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
         report("fingerprint_config", "control")
         fingerprints = []
@@ -197,13 +206,16 @@ def normalized_privacy_text(text: str) -> str:
     return decoded.casefold()
 
 
-def fingerprint_categories(text: str) -> set[str]:
+def fingerprint_categories(text: str, relative: str) -> set[str]:
     if not fingerprints:
         return set()
     normalized = normalized_privacy_text(text)
     lengths = {int(item["length"]) for item in fingerprints}
     fingerprints_by_key = {
-        (int(item["length"]), str(item["sha256"])): str(item["category"])
+        (int(item["length"]), str(item["sha256"])): (
+            str(item["category"]),
+            frozenset(str(path) for path in item.get("allowed_paths", [])),
+        )
         for item in fingerprints
     }
     categories: set[str] = set()
@@ -215,8 +227,9 @@ def fingerprint_categories(text: str) -> set[str]:
                 digest = hashlib.sha256(
                     "".join(characters[index : index + length]).encode("utf-8")
                 ).hexdigest()
-                category = fingerprints_by_key.get((length, digest))
-                if category:
+                match = fingerprints_by_key.get((length, digest))
+                if match and relative not in match[1]:
+                    category = match[0]
                     categories.add(category)
     for length in (value for value in lengths if value > 12):
         characters = list(normalized)
@@ -224,8 +237,9 @@ def fingerprint_categories(text: str) -> set[str]:
             digest = hashlib.sha256(
                 "".join(characters[index : index + length]).encode("utf-8")
             ).hexdigest()
-            category = fingerprints_by_key.get((length, digest))
-            if category:
+            match = fingerprints_by_key.get((length, digest))
+            if match and relative not in match[1]:
+                category = match[0]
                 categories.add(category)
     return categories
 
@@ -240,7 +254,7 @@ def scan_text(
 ) -> None:
     lower_text = text.casefold()
     if scan_fingerprints:
-        for category in fingerprint_categories(text):
+        for category in fingerprint_categories(text, relative):
             safe_category = re.sub(r"[^a-z0-9]+", "_", category.casefold()).strip("_")
             report(forced_category or f"private_fingerprint_{safe_category}", relative, 0)
     for marker in markers:

@@ -109,6 +109,42 @@ class PublicPrivacyTest(unittest.TestCase):
         self.assertNotIn(secret, result.stdout)
         self.assertNotIn(secret, result.stderr)
 
+    def test_public_identity_fingerprint_is_allowed_only_in_approved_files(self) -> None:
+        identity = "Public Maintainer Fixture"
+        normalized = identity.casefold()
+        self.fingerprints.write_text(
+            json.dumps(
+                [
+                    {
+                        "category": "public maintainer identity",
+                        "length": len(normalized),
+                        "sha256": hashlib.sha256(normalized.encode()).hexdigest(),
+                        "allowed_paths": ["README.md"],
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
+        self.markers.write_text("Synthetic CI sentinel\n", encoding="utf-8")
+        (self.root / "README.md").write_text(
+            f"Maintained by {identity}.\n", encoding="utf-8"
+        )
+
+        approved = self.run_scan()
+
+        self.assertEqual(approved.returncode, 0, approved.stdout + approved.stderr)
+
+        (self.root / "docs" / "private-proof.md").write_text(
+            f"Unexpected identity: {identity}.\n", encoding="utf-8"
+        )
+        rejected = self.run_scan()
+
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("private_fingerprint_public_maintainer_identity", rejected.stdout)
+        self.assertIn("docs/private-proof.md", rejected.stdout)
+        self.assertNotIn(identity, rejected.stdout)
+        self.assertNotIn(identity, rejected.stderr)
+
     def test_url_allowlist_is_exact_including_query_and_fragment(self) -> None:
         canonical = "https://docs.example.invalid/product"
         self.allowlist.write_text(f"{canonical}\n", encoding="utf-8")
