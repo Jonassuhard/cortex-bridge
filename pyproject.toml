@@ -8,7 +8,7 @@ version = "0.5.2"
 description = "Local, consent-bound bridge between ChatGPT and a reviewed executor"
 requires-python = ">=3.11"
 dependencies = [
-  "fastapi==0.140.13",
+  "fastapi==0.141.1",
   "uvicorn==0.51.0",
   "websockets==17.0",
   "playwright==1.61.0",
