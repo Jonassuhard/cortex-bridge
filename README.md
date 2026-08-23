@@ -8,13 +8,13 @@
 
 **Use free ChatGPT as a local coding agent — like Codex or Claude Code,
 without an API key.** Edit files, run commands, and review diffs on your
-Mac while ChatGPT does the reasoning. No OpenAI billing, no cloud executor,
+Mac while ChatGPT (GPT-5.6 Luna on the free tier) does the reasoning. No OpenAI billing, no cloud executor,
 no token metering. Just your ChatGPT account, your Chrome, and your files.
 
 Cortex Bridge is a **free ChatGPT coding agent**: your ordinary ChatGPT web
 chat plans the changes, a local executor applies them to your workspace, and
 every write or command waits for your explicit approval. Built for developers
-who want GPT-4-level coding assistance without paying for API access.
+who want GPT-5.6-level coding assistance without paying for API access.
 
 Created and maintained by [Jonas Suhard](https://github.com/Jonassuhard).
 Project background and verified case study:
@@ -24,28 +24,28 @@ Project background and verified case study:
 
 | Tool | Requires | Cortex Bridge instead |
 |------|----------|----------------------|
-| **Codex CLI** | ChatGPT Plus/Pro ($20–200/mo) or API key | Uses your free ChatGPT account |
+| **Codex CLI** | ChatGPT Plus/Pro ($20–200/mo) or API key | Uses your free ChatGPT account (GPT-5.6) |
 | **Claude Code** | Anthropic API key (pay-per-token) or Max subscription | Zero API costs |
 | **Cline / Aider** | BYO API key (OpenAI, Anthropic, etc.) | No key needed — uses ChatGPT web |
-| **GitHub Copilot** | $10/mo subscription | Free, GPT-4 through your ChatGPT tab |
-| **Ollama + Cline** | Local GPU, weaker models | GPT-4 reasoning quality, no GPU needed |
+| **GitHub Copilot** | $10/mo subscription | Free, GPT-5.6 through your ChatGPT tab |
+| **Ollama + Cline** | Local GPU, weaker models | GPT-5.6 reasoning quality, no GPU needed |
 
 **The trade-off:** Cortex Bridge reads and writes the ChatGPT web interface
 through a Chrome extension. DOM changes can temporarily break selectors, and
 this conflicts with OpenAI's Terms of Use (see below). In exchange: full
-GPT-4 coding power, zero API bills, human-approved audit trails.
+GPT-5.6 coding power, zero API bills, human-approved audit trails.
 
 ### How it compares to other free coding agents
 
 | Solution | LLM backend | Free? | Edits local files? | Human-in-the-loop? |
 |----------|-------------|-------|--------------------|---------------------|
-| **Cortex Bridge** | GPT-4o (via ChatGPT web) | ✅ Yes | ✅ Yes | ✅ Mandatory |
+| **Cortex Bridge** | GPT-5.6 Luna (via ChatGPT free tier) | ✅ Yes | ✅ Yes | ✅ Mandatory |
 | Cline + Gemini | Gemini 2.5 Flash | ✅ Free tier | ✅ Yes | Optional |
 | OpenCode | Various free models | ✅ Yes | ✅ Yes | Optional |
 | Aider + Ollama | Local models | ✅ Yes | ✅ Yes | Optional |
 | Codebuff (Freebuff) | DeepSeek V4 | ✅ Yes | ✅ Yes | Terminal-based |
 
-**Cortex Bridge's unique advantage:** GPT-4 class reasoning (not a smaller
+**Cortex Bridge's unique advantage:** GPT-5.6 class reasoning (not a smaller
 free model), with local file access and mandatory human approval, using only
 a standard ChatGPT account.
 
@@ -270,7 +270,7 @@ that edits files and runs commands with human approval.
 Cursor, Cline, Aider, Open Interpreter, OpenCode, Codebuff
 
 **Differentiator:** Zero API cost — uses the ChatGPT web interface
-instead of paid APIs. GPT-4 reasoning quality with mandatory human
+instead of paid APIs. GPT-5.6 reasoning quality with mandatory human
 approval on every write/command. No token metering, no billing.
 
 **Platform:** macOS 14+ · Google Chrome 116+
