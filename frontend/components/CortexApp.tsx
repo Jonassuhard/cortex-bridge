@@ -43,7 +43,7 @@ import {
 import { ConversationSidebar } from "./ConversationSidebar";
 import { ChatWorkspace, type WorkspaceAvailability } from "./ChatWorkspace";
 import { PipelineInspector } from "./PipelineInspector";
-import { SettingsPanel } from "./SettingsPanel";
+import { SettingsPanel, type SettingsTabId } from "./SettingsPanel";
 import { HistoryPanel } from "./HistoryPanel";
 import { OnboardingPanel } from "./OnboardingPanel";
 import { ChatGPTConnectionDialog } from "./ChatGPTConnectionDialog";
@@ -237,6 +237,7 @@ export function CortexApp() {
   const [ollamaModels, setOllamaModels] = useState<OllamaModelInfo[]>([]);
   const [chatgptModels, setChatGPTModels] = useState<ChatGPTModelInfo[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<SettingsTabId>("general");
   const [historyOpen, setHistoryOpen] = useState(false);
   const [capabilities, setCapabilities] = useState<{ upload_file: boolean; take_screenshot: boolean }>({ upload_file: false, take_screenshot: false });
   const [settingsSaving, setSettingsSaving] = useState(false);
@@ -636,6 +637,11 @@ export function CortexApp() {
     notify(message);
   }
 
+  function openSettings(tab: SettingsTabId = "general") {
+    setSettingsTab(tab);
+    setSettingsOpen(true);
+  }
+
   function conversationForKey(key: ConversationKey): ConversationSummary | null {
     return conversationState.entries[key]?.summary || null;
   }
@@ -680,7 +686,7 @@ export function CortexApp() {
     if (!conversation) return false;
     if (!transport.opt_in_accepted && !demoMode) {
       notify("Active d'abord le transport expérimental dans les paramètres.");
-      setSettingsOpen(true);
+      openSettings("transport");
       return false;
     }
     if (!beginExecution(key)) return false;
@@ -704,7 +710,7 @@ export function CortexApp() {
     if (!conversation) return false;
     if (!transport.opt_in_accepted && !demoMode) {
       notify("Active d'abord le transport expérimental dans les paramètres.");
-      setSettingsOpen(true);
+      openSettings("transport");
       return false;
     }
     if (!beginExecution(key)) return false;
@@ -747,7 +753,7 @@ export function CortexApp() {
     if (!conversation) return false;
     if (!transport.opt_in_accepted && !demoMode) {
       notify("Active d'abord le transport expérimental dans les paramètres.");
-      setSettingsOpen(true);
+      openSettings("transport");
       return false;
     }
     if (!beginExecution(key)) return false;
@@ -973,7 +979,7 @@ export function CortexApp() {
         }}
         onRefresh={() => void refreshConversations()}
         onNewConversation={() => newConversation()}
-        onOpenSettings={() => setSettingsOpen(true)}
+        onOpenSettings={() => openSettings()}
         onOpenHistory={() => setHistoryOpen(true)}
       />
 
@@ -1043,7 +1049,9 @@ export function CortexApp() {
       />
 
       <SettingsPanel
+        key={settingsTab}
         open={settingsOpen}
+        initialTab={settingsTab}
         settings={settings}
         ollamaModels={ollamaModels}
         chatgptModels={chatgptModels}
@@ -1058,7 +1066,7 @@ export function CortexApp() {
 
       {!settingsOpen && (
         <OnboardingPanel
-          onOpenSettings={() => setSettingsOpen(true)}
+          onOpenSettings={() => openSettings()}
           onOpenChatGPTProfile={openChatGPTProfile}
         />
       )}

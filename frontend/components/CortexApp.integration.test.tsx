@@ -122,6 +122,23 @@ afterEach(() => {
 });
 
 describe("CortexApp conversation integration", () => {
+  it("opens the transport settings when a send is blocked by the ChatGPT opt-in", async () => {
+    network.api.mockImplementation((path: string) => {
+      if (path === "/api/transport/status") {
+        return Promise.resolve({ ...demoTransport, opt_in_accepted: false });
+      }
+      return defaultApi(path);
+    });
+    const user = userEvent.setup();
+    await readyApp();
+
+    await user.type(composer(), "message synthétique bloqué");
+    await user.click(screen.getByTitle("Envoyer"));
+
+    expect(await screen.findByRole("heading", { name: "Transport ChatGPT" })).toBeInTheDocument();
+    expect(network.postJson.mock.calls.map(([path]) => path)).not.toContain("/api/chat/send");
+  });
+
   it("pairs the extension from the onboarding connection button", async () => {
     const token = "o".repeat(43);
     const postMessage = vi.spyOn(window, "postMessage").mockImplementation(() => undefined);

@@ -58,7 +58,7 @@ so any new session starts from facts, not from memory.
 
 ## Quality gates (all green on `main`)
 
-- 434 backend tests, 127 frontend unit tests, 56 extension tests, 12 E2E + 1
+- 435 backend tests, 131 frontend unit tests, 59 extension tests, 12 E2E + 1
   documented skip, 4 accessibility tests, typecheck, lint, deterministic build, privacy,
   release-evidence and secret scans.
 - CI: `.github/workflows/ci.yml` (backend, frontend, release-gates) plus the
@@ -88,6 +88,12 @@ so any new session starts from facts, not from memory.
 - Attachment transfers now enforce their declared byte budget and exact
   decoded size; extension suite is 59/59.
 - The onboarding connection button now uses the real extension pairing flow;
-  frontend suite is 130/130 plus all build, E2E and accessibility gates.
-- Real Chrome pairing and two synthetic conversation switches passed. A live
-  message, file, screenshot and mission still require action-time approval.
+  blocked sends now open the Transport opt-in directly; frontend suite is
+  131/131 plus all build, E2E and accessibility gates.
+- Real Chrome pairing, two synthetic conversation switches, a live text send,
+  a real screenshot transfer and a two-file disposable mission passed.
+- The unpacked Desktop extension matches the corrected sources and has a
+  timestamped backup. Its active Chrome reload is not independently proven.
+- Native live file selection remains unproven: the permitted Chrome controller
+  refused `fileChooser.setFiles` before submission. Automated attachment and
+  screenshot-transfer gates pass; release evidence must not be marked READY.
