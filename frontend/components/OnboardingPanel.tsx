@@ -2,7 +2,7 @@
 /* eslint-disable react-hooks/set-state-in-effect */
 
 import { useCallback, useEffect, useState } from "react";
-import { ApiError, api, postJson } from "@/lib/api";
+import { api, postJson } from "@/lib/api";
 import { AlertIcon, CheckIcon, RefreshIcon, XIcon } from "./Icons";
 
 interface OnboardingCheck {
@@ -23,7 +23,12 @@ interface OnboardingState {
  * First-launch assistant. Shown once (persisted server-side), re-checks the
  * real prerequisites on demand. Everything is French, matching the product.
  */
-export function OnboardingPanel({ onOpenSettings }: { onOpenSettings: () => void }) {
+interface OnboardingPanelProps {
+  onOpenSettings: () => void;
+  onOpenChatGPTProfile: () => Promise<void> | void;
+}
+
+export function OnboardingPanel({ onOpenSettings, onOpenChatGPTProfile }: OnboardingPanelProps) {
   const [state, setState] = useState<OnboardingState | null>(null);
   const [hidden, setHidden] = useState(false);
   const [checking, setChecking] = useState(false);
@@ -60,19 +65,10 @@ export function OnboardingPanel({ onOpenSettings }: { onOpenSettings: () => void
     setOpeningBrowser(true);
     setBrowserError(null);
     try {
-      await postJson("/api/onboarding/browser/open", {});
+      await onOpenChatGPTProfile();
       await refresh();
-    } catch (error) {
-      if (error instanceof ApiError) {
-        const envelope = error.detail as { detail?: { error?: string } } | undefined;
-        setBrowserError(
-          envelope?.detail?.error
-            ? `Le profil navigateur n’a pas pu être ouvert : ${envelope.detail.error}`
-            : "Le profil navigateur n’a pas pu être ouvert. Vérifie l’installation de Chromium."
-        );
-      } else {
-        setBrowserError("Le profil navigateur n’a pas pu être ouvert.");
-      }
+    } catch {
+      setBrowserError("La connexion à l’extension Chrome a échoué. Réessaie ou ouvre les paramètres.");
     } finally {
       setOpeningBrowser(false);
     }

@@ -122,6 +122,67 @@ afterEach(() => {
 });
 
 describe("CortexApp conversation integration", () => {
+  it("pairs the extension from the onboarding connection button", async () => {
+    const token = "o".repeat(43);
+    const postMessage = vi.spyOn(window, "postMessage").mockImplementation(() => undefined);
+    network.api.mockImplementation((path: string) => {
+      if (path === "/api/onboarding") {
+        return Promise.resolve({
+          completed: false,
+          ready: false,
+          checks: [
+            {
+              id: "browser-driver",
+              label: "Transport navigateur chrome_extension",
+              state: "missing",
+              detail: "chrome_extension indisponible",
+              hint: "Installe ou active l’extension Cortex Bridge dans Chrome.",
+            },
+          ],
+        });
+      }
+      return defaultApi(path);
+    });
+    network.postJson.mockImplementation((path: string) => {
+      if (path === "/api/chrome-extension/pairing") {
+        return Promise.resolve({ token, expires_in_seconds: 60 });
+      }
+      if (path === "/api/chrome-extension/open") {
+        return Promise.resolve({
+          code: "CONNECTED",
+          state: "connected",
+          title: "ChatGPT connecté",
+          message: "Cortex est lié à cet onglet Chrome.",
+          recoverable: false,
+          driver: "chrome_extension",
+          url: "https://chatgpt.com/",
+          tab_id: 42,
+          window_id: 7,
+        });
+      }
+      return Promise.reject(new Error(`Unexpected POST ${path}`));
+    });
+    const user = userEvent.setup();
+    render(<CortexApp />);
+
+    await user.click(
+      await screen.findByRole("button", { name: "Ouvrir le profil de connexion" }),
+    );
+
+    await waitFor(() => {
+      expect(network.postJson.mock.calls.map(([path]) => path)).toContain(
+        "/api/chrome-extension/open",
+      );
+    });
+    expect(postMessage).toHaveBeenCalledWith(
+      { source: "cortex-bridge-ui", type: "CORTEX_PAIR_EXTENSION", token },
+      window.location.origin,
+    );
+    expect(network.postJson.mock.calls.map(([path]) => path)).not.toContain(
+      "/api/onboarding/browser/open",
+    );
+  });
+
   it("refreshes conversations after Chrome becomes connected", async () => {
     let conversationCalls = 0;
     network.api.mockImplementation((path: string) => {

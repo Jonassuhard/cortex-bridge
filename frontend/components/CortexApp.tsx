@@ -1056,7 +1056,12 @@ export function CortexApp() {
 
       <HistoryPanel open={historyOpen} onClose={() => setHistoryOpen(false)} />
 
-      {!settingsOpen && <OnboardingPanel onOpenSettings={() => setSettingsOpen(true)} />}
+      {!settingsOpen && (
+        <OnboardingPanel
+          onOpenSettings={() => setSettingsOpen(true)}
+          onOpenChatGPTProfile={openChatGPTProfile}
+        />
+      )}
 
       {chatGPTConnection && (
         <ChatGPTConnectionDialog
