@@ -81,3 +81,13 @@ so any new session starts from facts, not from memory.
 - Runtime state lives under `CORTEX_HOME`, not in the repo.
 - Ollama is optional and lives on an external volume; the deterministic
   executor is the always-available default.
+
+## Active critical QA branch (not published)
+
+- Branch `codex/critical-qa`, based on `origin/main` at `42d3f53`.
+- Attachment transfers now enforce their declared byte budget and exact
+  decoded size; extension suite is 59/59.
+- The onboarding connection button now uses the real extension pairing flow;
+  frontend suite is 130/130 plus all build, E2E and accessibility gates.
+- Real Chrome pairing and two synthetic conversation switches passed. A live
+  message, file, screenshot and mission still require action-time approval.
