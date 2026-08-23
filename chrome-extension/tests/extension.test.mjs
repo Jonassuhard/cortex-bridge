@@ -76,6 +76,186 @@ async function getContentScriptState(messageNodes, action = "get_state") {
   });
 }
 
+async function runContentAttachmentActions(actions) {
+  const source = await readFile(join(EXTENSION_ROOT, "chatgpt-content.js"), "utf8");
+  let listener = null;
+  class FakeElement {
+    constructor() {
+      this.innerText = "";
+      this.textContent = "";
+      this.disabled = false;
+    }
+
+    getAttribute() { return null; }
+    querySelector() { return null; }
+    querySelectorAll() { return []; }
+  }
+  class FakeInput extends FakeElement {
+    constructor() {
+      super();
+      this.files = [];
+    }
+
+    dispatchEvent() {}
+  }
+  class FakeFile {
+    constructor(parts, name, options = {}) {
+      this.name = name;
+      this.type = options.type || "";
+      this.size = parts.reduce((total, part) => total + part.byteLength, 0);
+    }
+  }
+  class FakeDataTransfer {
+    constructor() {
+      this.files = [];
+      this.items = { add: (file) => this.files.push(file) };
+    }
+  }
+
+  const composer = new FakeElement();
+  const input = new FakeInput();
+  const document = {
+    body: { innerText: "" },
+    title: "Attachment boundary - ChatGPT",
+    querySelector(selector) {
+      if (selector === "#prompt-textarea") return composer;
+      if (selector === "form input[type=file]") return input;
+      return null;
+    },
+    querySelectorAll() { return []; },
+  };
+  const chrome = {
+    runtime: {
+      onMessage: {
+        addListener(callback) {
+          listener = callback;
+        },
+      },
+    },
+  };
+  runInNewContext(source, {
+    chrome,
+    document,
+    location: {
+      href: "https://chatgpt.com/c/attachment-boundary",
+      origin: "https://chatgpt.com",
+      pathname: "/c/attachment-boundary",
+    },
+    Element: FakeElement,
+    HTMLInputElement: FakeInput,
+    File: FakeFile,
+    DataTransfer: FakeDataTransfer,
+    Event: class {},
+    URL,
+    Map,
+    Promise,
+    Uint8Array,
+    atob,
+    getComputedStyle: () => ({ display: "block", visibility: "visible" }),
+    setTimeout,
+    clearTimeout,
+  });
+  assert.equal(typeof listener, "function");
+
+  const responses = [];
+  for (const { action, payload } of actions) {
+    responses.push(await new Promise((resolve) => {
+      listener(
+        { source: "cortex-bridge-extension", action, payload },
+        {},
+        resolve,
+      );
+    }));
+  }
+  return responses;
+}
+
+test("attachment begin accepts exactly 25 MiB and refuses the next byte", async () => {
+  const limit = 25 * 1024 * 1024;
+  const responses = await runContentAttachmentActions([
+    {
+      action: "attachment_begin",
+      payload: {
+        transfer_id: "exact-limit",
+        name: "exact.bin",
+        mime: "application/octet-stream",
+        size: limit,
+      },
+    },
+    {
+      action: "attachment_begin",
+      payload: {
+        transfer_id: "over-limit",
+        name: "over.bin",
+        mime: "application/octet-stream",
+        size: limit + 1,
+      },
+    },
+  ]);
+
+  assert.equal(responses[0].ok, true);
+  assert.equal(responses[0].result.accepted, true);
+  assert.equal(responses[1].ok, false);
+  assert.equal(responses[1].error.code, "ATTACHMENT_TOO_LARGE");
+});
+
+test("attachment chunks cannot exceed the declared byte budget", async () => {
+  const responses = await runContentAttachmentActions([
+    {
+      action: "attachment_begin",
+      payload: {
+        transfer_id: "declared-three-bytes",
+        name: "bounded.bin",
+        mime: "application/octet-stream",
+        size: 3,
+      },
+    },
+    {
+      action: "attachment_chunk",
+      payload: {
+        transfer_id: "declared-three-bytes",
+        index: 0,
+        data: Buffer.from([1, 2, 3, 4]).toString("base64"),
+      },
+    },
+  ]);
+
+  assert.equal(responses[0].ok, true);
+  assert.equal(responses[1].ok, false);
+  assert.equal(responses[1].error.code, "ATTACHMENT_TRANSFER_INVALID");
+});
+
+test("attachment commit rejects an incomplete declared transfer", async () => {
+  const responses = await runContentAttachmentActions([
+    {
+      action: "attachment_begin",
+      payload: {
+        transfer_id: "declared-three-received-two",
+        name: "incomplete.bin",
+        mime: "application/octet-stream",
+        size: 3,
+      },
+    },
+    {
+      action: "attachment_chunk",
+      payload: {
+        transfer_id: "declared-three-received-two",
+        index: 0,
+        data: Buffer.from([1, 2]).toString("base64"),
+      },
+    },
+    {
+      action: "attachment_commit",
+      payload: { transfer_id: "declared-three-received-two" },
+    },
+  ]);
+
+  assert.equal(responses[0].ok, true);
+  assert.equal(responses[1].ok, true);
+  assert.equal(responses[2].ok, false);
+  assert.equal(responses[2].error.code, "ATTACHMENT_TRANSFER_INVALID");
+});
+
 async function runContentScriptSend(
   text,
   {

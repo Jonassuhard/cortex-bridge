@@ -378,10 +378,20 @@
     },
     async attachment_begin(payload) {
       await ensureClassicChatSurface();
-      if (!payload.transfer_id || payload.size < 0 || payload.size > MAX_TRANSFER_BYTES) {
+      if (
+        !payload.transfer_id
+        || !Number.isSafeInteger(payload.size)
+        || payload.size < 0
+        || payload.size > MAX_TRANSFER_BYTES
+      ) {
         throw Object.assign(new Error("Attachment exceeds the 25 MiB bridge limit"), { code: "ATTACHMENT_TOO_LARGE" });
       }
-      transfers.set(payload.transfer_id, { ...payload, chunks: [] });
+      transfers.set(payload.transfer_id, {
+        ...payload,
+        chunks: [],
+        encodedCharacters: 0,
+        nextIndex: 0,
+      });
       return { accepted: true };
     },
     attachment_chunk(payload) {
@@ -389,7 +399,22 @@
       if (!transfer || typeof payload.data !== "string") {
         throw Object.assign(new Error("Unknown attachment transfer"), { code: "ATTACHMENT_TRANSFER_INVALID" });
       }
+      const encodedLimit = 4 * Math.ceil(transfer.size / 3);
+      const encodedCharacters = transfer.encodedCharacters + payload.data.length;
+      if (
+        !Number.isSafeInteger(payload.index)
+        || payload.index !== transfer.nextIndex
+        || encodedCharacters > encodedLimit
+      ) {
+        transfers.delete(payload.transfer_id);
+        throw Object.assign(
+          new Error("Attachment transfer exceeds its declared byte budget"),
+          { code: "ATTACHMENT_TRANSFER_INVALID" },
+        );
+      }
       transfer.chunks.push(payload.data);
+      transfer.encodedCharacters = encodedCharacters;
+      transfer.nextIndex += 1;
       return { accepted: true, chunks: transfer.chunks.length };
     },
     attachment_commit(payload) {
@@ -397,7 +422,23 @@
       if (!transfer) {
         throw Object.assign(new Error("Unknown attachment transfer"), { code: "ATTACHMENT_TRANSFER_INVALID" });
       }
-      const binary = atob(transfer.chunks.join(""));
+      let binary;
+      try {
+        binary = atob(transfer.chunks.join(""));
+      } catch {
+        transfers.delete(payload.transfer_id);
+        throw Object.assign(
+          new Error("Attachment transfer is not valid base64"),
+          { code: "ATTACHMENT_TRANSFER_INVALID" },
+        );
+      }
+      if (binary.length !== transfer.size || binary.length > MAX_TRANSFER_BYTES) {
+        transfers.delete(payload.transfer_id);
+        throw Object.assign(
+          new Error("Attachment transfer does not match its declared size"),
+          { code: "ATTACHMENT_TRANSFER_INVALID" },
+        );
+      }
       const bytes = new Uint8Array(binary.length);
       for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
       const file = new File([bytes], transfer.name, { type: transfer.mime || "application/octet-stream" });
