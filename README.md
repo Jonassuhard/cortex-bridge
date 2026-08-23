@@ -49,6 +49,51 @@ GPT-5.6 coding power, zero API bills, human-approved audit trails.
 free model), with local file access and mandatory human approval, using only
 a standard ChatGPT account.
 
+### What Cortex Bridge does that ChatGPT and Codex don't
+
+ChatGPT, Codex, and Cortex Bridge all use OpenAI models under the hood.
+But they give you very different levels of control over your own machine.
+
+| Capability | **ChatGPT (free web)** | **Codex (CLI / desktop)** | **Cortex Bridge** |
+|------------|----------------------|--------------------------|-------------------|
+| **LLM** | GPT-5.6 Luna | GPT-5.6 Terra/Sol (plan-gated) | GPT-5.6 Luna (via ChatGPT web) |
+| **Edits your local files** | ❌ No — sandbox only | ✅ Yes (sandbox clone or local) | ✅ Yes — direct local filesystem |
+| **Runs shell commands** | ❌ No | ✅ Yes | ✅ Yes (after your approval) |
+| **Reads your real project** | ❌ Upload manually | ✅ Git clone or local folder | ✅ Direct folder access |
+| **Sees your .env / node_modules** | ❌ No | ❌ Sandbox clone doesn't have them | ✅ Real project, real state |
+| **Human approves every write** | N/A | ❌ Auto-applies | ✅ Mandatory |
+| **Audit trail per change** | ❌ | ❌ Only git history | ✅ Every action timestamped |
+| **Works offline** | ❌ | ❌ (cloud sandbox) | ✅ Local executor |
+| **Cost** | Free | $20–200/mo or API token | Free |
+| **ToS risk** | None (official) | None (official) | ⚠️ Browser automation (see below) |
+
+**The bottom line:** ChatGPT is a chatbot that can't touch your files.
+Codex is an agent that can, but costs money and runs in a sandbox.
+Cortex Bridge gives you the agent-like local control, for free, with mandatory
+human oversight — at the cost of a ToS gray area.
+
+### How it compares to similar projects (ChatGPT web → local agent)
+
+A handful of open-source projects share the same idea: use the free ChatGPT
+web interface as a coding agent. Here is how Cortex Bridge stacks up.
+
+| Project | Approach | GUI? | Agent loop? | Human approval? | Security model | Status |
+|---------|----------|------|-------------|-----------------|---------------|--------|
+| **Cortex Bridge** | Chrome Extension + FastAPI | ✅ React GUI | ✅ Mission protocol | ✅ Mandatory | Tokens, loopback, allowlist | ✅ Active (v0.5.2) |
+| [chatgpt-browser-agent](https://github.com/abdallhMoukdad/chatgpt-browser-agent) | Puppeteer browser daemon | ❌ CLI + MCP only | ✅ `agent.js` (RUN/FILE blocks) | ⚠️ Optional (`--auto`) | None | ✅ Active |
+| [headless-chatgpt](https://github.com/HalilCan/headless-chatgpt) | Puppeteer API emulator | ❌ REST API only | ❌ Prompt → response only | ❌ No execution layer | None | ❌ Dormant |
+| [codex-chatgpt-control](https://github.com/adamallcock/codex-chatgpt-control) | SDK for Codex → ChatGPT delegation | ❌ SDK (Node/Python) | ❌ Delegates to Codex | ⚠️ Via Codex | Via Codex bridge | ✅ Alpha |
+| [DevSpace](https://github.com/waishnav/devspace) | MCP server (official protocol) | ❌ ChatGPT UI | ❌ Tool-based | ✅ ChatGPT prompts you | MCP + owner password | ✅ Active (v1.0) |
+
+> **DevSpace uses ChatGPT's official Developer Mode — which requires ChatGPT
+> Plus ($20/mo). All other projects in this table work with a free ChatGPT
+> account by automating the consumer web interface.**
+
+**Cortex Bridge is the only project in this category that offers:** a graphical
+console, mandatory human-in-the-loop on every write/command, a security model
+with token pairing and command allowlisting, and two-writer conversation
+isolation — all with a free ChatGPT account.
+
 Cortex Bridge links a real ChatGPT conversation in Google Chrome to a reviewed
 executor on your Mac. Chat messages remain ordinary ChatGPT messages. Local
 execution starts only after a separate preflight shows the workspace,
