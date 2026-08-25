@@ -36,6 +36,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from orchestration import protocol
@@ -67,6 +68,10 @@ WORK_SURFACE_REJECTED = "WORK_SURFACE_REJECTED"
 DEFINITIVE_PRE_DELIVERY_CODES = frozenset({
     WORK_SURFACE_REJECTED,
     "PRE_DELIVERY_NOT_READY",
+    "NATIVE_PERMISSION_REQUIRED",
+    "NATIVE_HELPER_UNAVAILABLE",
+    "NATIVE_ACTIVATION_REQUIRED",
+    SEND_REJECTED,
 })
 
 DEFAULT_SELECTION_BUDGET = 10.0
@@ -93,6 +98,57 @@ DEFAULT_EMPTY_REPLY_GRACE = 120.0
 MAX_FILE_BYTES = 512 * 1024 * 1024
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"}
+
+
+def _attachment_name_parts(value: str) -> tuple[str, str]:
+    filename = Path(str(value or "").strip()).name
+    suffix = Path(filename).suffix
+    stem = filename[: -len(suffix)] if suffix else filename
+    return stem, suffix
+
+
+def _attachment_name_matches(candidate_name: str, expected_name: str) -> bool:
+    candidate_stem, candidate_suffix = _attachment_name_parts(candidate_name)
+    expected_stem, expected_suffix = _attachment_name_parts(expected_name)
+    if not candidate_stem or not expected_stem or candidate_suffix != expected_suffix:
+        return False
+    if candidate_stem == expected_stem:
+        return True
+    if not candidate_stem.startswith(expected_stem):
+        return False
+    duplicate_suffix = candidate_stem[len(expected_stem):].strip()
+    duplicate_token = duplicate_suffix[1:-1] if (
+        len(duplicate_suffix) >= 3
+        and duplicate_suffix[0] == "("
+        and duplicate_suffix[-1] == ")"
+    ) else ""
+    ascii_digits = bool(duplicate_token) and all(
+        "0" <= character <= "9" for character in duplicate_token
+    )
+    timestamp_token = (
+        len(duplicate_token) == 15
+        and duplicate_token[8] == "-"
+        and all("0" <= character <= "9" for character in duplicate_token[:8])
+        and all("0" <= character <= "9" for character in duplicate_token[9:])
+    )
+    return (
+        bool(duplicate_token)
+        and (ascii_digits or timestamp_token)
+    )
+
+
+def _message_has_attachment(message: dict, expected_name: str) -> bool:
+    expected_stem, _expected_suffix = _attachment_name_parts(expected_name)
+    if not expected_stem:
+        return False
+    return any(
+        _attachment_name_matches(
+            str(attachment.get("name") or ""),
+            expected_name,
+        )
+        for attachment in message.get("attachments", [])
+        if isinstance(attachment, dict)
+    )
 
 # Wait for an attachment chip to appear in/above the composer after an
 # upload, and for its progress indicator to disappear. Heuristic by design —
@@ -816,6 +872,12 @@ class ChatGPTWebTransport:
         if uploader is None:
             raise TransportError("ATTACHMENTS_UNSUPPORTED", "this driver cannot upload files")
         await self.verify_lock()
+        before = await self._state()
+        user_ids_before = {
+            message["id"]
+            for message in before.get("messages", [])
+            if message.get("role") == "user"
+        }
         # The composer form input accepts everything (images included). The
         # standalone image/* inputs belong to other features and CDP rejects
         # them with "Not allowed" (verified live 2026-07-25).
@@ -829,6 +891,13 @@ class ChatGPTWebTransport:
                 await uploader(selector, [path])
             attached = True
         except DriverError as cdp_exc:
+            if getattr(cdp_exc, "code", None) == DELIVERY_UNCERTAIN:
+                self.delivery_uncertain = True
+                self.pause(DELIVERY_UNCERTAIN)
+                raise TransportError(
+                    DELIVERY_UNCERTAIN,
+                    f"attachment upload may have started: {cdp_exc}",
+                ) from cdp_exc
             if getattr(self.driver, "supports_raw_evaluation", True) is False:
                 raise TransportError(
                     "ATTACHMENT_FAILED",
@@ -864,18 +933,65 @@ class ChatGPTWebTransport:
         chip = await self.driver.await_attachment()
         if not chip.get("ok"):
             raise TransportError("ATTACHMENT_FAILED", chip.get("error", "attachment never appeared"))
+        expected_attachment_name = str(name or Path(path).name)
         if text and text.strip():
-            return await self.send_message(text)
+            sent_message = await self.send_message(
+                text,
+                attachment_label=expected_attachment_name,
+            )
+            if not _message_has_attachment(sent_message, expected_attachment_name):
+                self.delivery_uncertain = True
+                self.pause(DELIVERY_UNCERTAIN)
+                raise TransportError(
+                    DELIVERY_UNCERTAIN,
+                    "attachment not visible in the sent user message",
+                )
+            return sent_message
         result = await self.driver.send_bare()
         if not result.get("ok"):
             self.delivery_uncertain = True
             self.pause(DELIVERY_UNCERTAIN)
             raise TransportError(DELIVERY_UNCERTAIN, f"bare send failed: {result.get('error')}")
+        sent: list[dict] = []
+        after: dict = {}
+        deadline = time.monotonic() + min(30.0, self.max_wait)
+        while time.monotonic() < deadline:
+            try:
+                after = await self._state()
+            except (TransportError, DriverError) as exc:
+                self.delivery_uncertain = True
+                self.pause(DELIVERY_UNCERTAIN)
+                raise TransportError(
+                    DELIVERY_UNCERTAIN,
+                    f"cannot confirm attachment delivery: {exc}",
+                ) from exc
+            sent = [
+                message
+                for message in after.get("messages", [])
+                if message.get("role") == "user"
+                and message.get("id") not in user_ids_before
+                and _message_has_attachment(message, expected_attachment_name)
+            ]
+            if sent:
+                break
+            await asyncio.sleep(self.poll_interval)
+        if not sent:
+            self.delivery_uncertain = True
+            self.pause(DELIVERY_UNCERTAIN)
+            raise TransportError(
+                DELIVERY_UNCERTAIN,
+                "attachment message not visible after send",
+            )
         if self._pending_new_chat:
-            await self._capture_new_lock("")
+            await self._capture_new_lock(after.get("url", ""))
         return {"sent": True, "attachment": chip.get("label")}
 
-    async def send_message(self, text: str) -> dict:
+    async def send_message(
+        self,
+        text: str,
+        *,
+        attachment_label: str | None = None,
+    ) -> dict:
         """Send one user message into the locked conversation.
 
         Never resends automatically; uncertain delivery must be resolved by
@@ -918,12 +1034,18 @@ class ChatGPTWebTransport:
         # the leading ``` fence AND its language label, so neither can serve
         # as the marker; the JSON body stays visible inside the code block.
         marker = ""
+        rendered_lines: list[str] = []
         for line in text.splitlines():
             stripped = line.strip()
-            if stripped.startswith("```") or len(stripped) < 8:
+            if not stripped or stripped.startswith("```"):
                 continue
-            marker = stripped[:60]
-            break
+            rendered = " ".join(stripped.split())
+            rendered_lines.append(rendered)
+            if not marker and len(rendered) >= 8:
+                marker = rendered[:60]
+        if not marker and rendered_lines:
+            marker = rendered_lines[0][:60]
+        short_expected = " ".join(rendered_lines).casefold()
         sent: list[dict] = []
         after: dict = {}
         deadline = time.monotonic() + min(30.0, self.max_wait)
@@ -936,16 +1058,42 @@ class ChatGPTWebTransport:
                 raise TransportError(
                     DELIVERY_UNCERTAIN, f"cannot confirm delivery: {exc}"
                 ) from exc
-            sent = [
-                m
-                for m in after.get("messages", [])
-                if m["role"] == "user"
-                and m["id"] not in user_ids_before
-                and marker in (
-                    m.get("text", "")
-                    + " ".join(b.get("text", "") for b in m.get("code_blocks", []))
+            sent = []
+            for message in after.get("messages", []):
+                if (
+                    message.get("role") != "user"
+                    or message.get("id") in user_ids_before
+                ):
+                    continue
+                visible_text = (
+                    str(message.get("text") or "")
+                    + " "
+                    + " ".join(
+                        str(block.get("text") or "")
+                        for block in message.get("code_blocks", [])
+                    )
                 )
-            ]
+                normalized_visible_text = " ".join(visible_text.split())
+                if len(marker) >= 8:
+                    confirmed = marker in normalized_visible_text
+                else:
+                    short_candidates = [
+                        " ".join(str(message.get("text") or "").split()).casefold(),
+                        *(
+                            " ".join(str(block.get("text") or "").split()).casefold()
+                            for block in message.get("code_blocks", [])
+                        ),
+                    ]
+                    confirmed = bool(short_expected) and (
+                        short_expected in short_candidates
+                        or (
+                            bool(attachment_label)
+                            and short_expected
+                            in " ".join(str(message.get("text") or "").split()).casefold()
+                        )
+                    )
+                if confirmed:
+                    sent.append(message)
             if sent:
                 break
             await asyncio.sleep(0.5)
@@ -1001,6 +1149,8 @@ class ChatGPTWebTransport:
         stable_since: float | None = None
         empty_since: float | None = None
         final_paint_requested = False
+        streaming_sig: str | None = None
+        streaming_stable_since: float | None = None
 
         async def emit(payload: dict) -> None:
             if on_update is None:
@@ -1062,14 +1212,41 @@ class ChatGPTWebTransport:
                         "streaming": is_streaming,
                     })
                     last_emit = emit_key
-                if not is_streaming:
+                sig = (latest.get("text") or "") + "\x00" + "\x00".join(
+                    (b.get("text") or "") for b in (latest.get("code_blocks") or [])
+                )
+                if is_streaming:
+                    now = time.monotonic()
+                    focus_tab = getattr(self.driver, "focus_tab", None)
+                    if (
+                        sig.strip("\x00")
+                        and not final_paint_requested
+                        and focus_tab is not None
+                        and getattr(self.driver, "requires_content_stability", True)
+                    ):
+                        if sig == streaming_sig:
+                            streaming_stable_since = (
+                                streaming_stable_since
+                                if streaming_stable_since is not None
+                                else now
+                            )
+                            if now - streaming_stable_since >= self.stability_interval:
+                                await focus_tab()
+                                final_paint_requested = True
+                                last_sig = None
+                                stable_since = None
+                                await asyncio.sleep(self.poll_interval)
+                                continue
+                        else:
+                            streaming_sig = sig
+                            streaming_stable_since = None
+                else:
+                    streaming_sig = None
+                    streaming_stable_since = None
                     now = time.monotonic()
                     # Stability signature: visible text + code block contents
                     # (thinking models stream into the CodeMirror block after
                     # the prose, and the prose can be empty throughout).
-                    sig = (latest.get("text") or "") + "\x00" + "\x00".join(
-                        (b.get("text") or "") for b in (latest.get("code_blocks") or [])
-                    )
                     if not sig.strip("\x00"):
                         # Empty assistant shell: never final within the grace
                         # window — the model is very likely still reasoning or
@@ -1282,6 +1459,27 @@ _STATE_JS = r"""
       src: img.currentSrc || img.src || '',
       alt: img.alt || '',
     })).filter((img) => img.src && !img.src.startsWith('data:image/svg'));
+    const attachmentNames = new Set();
+    const attachments = Array.from(el.querySelectorAll([
+      '[data-testid*="attachment"]',
+      '[data-testid*="file-chip"]',
+      '[class*="attachment"]',
+      '[class*="file-chip"]',
+      'a[download]',
+    ].join(','))).map((item) => {
+      const name = (
+        item.getAttribute('download')
+        || item.getAttribute('data-filename')
+        || item.getAttribute('title')
+        || item.getAttribute('aria-label')
+        || item.getAttribute('alt')
+        || item.textContent
+        || ''
+      ).replace(/\s+/g, ' ').trim();
+      if (!name || attachmentNames.has(name)) return null;
+      attachmentNames.add(name);
+      return { name };
+    }).filter(Boolean);
     const timeEl = el.querySelector('time');
     return {
       id: el.getAttribute('data-message-id') || ('idx-' + i),
@@ -1289,6 +1487,7 @@ _STATE_JS = r"""
       text: el.textContent || '',
       code_blocks: blocks,
       images: images,
+      attachments: attachments,
       created_at: timeEl ? (timeEl.getAttribute('datetime') || timeEl.textContent || '').trim() : null,
     };
   });

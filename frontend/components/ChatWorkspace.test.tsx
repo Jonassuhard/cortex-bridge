@@ -10,7 +10,7 @@ import {
   type ConversationEvent,
   type ConversationState,
 } from "@/lib/conversation-state";
-import type { ChatRun, ConversationSummary } from "@/lib/types";
+import type { ChatRun, ConversationSummary, CortexSettings, ExecutionPreflight } from "@/lib/types";
 import { ChatWorkspace } from "./ChatWorkspace";
 
 const summary = (key: string): ConversationSummary => ({
@@ -35,6 +35,7 @@ function ControlledWorkspace({
   onReloadConversation = () => undefined,
   onChatSend = () => undefined,
   onMissionStart = () => undefined,
+  settings = demoSettings,
   transportLatencyMs = 128,
 }: {
   initialState?: ConversationState;
@@ -43,7 +44,8 @@ function ControlledWorkspace({
   onRetryRecovery?: (key: string) => void;
   onReloadConversation?: (key: string) => void;
   onChatSend?: (key: string, text: string) => void;
-  onMissionStart?: (key: string, text: string) => void;
+  onMissionStart?: (key: string, text: string, preflight: ExecutionPreflight) => void;
+  settings?: CortexSettings;
   transportLatencyMs?: number | null;
 }) {
   const [state, setState] = useState(initialState);
@@ -103,7 +105,7 @@ function ControlledWorkspace({
         mission={entry?.mission || null}
         pipeline={demoPipeline}
         availability={{ chatState: "connected", agentState: "available", transportLatencyMs }}
-        settings={demoSettings}
+        settings={settings}
         inspectorOpen={false}
         sidebarCollapsed={false}
         capabilities={{ upload_file: true, take_screenshot: true }}
@@ -119,8 +121,8 @@ function ControlledWorkspace({
         }}
         onSendAttachment={(key) => send(key)}
         onSendScreenshot={(key) => send(key, false)}
-        onStartMission={(key, text) => {
-          onMissionStart(key, text);
+        onStartMission={(key, text, preflight) => {
+          onMissionStart(key, text, preflight);
           return send(key);
         }}
         onCancelChat={() => undefined}
@@ -268,6 +270,25 @@ describe("ChatWorkspace controlled composer", () => {
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("dialog", { name: "Vérifier l’exécution locale" })).not.toBeInTheDocument();
     expect(trigger).toHaveFocus();
+  });
+
+  it("normalizes unsupported mission settings before the final submission", async () => {
+    const onMissionStart = vi.fn<(key: string, text: string, preflight: ExecutionPreflight) => void>();
+    const ollamaSettings: CortexSettings = { ...demoSettings, primary_executor: "ollama-test-model" };
+    const user = userEvent.setup();
+    render(<ControlledWorkspace settings={ollamaSettings} onMissionStart={onMissionStart} />);
+
+    await user.type(screen.getByRole("textbox", { name: "Message à envoyer" }), "Mission locale");
+    await user.click(screen.getByRole("button", { name: "Exécuter…" }));
+    await user.click(screen.getByRole("checkbox", { name: /Réseau/ }));
+    await user.click(screen.getByRole("button", { name: /^Démarrer/ }));
+
+    expect(onMissionStart).toHaveBeenCalledOnce();
+    expect(onMissionStart.mock.calls[0][2]).toMatchObject({
+      executorKind: "deterministic",
+      capabilities: { network: false },
+    });
+    expect(ollamaSettings.primary_executor).toBe("ollama-test-model");
   });
 
   it("sends Enter's exact draft only to ChatGPT", async () => {

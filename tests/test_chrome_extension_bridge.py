@@ -201,6 +201,7 @@ class ChromeExtensionCommandTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(request["type"], "command")
         self.assertEqual(request["session"], "session-a")
         self.assertEqual(request["action"], "probe")
+        self.assertEqual(request["timeout_ms"], 1000)
 
         accepted = manager.receive_result(
             connection,

@@ -148,7 +148,8 @@ class AttachmentUploadIn(BaseModel):
 class ChatSendAttachmentIn(BaseModel):
     conversation_url: str
     text: str = ""
-    path: str
+    path: str | None = None
+    data_b64: str | None = None
     image: bool = False
     name: str | None = None
     new_conversation: bool = False
@@ -173,7 +174,18 @@ _runs: dict[str, ChatRunRuntime] = {}
 _view_transport: ChatGPTWebTransport | None = None
 _view_url: str | None = None
 _view_mutex = asyncio.Lock()
-_view_operation_mutex = asyncio.Lock()
+_view_operation_mutex: asyncio.Lock | None = None
+_view_operation_loop: asyncio.AbstractEventLoop | None = None
+
+
+def _view_operation_lock() -> asyncio.Lock:
+    """Return the shared read-surface lock for the current event loop."""
+    global _view_operation_mutex, _view_operation_loop
+    loop = asyncio.get_running_loop()
+    if _view_operation_mutex is None or _view_operation_loop is not loop:
+        _view_operation_mutex = asyncio.Lock()
+        _view_operation_loop = loop
+    return _view_operation_mutex
 
 
 def _make_transport(session_id: str) -> ChatGPTWebTransport:
@@ -393,23 +405,29 @@ async def _run_chat(run: ChatRunRuntime) -> None:
         _set_state(run, "WAITING_FOR_CHATGPT")
 
         last_visible = ""
+        last_streaming: bool | None = None
 
         async def on_update(update: dict[str, Any]) -> None:
-            nonlocal last_visible
+            nonlocal last_streaming, last_visible
             if run.cancelled:
                 await transport.cancel_generation()
                 return
             text = str(update.get("text") or "")
+            streaming = bool(update.get("streaming"))
             if text and run.first_response_at is None:
                 run.first_response_at = _now()
                 run.latency["first_response_ms"] = _monotonic_ms(started)
-            if text != last_visible or update.get("streaming"):
+            if text != last_visible or streaming != last_streaming:
                 last_visible = text
+                last_streaming = streaming
                 run.response_text = text
-                _set_state(run, "CHATGPT_STREAMING")
+                _set_state(
+                    run,
+                    "CHATGPT_STREAMING" if streaming else "WAITING_FOR_CHATGPT",
+                )
                 _emit(run, "stream", {
                     "text": text,
-                    "streaming": bool(update.get("streaming")),
+                    "streaming": streaming,
                     "first_response_at": run.first_response_at,
                     "code_blocks": update.get("code_blocks", []),
                     "images": update.get("images", []),
@@ -464,6 +482,14 @@ async def _run_chat(run: ChatRunRuntime) -> None:
                 await transport.close()
             except Exception:
                 pass
+        if run.attachment_path:
+            try:
+                attachments.release_owned(
+                    run.attachment_path,
+                    token=run.attachment_token,
+                )
+            except Exception:
+                pass
         if run.lease is not None:
             await run.lease.release()
         _persist_runs()
@@ -509,7 +535,7 @@ async def conversation_snapshot(url: str = Query(..., min_length=1), light: int 
         }
 
     try:
-        async with _view_operation_mutex:
+        async with _view_operation_lock():
             transport = await _ensure_view_transport(clean_url)
             try:
                 return await read_snapshot(transport)
@@ -554,10 +580,16 @@ async def send_chat(body: ChatSendIn) -> dict[str, Any]:
         session_id=lease.session_id,
         lease=lease,
     )
-    _runs[run.id] = run
-    _emit(run, "status", {"state": run.state})
-    run.task = asyncio.create_task(_run_chat(run))
-    return run.public()
+    try:
+        _runs[run.id] = run
+        _emit(run, "status", {"state": run.state})
+        payload = run.public()
+        run.task = asyncio.create_task(_run_chat(run))
+        return payload
+    except BaseException:
+        _runs.pop(run.id, None)
+        await lease.release()
+        raise
 
 
 def list_active_runs() -> list[ChatRunRuntime]:
@@ -606,10 +638,16 @@ async def _start_attachment_run(
         session_id=lease.session_id,
         lease=lease,
     )
-    _runs[run.id] = run
-    _emit(run, "status", {"state": run.state})
-    run.task = asyncio.create_task(_run_chat(run))
-    return run.public()
+    try:
+        _runs[run.id] = run
+        _emit(run, "status", {"state": run.state})
+        payload = run.public()
+        run.task = asyncio.create_task(_run_chat(run))
+        return payload
+    except BaseException:
+        _runs.pop(run.id, None)
+        await lease.release()
+        raise
 
 
 @router.post("/chat/attachments", status_code=201)
@@ -656,22 +694,39 @@ async def send_with_attachment(body: ChatSendAttachmentIn) -> dict[str, Any]:
         raise HTTPException(status_code=403, detail="Experimental ChatGPT Web Transport is not enabled")
     url = _validate_chatgpt_url(body.conversation_url)
     try:
-        descriptor = attachments.stage_path(body.path)
+        if body.path and body.data_b64 is not None:
+            raise ValueError("fournis soit path, soit name + data_b64, pas les deux")
+        if body.data_b64 is not None and body.name:
+            descriptor = attachments.store_upload(body.name, body.data_b64)
+        elif body.path:
+            descriptor = attachments.stage_path(body.path)
+        else:
+            raise ValueError("fournis soit path, soit name + data_b64")
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
-    return await _start_attachment_run(
-        url=url,
-        text=body.text,
-        path=descriptor["path"],
-        image=body.image or descriptor["kind"] == "image",
-        name=descriptor["name"],
-        new_conversation=body.new_conversation,
-        token=descriptor["token"],
-        owner=descriptor["owner"],
-        mime=descriptor["mime"],
-        kind=descriptor["kind"],
-        size_bytes=descriptor["size_bytes"],
-    )
+    try:
+        return await _start_attachment_run(
+            url=url,
+            text=body.text,
+            path=descriptor["path"],
+            image=body.image or descriptor["kind"] == "image",
+            name=descriptor["name"],
+            new_conversation=body.new_conversation,
+            token=descriptor["token"],
+            owner=descriptor["owner"],
+            mime=descriptor["mime"],
+            kind=descriptor["kind"],
+            size_bytes=descriptor["size_bytes"],
+        )
+    except BaseException:
+        try:
+            attachments.release_owned(
+                descriptor["path"],
+                token=descriptor["token"],
+            )
+        except Exception:
+            pass
+        raise
 
 
 @router.post("/chat/send-screenshot", status_code=202)
@@ -682,51 +737,84 @@ async def send_screenshot(body: ChatScreenshotIn) -> dict[str, Any]:
     if not missions_api.optin_accepted():
         raise HTTPException(status_code=403, detail="Experimental ChatGPT Web Transport is not enabled")
     url = _validate_chatgpt_url(body.conversation_url)
-    transport = _make_transport(SCREENSHOT_SESSION_ID)
+    transport: ChatGPTWebTransport | None = None
+    target: Path | None = None
+    descriptor: dict[str, Any] | None = None
     try:
-        shooter = getattr(transport.driver, "take_screenshot", None)
-        if shooter is None:
-            raise HTTPException(status_code=422, detail="ce transport ne sait pas capturer d'écran")
-        try:
-            if url.rstrip("/") == "https://chatgpt.com":
-                await transport.start_new_conversation(url)
-            else:
-                await transport.select_conversation(url)
-        except Exception as exc:
-            raise HTTPException(status_code=503, detail=f"conversation cible introuvable: {exc}")
-        attachments.ATTACHMENTS_DIR.mkdir(parents=True, exist_ok=True)
-        target = attachments.ATTACHMENTS_DIR / f"cortex-screenshot-{uuid.uuid4().hex[:8]}.png"
-        try:
-            result = await shooter(str(target))
-            if not isinstance(result, dict) or not result.get("path"):
-                raise ValueError("le pilote n'a pas confirmé le chemin de capture")
-            descriptor = attachments.describe_screenshot(
-                str(result["path"]),
-                expected_path=str(target),
-            )
-        except Exception as exc:
-            target.unlink(missing_ok=True)
-            raise HTTPException(status_code=503, detail=f"capture impossible: {exc}")
-    finally:
-        closer = getattr(transport, "close", None)
-        if callable(closer):
+        # Read-only browser sessions share one physical Chrome tab. Keep route
+        # selection and pixel capture in the same operation lock used by
+        # conversation snapshots, otherwise a concurrent view can retarget the
+        # tab between these two steps and leak another conversation's pixels.
+        async with _view_operation_lock():
+            transport = _make_transport(SCREENSHOT_SESSION_ID)
             try:
-                await closer()
+                shooter = getattr(transport.driver, "take_screenshot", None)
+                if shooter is None:
+                    raise HTTPException(status_code=422, detail="ce transport ne sait pas capturer d'écran")
+                try:
+                    if url.rstrip("/") == "https://chatgpt.com":
+                        await transport.start_new_conversation(url)
+                    else:
+                        await transport.select_conversation(url)
+                except Exception as exc:
+                    raise HTTPException(status_code=503, detail=f"conversation cible introuvable: {exc}")
+                attachments.ATTACHMENTS_DIR.mkdir(parents=True, exist_ok=True)
+                target = attachments.ATTACHMENTS_DIR / f"cortex-screenshot-{uuid.uuid4().hex[:8]}.png"
+                try:
+                    result = await shooter(str(target))
+                    if not isinstance(result, dict) or not result.get("path"):
+                        raise ValueError("le pilote n'a pas confirmé le chemin de capture")
+                    descriptor = attachments.describe_screenshot(
+                        str(result["path"]),
+                        expected_path=str(target),
+                    )
+                except Exception as exc:
+                    target.unlink(missing_ok=True)
+                    raise HTTPException(status_code=503, detail=f"capture impossible: {exc}")
+            finally:
+                closer = getattr(transport, "close", None)
+                if callable(closer):
+                    try:
+                        await closer()
+                    except Exception:
+                        pass
+    except BaseException:
+        if descriptor is not None:
+            try:
+                attachments.release_owned(
+                    descriptor["path"],
+                    token=descriptor["token"],
+                )
             except Exception:
                 pass
-    return await _start_attachment_run(
-        url=url,
-        text=body.text,
-        path=descriptor["path"],
-        image=True,
-        name=descriptor["name"],
-        new_conversation=body.new_conversation,
-        token=descriptor["token"],
-        owner=descriptor["owner"],
-        mime=descriptor["mime"],
-        kind=descriptor["kind"],
-        size_bytes=descriptor["size_bytes"],
-    )
+        elif target is not None:
+            target.unlink(missing_ok=True)
+        raise
+    if descriptor is None:  # pragma: no cover - defensive
+        raise HTTPException(status_code=503, detail="capture impossible: descripteur absent")
+    try:
+        return await _start_attachment_run(
+            url=url,
+            text=body.text,
+            path=descriptor["path"],
+            image=True,
+            name=descriptor["name"],
+            new_conversation=body.new_conversation,
+            token=descriptor["token"],
+            owner=descriptor["owner"],
+            mime=descriptor["mime"],
+            kind=descriptor["kind"],
+            size_bytes=descriptor["size_bytes"],
+        )
+    except BaseException:
+        try:
+            attachments.release_owned(
+                descriptor["path"],
+                token=descriptor["token"],
+            )
+        except Exception:
+            pass
+        raise
 
 
 @router.get("/transport/capabilities")
@@ -736,8 +824,22 @@ async def transport_capabilities() -> dict[str, Any]:
 
     transport = _make_transport(READ_ONLY_SESSION_ID)
     caps_fn = getattr(transport.driver, "capabilities", None)
-    caps = caps_fn() if caps_fn else {"send_text": True, "upload_file": False, "upload_image": False, "take_screenshot": False}
-    caps.setdefault("limits", {"file_bytes": adapter_mod.MAX_FILE_BYTES, "image_bytes": adapter_mod.MAX_IMAGE_BYTES})
+    caps = dict(caps_fn()) if caps_fn else {"send_text": True, "upload_file": False, "upload_image": False, "take_screenshot": False}
+    driver_limits = caps.get("limits") if isinstance(caps.get("limits"), dict) else {}
+
+    def bounded_limit(value: Any, intake_limit: int) -> int:
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            return min(value, intake_limit)
+        return intake_limit
+
+    caps["limits"] = {
+        "file_bytes": bounded_limit(
+            driver_limits.get("file_bytes"), adapter_mod.MAX_FILE_BYTES
+        ),
+        "image_bytes": bounded_limit(
+            driver_limits.get("image_bytes"), adapter_mod.MAX_IMAGE_BYTES
+        ),
+    }
     return caps
 
 

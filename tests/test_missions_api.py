@@ -13,6 +13,7 @@ starting the mission.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import socket
 import sys
@@ -173,12 +174,24 @@ class MissionsApiTestCase(unittest.TestCase):
 
     def wait_terminal(self, mission_id, timeout=60):
         deadline = time.time() + timeout
+        last = None
         while time.time() < deadline:
             _, d = self.get(f"/api/missions/{mission_id}")
+            last = d
             if d["mission"]["state"] in ("COMPLETED", "BLOCKED", "FAILED", "CANCELLED"):
                 return d
             time.sleep(0.2)
-        self.fail(f"mission {mission_id} never terminated")
+        mission = last["mission"] if last else {}
+        events = (last or {}).get("timeline", {}).get("transport_events", [])
+        recent_events = [
+            (event.get("event_type"), event.get("detail_json"))
+            for event in events[-5:]
+        ]
+        self.fail(
+            f"mission {mission_id} never terminated; "
+            f"state={mission.get('state')} pause_reason={mission.get('pause_reason')} "
+            f"recent_transport_events={recent_events}"
+        )
 
     def _cancel_stragglers(self):
         for rt in list(missions_api._runtimes.values()):
@@ -316,6 +329,98 @@ class MissionsApiTestCase(unittest.TestCase):
         self.assertEqual(status, 200)
         d = self.wait_terminal(self.mission_id)
         self.assertEqual(d["mission"]["state"], "COMPLETED")
+        events = d["timeline"]["transport_events"]
+        paused_recovery_errors = [
+            event for event in events
+            if event["event_type"] == "TRANSPORT_PAUSED"
+            and "STATE_UNREADABLE" in (event.get("detail_json") or "")
+        ]
+        self.assertEqual(paused_recovery_errors, [])
+        self.assertEqual(
+            sum(event["event_type"] == "MESSAGE_DELIVERED" for event in events),
+            2,
+        )
+
+    def test_05b_pause_resume_keeps_pending_approval_visible(self):
+        self.optin()
+        status, body = self.start_mission([
+            decision_reply(self.mission_id, 1, "EXECUTE", tool="write_file",
+                           arguments={"path": "approval-resume.txt", "content": "A"},
+                           criteria=["approval-resume.txt written"]),
+            decision_reply(self.mission_id, 2, "COMPLETE",
+                           criteria=["approval-resume.txt exists"], terminal=True),
+        ], "Create approval-resume.txt.",
+            approval_policy="workspace-write-with-approvals")
+        self.assertEqual(status, 201, body)
+        self.wait_state(self.mission_id, "WAITING_FOR_APPROVAL",
+                        extra=lambda d: d["awaiting_approval"])
+
+        status, _ = self.post(f"/api/missions/{self.mission_id}/pause")
+        self.assertEqual(status, 200)
+        paused = self.wait_state(self.mission_id, "PAUSED")
+        self.assertEqual(paused["mission"]["paused_from_state"], "WAITING_FOR_APPROVAL")
+
+        status, refused = self.post(f"/api/missions/{self.mission_id}/approve",
+                                    {"scope": "once", "approve": True})
+        self.assertEqual(status, 409)
+        self.assertIn("Aucune approbation applicable", refused["detail"])
+
+        status, resumed = self.post(f"/api/missions/{self.mission_id}/resume")
+        self.assertEqual(status, 200)
+        self.assertEqual(resumed["state"], "WAITING_FOR_APPROVAL")
+        self.wait_state(self.mission_id, "WAITING_FOR_APPROVAL",
+                        extra=lambda d: d["awaiting_approval"])
+
+        status, _ = self.post(f"/api/missions/{self.mission_id}/approve",
+                              {"scope": "once", "approve": True})
+        self.assertEqual(status, 200)
+        terminal = self.wait_terminal(self.mission_id)
+        self.assertEqual(terminal["mission"]["state"], "COMPLETED")
+        self.assertEqual((self.ws / "approval-resume.txt").read_text(), "A")
+
+    def test_05c_pause_refuses_inflight_local_action_without_corrupting_it(self):
+        self.optin()
+        status, body = self.start_mission([
+            decision_reply(self.mission_id, 1, "EXECUTE", tool="write_file",
+                           arguments={"path": "action-resume.txt", "content": "A"},
+                           criteria=["action-resume.txt written"]),
+            decision_reply(self.mission_id, 2, "COMPLETE",
+                           criteria=["action-resume.txt exists"], terminal=True),
+        ], "Create action-resume.txt.",
+            approval_policy="workspace-write-with-approvals")
+        self.assertEqual(status, 201, body)
+        self.wait_state(self.mission_id, "WAITING_FOR_APPROVAL",
+                        extra=lambda d: d["awaiting_approval"])
+
+        runtime = missions_api._runtimes[self.mission_id]
+        original_write_file = runtime._tools.write_file
+        release_action = threading.Event()
+
+        async def blocked_write_file(*args, **kwargs):
+            while not release_action.is_set():
+                await asyncio.sleep(0.02)
+            return await original_write_file(*args, **kwargs)
+
+        runtime._tools.write_file = blocked_write_file
+        self.addCleanup(release_action.set)
+
+        status, _ = self.post(f"/api/missions/{self.mission_id}/approve",
+                              {"scope": "once", "approve": True})
+        self.assertEqual(status, 200)
+        self.wait_state(self.mission_id, "EXECUTING_LOCAL_ACTION")
+
+        status, refused = self.post(f"/api/missions/{self.mission_id}/pause")
+        self.assertEqual(status, 409)
+        self.assertIn("Impossible de mettre la mission en pause", refused["detail"])
+        self.wait_state(self.mission_id, "EXECUTING_LOCAL_ACTION")
+        release_action.set()
+
+        terminal = self.wait_terminal(self.mission_id)
+        self.assertEqual(terminal["mission"]["state"], "COMPLETED")
+        self.assertEqual((self.ws / "action-resume.txt").read_text(), "A")
+        self.assertEqual(
+            missions_api.get_store().count("tool_executions", self.mission_id), 1
+        )
 
     def test_06_cancel(self):
         self.optin()

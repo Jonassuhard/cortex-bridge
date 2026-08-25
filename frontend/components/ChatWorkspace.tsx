@@ -97,6 +97,17 @@ function cleanMessageText(text: string): string {
     .trim();
 }
 
+function normalizeMissionPreflight(value: ExecutionPreflight): ExecutionPreflight {
+  return {
+    ...value,
+    executorKind: "deterministic",
+    capabilities: {
+      ...value.capabilities,
+      network: false,
+    },
+  };
+}
+
 function isMissionProtocolMessage(message: ConversationMessage): boolean {
   const text = cleanMessageText(message.text).trimStart();
   const codeLanguages = (message.code_blocks || [])
@@ -424,7 +435,7 @@ export function ChatWorkspace({
     setPreflight({
       conversationKey,
       workspace: settings.default_workspace,
-      executorKind: settings.primary_executor.toLowerCase().includes("ollama") ? "ollama" : "deterministic",
+      executorKind: "deterministic",
       capabilities: { read: true, write: false, processes: false, network: false, delete: false },
       approvalPolicy: "read-only",
       maxIterations: settings.max_iterations,
@@ -581,6 +592,7 @@ export function ChatWorkspace({
 
       <div className="composer-shell">
         <Composer
+          key={conversationKey || "no-conversation"}
           value={draft}
           attachment={attachment}
           blocked={composerBlocked}
@@ -618,12 +630,13 @@ export function ChatWorkspace({
           value={preflight}
           attachmentName={attachment?.name || null}
           confirming={preflightConfirming}
-          onChange={setPreflight}
+          onChange={(value) => setPreflight(normalizeMissionPreflight(value))}
           onClose={() => setPreflightOpen(false)}
           onConfirm={() => {
             if (!conversationKey) return;
+            const missionPreflight = normalizeMissionPreflight(preflight);
             setPreflightConfirming(true);
-            void onStartMission(conversationKey, draft, preflight).then((accepted) => {
+            void onStartMission(conversationKey, draft, missionPreflight).then((accepted) => {
               if (accepted) setPreflightOpen(false);
             }).finally(() => setPreflightConfirming(false));
           }}

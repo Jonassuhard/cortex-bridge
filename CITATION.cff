@@ -2,7 +2,7 @@ cff-version: 1.2.0
 message: "If you use Cortex Bridge, cite the software and its public repository."
 title: "Cortex Bridge"
 type: software
-version: 0.5.2
+version: 0.5.3
 authors:
   - family-names: "Suhard"
     given-names: "Jonas"

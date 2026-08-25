@@ -363,6 +363,31 @@ class StateStoreTestCase(unittest.TestCase):
         sm2.resume("WAITING_FOR_CHATGPT")
         self.assertEqual(sm2.state, "WAITING_FOR_CHATGPT")
 
+    def test_pause_remembers_and_restores_exact_runtime_substate(self):
+        self.sm.transition("PARSING_DECISION")
+        self.sm.transition("WAITING_FOR_APPROVAL")
+        self.sm.transition("PAUSED", pause_reason="USER_PAUSE")
+
+        paused = self.store.get_mission(self.mission_id)
+        self.assertEqual(paused["paused_from_state"], "WAITING_FOR_APPROVAL")
+
+        self.store.resume(self.mission_id)
+        resumed = self.store.get_mission(self.mission_id)
+        self.assertEqual(resumed["state"], "WAITING_FOR_APPROVAL")
+        self.assertIsNone(resumed["paused_from_state"])
+
+    def test_restart_recovery_remembers_interrupted_substate(self):
+        self.sm.transition("PARSING_DECISION")
+        self.sm.transition("EXECUTING_LOCAL_ACTION")
+        self.store.close()
+
+        store2 = Store(self.db_path)
+        self.addCleanup(store2.close)
+        recovered = store2.get_mission(self.mission_id)
+
+        self.assertEqual(recovered["state"], "PAUSED_RECOVERY_REQUIRED")
+        self.assertEqual(recovered["paused_from_state"], "EXECUTING_LOCAL_ACTION")
+
 
 class StoreSchemaTestCase(unittest.TestCase):
     """§18: all 11 required tables exist; report builder (§11) shape."""

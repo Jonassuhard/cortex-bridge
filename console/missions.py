@@ -54,8 +54,12 @@ from orchestration.store import Store, StoreError  # noqa: E402
 from orchestration import protocol  # noqa: E402
 from transport.chatgpt_web.adapter import (  # noqa: E402
     EXPERIMENTAL_TRANSPORT_WARNING,
+    STATE_UNREADABLE,
+    BlockerDetected,
     ChatGPTWebTransport,
     ConversationLock,
+    TransportError,
+    protocol_text,
 )
 from transport.browser import create_transport  # noqa: E402
 import write_slots  # noqa: E402
@@ -533,6 +537,95 @@ async def _run_mission_task(rt: MissionRuntime, objective: str, body: MissionIn)
         await _release_terminal_mission(rt)
 
 
+async def _recover_unconsumed_visible_reply(
+    rt: MissionRuntime,
+    store: Store,
+) -> MockReply | None:
+    """Recover a reply painted before a transient read failure paused the run.
+
+    ``attach()`` deliberately baselines every visible assistant message. A
+    reply that appeared just before ``STATE_UNREADABLE`` would otherwise be
+    hidden by that new baseline forever. Only an unrecorded decision for this
+    exact mission and its next iteration is eligible; stale paint, another
+    mission, malformed output and already-consumed messages remain ignored.
+    """
+    expected_iteration = int(store.get_mission(rt.mission_id)["iteration"]) + 1
+    decision_rows = store.rows("orchestrator_decisions", rt.mission_id, order_by="rowid")
+    valid_decisions = [row for row in decision_rows if row.get("valid") == 1]
+    if any(row.get("iteration") == expected_iteration for row in valid_decisions):
+        return None
+    seen_action_ids = {
+        str(row.get("action_id") or "")
+        for row in valid_decisions
+        if row.get("action_id")
+    }
+
+    def candidates(state: dict) -> list[MockReply]:
+        if state.get("streaming") or state.get("stop_button_present"):
+            raise TransportError(
+                STATE_UNREADABLE,
+                "visible response is still streaming during resume recovery",
+            )
+        matches: list[MockReply] = []
+        for message in state.get("messages") or []:
+            message_id = str(message.get("id") or "")
+            if message.get("role") != "assistant" or not message_id:
+                continue
+            text = protocol_text(message)
+            try:
+                parsed = protocol.extract_decision_block(text)
+                protocol.validate_decision(
+                    parsed,
+                    expected_mission_id=rt.mission_id,
+                    expected_iteration=expected_iteration,
+                    seen_action_ids=seen_action_ids,
+                )
+            except protocol.DecisionError:
+                continue
+            matches.append(MockReply(text=text, message_id=message_id))
+        return matches
+
+    first = candidates(await rt.transport.snapshot())
+    if not first:
+        return None
+    if len(first) != 1:
+        raise TransportError(
+            STATE_UNREADABLE,
+            "multiple unconsumed visible decisions match resume recovery",
+        )
+    stability_interval = min(
+        max(float(getattr(rt.transport, "stability_interval", 0.0)), 0.0),
+        1.0,
+    )
+    if stability_interval:
+        await asyncio.sleep(stability_interval)
+    second = candidates(await rt.transport.snapshot())
+    if len(second) != 1 or second[0] != first[0]:
+        raise TransportError(
+            STATE_UNREADABLE,
+            "visible resume decision did not remain stable",
+        )
+    return first[0]
+
+
+def _pause_resumed_transport_error(
+    store: Store,
+    mission_id: str,
+    error: TransportError,
+) -> None:
+    reason = str(getattr(error, "code", None) or STATE_UNREADABLE)
+    try:
+        store.transition(mission_id, "PAUSED", pause_reason=reason)
+    except StoreError:
+        pass
+    store.record_transport_event(
+        str(uuid.uuid4()),
+        mission_id,
+        "TRANSPORT_PAUSED",
+        {"reason": reason, "error": str(error)[:500]},
+    )
+
+
 async def _resume_mission_task(rt: MissionRuntime) -> None:
     store = get_store()
     client = TransportOrchestratorClient(rt.transport, store=store, mission_id=rt.mission_id)
@@ -581,6 +674,21 @@ async def _resume_mission_task(rt: MissionRuntime) -> None:
             "PAUSED_RESPONSE_CONSUMED",
             {"stash_event_id": stash_event["id"]},
         )
+    else:
+        try:
+            recovered = await _recover_unconsumed_visible_reply(rt, store)
+        except (BlockerDetected, TransportError) as exc:
+            _pause_resumed_transport_error(store, rt.mission_id, exc)
+            await _release_terminal_mission(rt)
+            return
+        if recovered is not None:
+            loop._stashed = recovered
+            store.record_transport_event(
+                str(uuid.uuid4()),
+                rt.mission_id,
+                "VISIBLE_RESPONSE_RECOVERED",
+                {"message_id": recovered.message_id},
+            )
 
     # Resume without ever re-sending a message ChatGPT already answered, and
     # without awaiting a reply that will never come:
@@ -608,6 +716,8 @@ async def _resume_mission_task(rt: MissionRuntime) -> None:
         loop._pending = None  # contract+reports delivered → await ChatGPT
     try:
         await loop.run()
+    except (BlockerDetected, TransportError) as exc:
+        _pause_resumed_transport_error(store, rt.mission_id, exc)
     except Exception as exc:
         _fail_mission(store, rt.mission_id, f"resume crashed: {exc}")
         store.record_transport_event(
@@ -615,6 +725,43 @@ async def _resume_mission_task(rt: MissionRuntime) -> None:
         )
     finally:
         await _release_terminal_mission(rt)
+
+
+async def _resume_after_active_task(
+    rt: MissionRuntime,
+    active_task: asyncio.Task,
+) -> None:
+    """Serialize resume behind the mission loop that observed the pause.
+
+    A user can resume while the original loop is still waiting for ChatGPT.
+    Starting a second loop at that point lets both loops consume the same
+    conversation and can make the recovery probe inspect the next reply while
+    it is still streaming. Let the original loop finish first: it either
+    continues normally after the state is resumed, or persists its in-flight
+    reply as ``PAUSED_RESPONSE_STASHED`` before returning. Only the latter case
+    needs the rebuilt resume loop.
+    """
+    try:
+        await active_task
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        # The mission task records its own durable failure evidence. The state
+        # check below remains the source of truth for whether recovery is safe.
+        pass
+
+    try:
+        mission = get_store().get_mission(rt.mission_id)
+    except StoreError:
+        return
+    if mission["state"] in {"COMPLETED", "BLOCKED", "FAILED", "CANCELLED"}:
+        await _release_terminal_mission(rt)
+        return
+    if mission["state"] in {"PAUSED", "PAUSED_RECOVERY_REQUIRED"}:
+        return
+    if _runtimes.get(rt.mission_id) is not rt:
+        return
+    await _resume_mission_task(rt)
 
 
 async def _release_after_quiescence(
@@ -1036,7 +1183,20 @@ async def fallback_payload(mission_id: str) -> dict:
 @router.post("/missions/{mission_id}/pause")
 async def pause_mission(mission_id: str) -> dict:
     store = get_store()
-    _mission_or_404(store, mission_id)
+    mission = _mission_or_404(store, mission_id)
+    safe_pause_states = {
+        "WAITING_FOR_CHATGPT",
+        "WAITING_FOR_APPROVAL",
+        "TRANSPORT_ERROR",
+    }
+    if mission["state"] not in safe_pause_states:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Impossible de mettre la mission en pause depuis {mission['state']} : "
+                "attends que l’étape locale atteigne un état stable."
+            ),
+        )
     try:
         store.transition(mission_id, "PAUSED", pause_reason="USER_PAUSE")
     except StoreError as exc:
@@ -1053,6 +1213,42 @@ async def resume_mission(mission_id: str) -> dict:
     mission = _mission_or_404(store, mission_id)
     if mission["state"] not in ("PAUSED", "PAUSED_RECOVERY_REQUIRED"):
         raise HTTPException(status_code=409, detail=f"cannot resume from {mission['state']}")
+    active_rt = _runtimes.get(mission_id)
+    active_task = active_rt.task if active_rt is not None else None
+    if active_rt is not None and active_task is not None and not active_task.done():
+        # Do not create two browser consumers for one conversation. The
+        # coordinator waits for the loop that observed the pause, then only
+        # rebuilds if that loop returned without completing the mission.
+        try:
+            restored_state = store.resume(mission_id)
+        except StoreError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        active_rt.task = asyncio.create_task(
+            _resume_after_active_task(active_rt, active_task)
+        )
+        return {"state": restored_state}
+
+    paused_from_state = mission.get("paused_from_state")
+    runtime_bound_states = {
+        "PARSING_DECISION",
+        "WAITING_FOR_APPROVAL",
+        "EXECUTING_LOCAL_ACTION",
+        "VALIDATING_ACTION",
+        "FINAL_VALIDATION",
+    }
+    if paused_from_state in runtime_bound_states:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Reprise sûre impossible depuis {paused_from_state} : "
+                "le processus d’exécution d’origine n’est plus actif."
+            ),
+        )
+    if paused_from_state is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Reprise sûre impossible : l’état antérieur à la pause est absent.",
+        )
     # Rebuild the runtime: re-attach the locked conversation, never resend.
     bindings = store.rows("conversation_bindings", mission_id, order_by="rowid")
     lease = _mission_leases.get(mission_id)
@@ -1102,7 +1298,7 @@ async def resume_mission(mission_id: str) -> dict:
             "PAUSED_RECOVERY_REQUIRED",
         }:
             try:
-                store.resume(mission_id, "TRANSPORT_ERROR")
+                store.resume(mission_id)
             except StoreError:
                 pass
         _fail_mission(store, mission_id, f"mission resume failed: {exc}")
@@ -1141,7 +1337,12 @@ async def cancel_mission(mission_id: str) -> dict:
 @router.post("/missions/{mission_id}/approve")
 async def approve_mission(mission_id: str, body: ApprovalIn) -> dict:
     store = get_store()
-    _mission_or_404(store, mission_id)
+    mission = _mission_or_404(store, mission_id)
+    if mission["state"] != "WAITING_FOR_APPROVAL":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Aucune approbation applicable tant que la mission est {mission['state']}.",
+        )
     rt = _runtimes.get(mission_id)
     if rt is None or rt.approval_event.is_set():
         raise HTTPException(status_code=409, detail="no pending approval for this mission")

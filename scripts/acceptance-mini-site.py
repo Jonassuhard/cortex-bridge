@@ -159,6 +159,8 @@ def verify(args: argparse.Namespace) -> int:
     for path in workspace.rglob("*"):
         if not path.is_file() or path == evidence_path:
             continue
+        if ".cortex" in path.relative_to(workspace).parts:
+            continue
         if path.is_symlink() or not is_within(path.resolve(), workspace):
             findings.add("artifact_outside_workspace")
             continue

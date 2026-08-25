@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import sys
 import tempfile
 import unittest
@@ -218,6 +219,50 @@ class LoadingComposerManager:
         raise AssertionError(f"unexpected action: {action}")
 
 
+class StaleReadyRouteManager:
+    def __init__(self) -> None:
+        self.state_reads = 0
+
+    async def command(
+        self,
+        session: str,
+        action: str,
+        payload: dict,
+        timeout: float,
+    ) -> dict:
+        del session, timeout
+        if action == "navigate":
+            return {"tab_id": 47, "window_id": 7, "url": payload["url"]}
+        if action != "get_state":
+            raise AssertionError(f"unexpected action: {action}")
+        self.state_reads += 1
+        if self.state_reads == 1:
+            return {
+                "url": "https://chatgpt.com/c/previous-chat",
+                "conversation_id": "previous-chat",
+                "title": "Previous chat",
+                "blocker": None,
+                "composer_present": True,
+                "send_button_present": True,
+                "stop_button_present": False,
+                "streaming": False,
+                "messages": [],
+            }
+        if self.state_reads == 2:
+            await asyncio.sleep(0.03)
+        return {
+            "url": "https://chatgpt.com/",
+            "conversation_id": None,
+            "title": "ChatGPT",
+            "blocker": None,
+            "composer_present": True,
+            "send_button_present": True,
+            "stop_button_present": False,
+            "streaming": False,
+            "messages": [],
+        }
+
+
 class ClosedSelectionManager:
     def __init__(self) -> None:
         self.actions: list[str] = []
@@ -333,6 +378,37 @@ class DelayedBackgroundPaintDriver:
         self.focused = True
 
 
+class StaleStreamingUntilFocusedDriver:
+    requires_content_stability = True
+
+    def __init__(self) -> None:
+        self.focus_calls = 0
+
+    async def get_state(self) -> dict:
+        stale_streaming = self.focus_calls == 0
+        return {
+            "url": "https://chatgpt.com/c/stale-streaming",
+            "conversation_id": "stale-streaming",
+            "title": "Stale streaming",
+            "blocker": None,
+            "composer_present": True,
+            "send_button_present": not stale_streaming,
+            "stop_button_present": stale_streaming,
+            "streaming": stale_streaming,
+            "messages": [
+                {
+                    "id": "assistant-stale-streaming",
+                    "role": "assistant",
+                    "text": "CORTEX-QA-STALE-STREAMING-OK",
+                    "code_blocks": [],
+                }
+            ],
+        }
+
+    async def focus_tab(self) -> None:
+        self.focus_calls += 1
+
+
 class PermanentlyUnreadableDriver:
     async def get_state(self) -> dict:
         error = DriverError(
@@ -420,6 +496,26 @@ class ChromeExtensionReadinessRegressionTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(driver.navigate_calls, 1)
         self.assertEqual(driver.state_reads, 3)
         self.assertIsNone(transport.lock)
+        self.assertTrue(transport._pending_new_chat)
+
+    async def test_navigation_ignores_ready_composer_from_previous_route(self) -> None:
+        manager = StaleReadyRouteManager()
+        with tempfile.TemporaryDirectory() as temporary:
+            driver = ChromeExtensionBrowserDriver(
+                session="cortex-conv-stale-route",
+                manager=manager,
+                allowed_root=temporary,
+                retry_sleep=lambda _: None,
+            )
+            transport = ChatGPTWebTransport(
+                driver,
+                selection_budget=0.01,
+                poll_interval=0.001,
+            )
+
+            await transport.start_new_conversation("https://chatgpt.com/")
+
+        self.assertEqual(manager.state_reads, 3)
         self.assertTrue(transport._pending_new_chat)
 
     async def test_read_waits_for_content_script_after_navigation(self) -> None:
@@ -579,6 +675,27 @@ class ChromeExtensionReadinessRegressionTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response["text"], "CB-QA-A-1\nCB-QA-A-END")
         self.assertTrue(driver.focused)
+
+    async def test_stale_streaming_background_tab_is_focused_once_before_timeout(self) -> None:
+        driver = StaleStreamingUntilFocusedDriver()
+        transport = ChatGPTWebTransport(
+            driver,
+            stability_interval=0.02,
+            post_stream_stability_interval=0.03,
+            poll_interval=0.01,
+            max_wait=0.25,
+        )
+        transport.lock = ConversationLock(
+            "https://chatgpt.com/c/stale-streaming",
+            "stale-streaming",
+            "Stale streaming",
+            1.0,
+        )
+
+        response = await transport.await_response()
+
+        self.assertEqual(response["text"], "CORTEX-QA-STALE-STREAMING-OK")
+        self.assertEqual(driver.focus_calls, 1)
 
     async def test_unrecoverable_page_read_uses_the_transport_error_taxonomy(self) -> None:
         transport = ChatGPTWebTransport(PermanentlyUnreadableDriver())

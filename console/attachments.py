@@ -169,6 +169,7 @@ def _register(descriptor: dict) -> str:
         **descriptor,
         "expires_at": time.time() + TOKEN_TTL_SECONDS,
     }
+    _sweep_expired_tokens()
     return token
 
 
@@ -176,8 +177,11 @@ def resolve_token(token: str) -> dict | None:
     descriptor = _TOKENS.get(token)
     if descriptor is None:
         return None
-    if descriptor.get("owner") != OWNER or descriptor.get("expires_at", 0) <= time.time():
+    if descriptor.get("owner") != OWNER:
         _TOKENS.pop(token, None)
+        return None
+    if descriptor.get("expires_at", 0) <= time.time():
+        _sweep_expired_tokens()
         return None
     path = Path(str(descriptor.get("path", "")))
     try:
@@ -366,3 +370,81 @@ def cleanup_abandoned(preserve: set[str]) -> list[str]:
         candidate.unlink()
         deleted.append(str(candidate))
     return deleted
+
+
+def release_owned(path: str, *, token: str | None = None) -> bool:
+    """Release one ownership token and delete the file after the last owner."""
+    candidate = Path(path)
+    if ATTACHMENTS_DIR.is_symlink() or candidate.is_symlink():
+        return False
+    try:
+        resolved = candidate.resolve(strict=False)
+        managed_root = ATTACHMENTS_DIR.resolve()
+        metadata = candidate.lstat() if candidate.exists() else None
+    except (OSError, RuntimeError):
+        return False
+    if (
+        (metadata is not None and not stat.S_ISREG(metadata.st_mode))
+        or resolved.parent != managed_root
+        or not resolved.name.startswith(("cortex-attachment-", "cortex-screenshot-"))
+    ):
+        return False
+
+    def owns_path(descriptor: dict) -> bool:
+        if descriptor.get("owner") != OWNER:
+            return False
+        try:
+            return Path(str(descriptor.get("path", ""))).resolve(strict=False) == resolved
+        except (OSError, RuntimeError):
+            return False
+
+    now = time.time()
+    matching_tokens = {
+        registered_token
+        for registered_token, descriptor in _TOKENS.items()
+        if owns_path(descriptor)
+    }
+    if token is not None:
+        descriptor = _TOKENS.get(token)
+        if descriptor is None or not owns_path(descriptor):
+            return False
+        for registered_token in matching_tokens - {token}:
+            other = _TOKENS.get(registered_token)
+            if other and other.get("expires_at", 0) <= now:
+                _TOKENS.pop(registered_token, None)
+        live_others = {
+            registered_token
+            for registered_token in matching_tokens - {token}
+            if registered_token in _TOKENS
+        }
+        if live_others:
+            _TOKENS.pop(token, None)
+            return True
+        tokens_to_release = {token}
+    else:
+        tokens_to_release = matching_tokens
+
+    if metadata is None:
+        for registered_token in tokens_to_release:
+            _TOKENS.pop(registered_token, None)
+        return True
+    try:
+        resolved.unlink()
+    except OSError:
+        return False
+    for registered_token in tokens_to_release:
+        _TOKENS.pop(registered_token, None)
+    return True
+
+
+def _sweep_expired_tokens() -> None:
+    """Release expired ownership without deleting files still owned by live tokens."""
+    now = time.time()
+    for token in list(_TOKENS):
+        descriptor = _TOKENS.get(token)
+        if descriptor is None or descriptor.get("expires_at", 0) > now:
+            continue
+        if descriptor.get("owner") != OWNER:
+            _TOKENS.pop(token, None)
+            continue
+        release_owned(str(descriptor.get("path", "")), token=token)

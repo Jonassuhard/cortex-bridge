@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import fcntl
 import os
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -15,6 +17,90 @@ sys.path.insert(0, str(ROOT / "console"))
 
 
 class ProcessOwnershipTest(unittest.TestCase):
+    def test_shared_lock_command_blocks_an_exclusive_installer_lock_until_exit(self):
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            lock_path = root_path / "cortex-home" / ".install.lock"
+            ready_path = root_path / "ready"
+            release_path = root_path / "release"
+            command = (
+                "import sys,time\n"
+                "from pathlib import Path\n"
+                "ready,release=map(Path,sys.argv[1:])\n"
+                "ready.write_text('ready', encoding='utf-8')\n"
+                "while not release.exists(): time.sleep(0.01)\n"
+            )
+            process = subprocess.Popen(
+                [
+                    sys.executable,
+                    str(ROOT / "console" / "process_ownership.py"),
+                    "with-shared-lock",
+                    "--lock",
+                    str(lock_path),
+                    "--",
+                    sys.executable,
+                    "-c",
+                    command,
+                    str(ready_path),
+                    str(release_path),
+                ],
+                cwd=ROOT,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            self.addCleanup(lambda: process.kill() if process.poll() is None else None)
+
+            deadline = time.monotonic() + 5
+            while not ready_path.exists() and process.poll() is None and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertTrue(ready_path.exists(), f"lock command exited early: {process.poll()}")
+
+            fd = os.open(lock_path, os.O_RDWR | getattr(os, "O_NOFOLLOW", 0))
+            try:
+                self.assertEqual(stat.S_IMODE(os.fstat(fd).st_mode), 0o600)
+                with self.assertRaises(BlockingIOError):
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                release_path.touch()
+                stdout, stderr = process.communicate(timeout=5)
+                self.assertEqual(process.returncode, 0, stdout + stderr)
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            finally:
+                os.close(fd)
+
+    def test_shared_lock_command_rejects_a_symlink_without_running_the_command(self):
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            target = root_path / "unrelated"
+            target.write_text("keep", encoding="utf-8")
+            lock_path = root_path / ".install.lock"
+            lock_path.symlink_to(target)
+            command_marker = root_path / "command-ran"
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "console" / "process_ownership.py"),
+                    "with-shared-lock",
+                    "--lock",
+                    str(lock_path),
+                    "--",
+                    sys.executable,
+                    "-c",
+                    "from pathlib import Path; Path(__import__('sys').argv[1]).touch()",
+                    str(command_marker),
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse(command_marker.exists())
+            self.assertEqual(target.read_text(encoding="utf-8"), "keep")
+
     def test_listener_probe_timeout_is_structured_unknown_state(self):
         from process_ownership import classify
 
@@ -133,13 +219,26 @@ class CortexScriptOwnershipTest(unittest.TestCase):
             port = probe.getsockname()[1]
             probe.close()
             server_environment = root_path / "server-pythonpath.txt"
+            start_lock_observation = root_path / "start-install-lock.txt"
             fake_server = root_path / "fake_server.py"
             fake_server.write_text(
                 "from http.server import BaseHTTPRequestHandler, HTTPServer\n"
+                "import fcntl\n"
                 "import os\n"
                 "from pathlib import Path\n"
                 f"Path({str(server_environment)!r}).write_text("
                 "os.environ.get('PYTHONPATH', ''), encoding='utf-8')\n"
+                "lock_path = Path(os.environ['CORTEX_HOME']) / '.install.lock'\n"
+                "lock_fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)\n"
+                "try:\n"
+                " try:\n"
+                "  fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)\n"
+                f"  Path({str(start_lock_observation)!r}).write_text('exclusive-acquired', encoding='utf-8')\n"
+                "  fcntl.flock(lock_fd, fcntl.LOCK_UN)\n"
+                " except BlockingIOError:\n"
+                f"  Path({str(start_lock_observation)!r}).write_text('shared-blocked', encoding='utf-8')\n"
+                "finally:\n"
+                " os.close(lock_fd)\n"
                 "class Handler(BaseHTTPRequestHandler):\n"
                 " def do_GET(self):\n"
                 "  self.send_response(200); self.send_header('Content-Type', 'application/json'); self.end_headers(); self.wfile.write(b'{}')\n"
@@ -216,6 +315,10 @@ class CortexScriptOwnershipTest(unittest.TestCase):
                     server_environment.read_text(encoding="utf-8"),
                     f"{ROOT / 'console'}:{ROOT}",
                 )
+                self.assertEqual(
+                    start_lock_observation.read_text(encoding="utf-8"),
+                    "shared-blocked",
+                )
                 self.assertIn(
                     "import fastapi,uvicorn,playwright,websockets",
                     python_calls.read_text(encoding="utf-8"),
@@ -248,12 +351,20 @@ class CortexScriptOwnershipTest(unittest.TestCase):
             target.chmod(0o755)
         bash_env = root / "bash-env"
         bash_env.write_text("enable -n kill\n", encoding="utf-8")
+        python_wrapper = root / "python"
+        python_wrapper.write_text(
+            "#!/bin/sh\n"
+            "if [ \"$1\" = -c ] && [ \"$2\" = \"import fastapi,uvicorn,playwright,websockets\" ]; then exit 0; fi\n"
+            f"exec {sys.executable!r} \"$@\"\n",
+            encoding="utf-8",
+        )
+        python_wrapper.chmod(0o755)
         environment = {
             **os.environ,
             "PATH": f"{bin_dir}:{os.environ['PATH']}",
             "BASH_ENV": str(bash_env),
             "CORTEX_HOME": str(root / "cortex-home"),
-            "PYTHON_BIN": sys.executable,
+            "PYTHON_BIN": str(python_wrapper),
             "PORT": "58420",
         }
         return environment, kill_log
@@ -306,9 +417,10 @@ class CortexScriptOwnershipTest(unittest.TestCase):
             python_wrapper.write_text(
                 "#!/bin/sh\n"
                 "if [ \"$1\" = -c ] && [ \"$2\" = \"import fastapi,uvicorn,playwright,websockets\" ]; then exit 0; fi\n"
-                "case \"$1\" in\n"
-                " */process_ownership.py) printf '%s\\n' '{\"state\":\"unknown\",\"pid\":null,\"listener_pids\":[],\"reason\":\"listener probe timed out\"}'; exit 0;;\n"
-                " server.py) exit 1;;\n"
+                "case \"$1:$2\" in\n"
+                f" */process_ownership.py:with-shared-lock) exec {sys.executable!r} \"$@\";;\n"
+                " */process_ownership.py:status) printf '%s\\n' '{\"state\":\"unknown\",\"pid\":null,\"listener_pids\":[],\"reason\":\"listener probe timed out\"}'; exit 0;;\n"
+                " server.py:*) exit 1;;\n"
                 "esac\n"
                 f"exec {sys.executable!r} \"$@\"\n",
                 encoding="utf-8",

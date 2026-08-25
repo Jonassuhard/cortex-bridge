@@ -28,7 +28,7 @@ profile.
 | Navigation | cached UI, pending-target detection, separate composer readiness and ten A/B fixture switches | cold and warm switches between two neutral conversations | Chrome exposes the requested URL without consuming the composer budget; p95 remains below 3 seconds, hard maximum 10 seconds, no crossover |
 | Message delivery | prepare, activation, visible-marker confirmation and no-resend tests | one neutral exact-response message | visible sent state precedes the reply; ambiguous delivery is never retried |
 | Two writers | lease isolation and third-writer fixture scenarios | two simultaneous neutral sends plus a third attempt | A and B finish in their own tabs; the third draft is preserved and refused |
-| File upload | MIME, size, symlink, staging-token and duplicate-name tests | one small synthetic text file | exact public filename is visible and one response is returned |
+| File upload | MIME, size, symlink, staging-token, duplicate-name, normalized-text hash handoff, global AX target uniqueness, bounded composer grouping, timeout, single-use expectation and exact DOM-proof tests | one small synthetic text file sent through the current macOS Accessibility helper | one stable toolbar URL/file/composer/send target is proven, one native press starts, and a new exact text-plus-file DOM message is returned without replay |
 | Screenshot upload | one-shot permission, target match and atomic PNG tests | one explicitly authorized synthetic browser capture | the capture targets the selected conversation and is consumed once |
 | Mission protocol | parser, sequence, resynchronization, approvals and terminal validation | three disposable mini-sites and one self-diagnostic run | artifacts validate, processes stop, no mission merges or pushes itself |
 | Executor policy | workspace boundary, process allowlist, timeout and secret-free environment | one approved local write and one approved local process | no action exceeds the displayed workspace or capability scope |
@@ -45,6 +45,7 @@ profile.
 python -m unittest tests.test_chrome_extension_bridge -v
 python -m unittest tests.test_chrome_extension_driver -v
 node --test chrome-extension/tests/extension.test.mjs
+./scripts/cortex.sh doctor --json
 cd frontend
 ../scripts/npmw run test:unit
 ../scripts/npmw run typecheck
@@ -64,8 +65,54 @@ composer readiness, 10-second selection, attachments, screenshots, restart,
 responsive layouts, keyboard behavior, Axe, reduced motion, and absence of
 unexpected browser errors.
 
+The attachment driver fixtures inject the native activator. They prove the
+extension-to-helper contract, normalized-text SHA-256 handoff without the full
+prompt, absence of prompt/path/content in activation arguments and logs,
+one-shot state, post-press DOM evidence, and fail-closed errors. Native helper
+tests cover the globally unique AX target, toolbar-only omnibox, exact bounded
+file/composer/send ancestry and timeout failures. They do not grant macOS
+Accessibility or prove the current ChatGPT page.
+
 Fixtures do not prove current compatibility with a real authenticated ChatGPT
 account.
+
+On 2026-08-25, a separate owner-authorized technical observation used the
+production protocol-v2 extension in the owner's existing Chrome profile. It
+confirmed one neutral text send, two isolated writers and third-writer refusal,
+one small synthetic file, one privacy-masked screenshot, and three disposable
+mini-sites. The mini-sites independently passed three viewport renders,
+keyboard interaction, reduced motion, zero Axe violations, zero browser errors
+and zero external requests. This observation proves technical behavior only;
+it is not provider authorization and contains no publishable account or
+conversation identifier.
+
+## macOS attachment gate
+
+Before a real file-send observation, run:
+
+```bash
+./scripts/cortex.sh doctor --json
+```
+
+Record the three checks separately: `swift_toolchain`, `macos_ax_helper`, and
+`macos_accessibility`. A permission warning is acceptable for application
+startup and text-only tests, but the file gate remains pending until all three
+pass.
+
+Use only a small synthetic file and neutral prompt. In the Cortex-bound ChatGPT
+tab, record these facts without account data or conversation IDs:
+
+1. the extension exposed the expected filename and prepared one send control;
+2. the current helper had manual Accessibility permission;
+3. the AX result identified one stable global target with the expected toolbar
+   URL, composer hash and bounded file/composer/send group;
+4. one native press was attempted, with no automatic replay;
+5. a new DOM user message contained the exact normalized prompt and attachment;
+6. ChatGPT returned one response.
+
+If step 5 is absent, the result is `DELIVERY_UNCERTAIN`, not pass. Historical
+attachment observations made before this helper path do not close the current
+gate.
 
 ## Provider-compliance boundary
 

@@ -6,7 +6,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -35,8 +37,14 @@ OPT_IN_PREVIEW = "OPT_IN_TECHNICAL_PREVIEW"
 
 
 class EvidenceValidator:
-    def __init__(self, payload: dict[str, Any]) -> None:
+    def __init__(
+        self,
+        payload: dict[str, Any],
+        *,
+        manifest_path: Path | None = None,
+    ) -> None:
         self.payload = payload
+        self.manifest_path = manifest_path
         self.findings: set[tuple[str, str]] = set()
 
     def report(self, category: str, field: str) -> None:
@@ -55,6 +63,59 @@ class EvidenceValidator:
     def nonnegative_int(value: Any) -> bool:
         return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
+    def git(self, *args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["git", *args],
+            cwd=REPO_ROOT,
+            text=True,
+            capture_output=True,
+            timeout=10,
+            check=False,
+        )
+
+    def validate_source_commit(self, commit: str) -> None:
+        exists = self.git("cat-file", "-e", f"{commit}^{{commit}}")
+        if exists.returncode != 0:
+            self.report("commit_not_found", "commit")
+            return
+
+        head_result = self.git("rev-parse", "HEAD")
+        if head_result.returncode != 0:
+            self.report("source_repository", "commit")
+            return
+        head = head_result.stdout.strip()
+
+        ancestor = self.git("merge-base", "--is-ancestor", commit, head)
+        if ancestor.returncode != 0:
+            self.report("source_commit_not_ancestor", "commit")
+            return
+
+        allowed_drift: set[str] = set()
+        if self.manifest_path is not None:
+            try:
+                relative_manifest = self.manifest_path.resolve().relative_to(REPO_ROOT)
+            except (OSError, ValueError):
+                pass
+            else:
+                allowed_drift.add(relative_manifest.as_posix())
+
+        changed = self.git("diff", "--name-only", f"{commit}..{head}", "--")
+        if changed.returncode != 0:
+            self.report("source_repository", "commit")
+        else:
+            changed_paths = {
+                line.strip() for line in changed.stdout.splitlines() if line.strip()
+            }
+            if changed_paths - allowed_drift:
+                self.report("source_commit_drift", "commit")
+
+        if os.environ.get("CORTEX_RELEASE_ALLOW_DIRTY") != "1":
+            status = self.git("status", "--porcelain", "--untracked-files=all")
+            if status.returncode != 0:
+                self.report("source_repository", "workingTree")
+            elif status.stdout.strip():
+                self.report("source_tree_dirty", "workingTree")
+
     def validate(self) -> set[tuple[str, str]]:
         if self.get("schemaVersion") != 1:
             self.report("schema_version", "schemaVersion")
@@ -64,6 +125,8 @@ class EvidenceValidator:
         commit = self.get("commit")
         if not isinstance(commit, str) or not HEX40_RE.fullmatch(commit):
             self.report("commit_format", "commit")
+        else:
+            self.validate_source_commit(commit)
         generated_at = self.get("generatedAt")
         if not isinstance(generated_at, str) or not generated_at.endswith("Z"):
             self.report("timestamp_format", "generatedAt")
@@ -362,7 +425,7 @@ def main() -> int:
     if not isinstance(payload, dict):
         print("[release-evidence] invalid_json manifest")
         return 1
-    findings = EvidenceValidator(payload).validate()
+    findings = EvidenceValidator(payload, manifest_path=path).validate()
     for category, field in sorted(findings):
         print(f"[release-evidence] {category} {field}")
     if findings:

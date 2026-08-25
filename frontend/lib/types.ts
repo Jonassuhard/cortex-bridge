@@ -186,6 +186,58 @@ export interface TransportStatus {
   global_stop: boolean;
 }
 
+export interface TransportUploadLimits {
+  file_bytes: number;
+  image_bytes: number;
+}
+
+export interface TransportCapabilities {
+  upload_file: boolean;
+  upload_image: boolean;
+  take_screenshot: boolean;
+  limits: TransportUploadLimits;
+}
+
+export const DEFAULT_TRANSPORT_UPLOAD_LIMITS: TransportUploadLimits = {
+  file_bytes: 25 * 1024 * 1024,
+  image_bytes: 20 * 1024 * 1024,
+};
+
+export function normalizeTransportCapabilities(raw: {
+  upload_file?: boolean;
+  upload_image?: boolean;
+  take_screenshot?: boolean;
+  limits?: Partial<TransportUploadLimits>;
+}): TransportCapabilities {
+  const validLimit = (value: number | undefined, fallback: number) => (
+    typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback
+  );
+  return {
+    upload_file: raw.upload_file === true,
+    upload_image: raw.upload_image === true,
+    take_screenshot: raw.take_screenshot === true,
+    limits: {
+      file_bytes: validLimit(raw.limits?.file_bytes, DEFAULT_TRANSPORT_UPLOAD_LIMITS.file_bytes),
+      image_bytes: validLimit(raw.limits?.image_bytes, DEFAULT_TRANSPORT_UPLOAD_LIMITS.image_bytes),
+    },
+  };
+}
+
+const IMAGE_FILE_NAME = /\.(?:gif|jpe?g|png|webp)$/iu;
+
+export function attachmentSizeError(
+  file: File,
+  limits: TransportUploadLimits,
+): string | null {
+  const image = file.type.toLowerCase().startsWith("image/") || IMAGE_FILE_NAME.test(file.name);
+  const limit = image ? limits.image_bytes : limits.file_bytes;
+  if (file.size <= limit) return null;
+  const noun = image ? "image" : "fichier";
+  const limitMiB = Math.round(limit / (1024 * 1024));
+  return `Ce ${noun} dépasse la limite de ${limitMiB} Mo. `
+    + "Le brouillon et toute pièce jointe déjà sélectionnée sont conservés.";
+}
+
 export interface TransportProbeStatus {
   ok: boolean;
   title?: string | null;

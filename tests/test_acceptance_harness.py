@@ -183,6 +183,19 @@ class AcceptanceHarnessTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("external_url", result.stdout)
 
+    def test_cortex_backup_metadata_is_not_treated_as_a_deliverable(self) -> None:
+        backup = self.workspace / ".cortex" / "backups" / "README.md"
+        backup.parent.mkdir(parents=True)
+        backup.write_text(
+            "Historical safety copy mentioning https://old.example.invalid/ only.\n",
+            encoding="utf-8",
+        )
+
+        result = self.run_verify()
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("PASS", result.stdout)
+
     def test_required_artifact_symlink_outside_workspace_is_rejected(self) -> None:
         outside_script = self.guard_root / "outside.js"
         outside_script.write_text("document.body.dataset.ready='true';\n", encoding="utf-8")

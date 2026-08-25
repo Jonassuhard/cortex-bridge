@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "version": "0.5.2",
+  "version": "0.5.3",
   "dependencies": [
     {
       "id": "git",
@@ -14,6 +14,20 @@
       "minimum_version": "3.11",
       "official_url": "https://www.python.org/downloads/macos/",
       "human_pause": false
+    },
+    {
+      "id": "apple-command-line-tools",
+      "required": false,
+      "official_url": "https://developer.apple.com/xcode/resources/",
+      "human_pause": true,
+      "reason": "needed only to build the local file-send helper; text chat installs without it and Apple installation prompts remain manual"
+    },
+    {
+      "id": "macos-accessibility",
+      "required": false,
+      "official_url": "https://support.apple.com/guide/mac-help/allow-accessibility-apps-to-access-your-mac-mh43185/mac",
+      "human_pause": true,
+      "reason": "needed only for attachment send activation and never requested automatically"
     },
     {
       "id": "google-chrome",

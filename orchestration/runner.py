@@ -227,43 +227,50 @@ class ModeARunner:
             release_eligible=False,
         )
 
-        # §8: lock exactly one conversation (or capture a brand-new one).
-        if conversation_url is not None:
-            lock = await self.transport.select_conversation(conversation_url)
-        else:
-            await self.transport.start_new_conversation(new_conversation_url)
-            lock = None  # captured after the contract send creates /c/<id>
-
-        client = TransportOrchestratorClient(self.transport, store=self.store, mission_id=mission_id)
-        loop = MissionLoop(
-            store=self.store,
-            mission_id=mission_id,
-            orchestrator=client,
-            tools=self.tools,
-            policy=self.policy,
-            approval_callback=self.approval_callback,
-            action_validator=self.action_validator,
-            final_validator=self.final_validator,
-            budgets=self.budgets,
-            conversation=(
-                {"url": lock.url, "title": lock.title, "target_id": lock.identity}
-                if lock
-                else {"url": new_conversation_url, "title": None, "target_id": None}
-            ),
-            contract=render_contract(objective, mission_id, str(self.tools.workspace)),
-        )
         try:
+            # §8: lock exactly one conversation (or capture a brand-new one).
+            # Selection is inside the transport error boundary: a stale or
+            # temporarily unreadable tab must pause safely, not be reported as
+            # a generic runner crash.
+            if conversation_url is not None:
+                lock = await self.transport.select_conversation(conversation_url)
+            else:
+                await self.transport.start_new_conversation(new_conversation_url)
+                lock = None  # captured after the contract send creates /c/<id>
+
+            client = TransportOrchestratorClient(
+                self.transport,
+                store=self.store,
+                mission_id=mission_id,
+            )
+            loop = MissionLoop(
+                store=self.store,
+                mission_id=mission_id,
+                orchestrator=client,
+                tools=self.tools,
+                policy=self.policy,
+                approval_callback=self.approval_callback,
+                action_validator=self.action_validator,
+                final_validator=self.final_validator,
+                budgets=self.budgets,
+                conversation=(
+                    {"url": lock.url, "title": lock.title, "target_id": lock.identity}
+                    if lock
+                    else {"url": new_conversation_url, "title": None, "target_id": None}
+                ),
+                contract=render_contract(objective, mission_id, str(self.tools.workspace)),
+            )
             return self._persist_runtime_truth(
                 mission_id, await loop.run(max_cycles=self.max_cycles)
             )
         except BlockerDetected as exc:
             # §5: login/CAPTCHA/rate-limit — pause safely, never bypass.
             return self._persist_runtime_truth(
-                mission_id, self._pause_mission(loop, exc.code, str(exc))
+                mission_id, self._pause_mission_id(mission_id, exc.code, str(exc))
             )
         except TransportError as exc:
             return self._persist_runtime_truth(
-                mission_id, self._pause_mission(loop, exc.code, str(exc))
+                mission_id, self._pause_mission_id(mission_id, exc.code, str(exc))
             )
 
     def _pause_mission(
@@ -272,14 +279,22 @@ class ModeARunner:
         reason: str,
         error: str | None = None,
     ) -> dict:
+        return self._pause_mission_id(loop.mission_id, reason, error)
+
+    def _pause_mission_id(
+        self,
+        mission_id: str,
+        reason: str,
+        error: str | None = None,
+    ) -> dict:
         try:
-            loop.sm.transition("PAUSED", pause_reason=reason)
+            self.store.transition(mission_id, "PAUSED", pause_reason=reason)
         except StoreError:
             pass
         detail = {"reason": reason}
         if error:
             detail["error"] = error[:500]
         self.store.record_transport_event(
-            str(uuid.uuid4()), loop.mission_id, "TRANSPORT_PAUSED", detail
+            str(uuid.uuid4()), mission_id, "TRANSPORT_PAUSED", detail
         )
-        return self.store.get_mission(loop.mission_id)
+        return self.store.get_mission(mission_id)
