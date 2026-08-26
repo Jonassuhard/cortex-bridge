@@ -36,3 +36,4 @@ frontend/tsconfig.tsbuildinfo
 # Isolated implementation and review workspaces
 .worktrees/
 .superpowers/
+.gstack/
