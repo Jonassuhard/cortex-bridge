@@ -328,6 +328,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .collapsed-conversations { display: flex; flex-direction: column; align-items: center; }
 .open-chatgpt-link { flex: 0 0 auto; color: var(--blue-light); font-size: 12px; text-decoration: none; }
 .open-chatgpt-link:hover { text-decoration: underline; }
+.cortex-app.inspector-visible .open-chatgpt-link { display: none; }
 .reload-conversation-button { flex: 0 0 auto; min-height: 44px; padding: 0 12px; color: var(--amber); border: 1px solid color-mix(in srgb, var(--amber) 38%, transparent); border-radius: 9px; background: transparent; cursor: pointer; font-size: 12px; }
 .reload-conversation-button:hover { background: color-mix(in srgb, var(--amber) 10%, transparent); }
 
@@ -588,12 +589,12 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .mini-toggle input:checked + i::after { transform: translateX(12px); background: #fff; }
 
 /* ---- Pipeline inspector --------------------------------------------------- */
-.pipeline-inspector { position: relative; z-index: 7; min-width: 0; height: 100vh; overflow-y: auto; overflow-x: hidden; border-left: 1px solid var(--line); background: linear-gradient(180deg, rgba(11,14,17,.97), rgba(8,11,14,.96)); transform: translateX(100%); opacity: 0; pointer-events: none; transition: transform 260ms cubic-bezier(.22,1,.36,1), opacity 200ms ease; }
+.pipeline-inspector { position: relative; z-index: 7; min-width: 0; height: 100vh; overflow-y: auto; overflow-x: hidden; border-left: 1px solid var(--line); background: linear-gradient(180deg, rgba(11,14,17,.97), rgba(8,11,14,.96)); font-size: 12px; transform: translateX(100%); opacity: 0; pointer-events: none; transition: transform 260ms cubic-bezier(.22,1,.36,1), opacity 200ms ease; }
 .pipeline-inspector.is-open { transform: none; opacity: 1; pointer-events: auto; }
 .inspector-head { position: sticky; top: 0; z-index: 3; display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 72px; padding: 13px 15px; border-bottom: 1px solid var(--line); background: rgba(9,12,15,.93); backdrop-filter: blur(16px); }
 .inspector-head h2 { margin: 3px 0 0; font-size: 15px; letter-spacing: -.02em; }
 .inspector-head-actions { display: flex; align-items: center; gap: 7px; }
-.pipeline-live { display: inline-flex; align-items: center; gap: 5px; padding: 5px 7px; color: #9ff0bb; border: 1px solid rgba(34,197,94,.18); border-radius: 999px; background: var(--green-soft); font-size: 8px; }
+.pipeline-live { display: inline-flex; align-items: center; gap: 5px; padding: 5px 8px; color: #9ff0bb; border: 1px solid rgba(34,197,94,.18); border-radius: 999px; background: var(--green-soft); font-size: 11px; }
 .pipeline-live i { width: 5px; height: 5px; border-radius: 50%; background: var(--green); animation: pulse 1.8s ease-in-out infinite; }
 .pipeline-live.is-error { color: #fecaca; border-color: rgba(239,68,68,.2); background: var(--red-soft); }
 .pipeline-live.is-error i { background: var(--red); }
@@ -603,20 +604,20 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .pipeline-live.is-unknown i { background: var(--muted); animation: none; }
 .pipeline-live.is-active { color: var(--blue-light); border-color: rgba(96,165,250,.2); background: rgba(37,99,235,.1); }
 .pipeline-live.is-active i { background: var(--blue-light); }
-.global-stop-card { display: grid; grid-template-columns: 20px minmax(0,1fr) auto; align-items: start; gap: 9px; margin: 11px; padding: 11px; color: #fecaca; border: 1px solid rgba(239,68,68,.28); border-radius: 12px; background: var(--red-soft); }
+.global-stop-card { display: grid; grid-template-columns: 20px minmax(0,1fr) auto; align-items: start; gap: 9px; margin: 0; padding: 11px; color: #fecaca; border: 1px solid rgba(239,68,68,.28); border-radius: 12px; background: var(--red-soft); }
 .global-stop-card span { display: flex; flex-direction: column; }
-.global-stop-card strong { font-size: 9px; }
-.global-stop-card small { margin-top: 3px; color: #fca5a5; font-size: 8px; line-height: 1.4; }
-.global-stop-card button { padding: 6px 8px; color: #fff; border: 0; border-radius: 7px; background: #dc2626; cursor: pointer; font-size: 8px; }
+.global-stop-card strong { font-size: 12px; }
+.global-stop-card small { margin-top: 3px; color: #fca5a5; font-size: 11px; line-height: 1.45; }
+.global-stop-card button { min-height: 32px; padding: 6px 9px; color: #fff; border: 0; border-radius: 7px; background: #dc2626; cursor: pointer; font-size: 11px; }
 .pipeline-component-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; padding: 11px; }
 .pipeline-component { min-width: 0; display: grid; grid-template-columns: 28px minmax(0,1fr); grid-template-rows: auto auto; gap: 2px 8px; padding: 10px; border: 1px solid var(--line); border-radius: 11px; background: rgba(255,255,255,.025); transition: border-color 160ms ease, background 160ms ease; }
 .pipeline-component:hover { border-color: var(--line-strong); background: rgba(255,255,255,.04); }
 .pipeline-component-icon { width: 27px; height: 27px; grid-row: 1 / 3; display: grid; place-items: center; color: var(--muted); border-radius: 8px; background: rgba(255,255,255,.04); }
 .pipeline-component-icon svg { width: 15px; height: 15px; }
 .pipeline-component-copy { min-width: 0; display: flex; flex-direction: column; }
-.pipeline-component-copy strong { font-size: 8.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.pipeline-component-copy small { margin-top: 3px; color: var(--muted); font-size: 7.5px; line-height: 1.35; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.pipeline-component-status { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font: 7px var(--font-mono); }
+.pipeline-component-copy strong { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pipeline-component-copy small { margin-top: 3px; color: var(--muted); font-size: 11px; line-height: 1.4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pipeline-component-status { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font: 11px var(--font-mono); }
 .pipeline-component-status i { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
 .pipeline-component.tone-good .pipeline-component-status, .pipeline-component.tone-good .pipeline-component-icon { color: #7ce3a2; }
 .pipeline-component.tone-active .pipeline-component-status, .pipeline-component.tone-active .pipeline-component-icon { color: var(--blue-light); }
@@ -625,31 +626,32 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .pipeline-component.tone-danger .pipeline-component-status, .pipeline-component.tone-danger .pipeline-component-icon { color: var(--red); }
 .inspector-section { margin: 3px 11px 12px; padding-top: 12px; border-top: 1px solid var(--line); }
 .inspector-section-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
-.inspector-section-head h3 { margin: 3px 0 0; font-size: 12px; }
-.inspector-section-head button { display: inline-flex; align-items: center; gap: 4px; color: var(--blue-light); border: 0; background: transparent; cursor: pointer; font-size: 7.5px; }
+.inspector-section-head h3 { margin: 3px 0 0; font-size: 14px; }
+.inspector-section-head button { display: inline-flex; align-items: center; gap: 4px; color: var(--blue-light); border: 0; background: transparent; cursor: pointer; font-size: 11px; }
 .activity-timeline { position: relative; display: grid; gap: 0; }
 .activity-timeline::before { content: ""; position: absolute; left: 4px; top: 7px; bottom: 7px; border-left: 1px solid var(--line); }
-.activity-event { position: relative; display: grid; grid-template-columns: 10px 42px minmax(0,1fr) auto; gap: 6px; align-items: start; min-height: 31px; padding: 4px 0; color: var(--muted); }
+.activity-event { position: relative; display: grid; grid-template-columns: 10px 48px minmax(0,1fr) auto; gap: 6px; align-items: start; min-height: 38px; padding: 5px 0; color: var(--muted); }
 .activity-event-dot { position: relative; z-index: 1; width: 8px; height: 8px; margin-top: 2px; border-radius: 50%; background: #3d464c; border: 2px solid #0a0d10; }
 .activity-event-dot.is-current { background: var(--blue-light); box-shadow: 0 0 0 3px rgba(37,99,235,.1); }
-.activity-event time { font: 7px var(--font-mono); }
+.activity-event time { font: 11px var(--font-mono); }
 .activity-event > span:nth-child(3) { min-width: 0; display: flex; flex-direction: column; }
-.activity-event strong { color: var(--ink-soft); font-size: 8px; font-weight: 520; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.activity-event small { margin-top: 2px; font-size: 7px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.activity-event em { color: var(--muted-2); font: 7px var(--font-mono); font-style: normal; }
-.inspector-empty { color: var(--muted); font-size: 8px; }
+.activity-event strong { color: var(--ink-soft); font-size: 12px; font-weight: 520; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.activity-event small { margin-top: 2px; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.activity-event em { color: var(--muted-2); font: 11px var(--font-mono); font-style: normal; }
+.inspector-empty { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
 .pipeline-controls { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
-.pipeline-controls button { display: flex; align-items: center; justify-content: center; gap: 5px; min-height: 34px; color: var(--ink-soft); border: 1px solid var(--line); border-radius: 9px; background: rgba(255,255,255,.025); cursor: pointer; font-size: 8px; }
+.pipeline-controls button { display: flex; align-items: center; justify-content: center; gap: 5px; min-height: 38px; color: var(--ink-soft); border: 1px solid var(--line); border-radius: 9px; background: rgba(255,255,255,.025); cursor: pointer; font-size: 12px; }
 .pipeline-controls button:hover:not(:disabled) { color: #fff; background: rgba(255,255,255,.06); }
 .pipeline-controls button:disabled { opacity: .28; cursor: not-allowed; }
 .pipeline-controls button.danger { color: #fecaca !important; border-color: rgba(239,68,68,.2); }
-.stop-all-button { width: 100%; min-height: 37px; display: flex; align-items: center; justify-content: center; gap: 7px; margin-top: 7px; color: #fff; border: 0; border-radius: 9px; background: linear-gradient(145deg, #ef4444, #b91c1c); cursor: pointer; font-size: 9px; font-weight: 700; box-shadow: 0 8px 22px rgba(239,68,68,.16); }
+.security-copy { margin: 0 0 9px; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.stop-all-button { width: 100%; min-height: 40px; display: flex; align-items: center; justify-content: center; gap: 7px; margin-top: 7px; color: #fff; border: 0; border-radius: 9px; background: linear-gradient(145deg, #ef4444, #b91c1c); cursor: pointer; font-size: 12px; font-weight: 700; box-shadow: 0 8px 22px rgba(239,68,68,.16); }
 .stop-all-button:hover { filter: brightness(1.08); }
 .runtime-summary dl { display: grid; gap: 1px; overflow: hidden; margin: 0; border: 1px solid var(--line); border-radius: 10px; background: var(--line); }
 .runtime-summary dl div { min-width: 0; display: flex; justify-content: space-between; gap: 10px; padding: 8px 9px; background: rgba(9,13,16,.98); }
-.runtime-summary dt { color: var(--muted); font-size: 7.5px; }
-.runtime-summary dd { max-width: 175px; margin: 0; color: var(--ink-soft); font: 7.5px var(--font-mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.inspector-footer { display: flex; justify-content: space-between; gap: 8px; padding: 5px 12px 15px; color: var(--muted-2); font-size: 7px; }
+.runtime-summary dt { color: var(--muted); font-size: 11px; }
+.runtime-summary dd { max-width: 175px; margin: 0; color: var(--ink-soft); font: 11px var(--font-mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.inspector-footer { display: flex; justify-content: space-between; gap: 8px; padding: 5px 12px 15px; color: var(--muted-2); font-size: 11px; }
 .inspector-footer span { display: inline-flex; align-items: center; gap: 4px; }
 
 /* ---- Settings ------------------------------------------------------------- */

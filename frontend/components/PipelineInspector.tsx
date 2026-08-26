@@ -2,7 +2,12 @@
 
 import type { MissionDetail, PipelineComponent, PipelineStatus, RuntimeStatus, TransportStatus } from "@/lib/types";
 import { formatDuration, shortTime } from "@/lib/api";
-import { executorDiagnosticsLabel, statusPresentation } from "@/lib/runtimeTruth";
+import {
+  executionStateLabel,
+  executorDiagnosticsLabel,
+  executorDisplay,
+  statusPresentation,
+} from "@/lib/runtimeTruth";
 import { useAccessibleDialog } from "@/hooks/useAccessibleDialog";
 import {
   ActivityIcon,
@@ -10,7 +15,6 @@ import {
   BrowserIcon,
   CameraIcon,
   CheckIcon,
-  ChevronRightIcon,
   ClockIcon,
   CpuIcon,
   DatabaseIcon,
@@ -60,6 +64,41 @@ function stateTone(state: PipelineComponent["state"]) {
   return "muted";
 }
 
+const componentLabels: Record<string, string> = {
+  transport: "Transport ChatGPT",
+  validator: "Validateur Cortex",
+  task: "Tâche courante",
+  chrome: "Recherche Chrome",
+  screenshots: "Captures",
+  filesystem: "Fichiers",
+  ollama: "Disponibilité Ollama",
+  executor: "Exécuteur réellement utilisé",
+  approvals: "Approbations",
+  queue: "File d’attente",
+  database: "Persistance",
+};
+
+function translatedDetail(component: PipelineComponent, pipeline: PipelineStatus) {
+  if (component.id === "task") {
+    return executionStateLabel(component.detail) || component.detail;
+  }
+  if (component.id === "executor") {
+    return executorDisplay(pipeline.runtime_execution);
+  }
+  return component.detail
+    .replace(/chrome_extension/g, "Extension Chrome")
+    .replace(/playwright/gi, "Pilote Chrome")
+    .replace(/\bdaemon\b/gi, "service local")
+    .replace(/\bworkspace\b/gi, "espace de travail")
+    .replace(/\bhealthy\b/gi, "opérationnel")
+    .replace(/\bunavailable\b/gi, "indisponible")
+    .replace(/\bavailable\b/gi, "disponible")
+    .replace(/\bloaded\b/gi, "chargé")
+    .replace(/\binstalled\b/gi, "installé")
+    .replace(/\bready\b/gi, "prêt")
+    .replace(/\bmissing\b/gi, "absent");
+}
+
 export function PipelineInspector({
   open,
   pipeline,
@@ -77,40 +116,37 @@ export function PipelineInspector({
   const running = !!missionState && !["COMPLETED", "BLOCKED", "FAILED", "CANCELLED", "PAUSED", "PAUSED_RECOVERY_REQUIRED"].includes(missionState);
   const paused = missionState === "PAUSED" || missionState === "PAUSED_RECOVERY_REQUIRED";
   const pipelinePresentation = statusPresentation(pipeline.overall);
+  const pipelineLabel = !missionState && pipeline.overall === "healthy" && !transport.global_stop
+    ? "Prêt"
+    : pipelinePresentation.label;
+  const missionLabel = executionStateLabel(missionState) || (missionState ? "En cours" : "Aucune");
   const inspectorRef = useAccessibleDialog<HTMLElement>({ open, onClose });
 
   return (
-    <aside ref={inspectorRef} className={`pipeline-inspector ${open ? "is-open" : ""}`} aria-label="État de la pipeline" aria-hidden={!open} inert={open ? undefined : true}>
+    <aside ref={inspectorRef} className={`pipeline-inspector ${open ? "is-open" : ""}`} aria-label="État du pipeline" aria-hidden={!open} inert={open ? undefined : true}>
       <div className="inspector-head">
         <div>
           <span className="panel-eyebrow">Pipeline</span>
           <h2>État du bridge</h2>
         </div>
         <div className="inspector-head-actions">
-          <span className={`pipeline-live is-${pipelinePresentation.tone}`}><i /> {pipelinePresentation.label}</span>
-          <button className="icon-button" onClick={onClose} aria-label="Fermer la pipeline"><XIcon /></button>
+          <span className={`pipeline-live is-${pipelinePresentation.tone}`}><i /> {pipelineLabel}</span>
+          <button className="icon-button" onClick={onClose} aria-label="Fermer le panneau Pipeline"><XIcon /></button>
         </div>
       </div>
-
-      {transport.global_stop && (
-        <div className="global-stop-card">
-          <AlertIcon />
-          <span><strong>STOP EVERYTHING actif</strong><small>Aucun nouveau message ni aucune action locale ne peut démarrer.</small></span>
-          <button onClick={onResetStop}>Réarmer</button>
-        </div>
-      )}
 
       <div className="pipeline-component-grid">
         {pipeline.components.map((component) => (
           <div className={`pipeline-component tone-${stateTone(component.state)}`} key={component.id}>
             <span className="pipeline-component-icon">{componentIcon(component.id)}</span>
             <span className="pipeline-component-copy">
-              <strong>{component.label}</strong>
-              <small>{component.detail}</small>
+              <strong>{componentLabels[component.id] || component.label}</strong>
+              <small>{translatedDetail(component, pipeline)}</small>
             </span>
             <span className="pipeline-component-status">
               <i />
-              {component.latency_ms != null ? formatDuration(component.latency_ms) : component.state}
+              {statusPresentation(component.state).label}
+              {component.latency_ms != null ? ` · ${formatDuration(component.latency_ms)}` : ""}
             </span>
           </div>
         ))}
@@ -119,42 +155,60 @@ export function PipelineInspector({
       <section className="inspector-section">
         <div className="inspector-section-head">
           <div><span className="panel-eyebrow">Activité</span><h3>Chronologie en direct</h3></div>
-          <button>Logs complets <ChevronRightIcon size={13} /></button>
         </div>
         <div className="activity-timeline">
           {pipeline.events.slice(0, 8).map((event, index) => (
             <div className="activity-event" key={event.id}>
               <span className={`activity-event-dot ${index === 0 ? "is-current" : ""}`} />
               <time>{shortTime(event.ts)}</time>
-              <span><strong>{event.label}</strong>{event.detail && <small>{event.detail}</small>}</span>
+              <span><strong>{event.label}</strong>{event.detail && <small>{executionStateLabel(event.detail) || event.detail}</small>}</span>
               <em>{event.duration_ms != null ? formatDuration(event.duration_ms) : ""}</em>
             </div>
           ))}
-          {!pipeline.events.length && <p className="inspector-empty">Aucun événement récent.</p>}
+          {!pipeline.events.length && (
+            <p className="inspector-empty">{missionState ? "Aucun événement récent." : "Aucune mission active."}</p>
+          )}
         </div>
       </section>
 
-      <section className="inspector-section">
-        <div className="inspector-section-head"><div><span className="panel-eyebrow">Contrôles</span><h3>Mission active</h3></div></div>
-        <div className="pipeline-controls">
-          <button onClick={onPause} disabled={!running}><PauseIcon /> Pause</button>
-          <button onClick={onResume} disabled={!paused}><PlayIcon /> Reprendre</button>
-          <button className="danger" onClick={onCancel} disabled={!missionState}><StopIcon /> Annuler</button>
-        </div>
-        <button className="stop-all-button" onClick={onStopAll}><StopIcon /> Stop everything</button>
+      {missionState && (
+        <section className="inspector-section">
+          <div className="inspector-section-head"><div><span className="panel-eyebrow">Contrôles</span><h3>Mission active</h3></div></div>
+          <div className="pipeline-controls">
+            <button onClick={onPause} disabled={!running}><PauseIcon /> Pause</button>
+            <button onClick={onResume} disabled={!paused}><PlayIcon /> Reprendre</button>
+            <button className="danger" onClick={onCancel}><StopIcon /> Annuler</button>
+          </div>
+        </section>
+      )}
+
+      <section className="inspector-section security-section">
+        <div className="inspector-section-head"><div><span className="panel-eyebrow">Sécurité</span><h3>Arrêt général</h3></div></div>
+        {transport.global_stop ? (
+          <div className="global-stop-card">
+            <AlertIcon />
+            <span><strong>Arrêt général actif</strong><small>Aucun nouveau message ni aucune action locale ne peut démarrer.</small></span>
+            <button onClick={onResetStop}>Réarmer</button>
+          </div>
+        ) : (
+          <>
+            <p className="security-copy">Interrompt les nouveaux messages et toutes les actions locales.</p>
+            <button className="stop-all-button" onClick={onStopAll}><StopIcon /> Tout arrêter</button>
+          </>
+        )}
       </section>
 
       <section className="inspector-section runtime-summary">
-        <div className="inspector-section-head"><div><span className="panel-eyebrow">Runtime</span><h3>Exécution locale</h3></div></div>
+        <div className="inspector-section-head"><div><span className="panel-eyebrow">Système local</span><h3>Exécution locale</h3></div></div>
         <dl>
-          <div><dt>Disponibilité Ollama</dt><dd className={runtime.executor_available ? "good" : "danger"}>{runtime.executor_available ? "disponible" : "indisponible"}</dd></div>
+          <div><dt>Disponibilité Ollama</dt><dd className={runtime.executor_available ? "good" : "danger"}>{runtime.executor_available ? "Disponible" : "Indisponible"}</dd></div>
           <div><dt>Modèle candidat</dt><dd>{runtime.primary.name}</dd></div>
-          <div><dt>Exécuteur utilisé</dt><dd>{pipeline.runtime_execution.executor_kind}</dd></div>
-          <div><dt>Modèle réellement utilisé</dt><dd>{pipeline.runtime_execution.executor_model_used || "aucun"}</dd></div>
+          <div><dt>Exécuteur utilisé</dt><dd>{executorDisplay(pipeline.runtime_execution)}</dd></div>
+          <div><dt>Modèle réellement utilisé</dt><dd>{pipeline.runtime_execution.executor_model_used || "Aucun"}</dd></div>
           <div><dt>Mode d&apos;exécution</dt><dd>{executorDiagnosticsLabel(pipeline.runtime_execution)}</dd></div>
-          <div><dt>Stockage local</dt><dd className={runtime.volume_mounted ? "good" : "danger"}>{runtime.volume_mounted ? "monté" : "absent"}</dd></div>
+          <div><dt>Stockage local</dt><dd className={runtime.volume_mounted ? "good" : "danger"}>{runtime.volume_mounted ? "Monté" : "Absent"}</dd></div>
           <div><dt>Stockage</dt><dd title={runtime.storage_path}>{runtime.storage_path.split("/").slice(-3).join("/")}</dd></div>
-          <div><dt>Mission</dt><dd>{missionState || "aucune"}</dd></div>
+          <div><dt>Mission</dt><dd>{missionLabel}</dd></div>
           <div><dt>Session</dt><dd>{mission?.mission.id?.slice(0, 8) || "—"}</dd></div>
         </dl>
       </section>

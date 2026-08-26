@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { demoPipeline, demoRuntime, demoSettings, demoTransport } from "@/lib/demo";
-import type { ChatRun, ChatRunEvent, MissionDetail } from "@/lib/types";
+import type { ChatRun, ChatRunEvent, MissionDetail, PipelineStatus } from "@/lib/types";
 
 type ApiMock = (path: string, init?: RequestInit) => Promise<unknown>;
 type JsonMock = (path: string, body?: unknown, init?: RequestInit) => Promise<unknown>;
@@ -18,7 +18,11 @@ vi.mock("@/lib/api", async () => {
   return { ...actual, api: network.api, postJson: network.postJson, putJson: network.putJson };
 });
 
-import { CortexApp, projectPipelineForConversation } from "./CortexApp";
+import {
+  CortexApp,
+  pipelineResponseForConversation,
+  projectPipelineForConversation,
+} from "./CortexApp";
 
 const conversation = (key: string) => ({
   url: `https://chatgpt.com/c/${key}`,
@@ -85,7 +89,17 @@ function defaultApi(path: string) {
   }
   if (path === "/api/status") return Promise.resolve(demoRuntime);
   if (path === "/api/transport/status") return Promise.resolve({ ...demoTransport, opt_in_accepted: true });
-  if (path.startsWith("/api/pipeline/status")) return Promise.resolve(demoPipeline);
+  if (path.startsWith("/api/pipeline/status")) {
+    const params = new URL(path, "http://cortex.local").searchParams;
+    return Promise.resolve({
+      ...demoPipeline,
+      scope: {
+        mode: "conversation",
+        conversation_identity: params.get("conversation_identity"),
+        mission_id: params.get("mission_id"),
+      },
+    });
+  }
   if (path === "/api/settings") return Promise.resolve(demoSettings);
   if (path === "/api/models/ollama") return Promise.resolve({ models: [] });
   if (path === "/api/models/chatgpt") return Promise.resolve({ models: [] });
@@ -697,9 +711,45 @@ describe("CortexApp conversation integration", () => {
     expect(window.sessionStorage.getItem("cortex:pair-after-extension-reload")).toBeNull();
   });
 
-  it("neutralizes every mission-specific pipeline field when no selected mission matches", () => {
-    const projected = projectPipelineForConversation({
+  it("preserves mission-independent truth for the selected scoped conversation", () => {
+    const scopedPipeline = {
       ...demoPipeline,
+      scope: {
+        mode: "conversation",
+        conversation_identity: "conversation-b",
+        mission_id: null,
+      },
+      overall: "healthy",
+      active_mission_id: null,
+      active_mission_state: null,
+      components: [{ id: "transport", label: "ChatGPT", state: "connected", detail: "Extension Chrome" }],
+      events: [],
+      runtime_execution: {
+        ...demoPipeline.runtime_execution,
+        task_id: null,
+        state: "idle",
+        active: false,
+        executor_kind: "unavailable",
+        executor_model_used: null,
+      },
+    } as PipelineStatus;
+    const projected = projectPipelineForConversation(scopedPipeline, null, "conversation-b");
+
+    expect(projected.overall).toBe("healthy");
+    expect(projected.components).toEqual(scopedPipeline.components);
+    expect(projected.events).toEqual([]);
+    expect(projected.active_mission_id).toBeNull();
+    expect(projected.active_mission_state).toBeNull();
+  });
+
+  it("neutralizes every mission-specific pipeline field when the selected identity does not match", () => {
+    const pipeline = {
+      ...demoPipeline,
+      scope: {
+        mode: "conversation",
+        conversation_identity: "conversation-a",
+        mission_id: "mission-a-secret",
+      },
       active_mission_id: "mission-a-secret",
       active_mission_state: "EXECUTING_LOCAL_ACTION_SECRET",
       components: [{ id: "secret-component", label: "A_SECRET_COMPONENT", state: "running", detail: "A" }],
@@ -716,7 +766,17 @@ describe("CortexApp conversation integration", () => {
         release_eligible: true,
       },
       latency: { transport_ms: 11, local_model_ms: 22, total_iteration_ms: 33 },
-    }, null);
+    } as PipelineStatus;
+    const missionA = {
+      mission: {
+        id: "mission-a-secret",
+        state: "EXECUTING_LOCAL_ACTION_SECRET",
+      },
+      timeline: {},
+      awaiting_approval: false,
+      stopped: false,
+    } as MissionDetail;
+    const projected = projectPipelineForConversation(pipeline, missionA, "conversation-b");
 
     expect(projected).toMatchObject({
       active_mission_id: null,
@@ -736,6 +796,75 @@ describe("CortexApp conversation integration", () => {
       },
       latency: { transport_ms: null, local_model_ms: null, total_iteration_ms: null },
     });
+  });
+
+  it("never projects global legacy pipeline data into a selected conversation", () => {
+    const globalPipeline = {
+      ...demoPipeline,
+      scope: {
+        mode: "global_legacy",
+        conversation_identity: null,
+        mission_id: "mission-a-secret",
+      },
+      active_mission_id: "mission-a-secret",
+      active_mission_state: "EXECUTING_LOCAL_ACTION",
+      events: [{ id: "legacy-secret", ts: "now", label: "AUTRE_CONVERSATION_SECRET" }],
+    } as PipelineStatus;
+    const matchingMission = {
+      mission: {
+        id: "mission-a-secret",
+        state: "EXECUTING_LOCAL_ACTION",
+      },
+      timeline: {},
+      awaiting_approval: false,
+      stopped: false,
+    } as MissionDetail;
+
+    const projected = projectPipelineForConversation(
+      globalPipeline,
+      matchingMission,
+      "conversation-a",
+    );
+
+    expect(projected.overall).toBe("unknown");
+    expect(projected.active_mission_id).toBeNull();
+    expect(projected.events).toEqual([]);
+  });
+
+  it("replaces a mismatched pipeline response with neutral truth instead of retaining stale data", () => {
+    const mismatched = {
+      ...demoPipeline,
+      scope: {
+        mode: "conversation",
+        conversation_identity: "conversation-a",
+        mission_id: null,
+      },
+      components: [{ id: "stale", label: "A_SECRET", state: "running", detail: "A_SECRET" }],
+      events: [{ id: "stale-event", ts: "now", label: "A_SECRET" }],
+    } as PipelineStatus;
+    const selected = pipelineResponseForConversation(mismatched, "conversation-b");
+
+    expect(selected.overall).toBe("unknown");
+    expect(selected.components).toEqual([]);
+    expect(selected.events).toEqual([]);
+  });
+
+  it("treats an explicit scope as authoritative over a legacy top-level identity", () => {
+    const contradictory = {
+      ...demoPipeline,
+      conversation_identity: "conversation-b",
+      scope: {
+        mode: "conversation",
+        conversation_identity: null,
+        mission_id: null,
+      },
+      components: [{ id: "stale", label: "CONTRADICTORY_SECRET", state: "running", detail: "secret" }],
+    } as PipelineStatus;
+
+    const selected = pipelineResponseForConversation(contradictory, "conversation-b");
+
+    expect(selected.overall).toBe("unknown");
+    expect(selected.components).toEqual([]);
   });
 
   it("blocks Enter and screenshot while A1 is non-terminal without closing its source", async () => {
@@ -966,8 +1095,14 @@ describe("CortexApp conversation integration", () => {
     };
     network.api.mockImplementation((path: string) => {
       if (path.startsWith("/api/pipeline/status")) {
+        const params = new URL(path, "http://cortex.local").searchParams;
         return Promise.resolve({
           ...demoPipeline,
+          scope: {
+            mode: "conversation",
+            conversation_identity: params.get("conversation_identity"),
+            mission_id: params.get("mission_id"),
+          },
           active_mission_id: "mission-a",
           active_mission_state: "EXECUTING_LOCAL_ACTION",
           components: [
@@ -1009,10 +1144,10 @@ describe("CortexApp conversation integration", () => {
     await user.click(screen.getByRole("button", { name: "Démarrer en lecture seule" }));
     await screen.findByText("Mission A isolée");
     await user.click(screen.getByTitle("Détails du bridge (pipeline, logs, transport)"));
-    const inspector = within(screen.getByLabelText("État de la pipeline"));
+    const inspector = within(screen.getByLabelText("État du pipeline"));
     expect(inspector.getByText("Composant mission A")).toBeInTheDocument();
     expect(inspector.getByText("Événement mission A")).toBeInTheDocument();
-    expect(inspector.getByText("MISSION_A_MODEL_SECRET")).toBeInTheDocument();
+    expect(inspector.getAllByText("MISSION_A_MODEL_SECRET").length).toBeGreaterThan(0);
     expect(screen.getAllByText(/14m 37s/).length).toBeGreaterThan(0);
     expect(inspector.getByRole("button", { name: "Pause" })).toBeEnabled();
 
@@ -1024,8 +1159,8 @@ describe("CortexApp conversation integration", () => {
     expect(screen.queryByText("MISSION_A_RUNTIME_SECRET")).not.toBeInTheDocument();
     expect(screen.queryByText("MISSION_A_TASK_SECRET")).not.toBeInTheDocument();
     expect(screen.queryAllByText(/14m 37s/)).toHaveLength(0);
-    expect(inspector.getByRole("button", { name: "Pause" })).toBeDisabled();
-    expect(inspector.getByRole("button", { name: "Annuler" })).toBeDisabled();
+    expect(inspector.queryByRole("button", { name: "Pause" })).not.toBeInTheDocument();
+    expect(inspector.queryByRole("button", { name: "Annuler" })).not.toBeInTheDocument();
     expect(screen.getAllByText("ChatGPT").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Exécuteur").length).toBeGreaterThan(0);
     expect(screen.getByTitle("Statut de la connexion ChatGPT")).toHaveTextContent("Connecté");
@@ -1034,7 +1169,7 @@ describe("CortexApp conversation integration", () => {
     await user.click(screen.getByRole("button", { name: /Conversation A/ }));
     expect(inspector.getByText("Composant mission A")).toBeInTheDocument();
     expect(inspector.getByText("Événement mission A")).toBeInTheDocument();
-    expect(inspector.getByText("MISSION_A_MODEL_SECRET")).toBeInTheDocument();
+    expect(inspector.getAllByText("MISSION_A_MODEL_SECRET").length).toBeGreaterThan(0);
     expect(screen.getAllByText(/14m 37s/).length).toBeGreaterThan(0);
     expect(inspector.getByRole("button", { name: "Pause" })).toBeEnabled();
   });

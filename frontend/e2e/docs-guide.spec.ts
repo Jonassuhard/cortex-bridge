@@ -175,8 +175,8 @@ test("generate the synthetic v0.5 visual guide", async ({ appPage }) => {
 
     await reset();
     await appPage.getByRole("button", { name: /Détails du bridge/ }).click();
-    await appPage.getByRole("button", { name: "Stop everything" }).evaluate((button: HTMLButtonElement) => button.click());
-    await expect(appPage.getByText("STOP EVERYTHING actif", { exact: true })).toBeVisible();
+    await appPage.getByRole("button", { name: "Tout arrêter" }).evaluate((button: HTMLButtonElement) => button.click());
+    await expect(appPage.getByText("Arrêt général actif", { exact: true })).toBeVisible();
     await capture(appPage, viewport.width, "11-arret-diagnostic");
   }
 });

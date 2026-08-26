@@ -34,25 +34,12 @@ const stageOrder = [
   "Rapport renvoyé à ChatGPT",
 ];
 
-function stateLabel(state?: string) {
-  const labels: Record<string, string> = {
-    INITIALIZING_MISSION: "Initialisation",
-    SENDING_OBJECTIVE: "Envoi à ChatGPT",
-    WAITING_FOR_CHATGPT: "ChatGPT analyse",
-    PARSING_DECISION: "Décision reçue",
-    WAITING_FOR_APPROVAL: "Approbation requise",
-    EXECUTING_LOCAL_ACTION: "Exécution locale",
-    VALIDATING_ACTION: "Validation",
-    SENDING_REPORT: "Rapport vers ChatGPT",
-    FINAL_VALIDATION: "Validation finale",
-    COMPLETED: "Mission terminée",
-    BLOCKED: "Mission bloquée",
-    FAILED: "Mission échouée",
-    PAUSED: "Mission en pause",
-    PAUSED_RECOVERY_REQUIRED: "Reprise requise",
-    CANCELLED: "Mission annulée",
-  };
-  return labels[state || ""] || state || "Exécution locale";
+function missionCardStateLabel(state?: string): string {
+  if (state === "COMPLETED") return "Mission terminée";
+  if (state === "BLOCKED") return "Mission bloquée";
+  if (state === "FAILED") return "Mission échouée";
+  if (state === "CANCELLED") return "Mission annulée";
+  return executionStateLabel(state) || "État de mission inconnu";
 }
 
 function pauseReasonMessage(reason?: string | null): string | null {
@@ -128,7 +115,7 @@ export function ExecutionCard({ mission, pipeline, expanded, onToggle, onApprove
         <div className="execution-card-title">
           <span className={`execution-orb ${completed ? "is-done" : terminal ? "is-error" : ""}`} aria-hidden="true"><span /></span>
           <div>
-            <strong>{stateLabel(missionState)}</strong>
+            <strong>{missionCardStateLabel(missionState)}</strong>
             <small>{active?.objective || "Cortex Bridge exécute et vérifie l'action demandée."}</small>
           </div>
         </div>

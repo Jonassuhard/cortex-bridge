@@ -47,17 +47,15 @@ Current state: 2026-08-26. Read this file with `README.md`,
 
 - Backend: 628/628. Extension: 126/126. Mapped crash recovery: 6/6;
   dedicated Chrome recovery/anti-replay: 6/6.
-- Frontend: 145/145 unit and 35/35 runtime/privacy; typecheck, lint and Next.js
-  production build pass.
+- Frontend: 155/155 unit and 33/33 runtime/privacy; typecheck, lint and build pass.
 - Browser fixtures: 12 pass, one intentional guide-generation skip; a11y 4/4
   at 375, 768 and 1440 px; zero fixture console/page/hydration errors.
 - Ten cold dual-writer runs: zero crossover, third draft and file retained.
   Cached usability: 231.1 ms; switch p95/max: 141.7 ms.
 - Two normalized builds: 28 files each, aggregate SHA-256
   `a401609dd88bc4fc2562ffd4563c07854105f3d4c8324198ee5a712ec180666a`.
-- Privacy: 327 files and 42 images. Links: 121, including 56 external.
-  Gitleaks: 240 commits. npm and Python audits: zero known findings.
-  ShellCheck, Python compilation, runtime verification and diff checks pass.
+- Privacy: 329 files and 43 images. Links: 121, including 56 external. Gitleaks:
+  240 commits. Audits, ShellCheck, Python, runtime and diff checks pass.
 - A clean Git archive includes the extension, static chunk, Freebuff guide and
   Swift helper. Extension 126/126 and packaging 6/6 pass from that archive; its
   wheel includes the Swift source.
@@ -79,21 +77,24 @@ Current state: 2026-08-26. Read this file with `README.md`,
   on automatic/programmatic extraction. Owner approval does not remove it.
 - Still unproven: truly clean macOS account/VM lifecycle; live staged-file
   preservation on third-writer refusal; real cold/warm switch under ten seconds;
-  live tab-close/reload recovery without resend; final live console scan.
+  live tab-close/reload recovery without resend.
 - `docs/verification/v0.5.3.json` must reference the final clean source commit
   and then be committed alone.
 
-## Verified post-candidate fix (unpublished)
+## Verified post-candidate fixes
+
 - A real Cortex-only send exposed one persisted turn plus its local overlay.
 - Reconciliation now requires new message identities captured at send start;
   repeated identical turns and the poll-before-accept race have regression tests.
-- Proof: 149/149 unit and 32/32 runtime/privacy tests; typecheck, lint, canonical
-  build; live `CORTEX-UNIQUE-OK.` in 4.5 s, one pair after refresh, zero console
-  issues, and no direct operation of ChatGPT.
-- Committed on `codex/critical-qa`; publication and resealing remain independent. Inspector debt remains: stale pipeline truth and
-  untranslated `Stop everything` / `unavailable` labels.
+- Pipeline truth now requires an exact conversation scope; global legacy,
+  contradictory and mismatched responses fail closed without A-to-B leakage.
+- Inspector is readable and French, hides idle mission controls, separates the
+  global stop and distinguishes executor availability from actual use.
+- Proof: 155/155 frontend, 33/33 runtime/privacy, typecheck, lint, canonical
+  build, live scoped API, anonymized Chrome capture and zero console issues.
+- Duplicate fix is published on the branch; inspector commit stays local until
+  explicit push approval. Resealing remains independent.
 
 ## Next exact action
 
-Keep `main` unchanged. Resealing, opening a pull request, merging, tagging and
-publishing a release remain separate actions requiring explicit approval.
+Keep `main` unchanged; push only after approval. Reseal, PR, merge, tag and release separately.

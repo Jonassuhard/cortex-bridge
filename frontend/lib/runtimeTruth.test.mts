@@ -8,6 +8,7 @@ import * as runtimeTruthModule from "./runtimeTruth.ts";
 const {
   createUnavailableClientState,
   executorDisplay,
+  executorDiagnosticsLabel,
   executionStateLabel,
   isAvailableComponentState,
   usesOllamaStructuredTools,
@@ -847,10 +848,33 @@ test("API failure without fixture flag yields a neutral client state", () => {
 });
 
 test("failed, blocked and cancelled states are never labelled done", () => {
+  assert.equal(executionStateLabel("INITIALIZING_MISSION"), "Initialisation");
+  assert.equal(executionStateLabel("SENDING_OBJECTIVE"), "Envoi à ChatGPT");
+  assert.equal(executionStateLabel("WAITING_FOR_CHATGPT"), "ChatGPT analyse");
+  assert.equal(executionStateLabel("PARSING_DECISION"), "Décision reçue");
+  assert.equal(executionStateLabel("WAITING_FOR_APPROVAL"), "Approbation requise");
+  assert.equal(executionStateLabel("EXECUTING_LOCAL_ACTION"), "Exécution locale");
+  assert.equal(executionStateLabel("VALIDATING_ACTION"), "Validation");
+  assert.equal(executionStateLabel("SENDING_REPORT"), "Rapport vers ChatGPT");
+  assert.equal(executionStateLabel("FINAL_VALIDATION"), "Validation finale");
+  assert.equal(executionStateLabel("PAUSED"), "En pause");
+  assert.equal(executionStateLabel("PAUSED_RECOVERY_REQUIRED"), "Reprise requise");
   assert.equal(executionStateLabel("COMPLETED"), "Terminé");
   assert.equal(executionStateLabel("FAILED"), "Échec");
   assert.equal(executionStateLabel("BLOCKED"), "Bloquée");
   assert.equal(executionStateLabel("CANCELLED"), "Annulée");
+});
+
+test("Ollama diagnostics are fully localized", () => {
+  assert.equal(
+    executorDiagnosticsLabel({
+      executor_kind: "ollama",
+      executor_model_used: "qwen-test",
+      runtime_mode: "live",
+      release_eligible: false,
+    }),
+    "Ollama · outils structurés · qwen-test",
+  );
 });
 
 test("idle truth never renders deterministic execution", () => {

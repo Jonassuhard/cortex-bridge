@@ -170,7 +170,7 @@ export function usesOllamaStructuredTools(truth?: RuntimeTruth | null): boolean 
 
 export function executorDiagnosticsLabel(truth?: RuntimeTruth | null): string {
   if (usesOllamaStructuredTools(truth)) {
-    return `Ollama structured tools · ${truth?.executor_model_used}`;
+    return `Ollama · outils structurés · ${truth?.executor_model_used}`;
   }
   if (truth?.executor_kind === "deterministic") {
     return "Mode A · outils déterministes";
@@ -179,11 +179,24 @@ export function executorDiagnosticsLabel(truth?: RuntimeTruth | null): string {
 }
 
 export function executionStateLabel(state?: string): string | null {
-  if (state === "COMPLETED") return "Terminé";
-  if (state === "FAILED") return "Échec";
-  if (state === "BLOCKED") return "Bloquée";
-  if (state === "CANCELLED") return "Annulée";
-  return null;
+  const labels: Record<string, string> = {
+    INITIALIZING_MISSION: "Initialisation",
+    SENDING_OBJECTIVE: "Envoi à ChatGPT",
+    WAITING_FOR_CHATGPT: "ChatGPT analyse",
+    PARSING_DECISION: "Décision reçue",
+    WAITING_FOR_APPROVAL: "Approbation requise",
+    EXECUTING_LOCAL_ACTION: "Exécution locale",
+    VALIDATING_ACTION: "Validation",
+    SENDING_REPORT: "Rapport vers ChatGPT",
+    FINAL_VALIDATION: "Validation finale",
+    PAUSED: "En pause",
+    PAUSED_RECOVERY_REQUIRED: "Reprise requise",
+    COMPLETED: "Terminé",
+    FAILED: "Échec",
+    BLOCKED: "Bloquée",
+    CANCELLED: "Annulée",
+  };
+  return labels[state || ""] || null;
 }
 
 export function reduceConversationRefreshFailure(

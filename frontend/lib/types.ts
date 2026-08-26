@@ -293,6 +293,11 @@ export interface PipelineEvent {
 
 export interface PipelineStatus {
   conversation_identity?: string | null;
+  scope?: {
+    mode: "conversation" | "global_legacy";
+    conversation_identity: string | null;
+    mission_id: string | null;
+  };
   overall: HealthState;
   updated_at: string;
   components: PipelineComponent[];

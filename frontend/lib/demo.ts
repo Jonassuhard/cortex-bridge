@@ -100,6 +100,11 @@ export const demoTransport: TransportStatus = {
 };
 
 export const demoPipeline: PipelineStatus = {
+  scope: {
+    mode: "conversation",
+    conversation_identity: "demo-release-checklist",
+    mission_id: "demo-mission",
+  },
   overall: "running",
   updated_at: new Date().toISOString(),
   active_mission_id: "demo-mission",

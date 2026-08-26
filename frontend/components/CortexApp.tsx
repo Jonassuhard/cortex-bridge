@@ -164,15 +164,49 @@ function nonTerminal(state?: string) {
   return !!state && !["COMPLETED", "BLOCKED", "FAILED", "CANCELLED"].includes(state);
 }
 
+function pipelineIsScopedToConversation(
+  pipeline: PipelineStatus,
+  conversationIdentity: string | null,
+): boolean {
+  if (!conversationIdentity) return false;
+  if (pipeline.scope) {
+    return pipeline.scope.mode === "conversation"
+      && pipeline.scope.conversation_identity === conversationIdentity;
+  }
+  return !!pipeline.conversation_identity
+    && pipeline.conversation_identity === conversationIdentity;
+}
+
 export function projectPipelineForConversation(
   pipeline: PipelineStatus,
   mission: MissionDetail | null,
+  conversationIdentity: string | null = null,
 ): PipelineStatus {
-  if (mission && pipeline.active_mission_id === mission.mission.id) {
+  const exactConversationScope = pipelineIsScopedToConversation(
+    pipeline,
+    conversationIdentity,
+  );
+
+  if (
+    exactConversationScope
+    && mission
+    && pipeline.active_mission_id === mission.mission.id
+  ) {
     return {
       ...pipeline,
       active_mission_id: mission.mission.id,
       active_mission_state: mission.mission.state,
+    };
+  }
+  if (
+    exactConversationScope
+    && !mission
+    && !pipeline.active_mission_id
+  ) {
+    return {
+      ...pipeline,
+      active_mission_id: null,
+      active_mission_state: null,
     };
   }
   return {
@@ -200,6 +234,18 @@ export function projectPipelineForConversation(
       total_iteration_ms: null,
     },
   };
+}
+
+export function pipelineResponseForConversation(
+  pipeline: PipelineStatus,
+  conversationIdentity: string,
+): PipelineStatus {
+  const exactConversationScope = pipelineIsScopedToConversation(
+    pipeline,
+    conversationIdentity,
+  );
+  if (exactConversationScope) return pipeline;
+  return createUnavailableClientState(pipeline.updated_at).pipeline;
 }
 
 export function CortexApp() {
@@ -324,8 +370,12 @@ export function CortexApp() {
     return null;
   }, [missionDetail]);
   const selectedPipeline = useMemo(
-    () => projectPipelineForConversation(pipeline, missionDetail),
-    [missionDetail, pipeline],
+    () => projectPipelineForConversation(
+      pipeline,
+      missionDetail,
+      selectedEntry?.summary.identity ?? null,
+    ),
+    [missionDetail, pipeline, selectedEntry?.summary.identity],
   );
   const workspaceAvailability = useMemo<WorkspaceAvailability>(() => {
     const transportComponent = pipeline.components.find((component) => component.id === "transport");
@@ -526,8 +576,7 @@ export function CortexApp() {
     try {
       const data = await api<PipelineStatus>(`/api/pipeline/status?${params}`, { signal: controller.signal });
       if (controller.signal.aborted || conversationStateRef.current.selectedKey !== key) return;
-      if (data.conversation_identity && data.conversation_identity !== entry.summary.identity) return;
-      setPipeline(data);
+      setPipeline(pipelineResponseForConversation(data, entry.summary.identity));
     } catch {
       if (controller.signal.aborted || conversationStateRef.current.selectedKey !== key) return;
       setPipeline(
@@ -1015,7 +1064,7 @@ export function CortexApp() {
     try {
       await postJson("/api/transport/stop-everything", {});
       setTransport((current) => ({ ...current, global_stop: true }));
-      notify("STOP EVERYTHING actif.");
+      notify("Arrêt général activé.");
       void refreshPipeline();
     } catch (error) {
       notify(error instanceof Error ? error.message : "Arrêt global impossible.");
