@@ -82,7 +82,7 @@ web interface as a coding agent. Here is how Cortex Bridge stacks up.
 
 | Project | Approach | GUI? | Agent loop? | Human approval? | Security model | Status |
 |---------|----------|------|-------------|-----------------|---------------|--------|
-| **Cortex Bridge** | Chrome Extension + FastAPI | ✅ React GUI | ✅ Mission protocol | ✅ Mandatory | Tokens, loopback, allowlist | ✅ Active (v0.5.2) |
+| **Cortex Bridge** | Chrome Extension + FastAPI | ✅ React GUI | ✅ Mission protocol | ✅ Mandatory | Tokens, loopback, allowlist | ✅ Active (v0.5.3) |
 | [chatgpt-browser-agent](https://github.com/abdallhMoukdad/chatgpt-browser-agent) | Puppeteer browser daemon | ❌ CLI + MCP only | ✅ `agent.js` (RUN/FILE blocks) | ⚠️ Optional (`--auto`) | None | ✅ Active |
 | [headless-chatgpt](https://github.com/HalilCan/headless-chatgpt) | Puppeteer API emulator | ❌ REST API only | ❌ Prompt → response only | ❌ No execution layer | None | ❌ Dormant |
 | [codex-chatgpt-control](https://github.com/adamallcock/codex-chatgpt-control) | SDK for Codex → ChatGPT delegation | ❌ SDK (Node/Python) | ❌ Delegates to Codex | ⚠️ Via Codex | Via Codex bridge | ✅ Alpha |

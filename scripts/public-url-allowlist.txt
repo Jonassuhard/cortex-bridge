@@ -18,12 +18,16 @@ https://freebuff.com/privacy-policy
 https://freebuff.com/terms-of-service
 https://git-scm.com/download/mac
 https://github.com/aaif-goose/goose
+https://github.com/abdallhMoukdad/chatgpt-browser-agent
+https://github.com/adamallcock/codex-chatgpt-control
 https://github.com/browser-use/browser-use
+https://github.com/HalilCan/headless-chatgpt
 https://github.com/Jonassuhard
 https://github.com/Jonassuhard/cortex-bridge.git
 https://github.com/CodebuffAI/freebuff
 https://github.com/openai/codex
 https://github.com/openinterpreter/openinterpreter
+https://github.com/waishnav/devspace
 https://img.shields.io/badge/license-MIT-green.svg
 https://img.shields.io/badge/platform-macOS-lightgrey.svg
 https://img.shields.io/badge/version-0.5.3-blue.svg

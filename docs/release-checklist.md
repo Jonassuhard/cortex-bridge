@@ -17,7 +17,7 @@ gate.
       the final source tree.
 - [x] Two consecutive static builds contain the same 28 files and have the
       identical aggregate SHA-256.
-- [ ] Worktree is clean after the reproducible build.
+- [x] Worktree is clean after the reproducible build.
 
 ## Product
 
@@ -34,7 +34,7 @@ gate.
 
 ## Quality
 
-- [ ] Backend suite passes with temporary `CORTEX_HOME` on the final source
+- [x] Backend suite passes with temporary `CORTEX_HOME` on the final source
       tree.
 - [x] Frontend unit and runtime tests pass.
 - [x] TypeScript, lint and static build pass.
@@ -84,10 +84,11 @@ gate.
       source tree.
 - [x] Ten cold dual-conversation fixture runs pass without crossover and keep
       the refused third draft and staged file.
-- [ ] Six crash points recover without duplicate send or execution.
+- [x] Six historically mapped crash/recovery tests pass; six dedicated Chrome
+      recovery/anti-replay tests also pass.
 - [x] Three distinct mini-site missions complete in disposable workspaces and
       pass their acceptance checks.
-- [ ] A self-diagnostic mission runs in a disposable worktree and does not
+- [x] A self-diagnostic mission runs in a disposable worktree and does not
       merge itself.
 - [x] The production Chrome extension passes the complete v0.5.3 technical
       conversation, file and private-screenshot flow.

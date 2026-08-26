@@ -1,96 +1,88 @@
 # Cortex Bridge session primer
 
-Current state: 2026-08-26. Read this file with `README.md` and
-`docs/release-checklist.md`; do not infer release readiness from older v0.5.2
-evidence.
+Current state: 2026-08-26. Read this file with `README.md`,
+`docs/release-checklist.md` and `docs/verification/v0.5.3-test-report.md`.
 
 ## Repository
 
 - Worktree: `.worktrees/codex-critical-qa`; branch `codex/critical-qa`.
 - Canonical version: **0.5.3** in `VERSION`, Python metadata, frontend package
   and lock, Chrome manifest and installer metadata.
-- Remote: `https://github.com/Jonassuhard/cortex-bridge.git`; default branch is
-  `main`.
-- The branch is not published. The complete source candidate is ready for its
-  local pre-rebase commit; `origin/main` is four commits ahead.
-- Never claim that a branch, tag, release or `main` changed without checking
-  each one separately. Push, tag and release require Jonas's explicit approval.
+- Canonical remote: `origin`; default branch: `main`; rebase base: `3bb2cdb`.
+- The branch is unpublished. Push, tag and release require the owner's explicit
+  approval after the final diff and manifest are shown.
 
 ## Product invariants
 
-- Product transport = the unpacked local Chrome extension in the user's real
-  signed-in Chrome profile and the same Chrome window. No OpenAI API and no
-  separate Playwright profile may substitute for this flow.
+- Product transport is the unpacked local extension in the user's real signed-in
+  Chrome profile and the same Chrome window. No API or separate Playwright
+  profile may substitute for this flow.
 - Cortex writes only to classic ChatGPT chats. Work/business surfaces fail
   closed with `WORK_SURFACE_REJECTED`.
-- At most two distinct conversations may write concurrently. A third keeps its
-  draft and is refused in French.
-- Every local action remains bounded to the selected workspace and approval
-  policy. Ambiguous browser delivery is never automatically replayed.
+- At most two distinct conversations may write concurrently. A third retains
+  its draft and staged file in deterministic E2E coverage and is refused in
+  French before any browser action.
+- Local actions stay inside the selected workspace and approval policy.
+  Ambiguous browser delivery is never automatically replayed.
 
 ## Candidate work completed
 
-- Extension protocol-v2 pairing, same-window tab allocation, exact route
-  selection, FIFO delivery activation and trusted send-control revalidation.
-- File and screenshot staging are bounded, single-use and fail closed. Private
-  screenshots require a confirmed mask over navigation, sidebar and account
-  areas before pixels are read.
-- Mission resume recovers only one stable valid unconsumed decision after a
-  read failure. Manual resume waits for an already-active loop and never starts
-  a second consumer on the same response. Safe pauses restore their exact
-  durable state; an in-flight local action cannot be paused mid-effect.
-- Private screenshots use only exact-tab CDP capture, serialize the mask cycle
-  per tab and discard pixels unless same-document restoration is attested.
-  Uncertain writer tabs are durably quarantined from every session class.
-- Text-only installation no longer requires Swift. The native macOS helper is
-  an optional file-send capability. Child compilation/activation processes are
-  killed and reaped on cancellation. Uninstall requires a verified stopped
-  runtime, and start shares the installer lifecycle lock.
-- `docs/freebuff-installation.md` documents Freebuff only as an optional,
-  non-affiliated assistant: inspect and pin its package, show the immutable
-  Cortex dry-run plan, require `APPROVE <plan_hash>`, never use `sudo` or secrets,
-  and leave login, terms, extension and permissions to the human.
+- Protocol-v2 pairing, same-window tab allocation, exact route selection, FIFO
+  activation and trusted send-control revalidation.
+- Exact-tab CDP screenshots with serialized private masking, restoration proof
+  and discard-on-uncertainty behavior.
+- Durable fail-closed quarantine for uncertain writer tabs across every session
+  class and extension restart.
+- Exact durable pause/resume state, no second response consumer, and no pause
+  during an in-flight local effect.
+- Bounded, single-use file transfer; cancelled Swift compile/helper processes
+  are killed and reaped.
+- Install/start/uninstall share the lifecycle lock; uninstall accepts only a
+  verified stopped runtime and preserves foreign resources.
+- Optional Freebuff walkthrough with package pinning, source inspection,
+  immutable dry-run plan and exact `APPROVE <plan_hash>` consent.
 
-## Current evidence
+## Fresh v0.5.3 evidence
 
-- Last full backend baseline: 515 tests before the latest five regression
-  tests. Current targeted backend/lifecycle suites and 126 extension tests
-  pass. A full post-rebase rerun is still required. Frontend: 145 unit tests
-  and 35 runtime/privacy tests pass; typecheck, lint and production build pass.
-- Browser fixtures: 12 E2E pass, one guide-generation test is intentionally
-  skipped; four accessibility tests pass at 375, 768 and 1440 pixels.
-- Ten cold dual-writer fixture runs have zero crossover. Cached usability is
-  154.1 ms; ten fixture switches have p95 65.6 ms and max 65.6 ms.
-- Two consecutive normalized static builds contain 28 files and share aggregate
-  SHA-256 `050590ee0364a13b64c0636c6279403e0cf65ff7dc50e96e89505e2e51fd546f`.
-- Privacy scan passes 317 files and 42 images; links pass 117/117, including 52
-  external checks; Gitleaks passes 239 commits. npm audit and pip-audit report
-  zero known findings. ShellCheck and `git diff --check` pass.
-- Owner-authorized live technical observations passed: one text chat, two real
-  writers plus third refusal, one small synthetic file, one masked screenshot,
-  and three accepted disposable mini-sites. No account or conversation identity
-  is publishable evidence.
-- Isolated macOS `CORTEX_HOME` install/reinstall/Doctor/start/status/stop/
-  uninstall passed without `sudo`; this is not a genuinely clean account or VM.
-- A wheel built from the candidate contains
-  `transport/macos_ax_send.swift`; generated build metadata was kept outside
-  the repository.
+- Backend: 625/625. Extension: 126/126. Mapped crash recovery: 6/6;
+  dedicated Chrome recovery/anti-replay: 6/6.
+- Frontend: 145/145 unit and 35/35 runtime/privacy; typecheck, lint and Next.js
+  production build pass.
+- Browser fixtures: 12 pass, one intentional guide-generation skip; a11y 4/4
+  at 375, 768 and 1440 px; zero fixture console/page/hydration errors.
+- Ten cold dual-writer runs: zero crossover, third draft and file retained.
+  Cached usability: 231.1 ms; switch p95/max: 141.7 ms.
+- Two normalized builds: 28 files each, aggregate SHA-256
+  `a401609dd88bc4fc2562ffd4563c07854105f3d4c8324198ee5a712ec180666a`.
+- Privacy: 326 files and 42 images. Links: 121, including 56 external.
+  Gitleaks: 240 commits. npm and Python audits: zero known findings.
+  ShellCheck, Python compilation, runtime verification and diff checks pass.
+- A clean Git archive includes the extension, static chunk, Freebuff guide and
+  Swift helper. Extension 126/126 and packaging 6/6 pass from that archive; its
+  wheel includes the Swift source.
+- Isolated macOS lifecycle: immutable plan, install, Doctor, start/status/API,
+  stop, idempotent reinstall and uninstall pass without `sudo`; foreign
+  sentinels are preserved and no listener remains.
+- A detached self-diagnostic worktree completed install, replay refusal,
+  Doctor, start/status/API/tasks, stop, reinstall and uninstall, then was
+  removed without merge. Two failed evidence wrappers remain disclosed.
+- Owner-authorized live technical observations already recorded for this
+  candidate cover one text chat, two writers plus third refusal, one synthetic
+  file, one masked screenshot and three disposable mini-sites. No account or
+  conversation identity is public evidence.
 
-## Honest release state and blockers
+## Honest release state
 
-- Target verdict remains **`OPT_IN_TECHNICAL_PREVIEW`**, never `READY`.
-- Current consumer-site automation conflicts with OpenAI's published terms on
-  automatic/programmatic extraction. Owner approval does not remove that
-  provider blocker; an official MCP/plugin transport is the future compliant
-  route and a separate architecture decision.
-- Still unproven live: staged-file preservation on a refused third writer,
-  real cold/warm switch under 10 seconds, tab-close recovery and self-diagnostic
-  mission. A genuinely clean macOS account/VM lifecycle is also pending.
-- `docs/verification/v0.5.3.json` must remain absent until the exact source
-  commit is clean. The evidence manifest then needs its own commit.
+- Target verdict: **`OPT_IN_TECHNICAL_PREVIEW`**, never `READY`.
+- Consumer-site automation conflicts with the provider's published prohibition
+  on automatic/programmatic extraction. Owner approval does not remove it.
+- Still unproven: truly clean macOS account/VM lifecycle; live staged-file
+  preservation on third-writer refusal; real cold/warm switch under ten seconds;
+  live tab-close/reload recovery without resend; final live console scan.
+- `docs/verification/v0.5.3.json` must reference the final clean source commit
+  and then be committed alone.
 
 ## Next exact action
 
-Create the complete local source commit (including all three previously
-untracked release files), rebase onto `origin/main`, rerun every final gate,
-then generate and validate `docs/verification/v0.5.3.json`.
+Finish the source commit, create and validate the manifest-only commit, then
+show the final diff before requesting push approval.
