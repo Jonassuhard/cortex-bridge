@@ -84,5 +84,6 @@ Current state: 2026-08-26. Read this file with `README.md`,
 
 ## Next exact action
 
-Create and validate the manifest-only commit, rerun the final gates, then show
-the exact branch state and request push approval.
+Show the exact final branch state and obtain the owner's explicit approval to
+push `codex/critical-qa`. Tagging and publishing a GitHub release remain
+separate external actions that require separate approval.
