@@ -788,6 +788,23 @@ describe("conversationReducer", () => {
     expect(updated.entries.b.mission).toBeNull();
   });
 
+  it("clears the pending chat baseline when a mission is accepted", () => {
+    const seeded = reduce(
+      createConversationState([summary("a")], "a"),
+      { type: "REQUEST_STARTED", request: "send", key: "a" },
+    );
+    expect(seeded.entries.a.pendingRunBaselineMessageIds).toEqual([]);
+
+    const accepted = conversationReducer(seeded, {
+      type: "MISSION_EVENT",
+      key: "a",
+      missionId: "mission-a",
+      accepted: true,
+    });
+
+    expect(accepted.entries.a.pendingRunBaselineMessageIds).toBeNull();
+  });
+
   it("ignores a stale mission detail after a newer mission was accepted", () => {
     const seeded = reduce(
       createConversationState([summary("a")], "a"),

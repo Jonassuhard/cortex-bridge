@@ -83,8 +83,17 @@ Current state: 2026-08-26. Read this file with `README.md`,
 - `docs/verification/v0.5.3.json` must reference the final clean source commit
   and then be committed alone.
 
+## Verified post-candidate fix (unpublished)
+- A real Cortex-only send exposed one persisted turn plus its local overlay.
+- Reconciliation now requires new message identities captured at send start;
+  repeated identical turns and the poll-before-accept race have regression tests.
+- Proof: 149/149 unit and 32/32 runtime/privacy tests; typecheck, lint, canonical
+  build; live `CORTEX-UNIQUE-OK.` in 4.5 s, one pair after refresh, zero console
+  issues, and no direct operation of ChatGPT.
+- Committed on `codex/critical-qa`; publication and resealing remain independent. Inspector debt remains: stale pipeline truth and
+  untranslated `Stop everything` / `unavailable` labels.
+
 ## Next exact action
 
-Keep the published candidate unchanged until the owner explicitly chooses to
-open a pull request, merge it, tag it or publish a GitHub release. Windows v0.6
-design work must use a separate branch after its architecture is approved.
+Keep `main` unchanged. Resealing, opening a pull request, merging, tagging and
+publishing a release remain separate actions requiring explicit approval.

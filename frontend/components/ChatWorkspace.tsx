@@ -55,6 +55,7 @@ interface ChatWorkspaceProps {
   draft: string;
   attachment: File | null;
   chatRun: ChatRun | null;
+  runBaselineMessageIds: string[];
   mission: MissionDetail | null;
   pipeline: PipelineStatus;
   availability: WorkspaceAvailability;
@@ -95,6 +96,38 @@ function cleanMessageText(text: string): string {
     .replace(/Réfléchi pendant\s+\d+[smh]\s*/gi, "")
     .replace(/Thinking completed/gi, "")
     .trim();
+}
+
+function normalizedMessageText(text: string): string {
+  return cleanMessageText(text).replace(/\s+/g, " ");
+}
+
+function reconcileCompletedRun(
+  messages: ConversationMessage[],
+  chatRun: ChatRun,
+  runBaselineMessageIds: string[],
+): boolean {
+  if (chatRun.state !== "COMPLETED" || !chatRun.response_text || messages.length < 2) return false;
+  const userIndex = messages.length - 2;
+  const assistantIndex = messages.length - 1;
+  const userMessage = messages[userIndex];
+  const assistantMessage = messages[assistantIndex];
+  const baselineIds = new Set(runBaselineMessageIds);
+  if (
+    userMessage.role !== "user"
+    || assistantMessage.role !== "assistant"
+    || baselineIds.has(userMessage.id)
+    || baselineIds.has(assistantMessage.id)
+    || normalizedMessageText(userMessage.text) !== normalizedMessageText(chatRun.text)
+    || normalizedMessageText(assistantMessage.text) !== normalizedMessageText(chatRun.response_text)
+  ) return false;
+
+  messages[userIndex] = { ...userMessage, delivery: "received" };
+  messages[assistantIndex] = {
+    ...assistantMessage,
+    latency_ms: chatRun.latency?.first_response_ms ?? assistantMessage.latency_ms,
+  };
+  return true;
 }
 
 function normalizeMissionPreflight(value: ExecutionPreflight): ExecutionPreflight {
@@ -307,6 +340,7 @@ export function ChatWorkspace({
   draft,
   attachment,
   chatRun,
+  runBaselineMessageIds,
   mission,
   pipeline,
   availability,
@@ -356,7 +390,10 @@ export function ChatWorkspace({
 
   const mergedMessages = useMemo(() => {
     const source = [...messages];
-    if (chatRun) {
+    const reconciled = chatRun
+      ? reconcileCompletedRun(source, chatRun, runBaselineMessageIds)
+      : false;
+    if (chatRun && !reconciled) {
       const hasUser = source.some((message) => message.id === `local-${chatRun.id}`);
       if (!hasUser) {
         source.push({
@@ -392,7 +429,7 @@ export function ChatWorkspace({
       }
     }
     return source;
-  }, [messages, chatRun]);
+  }, [messages, chatRun, runBaselineMessageIds]);
 
   const { protocolMessages, visibleMessages } = useMemo(() => {
     const protocol: ConversationMessage[] = [];

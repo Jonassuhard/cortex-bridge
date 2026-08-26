@@ -1100,6 +1100,7 @@ export function CortexApp() {
         draft={selectedEntry?.draft || ""}
         attachment={selectedEntry?.attachment || null}
         chatRun={chatRun}
+        runBaselineMessageIds={selectedEntry?.runBaselineMessageIds || []}
         mission={activeMission || missionDetail}
         pipeline={selectedPipeline}
         availability={workspaceAvailability}

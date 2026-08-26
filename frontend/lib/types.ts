@@ -95,11 +95,13 @@ export interface ConversationEntry {
   draft: string;
   attachment: File | null;
   submittedPayload: SubmittedConversationPayload | null;
+  pendingRunBaselineMessageIds: string[] | null;
   loadEpoch: number;
   loadPhase: ConversationLoadPhase;
   loadError: string | null;
   freshness: ConversationFreshness;
   run: ChatRun | null;
+  runBaselineMessageIds: string[];
   streamEpoch: number;
   missionId: string | null;
   mission: MissionDetail | null;
