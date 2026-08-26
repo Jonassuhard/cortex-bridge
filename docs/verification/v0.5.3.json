@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "release": "0.5.3",
-  "commit": "96fe613794d167c5b246b7413e747935f794e199",
-  "generatedAt": "2026-08-26T20:35:43Z",
+  "commit": "86a9d71a201ef8e11e2f1da5dec194e334d288cc",
+  "generatedAt": "2026-08-26T21:21:12Z",
   "environment": {
     "os": "macOS 26.5.1 build 25F80, Apple silicon",
     "python": "3.12.1, exact requirements.lock environment",
@@ -60,7 +60,7 @@
     "crashPoints": {
       "runs": 6,
       "passed": 6,
-      "sourceCommit": "96fe613794d167c5b246b7413e747935f794e199",
+      "sourceCommit": "86a9d71a201ef8e11e2f1da5dec194e334d288cc",
       "command": "python -m unittest -v tests.test_loop_mock.LoopTestCase.test_08_restart_recovery_requires_explicit_resume tests.test_missions_api.MissionsApiTestCase.test_08_restart_recovery_surfaced tests.test_playwright_driver.PlaywrightDriverTest.test_startup_failure_is_evicted_and_factory_recovers tests.test_transport_session_isolation.MissionPersistenceFailureTest.test_sqlite_update_failure_fails_mission_and_releases_exact_lease tests.test_transport_session_isolation.MissionRouteSessionIsolationTest.test_runtime_construction_failure_fails_creation_and_releases_lease tests.test_transport_session_isolation.MissionStopQuiescenceTest.test_cancel_keeps_slot_until_browser_and_background_task_quiesce",
       "evidenceArtifact": "docs/verification/v0.5.3-crash-points.txt",
       "points": [
@@ -199,7 +199,7 @@
     "docs/screenshots/v0.5.0/proofs/mission-protocol-collapsed.jpg": "ca4c954e076476571722be6b6c9be1c6c982102da538747874f2ab964d3e8232",
     "docs/screenshots/v0.5.0/proofs/mission-protocol-expanded.jpg": "20ff475063ba786322310fb962f5456bd29edb50b351f1278d3a288111daadf8",
     "docs/screenshots/v0.5.0/proofs/mission-protocol-mobile.jpg": "6cd4b33e846510e5198eb1f53bdab3f1c01b96075ded012f2be339fe4b55212c",
-    "docs/verification/v0.5.3-test-report.md": "0e7d3df1ec78091ce00d7a09a13dce35d7d37388ad3e44c16233bd303641521f",
+    "docs/verification/v0.5.3-test-report.md": "4986759f22f9a39855201e59b1250675e6d2a7d6f2b3a115bcba812bca57b320",
     "docs/verification/self-diagnostic-2026-08-26.md": "cda26264efc7276be4c824be753e27f7c2ac59e497cb226f103cd7b637adbe2c"
   },
   "verdict": "OPT_IN_TECHNICAL_PREVIEW"
