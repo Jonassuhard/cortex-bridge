@@ -13,6 +13,21 @@ Open `chrome://extensions`, enable Developer mode, choose **Load unpacked**,
 and select the `chrome_extension_path` printed by the installer. Ensure Cortex
 Bridge is enabled, reload the Cortex tab, and retry.
 
+## The extension is detected but not paired
+
+Since v0.5.4 the console pairs the extension automatically on load, so this
+should resolve by itself within a few seconds. If it does not: reload the
+Cortex tab, check that the server is running (`./scripts/cortex.sh status`),
+and use the manual pairing button in the console. The **Guide de démarrage**
+button in the sidebar shows the live state of each setup step.
+
+## The tab group is not created
+
+The console and ChatGPT tabs are grouped under **Cortex Bridge** by the
+extension. Grouping is best-effort and never blocks a mission; if the group is
+missing, reload the extension on `chrome://extensions` (the `tabGroups`
+permission was added in v0.5.4) and reopen ChatGPT from the console.
+
 ## Cortex says the extension must be reloaded
 
 The files on disk are newer than the service worker currently running in

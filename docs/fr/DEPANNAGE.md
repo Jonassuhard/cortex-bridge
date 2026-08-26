@@ -24,7 +24,8 @@ Ci-dessous, les cas classiques.
 |---|---|---|
 | « Extension Chrome introuvable » au doctor | Extension pas chargée dans Chrome | `scripts/install-extension.sh` puis les 3 gestes affichés |
 | « Extension à recharger » | Extension mise à jour côté disque | `chrome://extensions` › bouton **↻** sur Cortex Bridge |
-| « Jumelage en attente » | Extension chargée mais jamais connectée | Dans l'interface Cortex : **Ouvrir et connecter ChatGPT** |
+| « Jumelage en attente » qui ne disparaît pas | Couplage automatique pas encore fait | Recharge l'onglet Cortex : l'extension se couple toute seule en quelques secondes ; sinon bouton de jumelage manuel dans l'interface. Le bouton **« Guide de démarrage »** (barre latérale) montre l'état de chaque étape |
+| Pas de groupe d'onglets « Cortex Bridge » | Permission `tabGroups` pas encore prise en compte | Recharge l'extension sur `chrome://extensions`, puis rouvre ChatGPT depuis la console (le groupe est un confort, jamais bloquant) |
 
 ## ChatGPT
 

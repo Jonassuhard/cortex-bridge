@@ -2,6 +2,26 @@
 
 All notable changes are recorded here.
 
+## 0.5.4 - 2026-08-27
+
+### Added
+
+- `scripts/cortex.sh go` launches everything in one command: it starts the
+  console, opens the console tab in the Chrome profile that carries the
+  extension, and prints the next steps in French.
+- The Chrome extension pairs with the console automatically when the console
+  detects an unpaired extension; the manual pairing button remains available.
+- The console and ChatGPT tabs are grouped in one **Cortex Bridge** Chrome tab
+  group, created and maintained by the extension (new `tabGroups` permission).
+- A **Guide de démarrage** button in the sidebar reopens a 3-step checklist
+  (pairing, ChatGPT tab, first mission) with live completion state.
+
+### Changed
+
+- `Cortex Bridge.command` now runs the full `cortex.sh go` flow instead of only
+  starting the server.
+- The ChatGPT connection button is labelled **Ouvrir ChatGPT**.
+
 ## 0.5.3 - 2026-08-25
 
 ### Added

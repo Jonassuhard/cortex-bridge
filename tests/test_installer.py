@@ -128,7 +128,7 @@ class InstallerTest(unittest.TestCase):
         after = sorted(str(path.relative_to(self.root)) for path in self.root.rglob("*"))
         self.assertEqual(after, before)
         self.assertEqual(plan["schema_version"], 1)
-        self.assertEqual(plan["version"], "0.5.3")
+        self.assertEqual(plan["version"], "0.5.4")
         self.assertEqual(len(plan["plan_hash"]), 64)
         self.assertTrue(plan["commands"])
         for command in plan["commands"]:
@@ -591,7 +591,7 @@ class InstallerTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         payload = json.loads(result.stdout)
         self.assertEqual(payload["schema_version"], 1)
-        self.assertEqual(payload["version"], "0.5.3")
+        self.assertEqual(payload["version"], "0.5.4")
         self.assertIn("deterministic", payload["modes"])
         self.assertTrue(payload["modes"]["chrome_extension"])
         extension = next(check for check in payload["checks"] if check["id"] == "chrome_extension")
@@ -620,7 +620,7 @@ class InstallerTest(unittest.TestCase):
         installer = load_installer_module()
         output = io.StringIO()
         payload = {
-            "version": "0.5.3",
+            "version": "0.5.4",
             "ok": True,
             "local_url": "http://127.0.0.1:18423",
             "checks": [

@@ -1,6 +1,7 @@
 import {
   HEARTBEAT_INTERVAL_MS,
   captureTabViaDebuggerExactly,
+  ensureCortexTabGroup,
   forgetClosedTab,
   restoreQuarantinedWriterTabs,
   routeCommand,
@@ -140,6 +141,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     windowId: sender.tab.windowId,
     index: sender.tab.index,
   };
+  void ensureCortexTabGroup(chrome, context.cortexTab);
   pendingPair = message.token;
   connect();
   if (send(createPairMessage(pendingPair))) {

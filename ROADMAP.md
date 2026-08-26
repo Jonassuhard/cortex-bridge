@@ -20,6 +20,11 @@ Public, best-effort roadmap. Dates are indicative; scope beats schedule.
       file and private screenshot delivery, and three accepted disposable
       mini-sites. Publication still requires the final clean source commit,
       v0.5.3 evidence manifest, review and explicit push/tag approval.
+- [ ] v0.5.4 (in progress): one-command launch (`scripts/cortex.sh go`, also
+      behind the double-clickable `Cortex Bridge.command`), automatic
+      extension pairing on console load, a shared **Cortex Bridge** Chrome tab
+      group for the console and ChatGPT tabs, and an on-demand 3-step startup
+      guide in the sidebar.
 - [x] Real-production-extension live capture E2E (2026-08-22: production
       debugger/CDP capture, PNG upload, canonical new-chat lock and visible
       response; stale-paint and attachment-lock regressions fixed first).

@@ -6,13 +6,18 @@ The application interface is French. This guide is in English.
 
 1. Complete [installation](../INSTALL.md), including **Load unpacked** from
    `chrome://extensions`.
-2. Start Cortex with `./scripts/cortex.sh start`.
-3. Open `http://127.0.0.1:8420` in Google Chrome.
-4. Press **Ouvrir et connecter ChatGPT** / **Open and connect ChatGPT**.
-5. Cortex opens or focuses ChatGPT in the same Chrome window and checks the
+2. Run `./scripts/cortex.sh go` (or double-click `Cortex Bridge.command`): it
+   starts Cortex and opens `http://127.0.0.1:8420` in the Chrome profile that
+   carries the extension. The extension pairs with the console automatically.
+3. Press **Ouvrir ChatGPT**. The ChatGPT tab joins the same **Cortex Bridge**
+   tab group as the console tab.
+4. Cortex opens or focuses ChatGPT in the same Chrome window and checks the
    page.
-6. If login or verification is required, finish it in the ChatGPT tab and
+5. If login or verification is required, finish it in the ChatGPT tab and
    press **Réessayer**. **Fermer** only dismisses the dialog.
+
+The **Guide de démarrage** button in the sidebar reopens the 3-step checklist
+(pairing, ChatGPT tab, first mission) with live completion state at any time.
 
 ![Synthetic onboarding](screenshots/v0.5.0/1440/01-onboarding.png)
 
