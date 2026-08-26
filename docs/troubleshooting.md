@@ -16,10 +16,12 @@ Bridge is enabled, reload the Cortex tab, and retry.
 ## The extension is detected but not paired
 
 Since v0.5.4 the console pairs the extension automatically on load, so this
-should resolve by itself within a few seconds. If it does not: reload the
-Cortex tab, check that the server is running (`./scripts/cortex.sh status`),
-and use the manual pairing button in the console. The **Guide de démarrage**
-button in the sidebar shows the live state of each setup step.
+should resolve by itself within a few seconds. After a console restart the
+extension also reconnects on its own within about 30 seconds. If it does not:
+reload the Cortex tab, check that the server is running
+(`./scripts/cortex.sh status`), and use the manual pairing button in the
+console. The **Guide de démarrage** button in the sidebar shows the live state
+of each setup step.
 
 ## The tab group is not created
 

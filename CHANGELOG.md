@@ -15,6 +15,9 @@ All notable changes are recorded here.
   group, created and maintained by the extension (new `tabGroups` permission).
 - A **Guide de démarrage** button in the sidebar reopens a 3-step checklist
   (pairing, ChatGPT tab, first mission) with live completion state.
+- The extension self-heals its connection: a Chrome alarm wakes the service
+  worker every 30 seconds and reconnects to the console after a console
+  restart (new `alarms` permission).
 
 ### Changed
 

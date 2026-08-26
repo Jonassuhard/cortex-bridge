@@ -4380,7 +4380,7 @@ test("manifest limits hosts and requires Chrome 116", async () => {
     "http://127.0.0.1:8420/*",
     "https://chatgpt.com/*",
   ]);
-  assert.deepEqual(manifest.permissions, ["activeTab", "debugger", "scripting", "storage", "tabGroups"]);
+  assert.deepEqual(manifest.permissions, ["activeTab", "alarms", "debugger", "scripting", "storage", "tabGroups"]);
   assert.equal(JSON.stringify(manifest).includes("<all_urls>"), false);
   assert.equal(JSON.stringify(manifest).includes("cookies"), false);
   assert.equal(JSON.stringify(manifest).includes("history"), false);
@@ -5218,4 +5218,15 @@ test("ensureCortexTabGroup never breaks a command when tabs vanish or APIs are m
 
   // sans onglet console valide ni onglet cible : no-op
   assert.equal(await ensureCortexTabGroup(chrome, null, []), null);
+});
+
+test("service worker self-heals the console connection through a reconnect alarm", async () => {
+  const source = await readFile(join(EXTENSION_ROOT, "service-worker.js"), "utf8");
+
+  // L'alarme réveille le service worker même idle-killé et reconnecte :
+  // sans elle, un redémarrage de la console laissait l'extension morte.
+  assert.match(source, /const RECONNECT_ALARM = "cortex-bridge-reconnect";/);
+  assert.match(source, /chrome\.alarms\.create\(RECONNECT_ALARM, \{ periodInMinutes: 0\.5 \}\);/);
+  assert.match(source, /chrome\.alarms\.onAlarm\.addListener/);
+  assert.match(source, /if \(alarm\?\.name === RECONNECT_ALARM\) connect\(\);/);
 });
