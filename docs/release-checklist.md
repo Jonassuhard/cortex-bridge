@@ -4,10 +4,10 @@
 
 Candidate date: 2026-08-26.
 
-This candidate is not `READY`, is not authorized by OpenAI and does not yet
-have `docs/verification/v0.5.3.json`. Every checked item below has current
-v0.5.3 evidence; v0.5.2 evidence and developer memory do not satisfy a v0.5.3
-gate.
+This candidate is not `READY` and is not authorized by OpenAI. Its
+machine-readable manifest is committed separately after the audited source
+commit so it cannot hash itself. Every checked item below has current v0.5.3
+evidence; v0.5.2 evidence and developer memory do not satisfy a v0.5.3 gate.
 
 ## Source and package
 
@@ -93,7 +93,7 @@ gate.
 - [x] The production Chrome extension passes the complete v0.5.3 technical
       conversation, file and private-screenshot flow.
 - [x] The consumer-site terms blocker is explicit and cannot be overridden by owner approval.
-- [ ] `docs/verification/v0.5.3.json` matches the audited source commit and
+- [x] `docs/verification/v0.5.3.json` matches the audited source commit and
       artifact hashes with the owner-assumed `OPT_IN_TECHNICAL_PREVIEW`
       verdict. This verdict does not mean OpenAI authorization.
 

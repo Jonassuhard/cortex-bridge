@@ -197,6 +197,76 @@ class EvidenceValidator:
             ):
                 self.report("acceptance_evidence", f"acceptance.{group}")
 
+        crash_points = self.get("acceptance.crashPoints")
+        if isinstance(crash_points, dict):
+            crash_runs = crash_points.get("runs")
+            points = crash_points.get("points")
+            source_commit = crash_points.get("sourceCommit")
+            command = crash_points.get("command")
+            evidence_artifact = crash_points.get("evidenceArtifact")
+            artifacts_payload = self.payload.get("artifacts")
+            point_ids: set[str] = set()
+            point_tests: set[str] = set()
+            points_valid = (
+                isinstance(points, list)
+                and self.nonnegative_int(crash_runs)
+                and len(points) == crash_runs
+                and len(points) >= 6
+            )
+            if isinstance(points, list):
+                for point in points:
+                    if not isinstance(point, dict):
+                        points_valid = False
+                        continue
+                    point_id = point.get("id")
+                    test_name = point.get("test")
+                    transport = point.get("transport")
+                    boundary = point.get("injectionBoundary")
+                    status = point.get("status")
+                    if (
+                        not isinstance(point_id, str)
+                        or not point_id.strip()
+                        or point_id in point_ids
+                        or not isinstance(test_name, str)
+                        or not test_name.strip()
+                        or test_name in point_tests
+                        or not isinstance(transport, str)
+                        or not transport.strip()
+                        or not isinstance(boundary, str)
+                        or not boundary.strip()
+                        or status != "PASS"
+                    ):
+                        points_valid = False
+                    if isinstance(point_id, str):
+                        point_ids.add(point_id)
+                    if isinstance(test_name, str):
+                        point_tests.add(test_name)
+            if not points_valid:
+                self.report(
+                    "crash_point_evidence",
+                    "acceptance.crashPoints.points",
+                )
+            if source_commit != commit:
+                self.report(
+                    "crash_point_evidence",
+                    "acceptance.crashPoints.sourceCommit",
+                )
+            if not isinstance(command, str) or not command.strip():
+                self.report(
+                    "crash_point_evidence",
+                    "acceptance.crashPoints.command",
+                )
+            if (
+                not isinstance(evidence_artifact, str)
+                or not evidence_artifact
+                or not isinstance(artifacts_payload, dict)
+                or evidence_artifact not in artifacts_payload
+            ):
+                self.report(
+                    "crash_point_evidence",
+                    "acceptance.crashPoints.evidenceArtifact",
+                )
+
         mini_runs = self.get("acceptance.miniSites.runs")
         mini_passed = self.get("acceptance.miniSites.passed")
         mini_status = self.get("acceptance.miniSites.status")

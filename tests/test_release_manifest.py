@@ -26,6 +26,26 @@ def current_commit() -> str:
     ).stdout.strip()
 
 
+def valid_crash_evidence() -> dict[str, object]:
+    return {
+        "runs": 6,
+        "passed": 6,
+        "sourceCommit": current_commit(),
+        "command": "python -m unittest -v six.mapped.tests",
+        "evidenceArtifact": "VERSION",
+        "points": [
+            {
+                "id": f"crash-{index}",
+                "test": f"tests.test_recovery.Case.test_point_{index}",
+                "transport": "deterministic_fixture",
+                "injectionBoundary": f"boundary-{index}",
+                "status": "PASS",
+            }
+            for index in range(1, 7)
+        ],
+    }
+
+
 def valid_payload() -> dict[str, object]:
     return {
         "schemaVersion": 1,
@@ -57,7 +77,7 @@ def valid_payload() -> dict[str, object]:
         "acceptance": {
             "fixtureMissions": {"runs": 20, "passed": 20},
             "coldDualRuns": {"runs": 10, "passed": 10},
-            "crashPoints": {"runs": 6, "passed": 6},
+            "crashPoints": valid_crash_evidence(),
             "liveChatGPT": {
                 "status": "PASS",
                 "singleConversation": {"runs": 1, "passed": 1},
@@ -202,6 +222,11 @@ class ReleaseManifestTest(unittest.TestCase):
             payload = valid_payload()
             payload["release"] = version
             payload["commit"] = source_commit
+            acceptance = payload["acceptance"]
+            assert isinstance(acceptance, dict)
+            crash_points = acceptance["crashPoints"]
+            assert isinstance(crash_points, dict)
+            crash_points["sourceCommit"] = source_commit
             payload["artifacts"] = {
                 "VERSION": hashlib.sha256((root / "VERSION").read_bytes()).hexdigest()
             }
@@ -242,6 +267,66 @@ class ReleaseManifestTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("missing_field", result.stdout)
         self.assertIn("performance.switchP95Ms", result.stdout)
+
+    def test_crash_evidence_requires_one_auditable_point_per_run(self) -> None:
+        payload = valid_payload()
+        acceptance = payload["acceptance"]
+        assert isinstance(acceptance, dict)
+        crash_points = acceptance["crashPoints"]
+        assert isinstance(crash_points, dict)
+        points = crash_points["points"]
+        assert isinstance(points, list)
+        points.pop()
+
+        result = self.run_validation(payload)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("crash_point_evidence", result.stdout)
+        self.assertIn("acceptance.crashPoints.points", result.stdout)
+
+    def test_crash_evidence_rejects_duplicate_or_unpassed_points(self) -> None:
+        mutations = ("duplicate", "failed")
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                payload = valid_payload()
+                acceptance = payload["acceptance"]
+                assert isinstance(acceptance, dict)
+                crash_points = acceptance["crashPoints"]
+                assert isinstance(crash_points, dict)
+                points = crash_points["points"]
+                assert isinstance(points, list)
+                first = points[0]
+                second = points[1]
+                assert isinstance(first, dict)
+                assert isinstance(second, dict)
+                if mutation == "duplicate":
+                    second["id"] = first["id"]
+                else:
+                    first["status"] = "FAIL"
+
+                result = self.run_validation(payload)
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("crash_point_evidence", result.stdout)
+
+    def test_crash_evidence_is_bound_to_source_and_hashed_artifact(self) -> None:
+        mutations = ("source", "artifact")
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                payload = valid_payload()
+                acceptance = payload["acceptance"]
+                assert isinstance(acceptance, dict)
+                crash_points = acceptance["crashPoints"]
+                assert isinstance(crash_points, dict)
+                if mutation == "source":
+                    crash_points["sourceCommit"] = "0" * 40
+                else:
+                    crash_points["evidenceArtifact"] = "missing.txt"
+
+                result = self.run_validation(payload)
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("crash_point_evidence", result.stdout)
 
     def test_failed_offline_gate_is_rejected(self) -> None:
         payload = valid_payload()

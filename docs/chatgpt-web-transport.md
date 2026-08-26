@@ -110,9 +110,11 @@ Accessibility permission described above. These requirements do not block
 startup or text-only chat. `./scripts/cortex.sh doctor --json` reports them as
 `swift_toolchain`, `macos_ax_helper`, and `macos_accessibility`.
 
-A screenshot captures only the visible bound ChatGPT tab. If another tab is
-active, Cortex asks the user to show the correct tab instead of capturing
-unrelated content.
+A screenshot captures only the exact bound ChatGPT tab through CDP using its
+verified `tabId`. The tab does not need to be active. Cortex confirms the
+expected ChatGPT route before and after capture, serializes masking with other
+debugger work on that tab, and discards the pixels if the route or private-mask
+restoration cannot be attested.
 
 ## Development transport
 

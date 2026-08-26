@@ -44,7 +44,7 @@ Current state: 2026-08-26. Read this file with `README.md`,
 
 ## Fresh v0.5.3 evidence
 
-- Backend: 625/625. Extension: 126/126. Mapped crash recovery: 6/6;
+- Backend: 628/628. Extension: 126/126. Mapped crash recovery: 6/6;
   dedicated Chrome recovery/anti-replay: 6/6.
 - Frontend: 145/145 unit and 35/35 runtime/privacy; typecheck, lint and Next.js
   production build pass.
@@ -54,7 +54,7 @@ Current state: 2026-08-26. Read this file with `README.md`,
   Cached usability: 231.1 ms; switch p95/max: 141.7 ms.
 - Two normalized builds: 28 files each, aggregate SHA-256
   `a401609dd88bc4fc2562ffd4563c07854105f3d4c8324198ee5a712ec180666a`.
-- Privacy: 326 files and 42 images. Links: 121, including 56 external.
+- Privacy: 327 files and 42 images. Links: 121, including 56 external.
   Gitleaks: 240 commits. npm and Python audits: zero known findings.
   ShellCheck, Python compilation, runtime verification and diff checks pass.
 - A clean Git archive includes the extension, static chunk, Freebuff guide and
@@ -84,5 +84,5 @@ Current state: 2026-08-26. Read this file with `README.md`,
 
 ## Next exact action
 
-Finish the source commit, create and validate the manifest-only commit, then
-show the final diff before requesting push approval.
+Create and validate the manifest-only commit, rerun the final gates, then show
+the exact branch state and request push approval.
