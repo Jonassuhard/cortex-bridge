@@ -26,11 +26,33 @@ describe("ExecutionPreflightDialog", () => {
     expect(screen.getByText("preuve.txt")).toBeInTheDocument();
     expect(screen.getByRole("checkbox", { name: "Écriture avec approbations" })).not.toBeChecked();
     expect(screen.getByRole("checkbox", { name: "Commandes revues" })).not.toBeChecked();
-    expect(screen.getByRole("checkbox", { name: "Réseau" })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Réseau indisponible pour les missions" })).not.toBeChecked();
     expect(onChange).not.toHaveBeenCalled();
     expect(onConfirm).not.toHaveBeenCalled();
 
     await userEvent.setup().click(screen.getByRole("button", { name: "Démarrer en lecture seule" }));
     expect(onConfirm).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the mission executor and network capability that the API actually supports", () => {
+    render(<ExecutionPreflightDialog
+      open
+      value={{
+        ...preflight,
+        executorKind: "ollama",
+        capabilities: { ...preflight.capabilities, network: true },
+      }}
+      attachmentName={null}
+      confirming={false}
+      onChange={vi.fn<(value: ExecutionPreflight) => void>()}
+      onClose={vi.fn<() => void>()}
+      onConfirm={vi.fn<() => void>()}
+    />);
+
+    expect(screen.getByText("Exécuteur déterministe")).toBeInTheDocument();
+    const network = screen.getByRole("checkbox", { name: "Réseau indisponible pour les missions" });
+    expect(network).toBeDisabled();
+    expect(network).not.toBeChecked();
+    expect(screen.queryByText("Ollama")).not.toBeInTheDocument();
   });
 });

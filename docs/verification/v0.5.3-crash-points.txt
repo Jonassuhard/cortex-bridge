@@ -1,0 +1,43 @@
+Cortex Bridge v0.5.3 mapped crash/recovery evidence
+Date: 2026-08-26
+Environment: isolated CORTEX_HOME; exact locked Python environment
+
+Command:
+python -m unittest -v \
+  tests.test_loop_mock.LoopTestCase.test_08_restart_recovery_requires_explicit_resume \
+  tests.test_missions_api.MissionsApiTestCase.test_08_restart_recovery_surfaced \
+  tests.test_playwright_driver.PlaywrightDriverTest.test_startup_failure_is_evicted_and_factory_recovers \
+  tests.test_transport_session_isolation.MissionPersistenceFailureTest.test_sqlite_update_failure_fails_mission_and_releases_exact_lease \
+  tests.test_transport_session_isolation.MissionRouteSessionIsolationTest.test_runtime_construction_failure_fails_creation_and_releases_lease \
+  tests.test_transport_session_isolation.MissionStopQuiescenceTest.test_cancel_keeps_slot_until_browser_and_background_task_quiesce
+
+Result:
+test_08_restart_recovery_requires_explicit_resume ... ok
+test_08_restart_recovery_surfaced ... ok
+test_startup_failure_is_evicted_and_factory_recovers ... ok
+test_sqlite_update_failure_fails_mission_and_releases_exact_lease ... ok
+test_runtime_construction_failure_fails_creation_and_releases_lease ... ok
+test_cancel_keeps_slot_until_browser_and_background_task_quiesce ... ok
+Ran 6 tests in 5.350s
+OK
+
+Point mapping:
+crash-1 | store | restart while WAITING_FOR_CHATGPT | explicit resume, zero execution before resume, exactly one after
+crash-2 | API/store | reopen persisted non-terminal mission | PAUSED_RECOVERY_REQUIRED surfaced without automatic resume
+crash-3 | Playwright development fixture | browser startup failure | failed driver evicted and a fresh instance recovers
+crash-4 | mission runtime/SQLite | binding persistence update fails | mission fails and exact writer lease is released
+crash-5 | mission runtime | runtime construction fails after lease acquisition | HTTP failure is compensated and capacity restored
+crash-6 | mission runtime | cancellation during browser/background quiescence | slot remains held until both paths quiesce
+
+Supplemental production-Chrome anti-replay checks:
+test_read_recovers_a_lost_content_script_from_the_canonical_url ... ok
+test_read_recovers_a_closed_tab_without_resending ... ok
+test_only_proven_pre_delivery_unavailability_is_retried ... ok
+probe reloads an existing ChatGPT tab whose content script became stale ... ok
+a writer send reports a missing content script as safe pre-delivery unavailability ... ok
+a failure after mousePressed is uncertain, detached, and never replayed ... ok
+Python: Ran 3 tests in 0.264s, OK
+Node: 3 passed, 0 failed
+
+This file contains no account data, conversation content, cookies, personal
+paths or raw browser captures.

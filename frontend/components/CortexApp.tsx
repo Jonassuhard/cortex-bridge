@@ -30,6 +30,11 @@ import type {
   RuntimeStatus,
   TransportStatus,
   TransportProbeStatus,
+  TransportCapabilities,
+} from "@/lib/types";
+import {
+  attachmentSizeError,
+  normalizeTransportCapabilities,
 } from "@/lib/types";
 import { useInterval } from "@/hooks/useInterval";
 import { useChatRunStream } from "@/hooks/useChatRunStream";
@@ -43,7 +48,7 @@ import {
 import { ConversationSidebar } from "./ConversationSidebar";
 import { ChatWorkspace, type WorkspaceAvailability } from "./ChatWorkspace";
 import { PipelineInspector } from "./PipelineInspector";
-import { SettingsPanel } from "./SettingsPanel";
+import { SettingsPanel, type SettingsTabId } from "./SettingsPanel";
 import { HistoryPanel } from "./HistoryPanel";
 import { OnboardingPanel } from "./OnboardingPanel";
 import { ChatGPTConnectionDialog } from "./ChatGPTConnectionDialog";
@@ -54,6 +59,8 @@ const INITIAL_UNAVAILABLE_STATE = createUnavailableClientState(
   new Date(0).toISOString(),
 );
 const INITIAL_POST_DEADLINE_MS = 10_000;
+const EXTENSION_PAIRING_DEADLINE_MS = 10_000;
+const CHATGPT_OPEN_DEADLINE_MS = 10_000;
 const INITIAL_POST_TIMEOUT_MESSAGE =
   "Envoi incertain : le délai de 10 secondes a expiré. Le brouillon et la pièce jointe sont conservés.";
 const PAIR_AFTER_EXTENSION_RELOAD_KEY = "cortex:pair-after-extension-reload";
@@ -77,6 +84,60 @@ interface InitialRequestTask {
 }
 
 class InitialRequestInterruptedError extends Error {}
+
+const CHROME_CONNECTION_TIMEOUT_MESSAGE =
+  "La vérification de l’extension a dépassé la limite de 10 secondes.";
+
+async function beforeDeadline<T>(
+  deadline: number,
+  parentSignal: AbortSignal,
+  request: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  if (parentSignal.aborted) throw new InitialRequestInterruptedError();
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) throw new Error(CHROME_CONNECTION_TIMEOUT_MESSAGE);
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let rejectInterrupted: ((error: Error) => void) | null = null;
+  const onAbort = () => {
+    controller.abort();
+    rejectInterrupted?.(new InitialRequestInterruptedError());
+  };
+  parentSignal.addEventListener("abort", onAbort, { once: true });
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      reject(new Error(CHROME_CONNECTION_TIMEOUT_MESSAGE));
+    }, remaining);
+  });
+  const interrupted = new Promise<never>((_resolve, reject) => {
+    rejectInterrupted = reject;
+  });
+  try {
+    return await Promise.race([
+      Promise.resolve().then(() => request(controller.signal)),
+      timeout,
+      interrupted,
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+    parentSignal.removeEventListener("abort", onAbort);
+  }
+}
+
+async function delayBeforeDeadline(
+  deadline: number,
+  signal: AbortSignal,
+  delayMs: number,
+): Promise<void> {
+  await beforeDeadline(deadline, signal, (childSignal) => new Promise((resolve, reject) => {
+    const timer = setTimeout(resolve, Math.min(delayMs, Math.max(0, deadline - Date.now())));
+    childSignal.addEventListener("abort", () => {
+      clearTimeout(timer);
+      reject(new InitialRequestInterruptedError());
+    }, { once: true });
+  }));
+}
 
 function normalizeConversation(raw: Partial<ConversationSummary> & { url: string }): ConversationSummary {
   const identity = raw.identity || raw.url.match(/\/c\/([^/?#]+)/)?.[1] || raw.url;
@@ -103,15 +164,49 @@ function nonTerminal(state?: string) {
   return !!state && !["COMPLETED", "BLOCKED", "FAILED", "CANCELLED"].includes(state);
 }
 
+function pipelineIsScopedToConversation(
+  pipeline: PipelineStatus,
+  conversationIdentity: string | null,
+): boolean {
+  if (!conversationIdentity) return false;
+  if (pipeline.scope) {
+    return pipeline.scope.mode === "conversation"
+      && pipeline.scope.conversation_identity === conversationIdentity;
+  }
+  return !!pipeline.conversation_identity
+    && pipeline.conversation_identity === conversationIdentity;
+}
+
 export function projectPipelineForConversation(
   pipeline: PipelineStatus,
   mission: MissionDetail | null,
+  conversationIdentity: string | null = null,
 ): PipelineStatus {
-  if (mission && pipeline.active_mission_id === mission.mission.id) {
+  const exactConversationScope = pipelineIsScopedToConversation(
+    pipeline,
+    conversationIdentity,
+  );
+
+  if (
+    exactConversationScope
+    && mission
+    && pipeline.active_mission_id === mission.mission.id
+  ) {
     return {
       ...pipeline,
       active_mission_id: mission.mission.id,
       active_mission_state: mission.mission.state,
+    };
+  }
+  if (
+    exactConversationScope
+    && !mission
+    && !pipeline.active_mission_id
+  ) {
+    return {
+      ...pipeline,
+      active_mission_id: null,
+      active_mission_state: null,
     };
   }
   return {
@@ -139,6 +234,18 @@ export function projectPipelineForConversation(
       total_iteration_ms: null,
     },
   };
+}
+
+export function pipelineResponseForConversation(
+  pipeline: PipelineStatus,
+  conversationIdentity: string,
+): PipelineStatus {
+  const exactConversationScope = pipelineIsScopedToConversation(
+    pipeline,
+    conversationIdentity,
+  );
+  if (exactConversationScope) return pipeline;
+  return createUnavailableClientState(pipeline.updated_at).pipeline;
 }
 
 export function CortexApp() {
@@ -237,8 +344,9 @@ export function CortexApp() {
   const [ollamaModels, setOllamaModels] = useState<OllamaModelInfo[]>([]);
   const [chatgptModels, setChatGPTModels] = useState<ChatGPTModelInfo[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<SettingsTabId>("general");
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [capabilities, setCapabilities] = useState<{ upload_file: boolean; take_screenshot: boolean }>({ upload_file: false, take_screenshot: false });
+  const [capabilities, setCapabilities] = useState<TransportCapabilities>(() => normalizeTransportCapabilities({}));
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
@@ -249,6 +357,7 @@ export function CortexApp() {
   const [connectionBusy, setConnectionBusy] = useState(false);
   const missionDetailRequestEpoch = useRef(createRequestEpoch());
   const pipelineRequestRef = useRef<{ controller: AbortController; key: ConversationKey } | null>(null);
+  const connectionRequestRef = useRef<AbortController | null>(null);
   const terminalRefreshTimer = useRef<number | null>(null);
   const initialRequestsRef = useRef(new Map<ConversationKey, InitialRequestTask>());
 
@@ -261,8 +370,12 @@ export function CortexApp() {
     return null;
   }, [missionDetail]);
   const selectedPipeline = useMemo(
-    () => projectPipelineForConversation(pipeline, missionDetail),
-    [missionDetail, pipeline],
+    () => projectPipelineForConversation(
+      pipeline,
+      missionDetail,
+      selectedEntry?.summary.identity ?? null,
+    ),
+    [missionDetail, pipeline, selectedEntry?.summary.identity],
   );
   const workspaceAvailability = useMemo<WorkspaceAvailability>(() => {
     const transportComponent = pipeline.components.find((component) => component.id === "transport");
@@ -323,24 +436,42 @@ export function CortexApp() {
     }
   }, [notify]);
 
-  const waitForExtensionPairing = useCallback(async () => {
-    const deadline = Date.now() + 2_000;
+  const waitForExtensionPairing = useCallback(async (
+    deadline: number,
+    signal: AbortSignal,
+  ) => {
     while (Date.now() < deadline) {
-      const status = await api<ChromeExtensionStatus>("/api/chrome-extension/status");
+      const status = await beforeDeadline(
+        deadline,
+        signal,
+        (requestSignal) => api<ChromeExtensionStatus>(
+          "/api/chrome-extension/status",
+          { signal: requestSignal },
+        ),
+      );
       if (status.paired) return true;
-      await new Promise((resolve) => window.setTimeout(resolve, 120));
+      await delayBeforeDeadline(deadline, signal, 120);
     }
     return false;
   }, []);
 
   const openChatGPTProfile = useCallback(async () => {
+    connectionRequestRef.current?.abort();
+    const controller = new AbortController();
+    connectionRequestRef.current = controller;
+    const deadline = Date.now() + EXTENSION_PAIRING_DEADLINE_MS;
     setConnectionBusy(true);
     setChatGPTConnection(INITIAL_CHROME_CONNECTION);
     setConnectionDialogOpen(true);
     try {
-      const pairing = await postJson<ChromeExtensionPairing>(
-        "/api/chrome-extension/pairing",
-        {},
+      const pairing = await beforeDeadline(
+        deadline,
+        controller.signal,
+        (signal) => postJson<ChromeExtensionPairing>(
+          "/api/chrome-extension/pairing",
+          {},
+          { signal },
+        ),
       );
       window.postMessage(
         {
@@ -350,14 +481,22 @@ export function CortexApp() {
         },
         window.location.origin,
       );
-      await waitForExtensionPairing();
-      const result = await postJson<ChromeConnectionResult>(
-        "/api/chrome-extension/open",
-        {},
+      const paired = await waitForExtensionPairing(deadline, controller.signal);
+      if (!paired) throw new Error(CHROME_CONNECTION_TIMEOUT_MESSAGE);
+      const openDeadline = Date.now() + CHATGPT_OPEN_DEADLINE_MS;
+      const result = await beforeDeadline(
+        openDeadline,
+        controller.signal,
+        (signal) => postJson<ChromeConnectionResult>(
+          "/api/chrome-extension/open",
+          {},
+          { signal },
+        ),
       );
       applyConnectionResult(result);
-      await refreshRuntime();
+      void refreshRuntime();
     } catch (error) {
+      if (error instanceof InitialRequestInterruptedError) return;
       applyConnectionResult({
         ...INITIAL_CHROME_CONNECTION,
         code: "CONNECTION_FAILED",
@@ -367,7 +506,10 @@ export function CortexApp() {
         recoverable: true,
       });
     } finally {
-      setConnectionBusy(false);
+      if (connectionRequestRef.current === controller) {
+        connectionRequestRef.current = null;
+        setConnectionBusy(false);
+      }
     }
   }, [applyConnectionResult, refreshRuntime, waitForExtensionPairing]);
 
@@ -381,15 +523,25 @@ export function CortexApp() {
       await openChatGPTProfile();
       return;
     }
+    connectionRequestRef.current?.abort();
+    const controller = new AbortController();
+    connectionRequestRef.current = controller;
+    const deadline = Date.now() + EXTENSION_PAIRING_DEADLINE_MS;
     setConnectionBusy(true);
     try {
-      const result = await postJson<ChromeConnectionResult>(
-        "/api/chrome-extension/retry",
-        {},
+      const result = await beforeDeadline(
+        deadline,
+        controller.signal,
+        (signal) => postJson<ChromeConnectionResult>(
+          "/api/chrome-extension/retry",
+          {},
+          { signal },
+        ),
       );
       applyConnectionResult(result);
-      await refreshRuntime();
+      void refreshRuntime();
     } catch (error) {
+      if (error instanceof InitialRequestInterruptedError) return;
       applyConnectionResult({
         ...INITIAL_CHROME_CONNECTION,
         code: "CONNECTION_FAILED",
@@ -399,7 +551,10 @@ export function CortexApp() {
         recoverable: true,
       });
     } finally {
-      setConnectionBusy(false);
+      if (connectionRequestRef.current === controller) {
+        connectionRequestRef.current = null;
+        setConnectionBusy(false);
+      }
     }
   }, [applyConnectionResult, chatGPTConnection?.code, openChatGPTProfile, refreshRuntime]);
 
@@ -421,8 +576,7 @@ export function CortexApp() {
     try {
       const data = await api<PipelineStatus>(`/api/pipeline/status?${params}`, { signal: controller.signal });
       if (controller.signal.aborted || conversationStateRef.current.selectedKey !== key) return;
-      if (data.conversation_identity && data.conversation_identity !== entry.summary.identity) return;
-      setPipeline(data);
+      setPipeline(pipelineResponseForConversation(data, entry.summary.identity));
     } catch {
       if (controller.signal.aborted || conversationStateRef.current.selectedKey !== key) return;
       setPipeline(
@@ -585,8 +739,8 @@ export function CortexApp() {
       refreshSettings(),
       refreshPipeline(),
     ]);
-    api<{ upload_file?: boolean; take_screenshot?: boolean }>("/api/transport/capabilities")
-      .then((caps) => setCapabilities({ upload_file: !!caps.upload_file, take_screenshot: !!caps.take_screenshot }))
+    api<Parameters<typeof normalizeTransportCapabilities>[0]>("/api/transport/capabilities")
+      .then((caps) => setCapabilities(normalizeTransportCapabilities(caps)))
       .catch(() => undefined);
   }, [refreshConversations, refreshPipeline, refreshRuntime, refreshSettings]);
 
@@ -597,6 +751,8 @@ export function CortexApp() {
   }, [chatGPTConnection?.code, refreshConversations]);
 
   useEffect(() => () => {
+    connectionRequestRef.current?.abort();
+    connectionRequestRef.current = null;
     if (terminalRefreshTimer.current) window.clearTimeout(terminalRefreshTimer.current);
     terminalRefreshTimer.current = null;
     for (const [key, task] of initialRequestsRef.current) {
@@ -634,6 +790,11 @@ export function CortexApp() {
       error: message,
     });
     notify(message);
+  }
+
+  function openSettings(tab: SettingsTabId = "general") {
+    setSettingsTab(tab);
+    setSettingsOpen(true);
   }
 
   function conversationForKey(key: ConversationKey): ConversationSummary | null {
@@ -680,7 +841,7 @@ export function CortexApp() {
     if (!conversation) return false;
     if (!transport.opt_in_accepted && !demoMode) {
       notify("Active d'abord le transport expérimental dans les paramètres.");
-      setSettingsOpen(true);
+      openSettings("transport");
       return false;
     }
     if (!beginExecution(key)) return false;
@@ -702,9 +863,14 @@ export function CortexApp() {
   async function sendAttachment(key: ConversationKey, text: string, file: File): Promise<boolean> {
     const conversation = conversationForKey(key);
     if (!conversation) return false;
+    const sizeError = attachmentSizeError(file, capabilities.limits);
+    if (sizeError) {
+      notify(sizeError);
+      return false;
+    }
     if (!transport.opt_in_accepted && !demoMode) {
       notify("Active d'abord le transport expérimental dans les paramètres.");
-      setSettingsOpen(true);
+      openSettings("transport");
       return false;
     }
     if (!beginExecution(key)) return false;
@@ -717,20 +883,15 @@ export function CortexApp() {
           reader.readAsDataURL(file);
         });
         if (signal.aborted) throw new InitialRequestInterruptedError();
-        const descriptor = await postJson<{ path: string; name: string; kind: string }>("/api/chat/attachments", {
-          name: file.name,
-          data_b64: dataB64,
-        }, { signal });
-        if (signal.aborted) throw new InitialRequestInterruptedError();
         const run = await postJson<ChatRun>("/api/chat/send-with-attachment", {
           conversation_url: conversation.url,
           text,
-          path: descriptor.path,
-          name: descriptor.name,
-          image: descriptor.kind === "image",
+          name: file.name,
+          data_b64: dataB64,
+          image: file.type.toLowerCase().startsWith("image/"),
           new_conversation: isProvisional(key, conversation),
         }, { signal });
-        return { descriptor, run };
+        return { descriptor: { name: file.name }, run };
       });
       chatStreams.subscribe(key, run, { submittedDraft: text, submittedAttachment: file });
       notify(`Pièce jointe prise en charge : ${descriptor.name}. Confirmation en cours.`);
@@ -747,7 +908,7 @@ export function CortexApp() {
     if (!conversation) return false;
     if (!transport.opt_in_accepted && !demoMode) {
       notify("Active d'abord le transport expérimental dans les paramètres.");
-      setSettingsOpen(true);
+      openSettings("transport");
       return false;
     }
     if (!beginExecution(key)) return false;
@@ -903,7 +1064,7 @@ export function CortexApp() {
     try {
       await postJson("/api/transport/stop-everything", {});
       setTransport((current) => ({ ...current, global_stop: true }));
-      notify("STOP EVERYTHING actif.");
+      notify("Arrêt général activé.");
       void refreshPipeline();
     } catch (error) {
       notify(error instanceof Error ? error.message : "Arrêt global impossible.");
@@ -973,7 +1134,7 @@ export function CortexApp() {
         }}
         onRefresh={() => void refreshConversations()}
         onNewConversation={() => newConversation()}
-        onOpenSettings={() => setSettingsOpen(true)}
+        onOpenSettings={() => openSettings()}
         onOpenHistory={() => setHistoryOpen(true)}
       />
 
@@ -988,6 +1149,7 @@ export function CortexApp() {
         draft={selectedEntry?.draft || ""}
         attachment={selectedEntry?.attachment || null}
         chatRun={chatRun}
+        runBaselineMessageIds={selectedEntry?.runBaselineMessageIds || []}
         mission={activeMission || missionDetail}
         pipeline={selectedPipeline}
         availability={workspaceAvailability}
@@ -1043,7 +1205,9 @@ export function CortexApp() {
       />
 
       <SettingsPanel
+        key={settingsTab}
         open={settingsOpen}
+        initialTab={settingsTab}
         settings={settings}
         ollamaModels={ollamaModels}
         chatgptModels={chatgptModels}
@@ -1056,7 +1220,12 @@ export function CortexApp() {
 
       <HistoryPanel open={historyOpen} onClose={() => setHistoryOpen(false)} />
 
-      {!settingsOpen && <OnboardingPanel onOpenSettings={() => setSettingsOpen(true)} />}
+      {!settingsOpen && (
+        <OnboardingPanel
+          onOpenSettings={() => openSettings()}
+          onOpenChatGPTProfile={openChatGPTProfile}
+        />
+      )}
 
       {chatGPTConnection && (
         <ChatGPTConnectionDialog

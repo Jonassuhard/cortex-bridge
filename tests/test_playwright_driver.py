@@ -498,6 +498,9 @@ class _AttachmentFallbackDriver:
     def __init__(self) -> None:
         self.evaluate_calls = 0
         self.url = "http://127.0.0.1/c/local-fixture"
+        self.sent = False
+        self.confirm_delivery = True
+        self.attachment_name = "proof.txt"
 
     async def get_state(self) -> dict:
         return {
@@ -505,7 +508,17 @@ class _AttachmentFallbackDriver:
             "conversation_id": "local-fixture",
             "title": "Fixture",
             "blocker": None,
-            "messages": [],
+            "messages": (
+                [{
+                    "id": "user-proof",
+                    "role": "user",
+                    "text": self.attachment_name,
+                    "code_blocks": [],
+                    "attachments": [{"name": self.attachment_name}],
+                }]
+                if self.sent and self.confirm_delivery
+                else []
+            ),
         }
 
     async def upload_files(self, _selector: str, _paths: list[str]) -> None:
@@ -518,10 +531,30 @@ class _AttachmentFallbackDriver:
         return {"ok": True}
 
     async def await_attachment(self) -> dict:
-        return {"ok": True, "label": "proof.txt"}
+        return {"ok": True, "label": self.attachment_name}
 
     async def send_bare(self) -> dict:
+        self.sent = True
         return {"ok": True}
+
+
+class _UncertainNamedAttachmentDriver(_AttachmentFallbackDriver):
+    supports_raw_evaluation = False
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.upload_calls = 0
+
+    async def upload_files_named(
+        self,
+        _selector: str,
+        _paths: list[str],
+        _name: str,
+    ) -> None:
+        self.upload_calls += 1
+        error = DriverError("native upload may already have started")
+        error.code = DELIVERY_UNCERTAIN
+        raise error
 
 
 class _NewChatAttachmentDriver:
@@ -546,7 +579,17 @@ class _NewChatAttachmentDriver:
             "send_button_present": False,
             "stop_button_present": False,
             "streaming": False,
-            "messages": [],
+            "messages": (
+                [{
+                    "id": "user-attachment-new-chat",
+                    "role": "user",
+                    "text": "proof.png",
+                    "code_blocks": [],
+                    "attachments": [{"name": "proof.png"}],
+                }]
+                if self.sent
+                else []
+            ),
         }
 
     async def upload_files(self, _selector: str, _paths: list[str]) -> None:
@@ -560,7 +603,79 @@ class _NewChatAttachmentDriver:
         return {"ok": True}
 
 
+class _TextAttachmentDriver:
+    def __init__(self, *, include_attachment: bool) -> None:
+        self.url = "https://chatgpt.com/c/text-attachment"
+        self.sent = False
+        self.include_attachment = include_attachment
+        self.attachment_name = "proof.txt"
+
+    async def get_state(self) -> dict:
+        visible = "CORTEX TEXT ATTACHMENT proof.txt"
+        return {
+            "url": self.url,
+            "conversation_id": "text-attachment",
+            "title": "Text attachment",
+            "blocker": None,
+            "composer_present": True,
+            "send_button_present": True,
+            "stop_button_present": False,
+            "streaming": False,
+            "messages": (
+                [{
+                    "id": "user-text-attachment",
+                    "role": "user",
+                    "text": visible,
+                    "code_blocks": [],
+                    "attachments": (
+                        [{"name": self.attachment_name}]
+                        if self.include_attachment
+                        else []
+                    ),
+                }]
+                if self.sent
+                else []
+            ),
+        }
+
+    async def upload_files(self, _selector: str, _paths: list[str]) -> None:
+        return None
+
+    async def await_attachment(self) -> dict:
+        return {"ok": True, "label": "proof.txt"}
+
+    async def send_message(self, _text: str) -> dict:
+        self.sent = True
+        return {"ok": True}
+
+
 class AdapterPublicDriverContractTest(unittest.IsolatedAsyncioTestCase):
+    async def test_uncertain_structured_upload_pauses_without_retrying(self) -> None:
+        driver = _UncertainNamedAttachmentDriver()
+        transport = ChatGPTWebTransport(driver)
+        transport.lock = ConversationLock(
+            driver.url,
+            "local-fixture",
+            "Fixture",
+            0,
+        )
+
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "proof.txt"
+            path.write_text("fixture", encoding="utf-8")
+            with self.assertRaises(TransportError) as raised:
+                await transport.send_with_attachment(
+                    None,
+                    str(path),
+                    image=False,
+                    name="proof.txt",
+                )
+
+        self.assertEqual(raised.exception.code, DELIVERY_UNCERTAIN)
+        self.assertTrue(transport.paused)
+        self.assertTrue(transport.delivery_uncertain)
+        self.assertEqual(driver.upload_calls, 1)
+
     async def test_attachment_fallback_uses_public_evaluate_contract(self) -> None:
         driver = _AttachmentFallbackDriver()
         transport = ChatGPTWebTransport(driver)
@@ -580,6 +695,7 @@ class AdapterPublicDriverContractTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_attachment_fallback_uses_validated_mime_and_name(self) -> None:
         driver = _AttachmentFallbackDriver()
+        driver.attachment_name = "validated.png"
         transport = ChatGPTWebTransport(driver)
         transport.lock = ConversationLock(driver.url, "local-fixture", "Fixture", 0)
         with tempfile.TemporaryDirectory() as root:
@@ -594,6 +710,237 @@ class AdapterPublicDriverContractTest(unittest.IsolatedAsyncioTestCase):
             )
         self.assertIn("image/png", driver.code)
         self.assertIn("validated.png", driver.code)
+
+    async def test_attachment_only_requires_a_new_visible_user_message(self) -> None:
+        driver = _AttachmentFallbackDriver()
+        driver.confirm_delivery = False
+        transport = ChatGPTWebTransport(
+            driver,
+            max_wait=0.05,
+            poll_interval=0.01,
+        )
+        transport.lock = ConversationLock(driver.url, "local-fixture", "Fixture", 0)
+
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "proof.txt"
+            path.write_text("fixture", encoding="utf-8")
+            with self.assertRaises(TransportError) as raised:
+                await transport.send_with_attachment(None, str(path), image=False)
+
+        self.assertEqual(raised.exception.code, DELIVERY_UNCERTAIN)
+        self.assertTrue(transport.delivery_uncertain)
+
+    async def test_text_attachment_requires_the_file_in_the_same_visible_message(self) -> None:
+        driver = _TextAttachmentDriver(include_attachment=False)
+        transport = ChatGPTWebTransport(
+            driver,
+            max_wait=0.05,
+            poll_interval=0.01,
+        )
+        transport.lock = ConversationLock(
+            driver.url,
+            "text-attachment",
+            "Text attachment",
+            0,
+        )
+
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "proof.txt"
+            path.write_text("fixture", encoding="utf-8")
+            with self.assertRaises(TransportError) as raised:
+                await transport.send_with_attachment(
+                    "CORTEX TEXT ATTACHMENT",
+                    str(path),
+                    image=False,
+                )
+
+        self.assertEqual(raised.exception.code, DELIVERY_UNCERTAIN)
+        self.assertTrue(transport.delivery_uncertain)
+
+    async def test_text_attachment_accepts_text_and_file_in_one_visible_message(self) -> None:
+        driver = _TextAttachmentDriver(include_attachment=True)
+        transport = ChatGPTWebTransport(
+            driver,
+            max_wait=0.05,
+            poll_interval=0.01,
+        )
+        transport.lock = ConversationLock(
+            driver.url,
+            "text-attachment",
+            "Text attachment",
+            0,
+        )
+
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "proof.txt"
+            path.write_text("fixture", encoding="utf-8")
+            result = await transport.send_with_attachment(
+                "CORTEX TEXT ATTACHMENT",
+                str(path),
+                image=False,
+            )
+
+        self.assertEqual(result["id"], "user-text-attachment")
+
+    async def test_text_attachment_accepts_chatgpt_duplicate_suffix_without_space(self) -> None:
+        driver = _TextAttachmentDriver(include_attachment=True)
+        driver.attachment_name = "proof(1).txt"
+        transport = ChatGPTWebTransport(
+            driver,
+            max_wait=0.05,
+            poll_interval=0.01,
+        )
+        transport.lock = ConversationLock(
+            driver.url,
+            "text-attachment",
+            "Text attachment",
+            0,
+        )
+
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "proof.txt"
+            path.write_text("fixture", encoding="utf-8")
+            result = await transport.send_with_attachment(
+                "CORTEX TEXT ATTACHMENT",
+                str(path),
+                image=False,
+            )
+
+        self.assertEqual(result["id"], "user-text-attachment")
+
+    async def test_text_attachment_accepts_chatgpt_timestamped_duplicate_suffix(self) -> None:
+        driver = _TextAttachmentDriver(include_attachment=True)
+        driver.attachment_name = "proof(20260824-015544).txt"
+        transport = ChatGPTWebTransport(
+            driver,
+            max_wait=0.05,
+            poll_interval=0.01,
+        )
+        transport.lock = ConversationLock(
+            driver.url,
+            "text-attachment",
+            "Text attachment",
+            0,
+        )
+
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "proof.txt"
+            path.write_text("fixture", encoding="utf-8")
+            result = await transport.send_with_attachment(
+                "CORTEX TEXT ATTACHMENT",
+                str(path),
+                image=False,
+            )
+
+        self.assertEqual(result["id"], "user-text-attachment")
+
+    async def test_text_attachment_rejects_filename_case_collision(self) -> None:
+        driver = _TextAttachmentDriver(include_attachment=True)
+        driver.attachment_name = "Proof.txt"
+        transport = ChatGPTWebTransport(
+            driver,
+            max_wait=0.05,
+            poll_interval=0.01,
+        )
+        transport.lock = ConversationLock(
+            driver.url,
+            "text-attachment",
+            "Text attachment",
+            0,
+        )
+
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "proof.txt"
+            path.write_text("fixture", encoding="utf-8")
+            with self.assertRaises(TransportError) as raised:
+                await transport.send_with_attachment(
+                    "CORTEX TEXT ATTACHMENT",
+                    str(path),
+                    image=False,
+                )
+
+        self.assertEqual(raised.exception.code, DELIVERY_UNCERTAIN)
+
+    async def test_text_attachment_rejects_unicode_digit_duplicate_suffix(self) -> None:
+        driver = _TextAttachmentDriver(include_attachment=True)
+        driver.attachment_name = "proof(١).txt"
+        transport = ChatGPTWebTransport(
+            driver,
+            max_wait=0.05,
+            poll_interval=0.01,
+        )
+        transport.lock = ConversationLock(
+            driver.url,
+            "text-attachment",
+            "Text attachment",
+            0,
+        )
+
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "proof.txt"
+            path.write_text("fixture", encoding="utf-8")
+            with self.assertRaises(TransportError) as raised:
+                await transport.send_with_attachment(
+                    "CORTEX TEXT ATTACHMENT",
+                    str(path),
+                    image=False,
+                )
+
+        self.assertEqual(raised.exception.code, DELIVERY_UNCERTAIN)
+
+    async def test_attachment_name_does_not_discard_legitimate_numeric_parentheses(self) -> None:
+        driver = _TextAttachmentDriver(include_attachment=True)
+        driver.attachment_name = "report.txt"
+        transport = ChatGPTWebTransport(
+            driver,
+            max_wait=0.05,
+            poll_interval=0.01,
+        )
+        transport.lock = ConversationLock(
+            driver.url,
+            "text-attachment",
+            "Text attachment",
+            0,
+        )
+
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "report (2024).txt"
+            path.write_text("fixture", encoding="utf-8")
+            with self.assertRaises(TransportError) as raised:
+                await transport.send_with_attachment(
+                    "CORTEX TEXT ATTACHMENT",
+                    str(path),
+                    image=False,
+                )
+
+        self.assertEqual(raised.exception.code, DELIVERY_UNCERTAIN)
+        self.assertTrue(transport.delivery_uncertain)
+
+    async def test_attachment_name_accepts_duplicate_after_legitimate_numeric_stem(self) -> None:
+        driver = _TextAttachmentDriver(include_attachment=True)
+        driver.attachment_name = "report (2024) (1).txt"
+        transport = ChatGPTWebTransport(
+            driver,
+            max_wait=0.05,
+            poll_interval=0.01,
+        )
+        transport.lock = ConversationLock(
+            driver.url,
+            "text-attachment",
+            "Text attachment",
+            0,
+        )
+
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "report (2024).txt"
+            path.write_text("fixture", encoding="utf-8")
+            result = await transport.send_with_attachment(
+                "CORTEX TEXT ATTACHMENT",
+                str(path),
+                image=False,
+            )
+
+        self.assertEqual(result["id"], "user-text-attachment")
 
     # Regression: ISSUE-002 — attachment-only new chat kept the provisional URL
     # Found by /qa on 2026-08-22
@@ -621,6 +968,156 @@ class AdapterPublicDriverContractTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(transport.lock)
         self.assertEqual(transport.lock.identity, "attachment-new-chat")
         self.assertFalse(transport._pending_new_chat)
+
+
+class _ShortMessageMismatchDriver:
+    def __init__(self) -> None:
+        self.url = "https://chatgpt.com/c/short-message"
+        self.sent = False
+        self.visible_text = "unrelated content"
+        self.code_blocks: list[dict[str, str]] = []
+
+    async def get_state(self) -> dict:
+        return {
+            "url": self.url,
+            "conversation_id": "short-message",
+            "title": "Short message",
+            "blocker": None,
+            "composer_present": True,
+            "send_button_present": True,
+            "stop_button_present": False,
+            "streaming": False,
+            "messages": (
+                [{
+                    "id": "unrelated-user-message",
+                    "role": "user",
+                    "text": self.visible_text,
+                    "code_blocks": self.code_blocks,
+                }]
+                if self.sent
+                else []
+            ),
+        }
+
+    async def send_message(self, _text: str) -> dict:
+        self.sent = True
+        return {"ok": True}
+
+
+class _PreDeliveryRejectedDriver(_ShortMessageMismatchDriver):
+    def __init__(self, code: str = "SEND_REJECTED") -> None:
+        super().__init__()
+        self.error_code = code
+
+    async def send_message(self, _text: str) -> dict:
+        error = DriverError(f"{self.error_code}: synthetic pre-press rejection")
+        error.code = self.error_code
+        raise error
+
+
+class AdapterShortMessageConfirmationTest(unittest.IsolatedAsyncioTestCase):
+    async def test_short_message_does_not_accept_an_unrelated_new_user_node(self) -> None:
+        driver = _ShortMessageMismatchDriver()
+        transport = ChatGPTWebTransport(
+            driver,
+            max_wait=0.05,
+            poll_interval=0.01,
+        )
+        transport.lock = ConversationLock(
+            driver.url,
+            "short-message",
+            "Short message",
+            0,
+        )
+
+        with self.assertRaises(TransportError) as raised:
+            await transport.send_message("ok")
+
+        self.assertEqual(raised.exception.code, DELIVERY_UNCERTAIN)
+        self.assertTrue(transport.delivery_uncertain)
+
+    async def test_short_fenced_message_ignores_duplicate_extracted_code_block(self) -> None:
+        driver = _ShortMessageMismatchDriver()
+        driver.visible_text = "ok"
+        driver.code_blocks = [{"text": "ok"}]
+        transport = ChatGPTWebTransport(
+            driver,
+            max_wait=0.05,
+            poll_interval=0.01,
+        )
+        transport.lock = ConversationLock(
+            driver.url,
+            "short-message",
+            "Short message",
+            0,
+        )
+
+        result = await transport.send_message("```\nok\n```")
+
+        self.assertEqual(result["id"], "unrelated-user-message")
+
+    async def test_long_marker_accepts_browser_normalized_whitespace(self) -> None:
+        driver = _ShortMessageMismatchDriver()
+        driver.visible_text = "CORTEX LONG MARKER"
+        transport = ChatGPTWebTransport(
+            driver,
+            max_wait=0.05,
+            poll_interval=0.01,
+        )
+        transport.lock = ConversationLock(
+            driver.url,
+            "short-message",
+            "Short message",
+            0,
+        )
+
+        result = await transport.send_message("CORTEX     LONG MARKER")
+
+        self.assertEqual(result["id"], "unrelated-user-message")
+
+    async def test_definitive_send_rejection_does_not_pause_the_transport(self) -> None:
+        driver = _PreDeliveryRejectedDriver()
+        transport = ChatGPTWebTransport(driver, max_wait=0.05, poll_interval=0.01)
+        transport.lock = ConversationLock(
+            driver.url,
+            "short-message",
+            "Short message",
+            0,
+        )
+
+        with self.assertRaises(TransportError) as raised:
+            await transport.send_message("CORTEX PRE DELIVERY")
+
+        self.assertEqual(raised.exception.code, "SEND_REJECTED")
+        self.assertFalse(transport.delivery_uncertain)
+        self.assertFalse(transport.paused)
+
+    async def test_native_pre_press_failures_remain_actionable_and_definitive(self) -> None:
+        for code in (
+            "NATIVE_PERMISSION_REQUIRED",
+            "NATIVE_HELPER_UNAVAILABLE",
+            "NATIVE_ACTIVATION_REQUIRED",
+        ):
+            with self.subTest(code=code):
+                driver = _PreDeliveryRejectedDriver(code)
+                transport = ChatGPTWebTransport(
+                    driver,
+                    max_wait=0.05,
+                    poll_interval=0.01,
+                )
+                transport.lock = ConversationLock(
+                    driver.url,
+                    "short-message",
+                    "Short message",
+                    0,
+                )
+
+                with self.assertRaises(TransportError) as raised:
+                    await transport.send_message("CORTEX PRE PRESS")
+
+                self.assertEqual(raised.exception.code, code)
+                self.assertFalse(transport.delivery_uncertain)
+                self.assertFalse(transport.paused)
 
 
 class _CountingWebBridgeDriver(WebBridgeDriver):

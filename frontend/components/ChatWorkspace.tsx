@@ -55,6 +55,7 @@ interface ChatWorkspaceProps {
   draft: string;
   attachment: File | null;
   chatRun: ChatRun | null;
+  runBaselineMessageIds: string[];
   mission: MissionDetail | null;
   pipeline: PipelineStatus;
   availability: WorkspaceAvailability;
@@ -95,6 +96,49 @@ function cleanMessageText(text: string): string {
     .replace(/Réfléchi pendant\s+\d+[smh]\s*/gi, "")
     .replace(/Thinking completed/gi, "")
     .trim();
+}
+
+function normalizedMessageText(text: string): string {
+  return cleanMessageText(text).replace(/\s+/g, " ");
+}
+
+function reconcileCompletedRun(
+  messages: ConversationMessage[],
+  chatRun: ChatRun,
+  runBaselineMessageIds: string[],
+): boolean {
+  if (chatRun.state !== "COMPLETED" || !chatRun.response_text || messages.length < 2) return false;
+  const userIndex = messages.length - 2;
+  const assistantIndex = messages.length - 1;
+  const userMessage = messages[userIndex];
+  const assistantMessage = messages[assistantIndex];
+  const baselineIds = new Set(runBaselineMessageIds);
+  if (
+    userMessage.role !== "user"
+    || assistantMessage.role !== "assistant"
+    || baselineIds.has(userMessage.id)
+    || baselineIds.has(assistantMessage.id)
+    || normalizedMessageText(userMessage.text) !== normalizedMessageText(chatRun.text)
+    || normalizedMessageText(assistantMessage.text) !== normalizedMessageText(chatRun.response_text)
+  ) return false;
+
+  messages[userIndex] = { ...userMessage, delivery: "received" };
+  messages[assistantIndex] = {
+    ...assistantMessage,
+    latency_ms: chatRun.latency?.first_response_ms ?? assistantMessage.latency_ms,
+  };
+  return true;
+}
+
+function normalizeMissionPreflight(value: ExecutionPreflight): ExecutionPreflight {
+  return {
+    ...value,
+    executorKind: "deterministic",
+    capabilities: {
+      ...value.capabilities,
+      network: false,
+    },
+  };
 }
 
 function isMissionProtocolMessage(message: ConversationMessage): boolean {
@@ -296,6 +340,7 @@ export function ChatWorkspace({
   draft,
   attachment,
   chatRun,
+  runBaselineMessageIds,
   mission,
   pipeline,
   availability,
@@ -345,7 +390,10 @@ export function ChatWorkspace({
 
   const mergedMessages = useMemo(() => {
     const source = [...messages];
-    if (chatRun) {
+    const reconciled = chatRun
+      ? reconcileCompletedRun(source, chatRun, runBaselineMessageIds)
+      : false;
+    if (chatRun && !reconciled) {
       const hasUser = source.some((message) => message.id === `local-${chatRun.id}`);
       if (!hasUser) {
         source.push({
@@ -381,7 +429,7 @@ export function ChatWorkspace({
       }
     }
     return source;
-  }, [messages, chatRun]);
+  }, [messages, chatRun, runBaselineMessageIds]);
 
   const { protocolMessages, visibleMessages } = useMemo(() => {
     const protocol: ConversationMessage[] = [];
@@ -424,7 +472,7 @@ export function ChatWorkspace({
     setPreflight({
       conversationKey,
       workspace: settings.default_workspace,
-      executorKind: settings.primary_executor.toLowerCase().includes("ollama") ? "ollama" : "deterministic",
+      executorKind: "deterministic",
       capabilities: { read: true, write: false, processes: false, network: false, delete: false },
       approvalPolicy: "read-only",
       maxIterations: settings.max_iterations,
@@ -459,7 +507,7 @@ export function ChatWorkspace({
           )}
           {conversation?.url && <a className="open-chatgpt-link" href={conversation.url} target="_blank" rel="noreferrer">Ouvrir dans ChatGPT</a>}
         </div>
-        <StatusRail transport={chatActive ? "running" : availability.chatState} executor={availability.agentState} execution={mission?.mission.state || null} latencyMs={availability.transportLatencyMs} onOpenChatGPTProfile={onOpenChatGPTProfile} connecting={chatGPTConnecting} />
+        <StatusRail transport={chatActive ? "running" : availability.chatState} executor={availability.agentState} latencyMs={availability.transportLatencyMs} onOpenChatGPTProfile={onOpenChatGPTProfile} connecting={chatGPTConnecting} />
         <div className="toolbar-right">
           <button className={`toolbar-icon-button ${inspectorOpen ? "is-active" : ""}`} onClick={onToggleInspector} title="Détails du bridge (pipeline, logs, transport)"><PanelIcon /></button>
         </div>
@@ -581,6 +629,7 @@ export function ChatWorkspace({
 
       <div className="composer-shell">
         <Composer
+          key={conversationKey || "no-conversation"}
           value={draft}
           attachment={attachment}
           blocked={composerBlocked}
@@ -618,12 +667,13 @@ export function ChatWorkspace({
           value={preflight}
           attachmentName={attachment?.name || null}
           confirming={preflightConfirming}
-          onChange={setPreflight}
+          onChange={(value) => setPreflight(normalizeMissionPreflight(value))}
           onClose={() => setPreflightOpen(false)}
           onConfirm={() => {
             if (!conversationKey) return;
+            const missionPreflight = normalizeMissionPreflight(preflight);
             setPreflightConfirming(true);
-            void onStartMission(conversationKey, draft, preflight).then((accepted) => {
+            void onStartMission(conversationKey, draft, missionPreflight).then((accepted) => {
               if (accepted) setPreflightOpen(false);
             }).finally(() => setPreflightConfirming(false));
           }}

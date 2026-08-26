@@ -158,7 +158,11 @@ function apiResponse(pathname: string, searchParams: URLSearchParams, method: st
   }
   if (method === "GET" && pathname === "/api/pipeline/status") {
     return {
-      conversation_identity: searchParams.get("conversation_identity"),
+      scope: {
+        mode: "conversation",
+        conversation_identity: searchParams.get("conversation_identity"),
+        mission_id: searchParams.get("mission_id"),
+      },
       overall: "idle",
       updated_at: fixedTime,
       active_mission_id: null,

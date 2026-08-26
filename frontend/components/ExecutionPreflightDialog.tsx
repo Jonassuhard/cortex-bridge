@@ -25,7 +25,7 @@ export function ExecutionPreflightDialog({
 }: ExecutionPreflightDialogProps) {
   const dialogRef = useAccessibleDialog<HTMLDialogElement>({ open, onClose });
   if (!open) return null;
-  const setCapability = (key: "write" | "processes" | "network", enabled: boolean) => {
+  const setCapability = (key: "write" | "processes", enabled: boolean) => {
     onChange({
       ...value,
       capabilities: { ...value.capabilities, [key]: enabled },
@@ -51,7 +51,7 @@ export function ExecutionPreflightDialog({
         <dl className="preflight-facts">
           <div><dt>Conversation</dt><dd>{value.conversationKey}</dd></div>
           <div><dt>Workspace</dt><dd>{value.workspace}</dd></div>
-          <div><dt>Exécuteur</dt><dd>{value.executorKind === "ollama" ? "Ollama" : "Déterministe"}</dd></div>
+          <div><dt>Exécuteur</dt><dd>Exécuteur déterministe</dd></div>
           <div><dt>Limites</dt><dd>{value.maxIterations} itérations · {value.maxDurationMinutes} min</dd></div>
           <div><dt>Pièce jointe</dt><dd>{attachmentName || "Aucune"}</dd></div>
         </dl>
@@ -60,7 +60,7 @@ export function ExecutionPreflightDialog({
           <label><input type="checkbox" checked disabled /> Lecture</label>
           <label><input type="checkbox" checked={value.capabilities.write} onChange={(event) => setCapability("write", event.target.checked)} /> Écriture avec approbations</label>
           <label><input type="checkbox" checked={value.capabilities.processes} onChange={(event) => setCapability("processes", event.target.checked)} /> Commandes revues</label>
-          <label><input type="checkbox" checked={value.capabilities.network} onChange={(event) => setCapability("network", event.target.checked)} /> Réseau</label>
+          <label><input type="checkbox" checked={false} disabled /> Réseau indisponible pour les missions</label>
           <label><input type="checkbox" checked={false} disabled /> Suppression</label>
         </fieldset>
         <footer>

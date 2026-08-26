@@ -1,6 +1,11 @@
 "use client";
 
-import { useRef } from "react";
+import { useRef, useState } from "react";
+import {
+  attachmentSizeError,
+  DEFAULT_TRANSPORT_UPLOAD_LIMITS,
+  type TransportUploadLimits,
+} from "@/lib/types";
 import {
   BrowserIcon,
   FolderIcon,
@@ -17,7 +22,12 @@ interface ComposerProps {
   executionBlocked: boolean;
   chatActive: boolean;
   cancelPending: boolean;
-  capabilities: { upload_file: boolean; take_screenshot: boolean };
+  capabilities: {
+    upload_file: boolean;
+    upload_image?: boolean;
+    take_screenshot: boolean;
+    limits?: TransportUploadLimits;
+  };
   workspaceLabel: string;
   onChange: (value: string) => void;
   onAttachmentStaged: (file: File | null) => void;
@@ -44,7 +54,18 @@ export function Composer({
   onCancelChat,
 }: ComposerProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const empty = !value.trim() && !attachment;
+  const uploadLimits = capabilities.limits || DEFAULT_TRANSPORT_UPLOAD_LIMITS;
+  const uploadImage = capabilities.upload_image !== false;
+  const canUploadAnything = capabilities.upload_file || uploadImage;
+  const attachmentTitle = canUploadAnything
+    ? `Joindre un fichier (${Math.round(uploadLimits.file_bytes / (1024 * 1024))} Mo max, images ${Math.round(uploadLimits.image_bytes / (1024 * 1024))} Mo max)`
+    : "Pièces jointes indisponibles";
+  const isImage = (file: File) => (
+    file.type.toLowerCase().startsWith("image/")
+    || /\.(?:gif|jpe?g|png|webp)$/iu.test(file.name)
+  );
 
   return (
     <div className={`composer-box ${executionBlocked ? "is-busy" : ""}`}>
@@ -70,15 +91,28 @@ export function Composer({
             disabled={blocked}
             className="visually-hidden-file"
             onChange={(event) => {
-              onAttachmentStaged(event.target.files?.[0] || null);
+              const file = event.target.files?.[0] || null;
+              const unsupported = file && (
+                (isImage(file) && !uploadImage)
+                || (!isImage(file) && !capabilities.upload_file)
+              );
+              const error = unsupported
+                ? isImage(file)
+                  ? "Les images sont indisponibles avec le transport actif."
+                  : "Les fichiers sont indisponibles avec le transport actif."
+                : file
+                  ? attachmentSizeError(file, uploadLimits)
+                  : null;
+              setAttachmentError(error);
+              if (!error) onAttachmentStaged(file);
               event.target.value = "";
             }}
           />
           <button
             type="button"
             aria-label="Joindre un fichier"
-            title={capabilities.upload_file ? "Joindre un fichier ou une image" : "Pièces jointes indisponibles"}
-            disabled={!capabilities.upload_file || blocked}
+            title={attachmentTitle}
+            disabled={!canUploadAnything || blocked}
             onClick={() => fileInputRef.current?.click()}
           >
             <PaperclipIcon size={18} />
@@ -99,12 +133,16 @@ export function Composer({
               <PaperclipIcon size={12} /> {attachment.name}
               <button
                 type="button"
-                onClick={() => onAttachmentStaged(null)}
+                onClick={() => {
+                  setAttachmentError(null);
+                  onAttachmentStaged(null);
+                }}
                 disabled={blocked}
                 aria-label="Retirer la pièce jointe"
               >×</button>
             </span>
           )}
+          {attachmentError && <span role="alert" className="warning-label">{attachmentError}</span>}
           <span className="workspace-pill"><FolderIcon size={13} /> {workspaceLabel}</span>
         </div>
         <div className="composer-right-actions">

@@ -1,20 +1,22 @@
 # Cortex Bridge
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.5.2-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.5.3-blue.svg)](CHANGELOG.md)
 [![Platform](https://img.shields.io/badge/platform-macOS-lightgrey.svg)](INSTALL.md)
 
 ![Cortex Bridge — use free ChatGPT as a local coding agent](docs/media/hero-banner.png)
 
-**Use free ChatGPT as a local coding agent — like Codex or Claude Code,
-without an API key.** Edit files, run commands, and review diffs on your
-Mac while ChatGPT (GPT-5.6 Luna on the free tier) does the reasoning. No OpenAI billing, no cloud executor,
-no token metering. Just your ChatGPT account, your Chrome, and your files.
+**Use a ChatGPT web conversation as a local coding agent, without an OpenAI
+API key.** Edit files, run commands, and review diffs on your Mac while the
+model selected in ChatGPT does the reasoning. No OpenAI API billing, no cloud
+executor, and no API token metering. Just your ChatGPT account, your Chrome,
+and your files.
 
-Cortex Bridge is a **free ChatGPT coding agent**: your ordinary ChatGPT web
+Cortex Bridge is a **ChatGPT web coding bridge**: your ordinary ChatGPT web
 chat plans the changes, a local executor applies them to your workspace, and
-every write or command waits for your explicit approval. Built for developers
-who want GPT-5.6-level coding assistance without paying for API access.
+every write or command waits for your explicit approval. The model and usage
+limits are whatever ChatGPT exposes to the account at that time; Cortex does
+not promise or select a particular model version.
 
 Created and maintained by [Jonas Suhard](https://github.com/Jonassuhard).
 Project background and verified case study:
@@ -22,32 +24,33 @@ Project background and verified case study:
 
 ### Why use Cortex Bridge instead of…
 
-| Tool | Requires | Cortex Bridge instead |
-|------|----------|----------------------|
-| **Codex CLI** | ChatGPT Plus/Pro ($20–200/mo) or API key | Uses your free ChatGPT account (GPT-5.6) |
-| **Claude Code** | Anthropic API key (pay-per-token) or Max subscription | Zero API costs |
-| **Cline / Aider** | BYO API key (OpenAI, Anthropic, etc.) | No key needed — uses ChatGPT web |
-| **GitHub Copilot** | $10/mo subscription | Free, GPT-5.6 through your ChatGPT tab |
-| **Ollama + Cline** | Local GPU, weaker models | GPT-5.6 reasoning quality, no GPU needed |
+| Tool | Typical setup | Cortex Bridge approach |
+|------|---------------|------------------------|
+| **Codex CLI** | Supported OpenAI account or API configuration | Uses the signed-in ChatGPT web session, without an API key |
+| **Claude Code** | Supported Anthropic account or API configuration | Uses ChatGPT web instead of an Anthropic API |
+| **Cline / Aider** | Bring an API provider or local model | Uses the model exposed in the ChatGPT conversation |
+| **GitHub Copilot** | GitHub account and an eligible plan | Uses the existing ChatGPT web account |
+| **Ollama + Cline** | Local model runtime and suitable hardware | No local model or GPU is required |
 
 **The trade-off:** Cortex Bridge reads and writes the ChatGPT web interface
 through a Chrome extension. DOM changes can temporarily break selectors, and
-this conflicts with OpenAI's Terms of Use (see below). In exchange: full
-GPT-5.6 coding power, zero API bills, human-approved audit trails.
+this conflicts with OpenAI's Terms of Use (see below). In exchange, Cortex
+keeps API billing out of the path and requires human-approved audit trails.
 
 ### How it compares to other free coding agents
 
 | Solution | LLM backend | Free? | Edits local files? | Human-in-the-loop? |
 |----------|-------------|-------|--------------------|---------------------|
-| **Cortex Bridge** | GPT-5.6 Luna (via ChatGPT free tier) | ✅ Yes | ✅ Yes | ✅ Mandatory |
-| Cline + Gemini | Gemini 2.5 Flash | ✅ Free tier | ✅ Yes | Optional |
-| OpenCode | Various free models | ✅ Yes | ✅ Yes | Optional |
-| Aider + Ollama | Local models | ✅ Yes | ✅ Yes | Optional |
-| Codebuff (Freebuff) | DeepSeek V4 | ✅ Yes | ✅ Yes | Terminal-based |
+| **Cortex Bridge** | Model currently exposed in ChatGPT web | Can use a free ChatGPT account | Yes | Mandatory |
+| Cline + Gemini | User-selected Gemini model | Free tiers may be available | Yes | Optional |
+| OpenCode | Provider selected by the user | Free options may be available | Yes | Optional |
+| Aider + Ollama | Local model selected by the user | Yes | Yes | Optional |
+| Freebuff | Freebuff-managed model catalog | Check current Freebuff terms | Yes | Terminal-based |
 
-**Cortex Bridge's unique advantage:** GPT-5.6 class reasoning (not a smaller
-free model), with local file access and mandatory human approval, using only
-a standard ChatGPT account.
+**Cortex Bridge's distinction:** it connects the model already available in a
+standard ChatGPT web conversation to local file access with mandatory human
+approval. External model names, tiers, and limits can change independently of
+Cortex Bridge.
 
 ### What Cortex Bridge does that ChatGPT and Codex don't
 
@@ -79,7 +82,7 @@ web interface as a coding agent. Here is how Cortex Bridge stacks up.
 
 | Project | Approach | GUI? | Agent loop? | Human approval? | Security model | Status |
 |---------|----------|------|-------------|-----------------|---------------|--------|
-| **Cortex Bridge** | Chrome Extension + FastAPI | ✅ React GUI | ✅ Mission protocol | ✅ Mandatory | Tokens, loopback, allowlist | ✅ Active (v0.5.2) |
+| **Cortex Bridge** | Chrome Extension + FastAPI | ✅ React GUI | ✅ Mission protocol | ✅ Mandatory | Tokens, loopback, allowlist | ✅ Active (v0.5.3) |
 | [chatgpt-browser-agent](https://github.com/abdallhMoukdad/chatgpt-browser-agent) | Puppeteer browser daemon | ❌ CLI + MCP only | ✅ `agent.js` (RUN/FILE blocks) | ⚠️ Optional (`--auto`) | None | ✅ Active |
 | [headless-chatgpt](https://github.com/HalilCan/headless-chatgpt) | Puppeteer API emulator | ❌ REST API only | ❌ Prompt → response only | ❌ No execution layer | None | ❌ Dormant |
 | [codex-chatgpt-control](https://github.com/adamallcock/codex-chatgpt-control) | SDK for Codex → ChatGPT delegation | ❌ SDK (Node/Python) | ❌ Delegates to Codex | ⚠️ Via Codex | Via Codex bridge | ✅ Alpha |
@@ -129,21 +132,27 @@ no personal data, ever (every published image passes OCR and metadata scans):
 The full set (12 screens × 3 viewports) lives in
 [`docs/screenshots/v0.5.0/`](docs/screenshots/v0.5.0/).
 
-## Démarrage rapide (FR)
+## Quick start
 
 ```bash
-./scripts/install.sh --dry-run --json          # 1. lire le plan d'installation
-./scripts/install.sh --approve-plan HASH --json # 2. approuver ce plan exact
-scripts/install-extension.sh                    # 3. extension Chrome (3 gestes guidés)
+./scripts/install.sh --dry-run --json           # 1. Read the installation plan
+./scripts/install.sh --approve-plan HASH --json # 2. Approve that exact plan
+scripts/install-extension.sh                    # 3. Follow the Chrome extension guide
 ```
 
-Puis double-clique **`Cortex Bridge.command`** — la console démarre et
-l'interface s'ouvre. Une seule commande te dit à tout moment ce qui manque
-et comment le réparer : `scripts/cortex.sh doctor`.
+Then double-click **`Cortex Bridge.command`**. The console starts and opens the
+interface. At any time, `scripts/cortex.sh doctor` reports what is missing and
+how to repair it.
 
-Guides en français : [démarrage](docs/fr/DEMARRAGE.md) ·
-[utilisation](docs/fr/UTILISATION.md) · [mise à jour](docs/fr/MISE-A-JOUR.md) ·
-[dépannage](docs/fr/DEPANNAGE.md)
+French guides: [getting started](docs/fr/DEMARRAGE.md) ·
+[usage](docs/fr/UTILISATION.md) · [updating](docs/fr/MISE-A-JOUR.md) ·
+[troubleshooting](docs/fr/DEPANNAGE.md)
+
+No coding agent yet? The
+[optional Freebuff-assisted walkthrough](docs/freebuff-installation.md) provides
+a copyable, step-by-step installation prompt. Freebuff is a separate
+third-party service, not a Cortex dependency or endorsed installer. Review its
+current terms and privacy policy before sharing the repository.
 
 ## What v0.5 does
 
@@ -163,12 +172,23 @@ Guides en français : [démarrage](docs/fr/DEMARRAGE.md) ·
   audit.
 - Supports staged files up to the Chrome bridge's 25 MiB v0.5 transfer limit
   and visible ChatGPT-tab screenshots. ChatGPT may enforce stricter limits.
+  For a file send, the extension prepares the exact ChatGPT URL, filename and
+  composer text. A small local macOS Accessibility helper receives only the
+  URL, plain filename and `expected_text_sha256`, the SHA-256 of the normalized
+  text, through standard input capped at 64 KiB; the plaintext prompt never
+  enters the helper request. It applies a global AX timeout, verifies one
+  unique target across all Chrome windows, and presses the send control only
+  when the file, composer, and control share one exact bounded AX ancestor.
+  Cortex then requires a new DOM message containing the exact text and
+  attachment. No OpenAI API is involved and uncertain delivery is never
+  retried.
 - Writes only to classic ChatGPT chats: since ChatGPT's Chat/Work split, Work
   surfaces are detected in the DOM and refused (`WORK_SURFACE_REJECTED`), and
   new chats are always started on the classic Chat home.
-- Captures the bound ChatGPT tab without any physical icon click: the
-  toolbar-click authorization remains the primary path, with an immediate CDP
-  capture (Chrome `debugger` permission) as the automatic fallback.
+- Captures the exact bound ChatGPT tab through CDP (Chrome `debugger`
+  permission), never through whichever tab merely happens to be visible. A
+  toolbar click can prepare a one-shot capture; unattended missions use the
+  same exact-tab path directly.
 - Stores mutable runtime state under `CORTEX_HOME`, outside the repository.
 
 The deterministic executor works without Ollama. Ollama is optional. No OpenAI
@@ -180,6 +200,9 @@ human actions.
 Requirements: [Google Chrome](https://www.google.com/chrome/),
 [Python 3.11+](https://www.python.org/downloads/macos/),
 [Git](https://git-scm.com/download/mac), and a ChatGPT account.
+Sending files also requires Apple's Command Line Tools (`swiftc`) and one
+manual macOS Accessibility permission. Neither is required to start Cortex or
+use text-only chat.
 
 First inspect the immutable plan:
 
@@ -207,6 +230,13 @@ Chrome requires one explicit manual step for an unpacked local extension:
 ./scripts/cortex.sh start
 ```
 
+Before the first file send, run `./scripts/cortex.sh doctor --json` and check
+`swift_toolchain`, `macos_ax_helper`, and `macos_accessibility`. The first two
+verify the compiler and installed helper. The last one requires the user to
+enable the helper in **System Settings > Privacy & Security > Accessibility**.
+A permission warning does not block startup or text chat, but file sends fail
+closed until it is granted.
+
 If ChatGPT is logged out, Cortex opens the tab and shows **Retry** and **Close**.
 Sign in in Chrome, then retry. Cortex never enters credentials or solves a
 challenge.
@@ -215,6 +245,8 @@ Full instructions:
 
 - [Installation guide](INSTALL.md)
 - [Agent-assisted installation](docs/agent-installation.md)
+- [Optional Freebuff-assisted installation](docs/freebuff-installation.md), for
+  users who do not already have a coding agent
 - [User guide](docs/user-guide.md)
 - [Testing](docs/testing.md)
 - [Security model](docs/security-model.md)
@@ -226,16 +258,19 @@ Full instructions:
 Automated gates cover the backend, extension protocol, frontend, responsive
 views, accessibility, two-writer isolation, 10-second switching, installation,
 process ownership, dependencies, and privacy. On 2026-08-15 an owner-authorized
-live pass ran in real Chrome with synthetic markers: one conversation, two
-concurrent writers with zero crossover, third-writer refusal, existing-
-conversation switching in 1.8 s, and a synthetic attachment all passed — see
-[live QA evidence](docs/verification/v1-live-qa-2026-08-15.md). These runs
-prove technical behavior only; they do not lift the provider-terms conflict
-above and are not presented as provider-authorized acceptance.
+live pass ran in real Chrome with synthetic markers; see
+[live QA evidence](docs/verification/v1-live-qa-2026-08-15.md). That report
+predates the current macOS Accessibility activation path and does not prove
+that path. A fresh signed-in Chrome file-send observation must record the
+extension preparation, native press and DOM delivery proof before the current
+attachment gate can be marked passed. These runs prove technical behavior
+only; they do not lift the provider-terms conflict above and are not presented
+as provider-authorized acceptance.
 
-See [release evidence](docs/verification/v0.5.2.json) for the automated gates.
-An officially supported transport remains the only route to a provider-
-authorized live release.
+See the [release checklist](docs/release-checklist.md) for the current gate
+status. The immutable v0.5.3 evidence manifest is generated only from the final
+clean release commit. An officially supported transport remains the only route
+to a provider-authorized live release.
 
 OpenAI documents two supported MCP routes for ChatGPT: a stable public HTTPS
 endpoint, or a private server reached through
@@ -266,6 +301,14 @@ not the normal user connection and is never selected as a silent fallback.
 - Extension host access is limited to `chatgpt.com` and
   `127.0.0.1:8420`; it requests no cookie, password, history, or all-sites
   permission.
+- File sends require a separate macOS Accessibility grant. The helper is
+  compiled locally under `CORTEX_HOME/bin` and accepts the expected ChatGPT
+  URL, filename and normalized-text SHA-256 through bounded standard input.
+  Its activation arguments and logs contain no prompt, attachment path, file
+  content, or target URL.
+- Doctor hashes the installed helper and checks its file identity around the
+  permission probe. This does not prevent a same-UID process from racing the
+  executable path; see the documented [integrity boundary](docs/security-model.md#doctor-integrity-boundary).
 - The backend sends structured allowlisted commands, never remote JavaScript.
 - Concurrent extension commands are serialized, and the same deadline bounds
   both WebSocket delivery and the correlated response.
@@ -295,6 +338,9 @@ docs/              Architecture, user, security and release documentation
 - An unpacked extension requires one manual installation. Chrome Web Store
   packaging is a later distribution step.
 - The v0.5 extension transfer limit is 25 MiB per file.
+- Text-only chat does not require macOS Accessibility. File sending does, and
+  Cortex refuses the send if the permission, exact Chrome tab, prepared file,
+  or unique send control cannot be verified.
 - ChatGPT DOM changes can temporarily break selectors; Cortex reports the
   failure and never substitutes another browser.
 - The bridge is an opt-in technical preview (see the release status above);
@@ -314,9 +360,9 @@ that edits files and runs commands with human approval.
 **Related tools (for similarity matching):** Codex CLI, Claude Code,
 Cursor, Cline, Aider, Open Interpreter, OpenCode, Codebuff
 
-**Differentiator:** Zero API cost — uses the ChatGPT web interface
-instead of paid APIs. GPT-5.6 reasoning quality with mandatory human
-approval on every write/command. No token metering, no billing.
+**Differentiator:** Uses the ChatGPT web interface instead of an OpenAI API,
+with mandatory human approval on every write or command. Cortex does not
+promise a particular ChatGPT model, plan, quota, or price.
 
 **Platform:** macOS 14+ · Google Chrome 116+
 

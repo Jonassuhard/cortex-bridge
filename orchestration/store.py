@@ -63,9 +63,13 @@ TERMINAL_STATES = frozenset({"COMPLETED", "BLOCKED", "FAILED", "CANCELLED"})
 # Allowed forward transitions. Resume from PAUSED / PAUSED_RECOVERY_REQUIRED
 # is handled separately (explicit user-driven target state).
 TRANSITIONS: dict[str, frozenset[str]] = {
-    "IDLE": frozenset({"SELECTING_CONVERSATION", "INITIALIZING_MISSION", "CANCELLED"}),
+    "IDLE": frozenset(
+        {"SELECTING_CONVERSATION", "INITIALIZING_MISSION", "PAUSED", "CANCELLED"}
+    ),
     "SELECTING_CONVERSATION": frozenset({"INITIALIZING_MISSION", "PAUSED", "CANCELLED"}),
-    "INITIALIZING_MISSION": frozenset({"SENDING_OBJECTIVE", "FAILED", "CANCELLED"}),
+    "INITIALIZING_MISSION": frozenset(
+        {"SENDING_OBJECTIVE", "FAILED", "PAUSED", "CANCELLED"}
+    ),
     "SENDING_OBJECTIVE": frozenset({"WAITING_FOR_CHATGPT", "TRANSPORT_ERROR", "CANCELLED"}),
     "WAITING_FOR_CHATGPT": frozenset(
         {"PARSING_DECISION", "PAUSED", "CANCELLED", "TRANSPORT_ERROR"}
@@ -119,6 +123,7 @@ CREATE TABLE IF NOT EXISTS missions (
     workspace TEXT NOT NULL,
     state TEXT NOT NULL,
     pause_reason TEXT,
+    paused_from_state TEXT,
     iteration INTEGER NOT NULL DEFAULT 0,
     max_iterations INTEGER NOT NULL DEFAULT 25,
     max_duration_seconds INTEGER NOT NULL DEFAULT 3600,
@@ -291,6 +296,7 @@ class Store:
             for row in self._conn.execute("PRAGMA table_info(missions)").fetchall()
         }
         additions = {
+            "paused_from_state": "TEXT",
             "executor_kind": "TEXT NOT NULL DEFAULT 'unavailable'",
             "executor_model_used": "TEXT",
             "runtime_mode": "TEXT NOT NULL DEFAULT 'live'",
@@ -318,7 +324,8 @@ class Store:
             )
             ids = [row["id"] for row in cur.fetchall()]
             self._conn.execute(
-                "UPDATE missions SET state = ?, pause_reason = ?, updated_at = ? "
+                "UPDATE missions SET paused_from_state = state, state = ?,"
+                " pause_reason = ?, updated_at = ? "
                 "WHERE state IN ({})".format(",".join("?" for _ in RUNNING_STATES)),
                 (
                     "PAUSED_RECOVERY_REQUIRED",
@@ -349,15 +356,17 @@ class Store:
         with self._conn:
             self._conn.execute(
                 "INSERT INTO missions (id, objective, workspace, state, pause_reason,"
+                " paused_from_state,"
                 " iteration, max_iterations, max_duration_seconds, failure_counts,"
                 " executor_kind, executor_model_used, runtime_mode, release_eligible,"
                 " runtime_observed_at, created_at, started_at, updated_at)"
-                " VALUES (?,?,?,?,?,0,?,?,'{}',?,?,?,?,?,?,?,?)",
+                " VALUES (?,?,?,?,?,?,0,?,?,'{}',?,?,?,?,?,?,?,?)",
                 (
                     mission_id,
                     objective,
                     workspace,
                     "IDLE",
+                    None,
                     None,
                     max_iterations,
                     max_duration_seconds,
@@ -430,30 +439,36 @@ class Store:
             current = row["state"]
             if new_state not in TRANSITIONS[current]:
                 raise InvalidTransition(f"{current} → {new_state} is not allowed")
+            paused_from_state = current if new_state in RESUMABLE_FROM else None
             self._conn.execute(
-                "UPDATE missions SET state = ?, pause_reason = ?, updated_at = ? WHERE id = ?",
-                (new_state, pause_reason, time.time(), mission_id),
+                "UPDATE missions SET state = ?, pause_reason = ?, paused_from_state = ?,"
+                " updated_at = ? WHERE id = ?",
+                (new_state, pause_reason, paused_from_state, time.time(), mission_id),
             )
         return new_state
 
-    def resume(self, mission_id: str, target_state: str) -> str:
-        """Explicit user-driven resume from PAUSED / PAUSED_RECOVERY_REQUIRED."""
-        if target_state not in RUNNING_STATES:
-            raise InvalidTransition(f"cannot resume into {target_state}")
+    def resume(self, mission_id: str, target_state: str | None = None) -> str:
+        """Resume explicitly, restoring the durable pre-pause state by default."""
         with self._conn:
             row = self._conn.execute(
-                "SELECT state FROM missions WHERE id = ?", (mission_id,)
+                "SELECT state, paused_from_state FROM missions WHERE id = ?", (mission_id,)
             ).fetchone()
             if row is None:
                 raise StoreError(f"unknown mission {mission_id}")
             current = row["state"]
             if current not in RESUMABLE_FROM:
                 raise InvalidTransition(f"cannot resume from {current}")
+            restored_state = target_state or row["paused_from_state"]
+            if restored_state not in RUNNING_STATES:
+                raise InvalidTransition(
+                    f"cannot resume without a valid paused state (got {restored_state})"
+                )
             self._conn.execute(
-                "UPDATE missions SET state = ?, pause_reason = NULL, updated_at = ? WHERE id = ?",
-                (target_state, time.time(), mission_id),
+                "UPDATE missions SET state = ?, pause_reason = NULL, paused_from_state = NULL,"
+                " updated_at = ? WHERE id = ?",
+                (restored_state, time.time(), mission_id),
             )
-        return target_state
+        return restored_state
 
     def set_iteration(self, mission_id: str, iteration: int) -> None:
         with self._conn:

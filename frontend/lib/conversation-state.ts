@@ -157,11 +157,13 @@ function createEntry(summary: ConversationSummary): ConversationEntry {
     draft: "",
     attachment: null,
     submittedPayload: null,
+    pendingRunBaselineMessageIds: null,
     loadEpoch: 0,
     loadPhase: "idle",
     loadError: null,
     freshness: "empty",
     run: null,
+    runBaselineMessageIds: [],
     streamEpoch: 0,
     missionId: null,
     mission: null,
@@ -379,6 +381,7 @@ export function conversationReducer(
       ...entry,
       sendPending: true,
       sendError: null,
+      pendingRunBaselineMessageIds: entry.messages.map((message) => message.id),
     }));
   }
 
@@ -419,6 +422,7 @@ export function conversationReducer(
         ...entry,
         sendPending: false,
         sendError: event.error,
+        pendingRunBaselineMessageIds: null,
       }));
     }
     const entry = state.entries[event.key];
@@ -466,6 +470,13 @@ export function conversationReducer(
         return {
           ...current,
           run: incomingRun,
+          runBaselineMessageIds: event.accepted
+            ? current.pendingRunBaselineMessageIds
+              ?? current.messages.map((message) => message.id)
+            : current.runBaselineMessageIds,
+          pendingRunBaselineMessageIds: event.accepted
+            ? null
+            : current.pendingRunBaselineMessageIds,
           streamEpoch: event.streamEpoch,
           draft: delivered && submittedPayload && current.draft === submittedPayload.draft ? "" : current.draft,
           attachment: delivered && submittedPayload && current.attachment === submittedPayload.attachment
@@ -554,6 +565,7 @@ export function conversationReducer(
       draft: event.accepted ? "" : entry.draft,
       attachment: event.accepted ? null : entry.attachment,
       sendPending: event.accepted ? false : entry.sendPending,
+      pendingRunBaselineMessageIds: event.accepted ? null : entry.pendingRunBaselineMessageIds,
       sendError: null,
     }));
     const canonicalUrl = event.mission && event.key.startsWith("provisional:")

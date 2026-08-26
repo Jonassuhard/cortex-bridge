@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { demoPipeline, demoRuntime, demoSettings, demoTransport } from "@/lib/demo";
-import type { ChatRun, ChatRunEvent, MissionDetail } from "@/lib/types";
+import type { ChatRun, ChatRunEvent, MissionDetail, PipelineStatus } from "@/lib/types";
 
 type ApiMock = (path: string, init?: RequestInit) => Promise<unknown>;
 type JsonMock = (path: string, body?: unknown, init?: RequestInit) => Promise<unknown>;
@@ -18,7 +18,11 @@ vi.mock("@/lib/api", async () => {
   return { ...actual, api: network.api, postJson: network.postJson, putJson: network.putJson };
 });
 
-import { CortexApp, projectPipelineForConversation } from "./CortexApp";
+import {
+  CortexApp,
+  pipelineResponseForConversation,
+  projectPipelineForConversation,
+} from "./CortexApp";
 
 const conversation = (key: string) => ({
   url: `https://chatgpt.com/c/${key}`,
@@ -85,11 +89,28 @@ function defaultApi(path: string) {
   }
   if (path === "/api/status") return Promise.resolve(demoRuntime);
   if (path === "/api/transport/status") return Promise.resolve({ ...demoTransport, opt_in_accepted: true });
-  if (path.startsWith("/api/pipeline/status")) return Promise.resolve(demoPipeline);
+  if (path.startsWith("/api/pipeline/status")) {
+    const params = new URL(path, "http://cortex.local").searchParams;
+    return Promise.resolve({
+      ...demoPipeline,
+      scope: {
+        mode: "conversation",
+        conversation_identity: params.get("conversation_identity"),
+        mission_id: params.get("mission_id"),
+      },
+    });
+  }
   if (path === "/api/settings") return Promise.resolve(demoSettings);
   if (path === "/api/models/ollama") return Promise.resolve({ models: [] });
   if (path === "/api/models/chatgpt") return Promise.resolve({ models: [] });
-  if (path === "/api/transport/capabilities") return Promise.resolve({ upload_file: true, take_screenshot: true });
+  if (path === "/api/transport/capabilities") {
+    return Promise.resolve({
+      upload_file: true,
+      upload_image: true,
+      take_screenshot: true,
+      limits: { file_bytes: 25 * 1024 * 1024, image_bytes: 20 * 1024 * 1024 },
+    });
+  }
   if (path === "/api/chrome-extension/status") {
     return Promise.resolve({ state: "paired", extension_connected: true, paired: true, pending_commands: 0 });
   }
@@ -122,6 +143,372 @@ afterEach(() => {
 });
 
 describe("CortexApp conversation integration", () => {
+  it("opens the transport settings when a send is blocked by the ChatGPT opt-in", async () => {
+    network.api.mockImplementation((path: string) => {
+      if (path === "/api/transport/status") {
+        return Promise.resolve({ ...demoTransport, opt_in_accepted: false });
+      }
+      return defaultApi(path);
+    });
+    const user = userEvent.setup();
+    await readyApp();
+
+    await user.type(composer(), "message synthétique bloqué");
+    await user.click(screen.getByTitle("Envoyer"));
+
+    expect(await screen.findByRole("heading", { name: "Transport ChatGPT" })).toBeInTheDocument();
+    expect(network.postJson.mock.calls.map(([path]) => path)).not.toContain("/api/chat/send");
+  });
+
+  it("pairs the extension from the onboarding connection button", async () => {
+    const token = "o".repeat(43);
+    const postMessage = vi.spyOn(window, "postMessage").mockImplementation(() => undefined);
+    network.api.mockImplementation((path: string) => {
+      if (path === "/api/onboarding") {
+        return Promise.resolve({
+          completed: false,
+          ready: false,
+          checks: [
+            {
+              id: "browser-driver",
+              label: "Transport navigateur chrome_extension",
+              state: "missing",
+              detail: "chrome_extension indisponible",
+              hint: "Installe ou active l’extension Cortex Bridge dans Chrome.",
+            },
+          ],
+        });
+      }
+      return defaultApi(path);
+    });
+    network.postJson.mockImplementation((path: string) => {
+      if (path === "/api/chrome-extension/pairing") {
+        return Promise.resolve({ token, expires_in_seconds: 60 });
+      }
+      if (path === "/api/chrome-extension/open") {
+        return Promise.resolve({
+          code: "CONNECTED",
+          state: "connected",
+          title: "ChatGPT connecté",
+          message: "Cortex est lié à cet onglet Chrome.",
+          recoverable: false,
+          driver: "chrome_extension",
+          url: "https://chatgpt.com/",
+          tab_id: 42,
+          window_id: 7,
+        });
+      }
+      return Promise.reject(new Error(`Unexpected POST ${path}`));
+    });
+    const user = userEvent.setup();
+    render(<CortexApp />);
+
+    await user.click(
+      await screen.findByRole("button", { name: "Ouvrir le profil de connexion" }),
+    );
+
+    await waitFor(() => {
+      expect(network.postJson.mock.calls.map(([path]) => path)).toContain(
+        "/api/chrome-extension/open",
+      );
+    });
+    expect(postMessage).toHaveBeenCalledWith(
+      { source: "cortex-bridge-ui", type: "CORTEX_PAIR_EXTENSION", token },
+      window.location.origin,
+    );
+    expect(network.postJson.mock.calls.map(([path]) => path)).not.toContain(
+      "/api/onboarding/browser/open",
+    );
+  });
+
+  it("waits beyond two seconds for delayed extension pairing and preserves a conversation switch", async () => {
+    let pairingStartedAt: number | null = null;
+    network.api.mockImplementation((path: string) => {
+      if (path === "/api/chrome-extension/status") {
+        const paired = pairingStartedAt !== null && Date.now() - pairingStartedAt >= 5_000;
+        return Promise.resolve({
+          state: paired ? "paired" : "awaiting_extension",
+          extension_connected: paired,
+          paired,
+          pending_commands: 0,
+          protocol_compatible: paired,
+          extension_protocol_version: paired ? 2 : null,
+          required_protocol_version: 2,
+        });
+      }
+      return defaultApi(path);
+    });
+    network.postJson.mockImplementation((path: string) => {
+      if (path === "/api/chrome-extension/pairing") {
+        pairingStartedAt = Date.now();
+        return Promise.resolve({ token: "d".repeat(43), expires_in_seconds: 60 });
+      }
+      if (path === "/api/chrome-extension/open") {
+        return Promise.resolve({
+          code: "CONNECTED",
+          state: "connected",
+          title: "ChatGPT connecté",
+          message: "Cortex est lié à cet onglet Chrome.",
+          recoverable: false,
+          driver: "chrome_extension",
+          url: "https://chatgpt.com/",
+          tab_id: 42,
+          window_id: 7,
+        });
+      }
+      return Promise.reject(new Error(`Unexpected POST ${path}`));
+    });
+    await readyApp();
+    vi.useFakeTimers();
+
+    fireEvent.click(screen.getByRole("button", { name: "Ouvrir et connecter ChatGPT" }));
+    await act(async () => Promise.resolve());
+    fireEvent.click(screen.getByRole("button", { name: /Conversation B/ }));
+    await act(async () => vi.advanceTimersByTimeAsync(2_500));
+
+    expect(network.postJson.mock.calls.map(([path]) => path)).not.toContain("/api/chrome-extension/open");
+    expect(screen.getByRole("heading", { name: "Conversation B" })).toBeInTheDocument();
+
+    await act(async () => vi.advanceTimersByTimeAsync(2_700));
+
+    expect(network.postJson.mock.calls.map(([path]) => path)).toContain("/api/chrome-extension/open");
+    expect(screen.getByRole("heading", { name: "Conversation B" })).toBeInTheDocument();
+  });
+
+  it("gives ChatGPT open a fresh ten-second deadline after pairing completes at 9.5 seconds", async () => {
+    network.api.mockImplementation((path: string) => {
+      if (path === "/api/chrome-extension/status") {
+        return new Promise((resolve) => window.setTimeout(() => resolve({
+          state: "paired",
+          extension_connected: true,
+          paired: true,
+          pending_commands: 0,
+          protocol_compatible: true,
+          extension_protocol_version: 2,
+          required_protocol_version: 2,
+        }), 9_500));
+      }
+      return defaultApi(path);
+    });
+    network.postJson.mockImplementation((path: string) => {
+      if (path === "/api/chrome-extension/pairing") {
+        return Promise.resolve({ token: "p".repeat(43), expires_in_seconds: 60 });
+      }
+      if (path === "/api/chrome-extension/open") {
+        return new Promise((resolve) => window.setTimeout(() => resolve({
+          code: "CONNECTED",
+          state: "connected",
+          title: "ChatGPT connecté",
+          message: "Cortex est lié à cet onglet Chrome.",
+          recoverable: false,
+          driver: "chrome_extension",
+          url: "https://chatgpt.com/",
+          tab_id: 42,
+          window_id: 7,
+        }), 500));
+      }
+      return Promise.reject(new Error(`Unexpected POST ${path}`));
+    });
+    await readyApp();
+    vi.useFakeTimers();
+
+    fireEvent.click(screen.getByRole("button", { name: "Ouvrir et connecter ChatGPT" }));
+    await act(async () => vi.advanceTimersByTimeAsync(10_000));
+
+    expect(screen.getByText("ChatGPT connecté dans cette fenêtre Chrome.")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Connexion Chrome impossible" })).not.toBeInTheDocument();
+  });
+
+  it("aborts a hung ChatGPT open ten seconds after pairing, not at the pairing deadline", async () => {
+    let openSignal: AbortSignal | null | undefined;
+    network.api.mockImplementation((path: string) => {
+      if (path === "/api/chrome-extension/status") {
+        return new Promise((resolve) => window.setTimeout(() => resolve({
+          state: "paired",
+          extension_connected: true,
+          paired: true,
+          pending_commands: 0,
+          protocol_compatible: true,
+          extension_protocol_version: 2,
+          required_protocol_version: 2,
+        }), 9_500));
+      }
+      return defaultApi(path);
+    });
+    network.postJson.mockImplementation((path: string, _body?: unknown, init?: RequestInit) => {
+      if (path === "/api/chrome-extension/pairing") {
+        return Promise.resolve({ token: "q".repeat(43), expires_in_seconds: 60 });
+      }
+      if (path === "/api/chrome-extension/open") {
+        openSignal = init?.signal;
+        return new Promise(() => undefined);
+      }
+      return Promise.reject(new Error(`Unexpected POST ${path}`));
+    });
+    await readyApp();
+    vi.useFakeTimers();
+
+    fireEvent.click(screen.getByRole("button", { name: "Ouvrir et connecter ChatGPT" }));
+    await act(async () => vi.advanceTimersByTimeAsync(10_000));
+
+    expect(openSignal).toBeInstanceOf(AbortSignal);
+    expect(openSignal?.aborted).toBe(false);
+
+    await act(async () => vi.advanceTimersByTimeAsync(9_499));
+    expect(openSignal?.aborted).toBe(false);
+
+    await act(async () => vi.advanceTimersByTimeAsync(1));
+    expect(openSignal?.aborted).toBe(true);
+    expect(screen.getByRole("heading", { name: "Connexion Chrome impossible" })).toBeInTheDocument();
+  });
+
+  it("aborts a hung extension status request at the ten-second pairing deadline", async () => {
+    let statusSignal: AbortSignal | null | undefined;
+    network.api.mockImplementation((path: string, init?: RequestInit) => {
+      if (path === "/api/chrome-extension/status") {
+        statusSignal = init?.signal;
+        return new Promise(() => undefined);
+      }
+      return defaultApi(path);
+    });
+    network.postJson.mockImplementation((path: string) => {
+      if (path === "/api/chrome-extension/pairing") {
+        return Promise.resolve({ token: "e".repeat(43), expires_in_seconds: 60 });
+      }
+      return Promise.reject(new Error(`Unexpected POST ${path}`));
+    });
+    await readyApp();
+    vi.useFakeTimers();
+
+    fireEvent.click(screen.getByRole("button", { name: "Ouvrir et connecter ChatGPT" }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(statusSignal).toBeInstanceOf(AbortSignal);
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+
+    expect(statusSignal?.aborted).toBe(true);
+    vi.useRealTimers();
+    expect(await screen.findByRole("heading", { name: "Connexion Chrome impossible" })).toBeInTheDocument();
+    expect(network.postJson.mock.calls.map(([path]) => path)).not.toContain("/api/chrome-extension/open");
+  });
+
+  it("releases the connection UI after a successful open even when runtime refresh hangs", async () => {
+    let hangRuntimeRefresh = false;
+    const pendingRuntimeRefresh = new Promise<never>(() => undefined);
+    network.api.mockImplementation((path: string) => {
+      if (
+        hangRuntimeRefresh
+        && ["/api/status", "/api/transport/status", "/api/transport/probe"].includes(path)
+      ) {
+        return pendingRuntimeRefresh;
+      }
+      return defaultApi(path);
+    });
+    network.postJson.mockImplementation((path: string) => {
+      if (path === "/api/chrome-extension/pairing") {
+        return Promise.resolve({ token: "f".repeat(43), expires_in_seconds: 60 });
+      }
+      if (path === "/api/chrome-extension/open") {
+        hangRuntimeRefresh = true;
+        return Promise.resolve({
+          code: "CONNECTED",
+          state: "connected",
+          title: "ChatGPT connecté",
+          message: "Cortex est lié à cet onglet Chrome.",
+          recoverable: false,
+          driver: "chrome_extension",
+          url: "https://chatgpt.com/",
+          tab_id: 42,
+          window_id: 7,
+        });
+      }
+      return Promise.reject(new Error(`Unexpected POST ${path}`));
+    });
+    await readyApp();
+    vi.useFakeTimers();
+
+    fireEvent.click(screen.getByRole("button", { name: "Ouvrir et connecter ChatGPT" }));
+    await act(async () => vi.advanceTimersByTimeAsync(10_000));
+
+    expect(screen.getByRole("button", { name: "Ouvrir et connecter ChatGPT" })).not.toBeDisabled();
+    expect(screen.queryByRole("heading", { name: "Vérification de la connexion…" })).not.toBeInTheDocument();
+  });
+
+  it("uses advertised upload limits before staging or reading an oversized file", async () => {
+    network.api.mockImplementation((path: string) => {
+      if (path === "/api/transport/capabilities") {
+        return Promise.resolve({
+          upload_file: true,
+          upload_image: true,
+          take_screenshot: true,
+          limits: { file_bytes: 2 * 1024 * 1024, image_bytes: 1024 * 1024 },
+        });
+      }
+      return defaultApi(path);
+    });
+    const readAsDataURL = vi.fn<(blob: Blob) => void>();
+    vi.stubGlobal("FileReader", class {
+      readAsDataURL = readAsDataURL;
+    });
+    const user = userEvent.setup();
+    const rendered = await readyApp();
+    await user.type(composer(), "brouillon conservé");
+    const input = rendered.container.querySelector<HTMLInputElement>('input[type="file"]');
+    if (!input) throw new Error("file input missing");
+
+    await user.upload(
+      input,
+      new File([new Uint8Array(1024 * 1024 + 1)], "capture.png", { type: "image/png" }),
+    );
+
+    expect(screen.getByRole("alert")).toHaveTextContent(/limite.*1 Mo/i);
+    expect(composer()).toHaveValue("brouillon conservé");
+    expect(screen.queryByText("capture.png")).not.toBeInTheDocument();
+    expect(readAsDataURL).not.toHaveBeenCalled();
+    expect(network.postJson).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: /Conversation B/ }));
+
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Conversation B" })).toBeInTheDocument();
+  });
+
+  it("rechecks a staged file before FileReader and POST while preserving its conversation state", async () => {
+    network.api.mockImplementation((path: string) => {
+      if (path === "/api/transport/capabilities") {
+        return Promise.resolve({
+          upload_file: true,
+          upload_image: true,
+          take_screenshot: true,
+          limits: { file_bytes: 2 * 1024 * 1024, image_bytes: 1024 * 1024 },
+        });
+      }
+      return defaultApi(path);
+    });
+    const readAsDataURL = vi.fn<(blob: Blob) => void>();
+    vi.stubGlobal("FileReader", class {
+      readAsDataURL = readAsDataURL;
+    });
+    const user = userEvent.setup();
+    const rendered = await readyApp();
+    await user.type(composer(), "preuve conservée");
+    const input = rendered.container.querySelector<HTMLInputElement>('input[type="file"]');
+    if (!input) throw new Error("file input missing");
+    const file = new File(["preuve"], "preuve.pdf", { type: "application/pdf" });
+    await user.upload(input, file);
+    expect(screen.getByText("preuve.pdf")).toBeInTheDocument();
+    Object.defineProperty(file, "size", { value: 2 * 1024 * 1024 + 1 });
+
+    await user.click(screen.getByTitle("Envoyer"));
+
+    expect(await screen.findByText(/limite.*2 Mo/i)).toBeInTheDocument();
+    expect(composer()).toHaveValue("preuve conservée");
+    expect(screen.getByText("preuve.pdf")).toBeInTheDocument();
+    expect(readAsDataURL).not.toHaveBeenCalled();
+    expect(network.postJson).not.toHaveBeenCalled();
+  });
+
   it("refreshes conversations after Chrome becomes connected", async () => {
     let conversationCalls = 0;
     network.api.mockImplementation((path: string) => {
@@ -217,6 +604,48 @@ describe("CortexApp conversation integration", () => {
     expect(network.postJson.mock.calls.map(([path]) => path)).toContain("/api/chrome-extension/retry");
   });
 
+  it("aborts a hung retry request at ten seconds and restores the retry controls", async () => {
+    let retrySignal: AbortSignal | null | undefined;
+    network.postJson.mockImplementation((path: string, _body?: unknown, init?: RequestInit) => {
+      if (path === "/api/chrome-extension/pairing") {
+        return Promise.resolve({ token: "g".repeat(43), expires_in_seconds: 60 });
+      }
+      if (path === "/api/chrome-extension/open") {
+        return Promise.resolve({
+          code: "LOGIN_REQUIRED",
+          state: "manual_action",
+          title: "Connexion à ChatGPT requise",
+          message: "Connecte-toi dans l’onglet ChatGPT, puis réessaie.",
+          recoverable: true,
+          driver: "chrome_extension",
+          url: "https://chatgpt.com/auth/login",
+          tab_id: 42,
+          window_id: 7,
+        });
+      }
+      if (path === "/api/chrome-extension/retry") {
+        retrySignal = init?.signal;
+        return new Promise(() => undefined);
+      }
+      return Promise.reject(new Error(`Unexpected POST ${path}`));
+    });
+    const user = userEvent.setup();
+    await readyApp();
+
+    await user.click(screen.getByRole("button", { name: "Ouvrir et connecter ChatGPT" }));
+    expect(await screen.findByRole("heading", { name: "Connexion à ChatGPT requise" })).toBeInTheDocument();
+    vi.useFakeTimers();
+
+    fireEvent.click(screen.getByRole("button", { name: "Réessayer" }));
+    await act(async () => vi.advanceTimersByTimeAsync(10_000));
+
+    expect(retrySignal).toBeInstanceOf(AbortSignal);
+    expect(retrySignal?.aborted).toBe(true);
+    expect(screen.getByRole("heading", { name: "Vérification Chrome impossible" })).toBeInTheDocument();
+    expect(screen.getByText("La vérification de l’extension a dépassé la limite de 10 secondes.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Réessayer" })).not.toBeDisabled();
+  });
+
   it("reloads Cortex and resumes pairing after the backend reports an outdated extension", async () => {
     const token = "b".repeat(43);
     let openCalls = 0;
@@ -282,9 +711,45 @@ describe("CortexApp conversation integration", () => {
     expect(window.sessionStorage.getItem("cortex:pair-after-extension-reload")).toBeNull();
   });
 
-  it("neutralizes every mission-specific pipeline field when no selected mission matches", () => {
-    const projected = projectPipelineForConversation({
+  it("preserves mission-independent truth for the selected scoped conversation", () => {
+    const scopedPipeline = {
       ...demoPipeline,
+      scope: {
+        mode: "conversation",
+        conversation_identity: "conversation-b",
+        mission_id: null,
+      },
+      overall: "healthy",
+      active_mission_id: null,
+      active_mission_state: null,
+      components: [{ id: "transport", label: "ChatGPT", state: "connected", detail: "Extension Chrome" }],
+      events: [],
+      runtime_execution: {
+        ...demoPipeline.runtime_execution,
+        task_id: null,
+        state: "idle",
+        active: false,
+        executor_kind: "unavailable",
+        executor_model_used: null,
+      },
+    } as PipelineStatus;
+    const projected = projectPipelineForConversation(scopedPipeline, null, "conversation-b");
+
+    expect(projected.overall).toBe("healthy");
+    expect(projected.components).toEqual(scopedPipeline.components);
+    expect(projected.events).toEqual([]);
+    expect(projected.active_mission_id).toBeNull();
+    expect(projected.active_mission_state).toBeNull();
+  });
+
+  it("neutralizes every mission-specific pipeline field when the selected identity does not match", () => {
+    const pipeline = {
+      ...demoPipeline,
+      scope: {
+        mode: "conversation",
+        conversation_identity: "conversation-a",
+        mission_id: "mission-a-secret",
+      },
       active_mission_id: "mission-a-secret",
       active_mission_state: "EXECUTING_LOCAL_ACTION_SECRET",
       components: [{ id: "secret-component", label: "A_SECRET_COMPONENT", state: "running", detail: "A" }],
@@ -301,7 +766,17 @@ describe("CortexApp conversation integration", () => {
         release_eligible: true,
       },
       latency: { transport_ms: 11, local_model_ms: 22, total_iteration_ms: 33 },
-    }, null);
+    } as PipelineStatus;
+    const missionA = {
+      mission: {
+        id: "mission-a-secret",
+        state: "EXECUTING_LOCAL_ACTION_SECRET",
+      },
+      timeline: {},
+      awaiting_approval: false,
+      stopped: false,
+    } as MissionDetail;
+    const projected = projectPipelineForConversation(pipeline, missionA, "conversation-b");
 
     expect(projected).toMatchObject({
       active_mission_id: null,
@@ -321,6 +796,75 @@ describe("CortexApp conversation integration", () => {
       },
       latency: { transport_ms: null, local_model_ms: null, total_iteration_ms: null },
     });
+  });
+
+  it("never projects global legacy pipeline data into a selected conversation", () => {
+    const globalPipeline = {
+      ...demoPipeline,
+      scope: {
+        mode: "global_legacy",
+        conversation_identity: null,
+        mission_id: "mission-a-secret",
+      },
+      active_mission_id: "mission-a-secret",
+      active_mission_state: "EXECUTING_LOCAL_ACTION",
+      events: [{ id: "legacy-secret", ts: "now", label: "AUTRE_CONVERSATION_SECRET" }],
+    } as PipelineStatus;
+    const matchingMission = {
+      mission: {
+        id: "mission-a-secret",
+        state: "EXECUTING_LOCAL_ACTION",
+      },
+      timeline: {},
+      awaiting_approval: false,
+      stopped: false,
+    } as MissionDetail;
+
+    const projected = projectPipelineForConversation(
+      globalPipeline,
+      matchingMission,
+      "conversation-a",
+    );
+
+    expect(projected.overall).toBe("unknown");
+    expect(projected.active_mission_id).toBeNull();
+    expect(projected.events).toEqual([]);
+  });
+
+  it("replaces a mismatched pipeline response with neutral truth instead of retaining stale data", () => {
+    const mismatched = {
+      ...demoPipeline,
+      scope: {
+        mode: "conversation",
+        conversation_identity: "conversation-a",
+        mission_id: null,
+      },
+      components: [{ id: "stale", label: "A_SECRET", state: "running", detail: "A_SECRET" }],
+      events: [{ id: "stale-event", ts: "now", label: "A_SECRET" }],
+    } as PipelineStatus;
+    const selected = pipelineResponseForConversation(mismatched, "conversation-b");
+
+    expect(selected.overall).toBe("unknown");
+    expect(selected.components).toEqual([]);
+    expect(selected.events).toEqual([]);
+  });
+
+  it("treats an explicit scope as authoritative over a legacy top-level identity", () => {
+    const contradictory = {
+      ...demoPipeline,
+      conversation_identity: "conversation-b",
+      scope: {
+        mode: "conversation",
+        conversation_identity: null,
+        mission_id: null,
+      },
+      components: [{ id: "stale", label: "CONTRADICTORY_SECRET", state: "running", detail: "secret" }],
+    } as PipelineStatus;
+
+    const selected = pipelineResponseForConversation(contradictory, "conversation-b");
+
+    expect(selected.overall).toBe("unknown");
+    expect(selected.components).toEqual([]);
   });
 
   it("blocks Enter and screenshot while A1 is non-terminal without closing its source", async () => {
@@ -479,9 +1023,11 @@ describe("CortexApp conversation integration", () => {
   it("times out a hung attachment POST, preserves the exact draft and File, and ignores its late result", async () => {
     const attachmentUpload = deferred<unknown>();
     let uploadSignal: AbortSignal | null | undefined;
-    network.postJson.mockImplementation((path: string, _body?: unknown, init?: RequestInit) => {
-      if (path === "/api/chat/attachments") {
+    let uploadBody: Record<string, unknown> | null = null;
+    network.postJson.mockImplementation((path: string, body?: unknown, init?: RequestInit) => {
+      if (path === "/api/chat/send-with-attachment") {
         uploadSignal = init?.signal;
+        uploadBody = body as Record<string, unknown>;
         return attachmentUpload.promise;
       }
       return Promise.reject(new Error(`Unexpected POST ${path}`));
@@ -517,8 +1063,17 @@ describe("CortexApp conversation integration", () => {
     expect(screen.getByText("preuve.txt")).toBeInTheDocument();
     expect(screen.getByText(/délai.*10 secondes/i)).toBeInTheDocument();
     expect(screen.getByTitle("Envoyer")).not.toBeDisabled();
-    await act(async () => attachmentUpload.resolve({ path: "/tmp/late", name: "preuve.txt", kind: "file" }));
-    expect(network.postJson.mock.calls.some(([path]) => path === "/api/chat/send-with-attachment")).toBe(false);
+    expect(uploadBody).toMatchObject({
+      conversation_url: "https://chatgpt.com/c/a",
+      text: "preuve exacte",
+      name: "preuve.txt",
+      data_b64: "cHJldXZl",
+      image: false,
+      new_conversation: false,
+    });
+    expect(network.postJson.mock.calls.some(([path]) => path === "/api/chat/attachments")).toBe(false);
+    await act(async () => attachmentUpload.resolve(run("a", "late-attachment-run")));
+    expect(AppEventSource.instances).toHaveLength(0);
   });
 
   it("removes every mission-A inspector detail on B and restores it only when A is selected again", async () => {
@@ -540,8 +1095,14 @@ describe("CortexApp conversation integration", () => {
     };
     network.api.mockImplementation((path: string) => {
       if (path.startsWith("/api/pipeline/status")) {
+        const params = new URL(path, "http://cortex.local").searchParams;
         return Promise.resolve({
           ...demoPipeline,
+          scope: {
+            mode: "conversation",
+            conversation_identity: params.get("conversation_identity"),
+            mission_id: params.get("mission_id"),
+          },
           active_mission_id: "mission-a",
           active_mission_state: "EXECUTING_LOCAL_ACTION",
           components: [
@@ -583,10 +1144,10 @@ describe("CortexApp conversation integration", () => {
     await user.click(screen.getByRole("button", { name: "Démarrer en lecture seule" }));
     await screen.findByText("Mission A isolée");
     await user.click(screen.getByTitle("Détails du bridge (pipeline, logs, transport)"));
-    const inspector = within(screen.getByLabelText("État de la pipeline"));
+    const inspector = within(screen.getByLabelText("État du pipeline"));
     expect(inspector.getByText("Composant mission A")).toBeInTheDocument();
     expect(inspector.getByText("Événement mission A")).toBeInTheDocument();
-    expect(inspector.getByText("MISSION_A_MODEL_SECRET")).toBeInTheDocument();
+    expect(inspector.getAllByText("MISSION_A_MODEL_SECRET").length).toBeGreaterThan(0);
     expect(screen.getAllByText(/14m 37s/).length).toBeGreaterThan(0);
     expect(inspector.getByRole("button", { name: "Pause" })).toBeEnabled();
 
@@ -598,8 +1159,8 @@ describe("CortexApp conversation integration", () => {
     expect(screen.queryByText("MISSION_A_RUNTIME_SECRET")).not.toBeInTheDocument();
     expect(screen.queryByText("MISSION_A_TASK_SECRET")).not.toBeInTheDocument();
     expect(screen.queryAllByText(/14m 37s/)).toHaveLength(0);
-    expect(inspector.getByRole("button", { name: "Pause" })).toBeDisabled();
-    expect(inspector.getByRole("button", { name: "Annuler" })).toBeDisabled();
+    expect(inspector.queryByRole("button", { name: "Pause" })).not.toBeInTheDocument();
+    expect(inspector.queryByRole("button", { name: "Annuler" })).not.toBeInTheDocument();
     expect(screen.getAllByText("ChatGPT").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Exécuteur").length).toBeGreaterThan(0);
     expect(screen.getByTitle("Statut de la connexion ChatGPT")).toHaveTextContent("Connecté");
@@ -608,7 +1169,7 @@ describe("CortexApp conversation integration", () => {
     await user.click(screen.getByRole("button", { name: /Conversation A/ }));
     expect(inspector.getByText("Composant mission A")).toBeInTheDocument();
     expect(inspector.getByText("Événement mission A")).toBeInTheDocument();
-    expect(inspector.getByText("MISSION_A_MODEL_SECRET")).toBeInTheDocument();
+    expect(inspector.getAllByText("MISSION_A_MODEL_SECRET").length).toBeGreaterThan(0);
     expect(screen.getAllByText(/14m 37s/).length).toBeGreaterThan(0);
     expect(inspector.getByRole("button", { name: "Pause" })).toBeEnabled();
   });

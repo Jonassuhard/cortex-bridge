@@ -216,6 +216,7 @@ class ChromeExtensionManager:
             "session": session,
             "action": action,
             "payload": payload,
+            "timeout_ms": max(1, int(timeout * 1000)),
         }
         encoded = json.dumps(envelope, separators=(",", ":"), ensure_ascii=False)
         if len(encoded.encode("utf-8")) > MAX_MESSAGE_BYTES:

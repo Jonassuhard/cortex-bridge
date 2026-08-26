@@ -30,7 +30,7 @@ flowchart TD
 `surface` is reported in `probe` and state payloads, so the scheduled DOM
 probe records classification drift whenever ChatGPT changes its markup.
 
-## Screenshot capture: click path + CDP fallback
+## Screenshot capture: one exact CDP path
 
 ```mermaid
 sequenceDiagram
@@ -39,7 +39,8 @@ sequenceDiagram
     participant T as Cortex-bound ChatGPT tab
     S->>W: capture_screenshot (session)
     alt fresh pendingCapture from a toolbar-icon click (&le; 60 s)
-        W->>W: validate PNG, TTL and same-conversation URL
+        Note over W,T: toolbar capture already used CDP against this exact tab
+        W->>W: validate PNG, TTL, tab ID and same-conversation URL
         Note over W: mismatch → SCREENSHOT_TARGET_MISMATCH
         W-->>S: authorized capture (consumed exactly once)
     else no usable click authorization
@@ -51,16 +52,16 @@ sequenceDiagram
     end
 ```
 
-The toolbar-click path stays primary: it is the explicit per-shot consent
-grant. The CDP fallback exists so unattended local automation (self-tests,
-missions) never blocks on physical input. Both paths only ever touch the tab
-the Cortex session is bound to; the extension still requests no `<all_urls>`,
-cookie, or history access.
+The toolbar click is an explicit per-shot capture, while unattended local
+automation can request the same operation without physical input. Both use
+CDP with the exact Cortex-bound tab ID. Private mask cycles are serialized per
+tab and any failed same-document restoration discards the pixels. The
+extension still requests no `<all_urls>`, cookie, or history access.
 
 ## Why `debugger` and not `<all_urls>`
 
-`chrome.tabs.captureVisibleTab` accepts only `<all_urls>` or an `activeTab`
-grant — a `chatgpt.com` host permission is refused (verified live). Widening
-to `<all_urls>` would expose every site the user visits. The `debugger`
-permission, combined with the existing `https://chatgpt.com/*` host
-permission, scopes CDP capture to ChatGPT tabs only.
+`chrome.tabs.captureVisibleTab` is intentionally not used: it cannot bind the
+returned pixels to one tab across an active-tab race and would otherwise need
+an `activeTab` or `<all_urls>` grant. The `debugger` permission, combined with
+the existing `https://chatgpt.com/*` host permission, captures the selected
+ChatGPT target directly without exposing other sites.

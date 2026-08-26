@@ -1,5 +1,8 @@
 import {
   HEARTBEAT_INTERVAL_MS,
+  captureTabViaDebuggerExactly,
+  forgetClosedTab,
+  restoreQuarantinedWriterTabs,
   routeCommand,
 } from "./service-worker-core.js";
 import { commandError, createPairMessage, isChatGPTUrl } from "./protocol.js";
@@ -10,8 +13,10 @@ const context = {
   cortexTab: null,
   sessionTabs: new Map(),
   reusableWriterTabs: new Set(),
+  quarantinedWriterTabs: new Set(),
   pendingCapture: null,
 };
+const contextReady = restoreQuarantinedWriterTabs(context);
 
 let socket = null;
 let reconnectTimer = null;
@@ -62,6 +67,7 @@ function connect() {
     }
     if (message.type !== "command") return;
     try {
+      await contextReady;
       const result = await routeCommand(context, message);
       send({
         type: "command.result",
@@ -97,6 +103,7 @@ function connect() {
 
 chrome.action.onClicked.addListener(async (tab) => {
   connect();
+  await contextReady;
   if (
     !Number.isInteger(tab?.id)
     || !Number.isInteger(tab?.windowId)
@@ -105,9 +112,7 @@ chrome.action.onClicked.addListener(async (tab) => {
     return;
   }
   try {
-    const data_url = await chrome.tabs.captureVisibleTab(tab.windowId, {
-      format: "png",
-    });
+    const data_url = await captureTabViaDebuggerExactly(chrome, tab);
     context.pendingCapture = {
       data_url,
       tab_id: tab.id,
@@ -147,4 +152,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 chrome.runtime.onStartup.addListener(connect);
 chrome.runtime.onInstalled.addListener(connect);
+chrome.tabs.onRemoved.addListener((tabId) => {
+  void forgetClosedTab(context, tabId);
+});
 connect();

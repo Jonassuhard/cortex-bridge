@@ -11,6 +11,15 @@ Public, best-effort roadmap. Dates are indicative; scope beats schedule.
       capture, contractual-risk opt-in control.
 - [x] v0.5.2 — one-command onboarding, French guides, unified mission
       history, clear paused/limit states, stable default workspace.
+- [ ] v0.5.3 (2026-08-25 candidate): release QA in progress, with native
+      macOS attachment activation,
+      optional Freebuff installation guidance, fail-closed private screenshot
+      masking, deterministic mission-preflight truth and stricter release
+      evidence validation. Owner-authorized technical observations now cover
+      the live Chrome pairing, one and two conversations, third-writer refusal,
+      file and private screenshot delivery, and three accepted disposable
+      mini-sites. Publication still requires the final clean source commit,
+      v0.5.3 evidence manifest, review and explicit push/tag approval.
 - [x] Real-production-extension live capture E2E (2026-08-22: production
       debugger/CDP capture, PNG upload, canonical new-chat lock and visible
       response; stale-paint and attachment-lock regressions fixed first).

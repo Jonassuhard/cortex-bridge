@@ -2,6 +2,80 @@
 
 All notable changes are recorded here.
 
+## 0.5.3 - 2026-08-25
+
+### Added
+
+- A native macOS accessibility helper can activate a staged attachment in the
+  real Chrome profile without replacing that profile or using the OpenAI API.
+- An optional Freebuff-assisted installation guide gives the assistant a
+  read-only inspection phase, a hashed dry-run plan, explicit human approval
+  and manual checkpoints for Chrome, macOS permissions and account login.
+- Screenshot capture now applies a fail-closed private mask to visible
+  navigation, sidebar and account areas before the exact-tab CDP path can read
+  pixels. Capture aborts if the mask cannot be confirmed.
+
+### Changed
+
+- Mission preflight now states the runtime truth: the deterministic executor is
+  selected and network access is disabled. The submitted mission payload is
+  normalized to the same values.
+- A fresh text-chat installation no longer requires Swift. When Apple's
+  Command Line Tools are missing, the reviewed plan records file sending as an
+  unavailable optional capability and installs the remaining local runtime.
+- Uninstall now refuses to remove owned runtime files while the Cortex server
+  is still running, any foreign listener is present or its state cannot be
+  verified. Start and uninstall now coordinate on the same lifecycle lock.
+- The public privacy policy allows the maintainer identity in the optional
+  Freebuff guide only where the exact official clone URL is required.
+
+### Fixed
+
+- The macOS accessibility scan no longer treats a legitimate unlabeled button
+  as an unreadable accessibility value.
+- Attachment delivery now binds to the current composer, detects composer
+  remounts, transfers each file once and confirms file tiles from the same user
+  message. A `DELIVERY_UNCERTAIN` result remains uncertain and is never hidden
+  by an automatic retry.
+- Release evidence validation now rejects missing or unrelated source commits,
+  source-code drift after the audited commit and dirty source trees.
+- Conversation selection now requires the requested ChatGPT route and a ready
+  composer together, so stale paint from the previously visible conversation
+  cannot satisfy a switch.
+- Delivery activation is serialized across writer tabs, refocuses the exact
+  writer before preparation and trusted input, and rejects expired queued work
+  before `mousePressed`.
+- ChatGPT send-control re-renders after focus or hover are reacquired within a
+  bounded deadline. The exact route, live hit target, attachment and normalized
+  composer text are revalidated before the single trusted click.
+- Mission resume can recover exactly one stable, fully valid, unconsumed reply
+  that appeared immediately before a read timeout. Duplicate actions, invalid
+  decisions, streaming output and ambiguous candidates fail closed; transport
+  errors during resume remain paused instead of becoming runner crashes.
+- A manual resume now serializes behind the mission loop that observed the
+  pause. It cannot start a second consumer while the original loop is still
+  receiving the same ChatGPT response.
+- Screenshot route selection and masked capture now share the read-surface
+  operation lock. The extension attests the expected ChatGPT URL before and
+  after reading pixels, so concurrent views or navigation cannot cross-capture
+  another conversation.
+- Invalid protocol decisions remain violation evidence but no longer count as
+  a consumed iteration or action during visible-reply recovery. A corrected
+  valid decision at the same iteration can resume normally.
+- Manual pause now records its exact stable origin. Pending approvals resume as
+  approvals, ChatGPT waits resume as waits, and a pause request is refused
+  while a local action is already changing the workspace.
+- A writer tab released after uncertain delivery is durably quarantined in
+  Chrome local storage from writer, read-only and screenshot allocation. A
+  release or later read fails closed if that tombstone cannot be persisted or
+  restored.
+- Private capture cycles are serialized per tab. Toolbar and automatic
+  screenshots both use `Page.captureScreenshot` against the exact bound tab;
+  ambiguous `captureVisibleTab` pixels are no longer accepted.
+- Cancelling either Swift compilation or a started macOS activation kills and
+  reaps the child process. A cancellation after activation starts is reported
+  as `DELIVERY_UNCERTAIN`, never as a clean unsent cancellation.
+
 ## 0.5.2 - 2026-08-20
 
 ### Added

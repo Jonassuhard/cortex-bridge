@@ -24,6 +24,7 @@ import { BridgeDiagram } from "./BridgeDiagram";
 
 interface SettingsPanelProps {
   open: boolean;
+  initialTab?: SettingsTabId;
   settings: CortexSettings;
   ollamaModels: OllamaModelInfo[];
   chatgptModels: ChatGPTModelInfo[];
@@ -34,9 +35,9 @@ interface SettingsPanelProps {
   onSelectChatGPTModel: (label: string) => Promise<void>;
 }
 
-type TabId = "general" | "models" | "permissions" | "transport" | "runtime" | "storage" | "diagnostics" | "info";
+export type SettingsTabId = "general" | "models" | "permissions" | "transport" | "runtime" | "storage" | "diagnostics" | "info";
 
-const tabs: { id: TabId; label: string; icon: React.ReactNode }[] = [
+const tabs: { id: SettingsTabId; label: string; icon: React.ReactNode }[] = [
   { id: "general", label: "Général", icon: <SettingsIcon /> },
   { id: "models", label: "Modèles", icon: <CpuIcon /> },
   { id: "permissions", label: "Permissions", icon: <ShieldIcon /> },
@@ -67,6 +68,7 @@ function Toggle({ checked, onChange, label, description, danger = false, disable
 
 export function SettingsPanel({
   open,
+  initialTab = "general",
   settings,
   ollamaModels,
   chatgptModels,
@@ -76,7 +78,7 @@ export function SettingsPanel({
   onSave,
   onSelectChatGPTModel,
 }: SettingsPanelProps) {
-  const [tab, setTab] = useState<TabId>("general");
+  const [tab, setTab] = useState<SettingsTabId>(initialTab);
   const [draft, setDraft] = useState<CortexSettings>(settings);
   const draftDirtyRef = useRef(false);
   const [labConfirmation, setLabConfirmation] = useState("");

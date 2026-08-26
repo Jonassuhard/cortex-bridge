@@ -10,7 +10,7 @@ import {
   type ConversationEvent,
   type ConversationState,
 } from "@/lib/conversation-state";
-import type { ChatRun, ConversationSummary } from "@/lib/types";
+import type { ChatRun, ConversationSummary, CortexSettings, ExecutionPreflight } from "@/lib/types";
 import { ChatWorkspace } from "./ChatWorkspace";
 
 const summary = (key: string): ConversationSummary => ({
@@ -35,6 +35,7 @@ function ControlledWorkspace({
   onReloadConversation = () => undefined,
   onChatSend = () => undefined,
   onMissionStart = () => undefined,
+  settings = demoSettings,
   transportLatencyMs = 128,
 }: {
   initialState?: ConversationState;
@@ -43,7 +44,8 @@ function ControlledWorkspace({
   onRetryRecovery?: (key: string) => void;
   onReloadConversation?: (key: string) => void;
   onChatSend?: (key: string, text: string) => void;
-  onMissionStart?: (key: string, text: string) => void;
+  onMissionStart?: (key: string, text: string, preflight: ExecutionPreflight) => void;
+  settings?: CortexSettings;
   transportLatencyMs?: number | null;
 }) {
   const [state, setState] = useState(initialState);
@@ -100,10 +102,11 @@ function ControlledWorkspace({
         draft={entry?.draft || ""}
         attachment={entry?.attachment || null}
         chatRun={entry?.run || null}
+        runBaselineMessageIds={entry?.runBaselineMessageIds || []}
         mission={entry?.mission || null}
         pipeline={demoPipeline}
         availability={{ chatState: "connected", agentState: "available", transportLatencyMs }}
-        settings={demoSettings}
+        settings={settings}
         inspectorOpen={false}
         sidebarCollapsed={false}
         capabilities={{ upload_file: true, take_screenshot: true }}
@@ -119,8 +122,8 @@ function ControlledWorkspace({
         }}
         onSendAttachment={(key) => send(key)}
         onSendScreenshot={(key) => send(key, false)}
-        onStartMission={(key, text) => {
-          onMissionStart(key, text);
+        onStartMission={(key, text, preflight) => {
+          onMissionStart(key, text, preflight);
           return send(key);
         }}
         onCancelChat={() => undefined}
@@ -197,6 +200,172 @@ function stateWithMissionProtocol(includeMission = true): ConversationState {
 }
 
 describe("ChatWorkspace controlled composer", () => {
+  it("renders one completed turn after the ChatGPT snapshot replaces the local overlay", () => {
+    const userText = "Question synthétique unique";
+    const assistantText = "Réponse synthétique unique";
+    let initial = createConversationState([summary("a")], "a");
+    initial = conversationReducer(initial, {
+      type: "RUN_EVENT",
+      key: "a",
+      runId: "run-a",
+      streamEpoch: 1,
+      run: {
+        id: "run-a",
+        state: "COMPLETED",
+        conversation_url: "https://chatgpt.com/c/a",
+        text: userText,
+        response_text: assistantText,
+        created_at: "2026-08-26T03:29:00.000Z",
+        delivered_at: "2026-08-26T03:29:01.000Z",
+        first_response_at: "2026-08-26T03:29:06.700Z",
+        completed_at: "2026-08-26T03:29:06.700Z",
+        latency: { first_response_ms: 6_700 },
+      },
+      accepted: true,
+      submittedDraft: userText,
+      submittedAttachment: null,
+    });
+    initial = conversationReducer(initial, { type: "SWITCH_STARTED", key: "a", epoch: 1 });
+    initial = conversationReducer(initial, {
+      type: "SNAPSHOT_RECEIVED",
+      key: "a",
+      epoch: 1,
+      snapshot: {
+        url: "https://chatgpt.com/c/a",
+        conversation_id: "a",
+        title: "Conversation synthétique",
+        blocker: null,
+        composer_present: true,
+        send_button_present: true,
+        stop_button_present: false,
+        streaming: false,
+        messages: [
+          {
+            id: "user-real",
+            role: "user",
+            text: userText,
+            created_at: "2026-08-26T03:29:00.000Z",
+          },
+          {
+            id: "assistant-real",
+            role: "assistant",
+            text: assistantText,
+            code_blocks: [{ lang: "text", text: "preuve issue du snapshot" }],
+            created_at: "2026-08-26T03:29:06.700Z",
+          },
+        ],
+      },
+    });
+
+    render(<ControlledWorkspace initialState={initial} />);
+
+    expect(screen.getAllByText(userText)).toHaveLength(1);
+    expect(screen.getAllByText(assistantText)).toHaveLength(1);
+    expect(screen.getAllByText("Réponse reçue")).toHaveLength(1);
+    expect(screen.getAllByText("6.7 s")).toHaveLength(1);
+    expect(screen.getByText("preuve issue du snapshot")).toBeInTheDocument();
+  });
+
+  it("keeps a repeated completed turn visible while its new snapshot is still pending", () => {
+    const repeatedUserText = "Question volontairement répétée";
+    const repeatedAssistantText = "Réponse volontairement répétée";
+    let initial = createConversationState([summary("a")], "a");
+    initial = conversationReducer(initial, { type: "SWITCH_STARTED", key: "a", epoch: 1 });
+    initial = conversationReducer(initial, {
+      type: "SNAPSHOT_RECEIVED",
+      key: "a",
+      epoch: 1,
+      snapshot: {
+        url: "https://chatgpt.com/c/a",
+        conversation_id: "a",
+        title: "Conversation répétée",
+        blocker: null,
+        composer_present: true,
+        send_button_present: true,
+        stop_button_present: false,
+        streaming: false,
+        messages: [
+          { id: "old-user", role: "user", text: repeatedUserText },
+          { id: "old-assistant", role: "assistant", text: repeatedAssistantText },
+        ],
+      },
+    });
+    initial = conversationReducer(initial, {
+      type: "RUN_EVENT",
+      key: "a",
+      runId: "run-a",
+      streamEpoch: 1,
+      run: {
+        id: "run-a",
+        state: "COMPLETED",
+        conversation_url: "https://chatgpt.com/c/a",
+        text: repeatedUserText,
+        response_text: repeatedAssistantText,
+        created_at: "2026-08-26T03:30:00.000Z",
+        delivered_at: "2026-08-26T03:30:01.000Z",
+        completed_at: "2026-08-26T03:30:06.000Z",
+      },
+      accepted: true,
+      submittedDraft: repeatedUserText,
+      submittedAttachment: null,
+    });
+
+    render(<ControlledWorkspace initialState={initial} />);
+
+    expect(screen.getAllByText(repeatedUserText)).toHaveLength(2);
+    expect(screen.getAllByText(repeatedAssistantText)).toHaveLength(2);
+  });
+
+  it("reconciles a snapshot that arrives between send start and run acceptance", () => {
+    const userText = "Question arrivée pendant l’acceptation";
+    const assistantText = "Réponse arrivée pendant l’acceptation";
+    let initial = createConversationState([summary("a")], "a");
+    initial = conversationReducer(initial, { type: "REQUEST_STARTED", request: "send", key: "a" });
+    initial = conversationReducer(initial, { type: "SWITCH_STARTED", key: "a", epoch: 1 });
+    initial = conversationReducer(initial, {
+      type: "SNAPSHOT_RECEIVED",
+      key: "a",
+      epoch: 1,
+      snapshot: {
+        url: "https://chatgpt.com/c/a",
+        conversation_id: "a",
+        title: "Conversation concurrente",
+        blocker: null,
+        composer_present: true,
+        send_button_present: true,
+        stop_button_present: false,
+        streaming: false,
+        messages: [
+          { id: "new-user", role: "user", text: userText },
+          { id: "new-assistant", role: "assistant", text: assistantText },
+        ],
+      },
+    });
+    initial = conversationReducer(initial, {
+      type: "RUN_EVENT",
+      key: "a",
+      runId: "run-a",
+      streamEpoch: 1,
+      run: {
+        id: "run-a",
+        state: "COMPLETED",
+        conversation_url: "https://chatgpt.com/c/a",
+        text: userText,
+        response_text: assistantText,
+        created_at: "2026-08-26T03:31:00.000Z",
+        completed_at: "2026-08-26T03:31:06.000Z",
+      },
+      accepted: true,
+      submittedDraft: userText,
+      submittedAttachment: null,
+    });
+
+    render(<ControlledWorkspace initialState={initial} />);
+
+    expect(screen.getAllByText(userText)).toHaveLength(1);
+    expect(screen.getAllByText(assistantText)).toHaveLength(1);
+  });
+
   it("recognizes persisted Cortex protocol after the local mission association was lost", () => {
     render(<ControlledWorkspace initialState={stateWithMissionProtocol(false)} />);
 
@@ -268,6 +437,25 @@ describe("ChatWorkspace controlled composer", () => {
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("dialog", { name: "Vérifier l’exécution locale" })).not.toBeInTheDocument();
     expect(trigger).toHaveFocus();
+  });
+
+  it("normalizes unsupported mission settings before the final submission", async () => {
+    const onMissionStart = vi.fn<(key: string, text: string, preflight: ExecutionPreflight) => void>();
+    const ollamaSettings: CortexSettings = { ...demoSettings, primary_executor: "ollama-test-model" };
+    const user = userEvent.setup();
+    render(<ControlledWorkspace settings={ollamaSettings} onMissionStart={onMissionStart} />);
+
+    await user.type(screen.getByRole("textbox", { name: "Message à envoyer" }), "Mission locale");
+    await user.click(screen.getByRole("button", { name: "Exécuter…" }));
+    await user.click(screen.getByRole("checkbox", { name: /Réseau/ }));
+    await user.click(screen.getByRole("button", { name: /^Démarrer/ }));
+
+    expect(onMissionStart).toHaveBeenCalledOnce();
+    expect(onMissionStart.mock.calls[0][2]).toMatchObject({
+      executorKind: "deterministic",
+      capabilities: { network: false },
+    });
+    expect(ollamaSettings.primary_executor).toBe("ollama-test-model");
   });
 
   it("sends Enter's exact draft only to ChatGPT", async () => {

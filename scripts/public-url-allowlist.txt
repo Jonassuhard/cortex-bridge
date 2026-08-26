@@ -1,6 +1,8 @@
 # Exact public URLs are added only after they are verified from primary sources.
 http://127.0.0.1:8420
 http://127.0.0.1:8420/*
+http://127.0.0.1:8420/api/chrome-extension/status
+http://127.0.0.1:8420/api/transport/probe
 https://chatgpt.com/
 https://chatgpt.com/*
 https://developer.chrome.com/docs/extensions/develop/concepts/content-scripts
@@ -8,16 +10,27 @@ https://developer.chrome.com/docs/extensions/develop/concepts/declare-permission
 https://developer.chrome.com/docs/extensions/get-started/tutorial/hello-world#load-unpacked
 https://developer.chrome.com/docs/extensions/how-to/web-platform/websockets
 https://developer.chrome.com/docs/extensions/reference/api/tabs
+https://developer.apple.com/xcode/resources/
 https://developers.openai.com/api/docs/guides/secure-mcp-tunnels
+https://freebuff.com/
+https://freebuff.com/cli
+https://freebuff.com/privacy-policy
+https://freebuff.com/terms-of-service
 https://git-scm.com/download/mac
 https://github.com/aaif-goose/goose
+https://github.com/abdallhMoukdad/chatgpt-browser-agent
+https://github.com/adamallcock/codex-chatgpt-control
 https://github.com/browser-use/browser-use
+https://github.com/HalilCan/headless-chatgpt
 https://github.com/Jonassuhard
+https://github.com/Jonassuhard/cortex-bridge.git
+https://github.com/CodebuffAI/freebuff
 https://github.com/openai/codex
 https://github.com/openinterpreter/openinterpreter
+https://github.com/waishnav/devspace
 https://img.shields.io/badge/license-MIT-green.svg
 https://img.shields.io/badge/platform-macOS-lightgrey.svg
-https://img.shields.io/badge/version-0.5.2-blue.svg
+https://img.shields.io/badge/version-0.5.3-blue.svg
 https://nodejs.org/en/download
 https://jonassuhard.com/
 https://jonassuhard.com/projets/cortex-bridge
@@ -25,5 +38,6 @@ https://ollama.com/download/mac
 https://openai.com/policies/eu-terms-of-use/
 https://openai.com/policies/terms-of-use/
 https://playwright.dev/python/docs/browsers
+https://support.apple.com/guide/mac-help/allow-accessibility-apps-to-access-your-mac-mh43185/mac
 https://www.google.com/chrome/
 https://www.python.org/downloads/macos/

@@ -14,14 +14,23 @@ sys.path.insert(0, str(ROOT / "console"))
 
 
 class VersionConsistencyTest(unittest.TestCase):
-    def test_python_package_and_canonical_file_are_052(self):
+    def test_python_package_and_canonical_file_are_053(self):
         from version import current_version
 
         canonical = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
         metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-        self.assertEqual(canonical, "0.5.2")
+        self.assertEqual(canonical, "0.5.3")
         self.assertEqual(metadata["project"]["version"], canonical)
         self.assertEqual(current_version(), canonical)
+
+    def test_python_package_includes_the_native_helper_source(self):
+        metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+
+        self.assertIn(
+            "macos_ax_send.swift",
+            metadata["tool"]["setuptools"]["package-data"]["transport"],
+        )
+        self.assertTrue((ROOT / "transport" / "macos_ax_send.swift").is_file())
 
     def test_frontend_package_and_lock_match_canonical_version(self):
         canonical = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
@@ -91,7 +100,7 @@ class VersionConsistencyTest(unittest.TestCase):
                     (
                         "import asyncio,server; "
                         "assert callable(server.main); "
-                        "assert asyncio.run(server.status())['version'] == '0.5.2'"
+                        "assert asyncio.run(server.status())['version'] == '0.5.3'"
                     ),
                 ],
                 cwd=ROOT,

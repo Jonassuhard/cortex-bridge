@@ -6,7 +6,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -35,8 +37,14 @@ OPT_IN_PREVIEW = "OPT_IN_TECHNICAL_PREVIEW"
 
 
 class EvidenceValidator:
-    def __init__(self, payload: dict[str, Any]) -> None:
+    def __init__(
+        self,
+        payload: dict[str, Any],
+        *,
+        manifest_path: Path | None = None,
+    ) -> None:
         self.payload = payload
+        self.manifest_path = manifest_path
         self.findings: set[tuple[str, str]] = set()
 
     def report(self, category: str, field: str) -> None:
@@ -55,6 +63,59 @@ class EvidenceValidator:
     def nonnegative_int(value: Any) -> bool:
         return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
+    def git(self, *args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["git", *args],
+            cwd=REPO_ROOT,
+            text=True,
+            capture_output=True,
+            timeout=10,
+            check=False,
+        )
+
+    def validate_source_commit(self, commit: str) -> None:
+        exists = self.git("cat-file", "-e", f"{commit}^{{commit}}")
+        if exists.returncode != 0:
+            self.report("commit_not_found", "commit")
+            return
+
+        head_result = self.git("rev-parse", "HEAD")
+        if head_result.returncode != 0:
+            self.report("source_repository", "commit")
+            return
+        head = head_result.stdout.strip()
+
+        ancestor = self.git("merge-base", "--is-ancestor", commit, head)
+        if ancestor.returncode != 0:
+            self.report("source_commit_not_ancestor", "commit")
+            return
+
+        allowed_drift: set[str] = set()
+        if self.manifest_path is not None:
+            try:
+                relative_manifest = self.manifest_path.resolve().relative_to(REPO_ROOT)
+            except (OSError, ValueError):
+                pass
+            else:
+                allowed_drift.add(relative_manifest.as_posix())
+
+        changed = self.git("diff", "--name-only", f"{commit}..{head}", "--")
+        if changed.returncode != 0:
+            self.report("source_repository", "commit")
+        else:
+            changed_paths = {
+                line.strip() for line in changed.stdout.splitlines() if line.strip()
+            }
+            if changed_paths - allowed_drift:
+                self.report("source_commit_drift", "commit")
+
+        if os.environ.get("CORTEX_RELEASE_ALLOW_DIRTY") != "1":
+            status = self.git("status", "--porcelain", "--untracked-files=all")
+            if status.returncode != 0:
+                self.report("source_repository", "workingTree")
+            elif status.stdout.strip():
+                self.report("source_tree_dirty", "workingTree")
+
     def validate(self) -> set[tuple[str, str]]:
         if self.get("schemaVersion") != 1:
             self.report("schema_version", "schemaVersion")
@@ -64,6 +125,8 @@ class EvidenceValidator:
         commit = self.get("commit")
         if not isinstance(commit, str) or not HEX40_RE.fullmatch(commit):
             self.report("commit_format", "commit")
+        else:
+            self.validate_source_commit(commit)
         generated_at = self.get("generatedAt")
         if not isinstance(generated_at, str) or not generated_at.endswith("Z"):
             self.report("timestamp_format", "generatedAt")
@@ -133,6 +196,76 @@ class EvidenceValidator:
                 or group_passed != group_runs
             ):
                 self.report("acceptance_evidence", f"acceptance.{group}")
+
+        crash_points = self.get("acceptance.crashPoints")
+        if isinstance(crash_points, dict):
+            crash_runs = crash_points.get("runs")
+            points = crash_points.get("points")
+            source_commit = crash_points.get("sourceCommit")
+            command = crash_points.get("command")
+            evidence_artifact = crash_points.get("evidenceArtifact")
+            artifacts_payload = self.payload.get("artifacts")
+            point_ids: set[str] = set()
+            point_tests: set[str] = set()
+            points_valid = (
+                isinstance(points, list)
+                and self.nonnegative_int(crash_runs)
+                and len(points) == crash_runs
+                and len(points) >= 6
+            )
+            if isinstance(points, list):
+                for point in points:
+                    if not isinstance(point, dict):
+                        points_valid = False
+                        continue
+                    point_id = point.get("id")
+                    test_name = point.get("test")
+                    transport = point.get("transport")
+                    boundary = point.get("injectionBoundary")
+                    status = point.get("status")
+                    if (
+                        not isinstance(point_id, str)
+                        or not point_id.strip()
+                        or point_id in point_ids
+                        or not isinstance(test_name, str)
+                        or not test_name.strip()
+                        or test_name in point_tests
+                        or not isinstance(transport, str)
+                        or not transport.strip()
+                        or not isinstance(boundary, str)
+                        or not boundary.strip()
+                        or status != "PASS"
+                    ):
+                        points_valid = False
+                    if isinstance(point_id, str):
+                        point_ids.add(point_id)
+                    if isinstance(test_name, str):
+                        point_tests.add(test_name)
+            if not points_valid:
+                self.report(
+                    "crash_point_evidence",
+                    "acceptance.crashPoints.points",
+                )
+            if source_commit != commit:
+                self.report(
+                    "crash_point_evidence",
+                    "acceptance.crashPoints.sourceCommit",
+                )
+            if not isinstance(command, str) or not command.strip():
+                self.report(
+                    "crash_point_evidence",
+                    "acceptance.crashPoints.command",
+                )
+            if (
+                not isinstance(evidence_artifact, str)
+                or not evidence_artifact
+                or not isinstance(artifacts_payload, dict)
+                or evidence_artifact not in artifacts_payload
+            ):
+                self.report(
+                    "crash_point_evidence",
+                    "acceptance.crashPoints.evidenceArtifact",
+                )
 
         mini_runs = self.get("acceptance.miniSites.runs")
         mini_passed = self.get("acceptance.miniSites.passed")
@@ -362,7 +495,7 @@ def main() -> int:
     if not isinstance(payload, dict):
         print("[release-evidence] invalid_json manifest")
         return 1
-    findings = EvidenceValidator(payload).validate()
+    findings = EvidenceValidator(payload, manifest_path=path).validate()
     for category, field in sorted(findings):
         print(f"[release-evidence] {category} {field}")
     if findings:

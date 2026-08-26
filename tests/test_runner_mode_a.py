@@ -25,6 +25,7 @@ from transport.chatgpt_web.adapter import (  # noqa: E402
     ChatGPTWebTransport,
     DELIVERY_UNCERTAIN,
     LocalFixtureDriver,
+    SELECTION_TIMEOUT,
     TransportError,
 )
 from transport.chatgpt_web.fixture import FixtureServer  # noqa: E402
@@ -168,6 +169,29 @@ class ModeARunnerTestCase(unittest.IsolatedAsyncioTestCase):
             detail["error"],
             "DELIVERY_UNCERTAIN: synthetic new-chat submitter became detached",
         )
+
+    async def test_selection_timeout_is_a_structured_pause_not_a_runner_crash(self):
+        async def timed_out_selection(_url):
+            raise TransportError(
+                SELECTION_TIMEOUT,
+                "synthetic stale route exceeded the selection budget",
+            )
+
+        self.transport.select_conversation = timed_out_selection
+        mission_id = str(uuid.uuid4())
+        runner = self.make_runner()
+
+        mission = await runner.run_mission(
+            "Exercise a timed-out conversation selection.",
+            conversation_url=self.conv_url,
+            mission_id=mission_id,
+        )
+
+        self.assertEqual(mission["state"], "PAUSED")
+        self.assertEqual(mission["pause_reason"], SELECTION_TIMEOUT)
+        event = self.store.rows("transport_events", mission_id)[-1]
+        self.assertEqual(event["event_type"], "TRANSPORT_PAUSED")
+        self.assertEqual(json.loads(event["detail_json"])["reason"], SELECTION_TIMEOUT)
 
     # §8: list candidate conversations from the fixture sidebar equivalent
     async def test_list_conversation_candidates(self):

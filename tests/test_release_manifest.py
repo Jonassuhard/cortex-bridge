@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import os
 import shutil
 import subprocess
 import tempfile
@@ -15,11 +16,41 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 VALIDATOR = REPO_ROOT / "scripts" / "verify-release-evidence.py"
 
 
+def current_commit() -> str:
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout.strip()
+
+
+def valid_crash_evidence() -> dict[str, object]:
+    return {
+        "runs": 6,
+        "passed": 6,
+        "sourceCommit": current_commit(),
+        "command": "python -m unittest -v six.mapped.tests",
+        "evidenceArtifact": "VERSION",
+        "points": [
+            {
+                "id": f"crash-{index}",
+                "test": f"tests.test_recovery.Case.test_point_{index}",
+                "transport": "deterministic_fixture",
+                "injectionBoundary": f"boundary-{index}",
+                "status": "PASS",
+            }
+            for index in range(1, 7)
+        ],
+    }
+
+
 def valid_payload() -> dict[str, object]:
     return {
         "schemaVersion": 1,
-        "release": "0.5.2",
-        "commit": "1" * 40,
+        "release": (REPO_ROOT / "VERSION").read_text(encoding="utf-8").strip(),
+        "commit": current_commit(),
         "generatedAt": "2026-07-29T12:00:00Z",
         "environment": {
             "os": "macOS fixture",
@@ -46,7 +77,7 @@ def valid_payload() -> dict[str, object]:
         "acceptance": {
             "fixtureMissions": {"runs": 20, "passed": 20},
             "coldDualRuns": {"runs": 10, "passed": 10},
-            "crashPoints": {"runs": 6, "passed": 6},
+            "crashPoints": valid_crash_evidence(),
             "liveChatGPT": {
                 "status": "PASS",
                 "singleConversation": {"runs": 1, "passed": 1},
@@ -145,6 +176,7 @@ class ReleaseManifestTest(unittest.TestCase):
                 text=True,
                 capture_output=True,
                 timeout=15,
+                env=os.environ | {"CORTEX_RELEASE_ALLOW_DIRTY": "1"},
             )
 
     def test_complete_release_evidence_passes(self) -> None:
@@ -163,14 +195,54 @@ class ReleaseManifestTest(unittest.TestCase):
             verification.mkdir(parents=True)
             shutil.copy2(VALIDATOR, scripts / VALIDATOR.name)
             (root / "VERSION").write_text(f"{version}\n", encoding="utf-8")
+            subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+            subprocess.run(
+                ["git", "config", "user.name", "Cortex Release Test"],
+                cwd=root,
+                check=True,
+            )
+            subprocess.run(
+                ["git", "config", "user.email", "release-test@localhost"],
+                cwd=root,
+                check=True,
+            )
+            subprocess.run(["git", "add", "VERSION", "scripts"], cwd=root, check=True)
+            subprocess.run(
+                ["git", "commit", "-q", "-m", "test: source candidate"],
+                cwd=root,
+                check=True,
+            )
+            source_commit = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                text=True,
+                capture_output=True,
+                check=True,
+            ).stdout.strip()
             payload = valid_payload()
             payload["release"] = version
+            payload["commit"] = source_commit
+            acceptance = payload["acceptance"]
+            assert isinstance(acceptance, dict)
+            crash_points = acceptance["crashPoints"]
+            assert isinstance(crash_points, dict)
+            crash_points["sourceCommit"] = source_commit
             payload["artifacts"] = {
                 "VERSION": hashlib.sha256((root / "VERSION").read_bytes()).hexdigest()
             }
             (verification / f"v{version}.json").write_text(
                 json.dumps(payload),
                 encoding="utf-8",
+            )
+            subprocess.run(
+                ["git", "add", f"docs/verification/v{version}.json"],
+                cwd=root,
+                check=True,
+            )
+            subprocess.run(
+                ["git", "commit", "-q", "-m", "docs: release evidence"],
+                cwd=root,
+                check=True,
             )
 
             result = subprocess.run(
@@ -195,6 +267,66 @@ class ReleaseManifestTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("missing_field", result.stdout)
         self.assertIn("performance.switchP95Ms", result.stdout)
+
+    def test_crash_evidence_requires_one_auditable_point_per_run(self) -> None:
+        payload = valid_payload()
+        acceptance = payload["acceptance"]
+        assert isinstance(acceptance, dict)
+        crash_points = acceptance["crashPoints"]
+        assert isinstance(crash_points, dict)
+        points = crash_points["points"]
+        assert isinstance(points, list)
+        points.pop()
+
+        result = self.run_validation(payload)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("crash_point_evidence", result.stdout)
+        self.assertIn("acceptance.crashPoints.points", result.stdout)
+
+    def test_crash_evidence_rejects_duplicate_or_unpassed_points(self) -> None:
+        mutations = ("duplicate", "failed")
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                payload = valid_payload()
+                acceptance = payload["acceptance"]
+                assert isinstance(acceptance, dict)
+                crash_points = acceptance["crashPoints"]
+                assert isinstance(crash_points, dict)
+                points = crash_points["points"]
+                assert isinstance(points, list)
+                first = points[0]
+                second = points[1]
+                assert isinstance(first, dict)
+                assert isinstance(second, dict)
+                if mutation == "duplicate":
+                    second["id"] = first["id"]
+                else:
+                    first["status"] = "FAIL"
+
+                result = self.run_validation(payload)
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("crash_point_evidence", result.stdout)
+
+    def test_crash_evidence_is_bound_to_source_and_hashed_artifact(self) -> None:
+        mutations = ("source", "artifact")
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                payload = valid_payload()
+                acceptance = payload["acceptance"]
+                assert isinstance(acceptance, dict)
+                crash_points = acceptance["crashPoints"]
+                assert isinstance(crash_points, dict)
+                if mutation == "source":
+                    crash_points["sourceCommit"] = "0" * 40
+                else:
+                    crash_points["evidenceArtifact"] = "missing.txt"
+
+                result = self.run_validation(payload)
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("crash_point_evidence", result.stdout)
 
     def test_failed_offline_gate_is_rejected(self) -> None:
         payload = valid_payload()
@@ -368,6 +500,30 @@ class ReleaseManifestTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("commit_format", result.stdout)
         self.assertIn("artifact_hash", result.stdout)
+
+    def test_well_formed_but_missing_commit_is_rejected(self) -> None:
+        payload = valid_payload()
+        payload["commit"] = "f" * 40
+
+        result = self.run_validation(payload)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("commit_not_found", result.stdout)
+
+    def test_existing_commit_with_source_drift_is_rejected(self) -> None:
+        payload = valid_payload()
+        payload["commit"] = subprocess.run(
+            ["git", "rev-parse", "HEAD^"],
+            cwd=REPO_ROOT,
+            text=True,
+            capture_output=True,
+            check=True,
+        ).stdout.strip()
+
+        result = self.run_validation(payload)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("source_commit_drift", result.stdout)
 
     def test_opt_in_preview_verdict_accepts_partial_live_evidence(self) -> None:
         payload = opt_in_preview_payload()

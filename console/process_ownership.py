@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-import hashlib
 import argparse
+import fcntl
+import hashlib
 import json
 import os
+import stat
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -134,6 +136,25 @@ def write_record(path: Path, record: dict[str, Any]) -> None:
     temporary.replace(path)
 
 
+def run_command_with_shared_lock(lock_path: Path, command: list[str]) -> int:
+    if not command:
+        raise ValueError("a command is required")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(lock_path, flags, 0o600)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise RuntimeError(f"lifecycle lock is unsafe: {lock_path}")
+        os.fchmod(fd, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_SH)
+        return subprocess.run(command, check=False).returncode
+    finally:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
+
 def _listener_commands(pids: list[int]) -> dict[int, str]:
     commands: dict[int, str] = {}
     for pid in pids:
@@ -168,11 +189,21 @@ def main(argv: list[str] | None = None) -> int:
     capture_parser.add_argument("--pid", type=int, required=True)
     capture_parser.add_argument("--port", type=int, required=True)
     capture_parser.add_argument("--token", required=True)
+    lock_parser = subparsers.add_parser("with-shared-lock")
+    lock_parser.add_argument("--lock", type=Path, required=True)
+    lock_parser.add_argument("command_argv", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
 
     if args.command == "status":
         print(json.dumps(_status_payload(args.record, args.port), sort_keys=True))
         return 0
+    if args.command == "with-shared-lock":
+        command = args.command_argv
+        if command[:1] == ["--"]:
+            command = command[1:]
+        if not command:
+            parser.error("with-shared-lock requires a command after --")
+        return run_command_with_shared_lock(args.lock, command)
     record = capture_identity(args.pid, args.port, args.token)
     write_record(args.record, record)
     print(json.dumps(record, sort_keys=True))

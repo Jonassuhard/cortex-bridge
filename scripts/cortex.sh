@@ -10,7 +10,10 @@ case "$CORTEX_HOME" in
   *) echo "CORTEX_HOME must be absolute" >&2; exit 2 ;;
 esac
 export PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-$CORTEX_HOME/browser-cache}"
-export PYTHONPATH="$ROOT/console:$ROOT${PYTHONPATH:+:$PYTHONPATH}"
+case "${PYTHONPATH:-}" in
+  "$ROOT/console:$ROOT"|"$ROOT/console:$ROOT:"*) ;;
+  *) export PYTHONPATH="$ROOT/console:$ROOT${PYTHONPATH:+:$PYTHONPATH}" ;;
+esac
 
 if [ -n "${PYTHON_BIN:-}" ]; then
   PYTHON="$PYTHON_BIN"
@@ -78,6 +81,12 @@ for pid in payload.get("listener_pids") or []:
 
 case "$COMMAND" in
   start)
+    if [ "${CORTEX_START_INSTALL_LOCK_HELD:-}" != "1" ]; then
+      export CORTEX_START_INSTALL_LOCK_HELD=1
+      exec "$PYTHON" "$OWNERSHIP" with-shared-lock \
+        --lock "$CORTEX_HOME/.install.lock" -- \
+        bash "$ROOT/scripts/cortex.sh" "$@"
+    fi
     mkdir -p "$PIDS_DIR" "$LOGS_DIR"
     if ! mkdir "$START_LOCK" 2>/dev/null; then
       echo "Cortex Bridge start is already in progress." >&2

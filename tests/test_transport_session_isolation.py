@@ -396,6 +396,57 @@ class ChatRouteSessionIsolationTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn(run_a["id"], chat_api._runs)
         self.assertIn(run_b["id"], chat_api._runs)
 
+    async def test_non_streaming_update_clears_chatgpt_streaming_state(self) -> None:
+        non_streaming_emitted = asyncio.Event()
+        release_final = asyncio.Event()
+
+        class StreamingTransitionTransport:
+            def __init__(self, session_id: str | None):
+                self.session_id = session_id
+                self.lock = None
+
+            async def select_conversation(self, url: str):
+                self.lock = SimpleNamespace(url=url, identity=url.rsplit("/", 1)[-1])
+                return self.lock
+
+            async def send_message(self, _text: str) -> None:
+                return None
+
+            async def stream_response(self, on_update=None) -> dict:
+                update = {
+                    "id": "assistant-transition",
+                    "role": "assistant",
+                    "text": "stable response",
+                    "code_blocks": [],
+                    "images": [],
+                }
+                await on_update({**update, "streaming": True})
+                await on_update({**update, "streaming": False})
+                non_streaming_emitted.set()
+                await release_final.wait()
+                return update
+
+            async def close(self) -> None:
+                return None
+
+        chat_api.ui_transport_factory = StreamingTransitionTransport
+        accepted = await chat_api.send_chat(
+            chat_api.ChatSendIn(
+                conversation_url="https://chatgpt.com/c/streaming-transition",
+                text="transition",
+            )
+        )
+        await asyncio.wait_for(non_streaming_emitted.wait(), timeout=1)
+        run = chat_api._runs[accepted["id"]]
+
+        try:
+            self.assertEqual(run.state, "WAITING_FOR_CHATGPT")
+            self.assertEqual(run.response_text, "stable response")
+        finally:
+            release_final.set()
+        await asyncio.wait_for(run.task, timeout=1)
+        self.assertEqual(run.state, "COMPLETED")
+
     async def test_snapshot_rebuilds_a_stale_read_only_transport_once(self) -> None:
         created: list[object] = []
 
@@ -1075,6 +1126,330 @@ class MissionRouteSessionIsolationTest(unittest.IsolatedAsyncioTestCase):
             await write_slots.acquire_writer("https://chatgpt.com/c/attach-recovered-3")
         await first.release()
         await second.release()
+
+
+class ResumeVisibleReplyRecoveryTest(unittest.IsolatedAsyncioTestCase):
+    async def test_recovers_only_the_current_unconsumed_mission_reply(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            mission_id = "00000000-0000-0000-0000-000000000091"
+            store = Store(Path(tmp) / "cortex.db")
+            store.create_mission(mission_id, "recover visible reply", tmp)
+            store.set_iteration(mission_id, 8)
+            store.record_message(
+                "assistant-consumed",
+                mission_id,
+                "assistant",
+                "consumed-fingerprint",
+                "already consumed",
+            )
+
+            def decision(mid: str, iteration: int, action_id: str) -> dict:
+                return {
+                    "protocol": "cortex.v1",
+                    "missionId": mid,
+                    "actionId": action_id,
+                    "iteration": iteration,
+                    "state": "COMPLETE",
+                    "summary": "validated",
+                    "action": None,
+                    "acceptanceCriteria": ["All deterministic checks passed."],
+                    "requiresApproval": False,
+                    "terminal": True,
+                }
+
+            messages = [
+                {
+                    "id": "assistant-consumed",
+                    "role": "assistant",
+                    "text": "cortex-decision",
+                    "code_blocks": [{
+                        "lang": "cortex-decision",
+                        "text": json.dumps(decision(
+                            mission_id,
+                            8,
+                            "00000000-0000-0000-0000-000000000081",
+                        )),
+                    }],
+                },
+                {
+                    "id": "assistant-other-mission",
+                    "role": "assistant",
+                    "text": "cortex-decision",
+                    "code_blocks": [{
+                        "lang": "cortex-decision",
+                        "text": json.dumps(decision(
+                            "00000000-0000-0000-0000-000000000099",
+                            9,
+                            "00000000-0000-0000-0000-000000000082",
+                        )),
+                    }],
+                },
+                {
+                    "id": "assistant-current-unconsumed",
+                    "role": "assistant",
+                    "text": "cortex-decision",
+                    "code_blocks": [{
+                        "lang": "cortex-decision",
+                        "text": json.dumps(decision(
+                            mission_id,
+                            9,
+                            "00000000-0000-0000-0000-000000000083",
+                        )),
+                    }],
+                },
+            ]
+
+            class SnapshotTransport:
+                async def snapshot(self):
+                    return {"messages": messages}
+
+            runtime = SimpleNamespace(mission_id=mission_id, transport=SnapshotTransport())
+            reply = await missions_api._recover_unconsumed_visible_reply(runtime, store)
+
+            self.assertIsNotNone(reply)
+            self.assertEqual(reply.message_id, "assistant-current-unconsumed")
+            parsed = missions_api.protocol.extract_decision_block(reply.text)
+            self.assertEqual(parsed["missionId"], mission_id)
+            self.assertEqual(parsed["iteration"], 9)
+            store.close()
+
+    async def test_refuses_a_decision_whose_action_was_already_recorded(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            mission_id = "00000000-0000-0000-0000-000000000092"
+            action_id = "00000000-0000-0000-0000-000000000084"
+            store = Store(Path(tmp) / "cortex.db")
+            store.create_mission(mission_id, "do not replay", tmp)
+            store.set_iteration(mission_id, 8)
+            decision = {
+                "protocol": "cortex.v1",
+                "missionId": mission_id,
+                "actionId": action_id,
+                "iteration": 9,
+                "state": "COMPLETE",
+                "summary": "already consumed",
+                "action": None,
+                "acceptanceCriteria": ["The result was already persisted."],
+                "requiresApproval": False,
+                "terminal": True,
+            }
+            store.record_message(
+                "sqlite-row-not-dom-id",
+                mission_id,
+                "assistant",
+                "already-consumed-fingerprint",
+                json.dumps(decision),
+            )
+            store.record_decision(
+                "decision-row",
+                mission_id,
+                action_id,
+                9,
+                decision,
+                valid=True,
+            )
+
+            class SnapshotTransport:
+                async def snapshot(self):
+                    return {
+                        "streaming": False,
+                        "messages": [{
+                            "id": "assistant-dom-id",
+                            "role": "assistant",
+                            "text": "cortex-decision",
+                            "code_blocks": [{
+                                "lang": "cortex-decision",
+                                "text": json.dumps(decision),
+                            }],
+                        }],
+                    }
+
+            runtime = SimpleNamespace(mission_id=mission_id, transport=SnapshotTransport())
+            reply = await missions_api._recover_unconsumed_visible_reply(runtime, store)
+
+            self.assertIsNone(reply)
+            store.close()
+
+    async def test_invalid_decision_does_not_hide_a_valid_correction_at_same_iteration(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            mission_id = "00000000-0000-0000-0000-000000000095"
+            store = Store(Path(tmp) / "cortex.db")
+            store.create_mission(mission_id, "recover corrected decision", tmp)
+            store.set_iteration(mission_id, 8)
+            store.record_decision(
+                "invalid-decision-row",
+                mission_id,
+                "00000000-0000-0000-0000-000000000096",
+                9,
+                {"iteration": 9, "state": "COMPLETE", "acceptanceCriteria": []},
+                valid=False,
+                error="MISSING_ACCEPTANCE_CRITERIA",
+            )
+            corrected = {
+                "protocol": "cortex.v1",
+                "missionId": mission_id,
+                "actionId": "00000000-0000-0000-0000-000000000097",
+                "iteration": 9,
+                "state": "COMPLETE",
+                "summary": "corrected visible decision",
+                "action": None,
+                "acceptanceCriteria": ["The corrected result is validated."],
+                "requiresApproval": False,
+                "terminal": True,
+            }
+
+            class SnapshotTransport:
+                async def snapshot(self):
+                    return {
+                        "streaming": False,
+                        "messages": [{
+                            "id": "assistant-corrected",
+                            "role": "assistant",
+                            "text": "cortex-decision",
+                            "code_blocks": [{
+                                "lang": "cortex-decision",
+                                "text": json.dumps(corrected),
+                            }],
+                        }],
+                    }
+
+            runtime = SimpleNamespace(mission_id=mission_id, transport=SnapshotTransport())
+            reply = await missions_api._recover_unconsumed_visible_reply(runtime, store)
+
+            self.assertIsNotNone(reply)
+            self.assertEqual(reply.message_id, "assistant-corrected")
+            self.assertEqual(
+                missions_api.protocol.extract_decision_block(reply.text)["actionId"],
+                corrected["actionId"],
+            )
+            store.close()
+
+    async def test_refuses_invalid_streaming_and_ambiguous_visible_replies(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            mission_id = "00000000-0000-0000-0000-000000000093"
+            store = Store(Path(tmp) / "cortex.db")
+            store.create_mission(mission_id, "fail closed", tmp)
+            store.set_iteration(mission_id, 8)
+
+            def message(message_id: str, action_id: str, *, criteria: list[str]) -> dict:
+                return {
+                    "id": message_id,
+                    "role": "assistant",
+                    "text": "cortex-decision",
+                    "code_blocks": [{
+                        "lang": "cortex-decision",
+                        "text": json.dumps({
+                            "protocol": "cortex.v1",
+                            "missionId": mission_id,
+                            "actionId": action_id,
+                            "iteration": 9,
+                            "state": "COMPLETE",
+                            "summary": "candidate",
+                            "action": None,
+                            "acceptanceCriteria": criteria,
+                            "requiresApproval": False,
+                            "terminal": True,
+                        }),
+                    }],
+                }
+
+            invalid = message(
+                "assistant-invalid",
+                "00000000-0000-0000-0000-000000000085",
+                criteria=[],
+            )
+            valid_one = message(
+                "assistant-one",
+                "00000000-0000-0000-0000-000000000086",
+                criteria=["First complete result."],
+            )
+            valid_two = message(
+                "assistant-two",
+                "00000000-0000-0000-0000-000000000087",
+                criteria=["Second complete result."],
+            )
+
+            class SnapshotTransport:
+                def __init__(self, payload):
+                    self.payload = payload
+
+                async def snapshot(self):
+                    return self.payload
+
+            invalid_runtime = SimpleNamespace(
+                mission_id=mission_id,
+                transport=SnapshotTransport({"streaming": False, "messages": [invalid]}),
+            )
+            self.assertIsNone(
+                await missions_api._recover_unconsumed_visible_reply(invalid_runtime, store)
+            )
+
+            streaming_runtime = SimpleNamespace(
+                mission_id=mission_id,
+                transport=SnapshotTransport({"streaming": True, "messages": [valid_one]}),
+            )
+            with self.assertRaises(TransportError):
+                await missions_api._recover_unconsumed_visible_reply(streaming_runtime, store)
+
+            ambiguous_runtime = SimpleNamespace(
+                mission_id=mission_id,
+                transport=SnapshotTransport({
+                    "streaming": False,
+                    "messages": [valid_one, valid_two],
+                }),
+            )
+            with self.assertRaises(TransportError):
+                await missions_api._recover_unconsumed_visible_reply(ambiguous_runtime, store)
+            store.close()
+
+    async def test_resume_transport_error_stays_paused_without_runner_crash(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            mission_id = "00000000-0000-0000-0000-000000000094"
+            workspace = Path(tmp) / "workspace"
+            workspace.mkdir()
+            store = Store(Path(tmp) / "cortex.db")
+            store.create_mission(mission_id, "pause safely", str(workspace))
+            for state in (
+                "INITIALIZING_MISSION",
+                "SENDING_OBJECTIVE",
+                "WAITING_FOR_CHATGPT",
+            ):
+                store.transition(mission_id, state)
+
+            class StreamingTransport:
+                lock = SimpleNamespace(identity="resume-test-conversation")
+                stability_interval = 0.0
+
+                async def snapshot(self):
+                    return {"streaming": True, "messages": []}
+
+            runtime = missions_api.MissionRuntime(mission_id=mission_id)
+            runtime.transport = StreamingTransport()
+            runtime.policy = missions_api.PolicyEngine(
+                workspace,
+                mode=missions_api.WRITE_WITH_APPROVALS,
+            )
+            runtime._tools = missions_api.ToolExecutor(workspace)
+            runtime._budgets = missions_api.Budgets(
+                max_iterations=10,
+                max_duration_seconds=600,
+            )
+            original_store = missions_api._store
+            missions_api._store = store
+            try:
+                await missions_api._resume_mission_task(runtime)
+            finally:
+                missions_api._store = original_store
+
+            mission = store.get_mission(mission_id)
+            self.assertEqual(mission["state"], "PAUSED")
+            self.assertEqual(mission["pause_reason"], "STATE_UNREADABLE")
+            event_types = [
+                row["event_type"]
+                for row in store.rows("transport_events", mission_id, order_by="rowid")
+            ]
+            self.assertIn("TRANSPORT_PAUSED", event_types)
+            self.assertNotIn("RUNNER_CRASHED", event_types)
+            store.close()
 
 
 class MissionRestartPersistenceTest(unittest.IsolatedAsyncioTestCase):
