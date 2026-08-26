@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "release": "0.5.3",
-  "commit": "cdd443439dc5fe37d00bf98a4520eff37ab679ad",
-  "generatedAt": "2026-08-26T02:45:05Z",
+  "commit": "bea29f07fec2bf1895e5ce874b2b8d78c73561ac",
+  "generatedAt": "2026-08-26T17:40:40Z",
   "environment": {
     "os": "macOS 26.5.1 build 25F80, Apple silicon",
     "python": "3.12.1, exact requirements.lock environment",
@@ -13,12 +13,12 @@
   },
   "suites": {
     "backend": {
-      "passed": 628,
+      "passed": 629,
       "failed": 0,
       "skipped": 0
     },
     "frontendUnit": {
-      "passed": 145,
+      "passed": 155,
       "failed": 0,
       "skipped": 0
     },
@@ -60,7 +60,7 @@
     "crashPoints": {
       "runs": 6,
       "passed": 6,
-      "sourceCommit": "cdd443439dc5fe37d00bf98a4520eff37ab679ad",
+      "sourceCommit": "bea29f07fec2bf1895e5ce874b2b8d78c73561ac",
       "command": "python -m unittest -v tests.test_loop_mock.LoopTestCase.test_08_restart_recovery_requires_explicit_resume tests.test_missions_api.MissionsApiTestCase.test_08_restart_recovery_surfaced tests.test_playwright_driver.PlaywrightDriverTest.test_startup_failure_is_evicted_and_factory_recovers tests.test_transport_session_isolation.MissionPersistenceFailureTest.test_sqlite_update_failure_fails_mission_and_releases_exact_lease tests.test_transport_session_isolation.MissionRouteSessionIsolationTest.test_runtime_construction_failure_fails_creation_and_releases_lease tests.test_transport_session_isolation.MissionStopQuiescenceTest.test_cancel_keeps_slot_until_browser_and_background_task_quiesce",
       "evidenceArtifact": "docs/verification/v0.5.3-crash-points.txt",
       "points": [
@@ -183,7 +183,7 @@
   },
   "artifacts": {
     "VERSION": "27ecff1fcdaf65ab46c1bb99c1072d6d134a0e8dd97dd95cfa88696b9ed453b2",
-    "frontend/out/index.html": "e44951363f573d1d046a06a0a1a1bb66cb89aca673b0e9d3c255dd91050c967f",
+    "frontend/out/index.html": "24b764e403070652ffccd827688258de1aec5378cd9a2d262e85f0ec75304932",
     "chrome-extension/manifest.json": "06711c4fee1fe4efb5188991acf76b0aa9182b28ce6f82717f5d811af6125a00",
     "transport/macos_ax_send.swift": "57dd28186ec49cdbf9292f0dfdbb71be26230f67e1e241dbf5e63bb3472a7257",
     "docs/freebuff-installation.md": "06b00c6dba85eece6f86e06e046e217b848864ab81808fe315db8e2584f2c5b1",
