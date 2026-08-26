@@ -9,8 +9,9 @@ Current state: 2026-08-26. Read this file with `README.md`,
 - Canonical version: **0.5.3** in `VERSION`, Python metadata, frontend package
   and lock, Chrome manifest and installer metadata.
 - Canonical remote: `origin`; default branch: `main`; rebase base: `3bb2cdb`.
-- The branch is unpublished. Push, tag and release require the owner's explicit
-  approval after the final diff and manifest are shown.
+- The branch is published at `origin/codex/critical-qa`. `main` is unchanged.
+  Opening a pull request, tagging and publishing a release remain separate
+  external actions that require the owner's explicit approval.
 
 ## Product invariants
 
@@ -84,6 +85,6 @@ Current state: 2026-08-26. Read this file with `README.md`,
 
 ## Next exact action
 
-Show the exact final branch state and obtain the owner's explicit approval to
-push `codex/critical-qa`. Tagging and publishing a GitHub release remain
-separate external actions that require separate approval.
+Keep the published candidate unchanged until the owner explicitly chooses to
+open a pull request, merge it, tag it or publish a GitHub release. Windows v0.6
+design work must use a separate branch after its architecture is approved.
