@@ -59,6 +59,20 @@ class CiContractTest(unittest.TestCase):
 
         self.assertIn(".venv/bin/python -m playwright install chromium", source)
 
+    def test_release_history_checks_fetch_the_parent_commit(self):
+        source = WORKFLOWS[0].read_text(encoding="utf-8")
+
+        for job in ("backend", "release-gates"):
+            with self.subTest(job=job):
+                match = re.search(
+                    rf"^  {re.escape(job)}:\n(?P<body>.*?)(?=^  [a-z][a-z-]+:\n|\Z)",
+                    source,
+                    re.MULTILINE | re.DOTALL,
+                )
+                self.assertIsNotNone(match)
+                assert match is not None
+                self.assertIn("fetch-depth: 2", match.group("body"))
+
     def test_test_all_resolves_relative_python_before_frontend_subshell(self):
         source = (ROOT / "scripts/test-all.sh").read_text(encoding="utf-8")
 

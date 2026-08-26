@@ -91,9 +91,9 @@ Current state: 2026-08-26. Read this file with `README.md`,
   global stop and distinguishes executor availability from actual use.
 - Proof: 155/155 frontend, 33/33 runtime/privacy, typecheck, lint, canonical
   build, live scoped API, anonymized Chrome capture and zero console issues.
-- Duplicate and inspector fixes are published on `codex/critical-qa`.
-  Resealing remains independent.
+- PR #13 has green frontend/public-tree checks; its shallow-checkout backend
+  failure is corrected on the branch. Resealing remains independent.
 
 ## Next exact action
 
-Keep `main` unchanged; wait for PR #13 CI. Reseal, merge, tag and release separately.
+Keep `main` unchanged; wait for PR #13 rerun. Reseal, merge, tag and release separately.
