@@ -9,9 +9,8 @@ Current state: 2026-08-26. Read this file with `README.md`,
 - Canonical version: **0.5.3** in `VERSION`, Python metadata, frontend package
   and lock, Chrome manifest and installer metadata.
 - Canonical remote: `origin`; default branch: `main`; rebase base: `3bb2cdb`.
-- The branch is published at `origin/codex/critical-qa`. `main` is unchanged.
-  Opening a pull request, tagging and publishing a release remain separate
-  external actions that require the owner's explicit approval.
+- The branch is published at `origin/codex/critical-qa`; PR #13 targets `main`.
+  `main` is unchanged. Merge, tag and release still require explicit approval.
 
 ## Product invariants
 
@@ -97,4 +96,4 @@ Current state: 2026-08-26. Read this file with `README.md`,
 
 ## Next exact action
 
-Keep `main` unchanged. Reseal, PR, merge, tag and release separately.
+Keep `main` unchanged; wait for PR #13 CI. Reseal, merge, tag and release separately.
