@@ -44,7 +44,7 @@ Current state: 2026-08-26. Read this file with `README.md`,
 
 ## Fresh v0.5.3 evidence
 
-- Backend: 628/628. Extension: 126/126. Mapped crash recovery: 6/6;
+- Backend: 629/629. Extension: 126/126. Mapped crash recovery: 6/6;
   dedicated Chrome recovery/anti-replay: 6/6.
 - Frontend: 155/155 unit and 33/33 runtime/privacy; typecheck, lint and build pass.
 - Browser fixtures: 12 pass, one intentional guide-generation skip; a11y 4/4
@@ -91,9 +91,9 @@ Current state: 2026-08-26. Read this file with `README.md`,
   global stop and distinguishes executor availability from actual use.
 - Proof: 155/155 frontend, 33/33 runtime/privacy, typecheck, lint, canonical
   build, live scoped API, anonymized Chrome capture and zero console issues.
-- PR #13 has green frontend/public-tree checks; its shallow-checkout backend
-  failure is corrected on the branch. Resealing remains independent.
+- PR #13 keeps source changes and the authorized manifest reseal in separate
+  commits. Its release gate fetches full history to verify the exact source.
 
 ## Next exact action
 
-Keep `main` unchanged; wait for PR #13 rerun. Reseal, merge, tag and release separately.
+Keep `main` unchanged. Review PR #13 after every check is green; merge, tag and release remain separately approved actions.
