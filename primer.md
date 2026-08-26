@@ -92,9 +92,9 @@ Current state: 2026-08-26. Read this file with `README.md`,
   global stop and distinguishes executor availability from actual use.
 - Proof: 155/155 frontend, 33/33 runtime/privacy, typecheck, lint, canonical
   build, live scoped API, anonymized Chrome capture and zero console issues.
-- Duplicate fix is published on the branch; inspector commit stays local until
-  explicit push approval. Resealing remains independent.
+- Duplicate and inspector fixes are published on `codex/critical-qa`.
+  Resealing remains independent.
 
 ## Next exact action
 
-Keep `main` unchanged; push only after approval. Reseal, PR, merge, tag and release separately.
+Keep `main` unchanged. Reseal, PR, merge, tag and release separately.
