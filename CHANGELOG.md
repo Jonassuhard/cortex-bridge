@@ -18,6 +18,8 @@ All notable changes are recorded here.
 - The extension self-heals its connection: a Chrome alarm wakes the service
   worker every 30 seconds and reconnects to the console after a console
   restart (new `alarms` permission).
+- `cortex.sh selftest` runs a 4-step self-diagnostic (server, extension
+  pairing, DOM probe, version consistency) and reports results in French.
 
 ### Changed
 
