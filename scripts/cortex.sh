@@ -198,7 +198,130 @@ case "$COMMAND" in
     exec tail -f "$LOG_FILE"
     ;;
 
+  go)
+    # Lancement complet en une commande : serveur + Chrome + console + guidage.
+    bash "$ROOT/scripts/cortex.sh" start || exit 1
+    CONSOLE_URL="http://127.0.0.1:$PORT/"
+
+    # Profil Chrome qui porte l'extension Cortex (défaut : dernier profil actif).
+    CHROME_PROFILE="$("$PYTHON" - <<'PYEOF'
+import json, pathlib, sys
+base = pathlib.Path.home() / "Library/Application Support/Google/Chrome"
+found = None
+try:
+    state = json.loads((base / "Local State").read_text())
+    last = state.get("profile", {}).get("last_used") or "Default"
+except Exception:
+    last = "Default"
+for sp in sorted(base.glob("*/Secure Preferences")):
+    try:
+        data = json.loads(sp.read_text())
+    except Exception:
+        continue
+    for ext in (data.get("extensions", {}) or {}).get("settings", {}).values():
+        if "cortex" in json.dumps(ext).lower():
+            found = sp.parent.name
+            break
+    if found:
+        break
+print(found or last)
+PYEOF
+)"
+
+    if pgrep -x "Google Chrome" >/dev/null 2>&1; then
+      open -a "Google Chrome" "$CONSOLE_URL"
+    else
+      open -a "Google Chrome" --args --profile-directory="$CHROME_PROFILE" "$CONSOLE_URL"
+    fi
+
+    echo
+    echo "Cortex Bridge est prêt : $CONSOLE_URL"
+    echo "Profil Chrome utilisé : $CHROME_PROFILE"
+    echo
+    echo "Étapes dans l'onglet Cortex qui vient de s'ouvrir :"
+    echo "  1. L'extension se couple automatiquement à la console (aucun code à copier)."
+    echo "  2. Clique « Ouvrir ChatGPT » : l'onglet ChatGPT rejoint le même groupe d'onglets."
+    echo "  3. Écris ta tâche dans le chat : ChatGPT propose, tu valides, Cortex exécute."
+    echo
+    echo "Vérifier l'installation : scripts/cortex.sh doctor"
+    echo "Auto-test complet : scripts/cortex.sh selftest"
+    echo "Tout arrêter proprement : scripts/cortex.sh stop"
+    ;;
+
+  selftest)
+    # Auto-diagnostic complet : vérifie serveur, extension, protocole, DOM.
+    FAIL=0
+    VERSION=""
+    echo "=== Cortex Bridge — auto-test ==="
+    echo
+
+    # 1. Serveur
+    echo -n "[1/4] Serveur en écoute sur le port $PORT... "
+    STATUS_JSON=$(curl -sf --max-time 3 "http://127.0.0.1:$PORT/api/status" 2>/dev/null || true)
+    if [ -z "$STATUS_JSON" ]; then
+      echo "ÉCHEC — serveur non accessible. Lance scripts/cortex.sh start d'abord."
+      FAIL=1
+    else
+      VERSION=$(_json_field "$STATUS_JSON" version)
+      RUNTIME=$(_json_field "$STATUS_JSON" runtime_mode)
+      echo "OK (version $VERSION, runtime=$RUNTIME)"
+    fi
+
+    # 2. Extension
+    echo -n "[2/4] Extension Chrome couplée... "
+    EXT_JSON=$(curl -sf --max-time 3 "http://127.0.0.1:$PORT/api/chrome-extension/status" 2>/dev/null || true)
+    if [ -z "$EXT_JSON" ]; then
+      echo "ÉCHEC — impossible de lire le statut extension."
+      FAIL=1
+    else
+      EXT_STATE=$(_json_field "$EXT_JSON" state)
+      EXT_PAIRED=$(_json_field "$EXT_JSON" paired)
+      if [ "$EXT_STATE" = "paired" ] || [ "$EXT_PAIRED" = "True" ]; then
+        echo "OK (état: $EXT_STATE)"
+      else
+        echo "ATTENTION — état: $EXT_STATE (pas encore couplée)"
+        echo "  → Ouvre la console dans Chrome, l'extension se couple automatiquement."
+        FAIL=1
+      fi
+    fi
+
+    # 3. DOM ChatGPT (probe) — seulement si extension couplée
+    echo -n "[3/4] Probe DOM ChatGPT... "
+    PROBE_JSON=$(curl -sf --max-time 10 "http://127.0.0.1:$PORT/api/transport/probe" 2>/dev/null || true)
+    if [ -z "$PROBE_JSON" ]; then
+      echo "ATTENTION — probe indisponible (extension peut-être pas couplée ou onglet ChatGPT absent)."
+      echo "  → Ouvre un onglet ChatGPT via « Ouvrir ChatGPT » dans la console."
+    else
+      FAILURES=$(_json_field "$PROBE_JSON" failures)
+      COMPOSER=$(_json_field "$PROBE_JSON" composer)
+      if [ "$FAILURES" = "[]" ] || [ -z "$FAILURES" ]; then
+        echo "OK (composer=$COMPOSER)"
+      else
+        echo "ATTENTION — failures: $FAILURES"
+      fi
+    fi
+
+    # 4. Version
+    echo -n "[4/4] Cohérence version... "
+    REPO_VERSION=$(cat "$ROOT/VERSION" 2>/dev/null || echo "inconnue")
+    if [ -n "$VERSION" ] && [ "$VERSION" = "$REPO_VERSION" ]; then
+      echo "OK ($VERSION)"
+    elif [ -z "$VERSION" ]; then
+      echo "IGNORÉ — serveur non disponible, impossible de vérifier."
+    else
+      echo "ATTENTION — VERSION=$REPO_VERSION mais serveur=$VERSION"
+    fi
+
+    echo
+    if [ "$FAIL" -eq 0 ]; then
+      echo "✅ Tous les tests sont passés — Cortex Bridge est opérationnel."
+    else
+      echo "⚠️  Certains tests ont échoué. Corrige les points signalés ci-dessus."
+    fi
+    exit "$FAIL"
+    ;;
+
   help|--help|-h|*)
-    echo "Usage: scripts/cortex.sh {start|stop|status [--json]|doctor [--json]|logs}"
+    echo "Usage: scripts/cortex.sh {go|start|stop|status [--json]|doctor [--json]|selftest|logs}"
     ;;
 esac

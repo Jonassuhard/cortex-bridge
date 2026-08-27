@@ -52,6 +52,64 @@ function requireCortexTab(cortexTab) {
   return cortexTab;
 }
 
+export const CORTEX_GROUP_TITLE = "Cortex Bridge";
+export const CORTEX_GROUP_COLOR = "blue";
+
+// Regroupe l'onglet console et les onglets ChatGPT pilotés dans un même
+// groupe d'onglets Chrome « Cortex Bridge ». Jamais bloquant : tout échec
+// (onglet fermé, API indisponible) est ignoré pour ne pas casser une commande.
+export async function ensureCortexTabGroup(chromeApi, cortexTab, tabIds = []) {
+  try {
+    if (!chromeApi?.tabs?.group || !chromeApi?.tabGroups?.update) return null;
+    const ids = new Set();
+    if (Number.isInteger(cortexTab?.id)) ids.add(cortexTab.id);
+    for (const id of tabIds) {
+      if (Number.isInteger(id)) ids.add(id);
+    }
+    if (!ids.size) return null;
+    const tabs = [];
+    for (const id of ids) {
+      try {
+        const tab = await chromeApi.tabs.get(id);
+        if (tab?.windowId != null) tabs.push(tab);
+      } catch {
+        // onglet fermé entre-temps : ignoré
+      }
+    }
+    if (!tabs.length) return null;
+    const windowId = cortexTab?.windowId ?? tabs[0].windowId;
+    const inWindow = tabs.filter((tab) => tab.windowId === windowId);
+    if (!inWindow.length) return null;
+
+    let groupId = inWindow.find((tab) => Number.isInteger(tab.groupId) && tab.groupId >= 0)?.groupId;
+    if (!Number.isInteger(groupId) && chromeApi.tabGroups.query) {
+      try {
+        const groups = await chromeApi.tabGroups.query({ title: CORTEX_GROUP_TITLE, windowId });
+        if (groups.length) groupId = groups[0].id;
+      } catch {
+        // recherche impossible : on créera un nouveau groupe
+      }
+    }
+    const tabIdsInWindow = inWindow.map((tab) => tab.id);
+    if (Number.isInteger(groupId)) {
+      await chromeApi.tabs.group({ tabIds: tabIdsInWindow, groupId });
+    } else {
+      groupId = await chromeApi.tabs.group({
+        tabIds: tabIdsInWindow,
+        createProperties: { windowId },
+      });
+    }
+    await chromeApi.tabGroups.update(groupId, {
+      title: CORTEX_GROUP_TITLE,
+      color: CORTEX_GROUP_COLOR,
+      collapsed: false,
+    });
+    return groupId;
+  } catch {
+    return null;
+  }
+}
+
 function comparableChatGPTUrl(rawUrl) {
   try {
     const url = new URL(rawUrl);
@@ -1370,6 +1428,7 @@ async function openForSessionUnlocked(
     try {
       const current = await context.chrome.tabs.get(currentTabId);
       if (focus) await context.chrome.tabs.update(currentTabId, { active: true });
+      void ensureCortexTabGroup(context.chrome, context.cortexTab, [currentTabId]);
       return {
         tab_id: currentTabId,
         window_id: current.windowId,
@@ -1391,6 +1450,7 @@ async function openForSessionUnlocked(
       throw new ExtensionCommandError("TAB_UNAVAILABLE", "Chrome did not create a ChatGPT tab");
     }
     context.sessionTabs.set(session, tab.id);
+    void ensureCortexTabGroup(context.chrome, context.cortexTab, [tab.id]);
     return {
       tab_id: tab.id,
       window_id: tab.windowId,
@@ -1419,6 +1479,7 @@ async function openForSessionUnlocked(
     throw new ExtensionCommandError("TAB_UNAVAILABLE", "Chrome did not create a ChatGPT tab");
   }
   context.sessionTabs.set(session, tab.id);
+  void ensureCortexTabGroup(context.chrome, context.cortexTab, [tab.id]);
   return {
     tab_id: tab.id,
     window_id: tab.windowId,

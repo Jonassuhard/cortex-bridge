@@ -344,6 +344,7 @@ export function CortexApp() {
   const [ollamaModels, setOllamaModels] = useState<OllamaModelInfo[]>([]);
   const [chatgptModels, setChatGPTModels] = useState<ChatGPTModelInfo[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [guideOpen, setGuideOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTabId>("general");
   const [historyOpen, setHistoryOpen] = useState(false);
   const [capabilities, setCapabilities] = useState<TransportCapabilities>(() => normalizeTransportCapabilities({}));
@@ -563,6 +564,51 @@ export function CortexApp() {
     window.sessionStorage.removeItem(PAIR_AFTER_EXTENSION_RELOAD_KEY);
     void openChatGPTProfile();
   }, [openChatGPTProfile]);
+
+  // Couplage automatique : si l'extension est détectée mais non appairée au
+  // chargement de la console, on enchaîne le handshake sans clic. Le bouton
+  // manuel reste disponible en secours.
+  const autoPairAttemptedRef = useRef(false);
+  useEffect(() => {
+    if (autoPairAttemptedRef.current) return;
+    autoPairAttemptedRef.current = true;
+    let cancelled = false;
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const status = await api<ChromeExtensionStatus>(
+          "/api/chrome-extension/status",
+          { signal: controller.signal },
+        );
+        if (cancelled || status.paired || status.state !== "extension_detected") return;
+        const pairing = await postJson<ChromeExtensionPairing>(
+          "/api/chrome-extension/pairing",
+          {},
+          { signal: controller.signal },
+        );
+        if (cancelled) return;
+        window.postMessage(
+          {
+            source: "cortex-bridge-ui",
+            type: "CORTEX_PAIR_EXTENSION",
+            token: pairing.token,
+          },
+          window.location.origin,
+        );
+        const paired = await waitForExtensionPairing(
+          Date.now() + EXTENSION_PAIRING_DEADLINE_MS,
+          controller.signal,
+        );
+        if (paired && !cancelled) void refreshRuntime();
+      } catch {
+        // silencieux : la connexion manuelle reste possible
+      }
+    })();
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [refreshRuntime, waitForExtensionPairing]);
 
   const refreshPipeline = useCallback(async () => {
     const key = conversationStateRef.current.selectedKey;
@@ -1136,6 +1182,7 @@ export function CortexApp() {
         onNewConversation={() => newConversation()}
         onOpenSettings={() => openSettings()}
         onOpenHistory={() => setHistoryOpen(true)}
+        onOpenGuide={() => setGuideOpen(true)}
       />
 
       <ChatWorkspace
@@ -1224,6 +1271,8 @@ export function CortexApp() {
         <OnboardingPanel
           onOpenSettings={() => openSettings()}
           onOpenChatGPTProfile={openChatGPTProfile}
+          forceOpen={guideOpen}
+          onCloseGuide={() => setGuideOpen(false)}
         />
       )}
 

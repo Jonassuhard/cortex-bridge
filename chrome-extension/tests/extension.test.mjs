@@ -7,8 +7,11 @@ import { runInNewContext } from "node:vm";
 
 import {
   ALLOWED_COMMANDS,
+  CORTEX_GROUP_COLOR,
+  CORTEX_GROUP_TITLE,
   HEARTBEAT_INTERVAL_MS,
   captureTabViaDebuggerExactly,
+  ensureCortexTabGroup,
   findOrOpenChatGPTTab,
   restoreQuarantinedWriterTabs,
   routeCommand,
@@ -4377,7 +4380,7 @@ test("manifest limits hosts and requires Chrome 116", async () => {
     "http://127.0.0.1:8420/*",
     "https://chatgpt.com/*",
   ]);
-  assert.deepEqual(manifest.permissions, ["activeTab", "debugger", "scripting", "storage"]);
+  assert.deepEqual(manifest.permissions, ["activeTab", "alarms", "debugger", "scripting", "storage", "tabGroups"]);
   assert.equal(JSON.stringify(manifest).includes("<all_urls>"), false);
   assert.equal(JSON.stringify(manifest).includes("cookies"), false);
   assert.equal(JSON.stringify(manifest).includes("history"), false);
@@ -5135,4 +5138,95 @@ test("select_model confirms immediately when the requested model is already acti
 
   assert.equal(response.ok, true);
   assert.equal(response.result.selected, "Pro");
+});
+
+function fakeChromeWithTabs(tabs) {
+  const calls = { group: [], groupUpdate: [], groupQuery: [] };
+  const chrome = {
+    tabs: {
+      async get(id) {
+        const tab = tabs.find((candidate) => candidate.id === id);
+        if (!tab) throw new Error("No tab with id: " + id);
+        return tab;
+      },
+      async group(options) {
+        calls.group.push(options);
+        const groupId = options.groupId ?? 501;
+        for (const id of [options.tabIds].flat()) {
+          const tab = tabs.find((candidate) => candidate.id === id);
+          if (tab) tab.groupId = groupId;
+        }
+        return groupId;
+      },
+    },
+    tabGroups: {
+      async query(info) {
+        calls.groupQuery.push(info);
+        return [];
+      },
+      async update(groupId, props) {
+        calls.groupUpdate.push({ groupId, props });
+      },
+    },
+  };
+  return { chrome, calls };
+}
+
+test("ensureCortexTabGroup groups the console and ChatGPT tabs under one named group", async () => {
+  const tabs = [
+    { id: 10, windowId: 1, groupId: -1 },
+    { id: 11, windowId: 1, groupId: -1 },
+  ];
+  const { chrome, calls } = fakeChromeWithTabs(tabs);
+
+  const groupId = await ensureCortexTabGroup(chrome, { id: 10, windowId: 1 }, [11]);
+
+  assert.equal(groupId, 501);
+  assert.equal(calls.group.length, 1);
+  assert.deepEqual([calls.group[0].tabIds].flat().sort(), [10, 11]);
+  assert.equal(calls.groupUpdate.length, 1);
+  assert.equal(calls.groupUpdate[0].props.title, CORTEX_GROUP_TITLE);
+  assert.equal(calls.groupUpdate[0].props.color, CORTEX_GROUP_COLOR);
+  assert.equal(calls.groupUpdate[0].props.collapsed, false);
+});
+
+test("ensureCortexTabGroup reuses the group of an already grouped tab", async () => {
+  const tabs = [
+    { id: 10, windowId: 1, groupId: 77 },
+    { id: 12, windowId: 1, groupId: -1 },
+  ];
+  const { chrome, calls } = fakeChromeWithTabs(tabs);
+
+  const groupId = await ensureCortexTabGroup(chrome, { id: 10, windowId: 1 }, [12]);
+
+  assert.equal(groupId, 77);
+  assert.equal(calls.group[0].groupId, 77);
+  assert.equal(calls.groupQuery.length, 0);
+});
+
+test("ensureCortexTabGroup never breaks a command when tabs vanish or APIs are missing", async () => {
+  const tabs = [{ id: 10, windowId: 1, groupId: -1 }];
+  const { chrome } = fakeChromeWithTabs(tabs);
+
+  // onglet ChatGPT fermé entre-temps : seul l'onglet console est groupé
+  const groupId = await ensureCortexTabGroup(chrome, { id: 10, windowId: 1 }, [999]);
+  assert.equal(groupId, 501);
+
+  // API tabGroups absente : no-op silencieux
+  const partial = { tabs: chrome.tabs };
+  assert.equal(await ensureCortexTabGroup(partial, { id: 10, windowId: 1 }, []), null);
+
+  // sans onglet console valide ni onglet cible : no-op
+  assert.equal(await ensureCortexTabGroup(chrome, null, []), null);
+});
+
+test("service worker self-heals the console connection through a reconnect alarm", async () => {
+  const source = await readFile(join(EXTENSION_ROOT, "service-worker.js"), "utf8");
+
+  // L'alarme réveille le service worker même idle-killé et reconnecte :
+  // sans elle, un redémarrage de la console laissait l'extension morte.
+  assert.match(source, /const RECONNECT_ALARM = "cortex-bridge-reconnect";/);
+  assert.match(source, /chrome\.alarms\.create\(RECONNECT_ALARM, \{ periodInMinutes: 0\.5 \}\);/);
+  assert.match(source, /chrome\.alarms\.onAlarm\.addListener/);
+  assert.match(source, /if \(alarm\?\.name === RECONNECT_ALARM\) connect\(\);/);
 });

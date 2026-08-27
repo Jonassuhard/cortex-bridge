@@ -7,6 +7,7 @@ import {
   ArchiveIcon,
   ChevronDownIcon,
   ClockIcon,
+  InfoIcon,
   MenuIcon,
   MessageIcon,
   GlobeIcon,
@@ -29,6 +30,7 @@ interface ConversationSidebarProps {
   onNewConversation: () => void;
   onOpenSettings: () => void;
   onOpenHistory?: () => void;
+  onOpenGuide?: () => void;
 }
 
 function formatTimestamp(value?: string): string {
@@ -73,7 +75,7 @@ function ConversationRow({ conversation, selectedKey, onSelect }: {
   );
 }
 
-export function ConversationSidebar({ conversations, selectedKey, loading, collapsed, onCollapse, onSelect, onRefresh, onNewConversation, onOpenSettings, onOpenHistory }: ConversationSidebarProps) {
+export function ConversationSidebar({ conversations, selectedKey, loading, collapsed, onCollapse, onSelect, onRefresh, onNewConversation, onOpenSettings, onOpenHistory, onOpenGuide }: ConversationSidebarProps) {
   const [query, setQuery] = useState("");
   const filtered = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -94,6 +96,7 @@ export function ConversationSidebar({ conversations, selectedKey, loading, colla
           ))}
         </nav>
         <div className="collapsed-spacer" />
+        {onOpenGuide && <button className="sidebar-icon-button" onClick={onOpenGuide} title="Guide de démarrage" aria-label="Guide de démarrage"><InfoIcon /></button>}
         {onOpenHistory && <button className="sidebar-icon-button" onClick={onOpenHistory} title="Historique des missions" aria-label="Historique des missions"><ClockIcon /></button>}
         <button className="sidebar-icon-button" onClick={onOpenSettings} title="Paramètres" aria-label="Paramètres"><SettingsIcon /></button>
       </aside>
@@ -133,6 +136,7 @@ export function ConversationSidebar({ conversations, selectedKey, loading, colla
       </nav>
       <button className="archived-button"><ArchiveIcon size={16} /><span>Conversations archivées</span></button>
       <div className="sidebar-bottom">
+        {onOpenGuide && <button className="settings-entry" onClick={onOpenGuide}><span className="settings-entry-icon"><InfoIcon /></span><span className="settings-entry-copy"><strong>Guide de démarrage</strong><small>Couplage, ChatGPT, première tâche</small></span><ChevronDownIcon size={15} /></button>}
         {onOpenHistory && <button className="history-entry" onClick={onOpenHistory}><span className="history-entry-icon"><ClockIcon /></span><span className="history-entry-copy"><strong>Historique</strong><small>Missions et exécutions passées</small></span><ChevronDownIcon size={15} /></button>}
         <button className="settings-entry" onClick={onOpenSettings}><span className="settings-entry-icon"><SettingsIcon /></span><span className="settings-entry-copy"><strong>Paramètres</strong><small>Modèles, permissions, transport</small></span><ChevronDownIcon size={15} /></button>
         <div className="account-row"><span className="account-avatar">CL</span><span><strong>Compte local</strong><small>Session locale</small></span></div>

@@ -1,6 +1,7 @@
 import {
   HEARTBEAT_INTERVAL_MS,
   captureTabViaDebuggerExactly,
+  ensureCortexTabGroup,
   forgetClosedTab,
   restoreQuarantinedWriterTabs,
   routeCommand,
@@ -8,6 +9,7 @@ import {
 import { commandError, createPairMessage, isChatGPTUrl } from "./protocol.js";
 
 const SOCKET_URL = "ws://127.0.0.1:8420/api/chrome-extension/ws";
+const RECONNECT_ALARM = "cortex-bridge-reconnect";
 const context = {
   chrome,
   cortexTab: null,
@@ -140,6 +142,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     windowId: sender.tab.windowId,
     index: sender.tab.index,
   };
+  void ensureCortexTabGroup(chrome, context.cortexTab);
   pendingPair = message.token;
   connect();
   if (send(createPairMessage(pendingPair))) {
@@ -152,6 +155,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 chrome.runtime.onStartup.addListener(connect);
 chrome.runtime.onInstalled.addListener(connect);
+chrome.alarms.create(RECONNECT_ALARM, { periodInMinutes: 0.5 });
+chrome.alarms.onAlarm.addListener((alarm) => {
+  // Self-heal after a console restart: the alarm wakes the service worker
+  // even when idle-killed, and connect() no-ops while the socket is alive.
+  if (alarm?.name === RECONNECT_ALARM) connect();
+});
 chrome.tabs.onRemoved.addListener((tabId) => {
   void forgetClosedTab(context, tabId);
 });

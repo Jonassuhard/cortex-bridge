@@ -2,8 +2,10 @@
 
 ## Connecter ChatGPT
 
-1. Ouvre l'interface : http://127.0.0.1:8420
-2. Clique **« Ouvrir et connecter ChatGPT »**.
+1. Lance `scripts/cortex.sh go` (ou double-clique `Cortex Bridge.command`) :
+   la console s'ouvre dans Chrome et l'extension se couple automatiquement.
+2. Clique **« Ouvrir ChatGPT »**. L'onglet ChatGPT rejoint le même groupe
+   d'onglets « Cortex Bridge » que la console.
 3. Chrome s'ouvre (ou se met au premier plan) sur ChatGPT. Si tu n'es pas
    connecté, connecte-toi — c'est ta session, Cortex ne touche ni mot de passe
    ni CAPTCHA.

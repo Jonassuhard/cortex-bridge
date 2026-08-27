@@ -204,7 +204,7 @@ describe("CortexApp conversation integration", () => {
     render(<CortexApp />);
 
     await user.click(
-      await screen.findByRole("button", { name: "Ouvrir le profil de connexion" }),
+      await screen.findByRole("button", { name: "Ouvrir ChatGPT" }),
     );
 
     await waitFor(() => {

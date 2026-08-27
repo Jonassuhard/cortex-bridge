@@ -140,9 +140,17 @@ The full set (12 screens × 3 viewports) lives in
 scripts/install-extension.sh                    # 3. Follow the Chrome extension guide
 ```
 
-Then double-click **`Cortex Bridge.command`**. The console starts and opens the
-interface. At any time, `scripts/cortex.sh doctor` reports what is missing and
-how to repair it.
+Then one command starts everything:
+
+```bash
+scripts/cortex.sh go    # or double-click "Cortex Bridge.command"
+```
+
+`go` starts the console, opens `http://127.0.0.1:8420` in the Chrome profile
+that carries the extension, and prints the next steps. The extension pairs with
+the console automatically (no code to copy), and the Cortex and ChatGPT tabs
+share one **Cortex Bridge** tab group. At any time, `scripts/cortex.sh doctor`
+reports what is missing and how to repair it.
 
 French guides: [getting started](docs/fr/DEMARRAGE.md) ·
 [usage](docs/fr/UTILISATION.md) · [updating](docs/fr/MISE-A-JOUR.md) ·
@@ -157,8 +165,10 @@ current terms and privacy policy before sharing the repository.
 ## What v0.5 does
 
 - Uses the person's existing Google Chrome profile through a packaged local
-  extension; Cortex and ChatGPT stay in the same Chrome window.
-- Opens or focuses `https://chatgpt.com/` with **Open and connect ChatGPT**,
+  extension; Cortex and ChatGPT stay in the same Chrome window and in one
+  shared **Cortex Bridge** tab group. The extension pairs with the console
+  automatically on load.
+- Opens or focuses `https://chatgpt.com/` with **Ouvrir ChatGPT**,
   then verifies login, CAPTCHA, loading, composer, and tab state.
 - Loads at most the latest 50 conversations and groups exposed Pinned,
   Projects, and Recent metadata without inventing it.
@@ -223,11 +233,12 @@ Chrome requires one explicit manual step for an unpacked local extension:
 2. enable **Developer mode**;
 3. choose **Load unpacked**;
 4. select the absolute `chrome_extension_path` printed by the installer;
-5. start Cortex and open `http://127.0.0.1:8420` in that Chrome window;
-6. press **Open and connect ChatGPT**.
+5. run `scripts/cortex.sh go`: it starts Cortex and opens the console tab in
+   that Chrome profile — the extension then pairs automatically;
+6. press **Ouvrir ChatGPT** ("Open ChatGPT").
 
 ```bash
-./scripts/cortex.sh start
+scripts/cortex.sh go
 ```
 
 Before the first file send, run `./scripts/cortex.sh doctor --json` and check

@@ -19,7 +19,7 @@ class VersionConsistencyTest(unittest.TestCase):
 
         canonical = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
         metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-        self.assertEqual(canonical, "0.5.3")
+        self.assertEqual(canonical, "0.5.4")
         self.assertEqual(metadata["project"]["version"], canonical)
         self.assertEqual(current_version(), canonical)
 
@@ -100,7 +100,7 @@ class VersionConsistencyTest(unittest.TestCase):
                     (
                         "import asyncio,server; "
                         "assert callable(server.main); "
-                        "assert asyncio.run(server.status())['version'] == '0.5.3'"
+                        "assert asyncio.run(server.status())['version'] == '0.5.4'"
                     ),
                 ],
                 cwd=ROOT,
