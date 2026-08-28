@@ -748,6 +748,150 @@ _json_field() {
   "$PYTHON" -c 'import json,sys; value=json.loads(sys.argv[1]).get(sys.argv[2]); print("" if value is None else value)' "$payload" "$field"
 }
 
+_selftest_probe_fields() {
+  local payload="$1"
+  "$PYTHON" -c '
+import json
+import sys
+import unicodedata
+
+try:
+    document = json.loads(sys.argv[1])
+except (json.JSONDecodeError, TypeError):
+    raise SystemExit(2)
+if not isinstance(document, dict):
+    raise SystemExit(2)
+ok = document.get("ok")
+composer = document.get("composer_present")
+send_button = document.get("send_button_present")
+blocker = document.get("blocker")
+failures = document.get("failures")
+has_control = lambda value: any(
+    unicodedata.category(character).startswith("C") for character in value
+)
+if (
+    type(ok) is not bool
+    or type(composer) is not bool
+    or type(send_button) is not bool
+    or "blocker" not in document
+    or (
+        blocker is not None
+        and (
+            not isinstance(blocker, str)
+            or not blocker
+            or has_control(blocker)
+        )
+    )
+    or not isinstance(failures, list)
+    or any(
+        not isinstance(item, str) or not item or has_control(item)
+        for item in failures
+    )
+):
+    raise SystemExit(2)
+print(
+    ("True" if ok else "False")
+    + "\t"
+    + ("True" if composer else "False")
+    + "\t"
+    + ("True" if send_button else "False")
+    + "\t"
+    + json.dumps(blocker, ensure_ascii=False, separators=(",", ":"))
+    + "\t"
+    + json.dumps(failures, ensure_ascii=False, separators=(",", ":"))
+)
+' "$payload"
+}
+
+_selftest_status_fields() {
+  local payload="$1"
+  "$PYTHON" -c '
+import json
+import sys
+import unicodedata
+
+try:
+    document = json.loads(sys.argv[1])
+except (json.JSONDecodeError, TypeError):
+    raise SystemExit(2)
+if not isinstance(document, dict):
+    raise SystemExit(2)
+version = document.get("version")
+runtime = document.get("runtime_mode")
+has_control = lambda value: any(
+    unicodedata.category(character).startswith("C") for character in value
+)
+if (
+    not isinstance(version, str)
+    or not version
+    or not isinstance(runtime, str)
+    or not runtime
+    or has_control(version)
+    or has_control(runtime)
+):
+    raise SystemExit(2)
+print(version + "\t" + runtime)
+' "$payload"
+}
+
+_selftest_extension_fields() {
+  local payload="$1"
+  "$PYTHON" -c '
+import json
+import sys
+import unicodedata
+
+try:
+    document = json.loads(sys.argv[1])
+except (json.JSONDecodeError, TypeError):
+    raise SystemExit(2)
+if not isinstance(document, dict):
+    raise SystemExit(2)
+state = document.get("state")
+paired = document.get("paired")
+connected = document.get("extension_connected")
+compatible = document.get("protocol_compatible")
+extension_version = document.get("extension_protocol_version")
+required_version = document.get("required_protocol_version")
+has_control = lambda value: any(
+    unicodedata.category(character).startswith("C") for character in value
+)
+if (
+    not isinstance(state, str)
+    or not state
+    or has_control(state)
+    or type(paired) is not bool
+    or type(connected) is not bool
+    or (compatible is not None and type(compatible) is not bool)
+    or (extension_version is not None and type(extension_version) is not int)
+    or type(required_version) is not int
+):
+    raise SystemExit(2)
+print(
+    state
+    + "\t"
+    + ("True" if paired else "False")
+    + "\t"
+    + ("True" if connected else "False")
+    + "\t"
+    + ("None" if compatible is None else ("True" if compatible else "False"))
+    + "\t"
+    + ("None" if extension_version is None else str(extension_version))
+    + "\t"
+    + str(required_version)
+    + "\t"
+    + (
+        "True"
+        if type(extension_version) is int
+        and extension_version >= 1
+        and required_version >= 1
+        and extension_version == required_version
+        else "False"
+    )
+)
+' "$payload"
+}
+
 _port_pid() {
   lsof -nP -iTCP:"$PORT" -sTCP:LISTEN -t 2>/dev/null | head -1 || true
 }
@@ -1717,10 +1861,17 @@ PYEOF
     if [ -z "$STATUS_JSON" ]; then
       echo "ÉCHEC — serveur non accessible. Lance scripts/cortex.sh start d'abord."
       FAIL=1
+    elif ! STATUS_FIELDS=$(_selftest_status_fields "$STATUS_JSON" 2>/dev/null); then
+      echo "ÉCHEC — réponse serveur invalide."
+      FAIL=1
     else
-      VERSION=$(_json_field "$STATUS_JSON" version)
-      RUNTIME=$(_json_field "$STATUS_JSON" runtime_mode)
-      echo "OK (version $VERSION, runtime=$RUNTIME)"
+      IFS=$'\t' read -r VERSION RUNTIME <<< "$STATUS_FIELDS"
+      if [ "$RUNTIME" = "live" ]; then
+        echo "OK (version $VERSION, runtime=$RUNTIME)"
+      else
+        echo "ÉCHEC — runtime non live: $RUNTIME."
+        FAIL=1
+      fi
     fi
 
     # 2. Extension
@@ -1729,13 +1880,19 @@ PYEOF
     if [ -z "$EXT_JSON" ]; then
       echo "ÉCHEC — impossible de lire le statut extension."
       FAIL=1
+    elif ! EXT_FIELDS=$(_selftest_extension_fields "$EXT_JSON" 2>/dev/null); then
+      echo "ÉCHEC — réponse extension invalide."
+      FAIL=1
     else
-      EXT_STATE=$(_json_field "$EXT_JSON" state)
-      EXT_PAIRED=$(_json_field "$EXT_JSON" paired)
-      if [ "$EXT_STATE" = "paired" ] || [ "$EXT_PAIRED" = "True" ]; then
-        echo "OK (état: $EXT_STATE)"
+      IFS=$'\t' read -r EXT_STATE EXT_PAIRED EXT_CONNECTED EXT_PROTOCOL EXT_PROTOCOL_VERSION REQUIRED_PROTOCOL_VERSION PROTOCOL_VERSIONS_READY <<< "$EXT_FIELDS"
+      if [ "$EXT_STATE" = "paired" ] \
+        && [ "$EXT_PAIRED" = "True" ] \
+        && [ "$EXT_CONNECTED" = "True" ] \
+        && [ "$EXT_PROTOCOL" = "True" ] \
+        && [ "$PROTOCOL_VERSIONS_READY" = "True" ]; then
+        echo "OK (état: $EXT_STATE, protocole v$EXT_PROTOCOL_VERSION)"
       else
-        echo "ATTENTION — état: $EXT_STATE (pas encore couplée)"
+        echo "ÉCHEC — extension non prête (état=$EXT_STATE, connectée=$EXT_CONNECTED, protocole=$EXT_PROTOCOL, versions=$EXT_PROTOCOL_VERSION/$REQUIRED_PROTOCOL_VERSION)."
         echo "  → Ouvre la console dans Chrome, l'extension se couple automatiquement."
         FAIL=1
       fi
@@ -1747,13 +1904,31 @@ PYEOF
     if [ -z "$PROBE_JSON" ]; then
       echo "ATTENTION — probe indisponible (extension peut-être pas couplée ou onglet ChatGPT absent)."
       echo "  → Ouvre un onglet ChatGPT via « Ouvrir ChatGPT » dans la console."
+      FAIL=1
     else
-      FAILURES=$(_json_field "$PROBE_JSON" failures)
-      COMPOSER=$(_json_field "$PROBE_JSON" composer)
-      if [ "$FAILURES" = "[]" ] || [ -z "$FAILURES" ]; then
-        echo "OK (composer=$COMPOSER)"
+      if ! PROBE_FIELDS=$(_selftest_probe_fields "$PROBE_JSON" 2>/dev/null); then
+        echo "ÉCHEC — réponse probe invalide."
+        FAIL=1
       else
-        echo "ATTENTION — failures: $FAILURES"
+        IFS=$'\t' read -r PROBE_OK COMPOSER SEND_BUTTON BLOCKER FAILURES <<< "$PROBE_FIELDS"
+        if [ "$FAILURES" != "[]" ]; then
+          echo "ATTENTION — failures: $FAILURES"
+          FAIL=1
+        elif [ "$BLOCKER" != "null" ]; then
+          echo "ÉCHEC — blocage ChatGPT: $BLOCKER."
+          FAIL=1
+        elif [ "$PROBE_OK" != "True" ]; then
+          echo "ÉCHEC — probe déclaré non opérationnel."
+          FAIL=1
+        elif [ "$COMPOSER" != "True" ]; then
+          echo "ÉCHEC — composer ChatGPT absent."
+          FAIL=1
+        elif [ "$SEND_BUTTON" != "True" ]; then
+          echo "ÉCHEC — bouton d’envoi ChatGPT absent."
+          FAIL=1
+        else
+          echo "OK (composer=$COMPOSER, envoi=$SEND_BUTTON)"
+        fi
       fi
     fi
 
@@ -1766,6 +1941,7 @@ PYEOF
       echo "IGNORÉ — serveur non disponible, impossible de vérifier."
     else
       echo "ATTENTION — VERSION=$REPO_VERSION mais serveur=$VERSION"
+      FAIL=1
     fi
 
     echo
