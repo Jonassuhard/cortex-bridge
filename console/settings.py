@@ -7,6 +7,7 @@ import os
 import re
 import hashlib
 import sqlite3
+import tempfile
 import time
 import uuid
 from dataclasses import asdict
@@ -148,11 +149,35 @@ def load_settings() -> dict[str, Any]:
 
 
 def save_settings(settings: dict[str, Any]) -> dict[str, Any]:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    if DATA_DIR.is_symlink():
+        raise RuntimeError(f"private runtime directory is unsafe: {DATA_DIR}")
+    DATA_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if not DATA_DIR.is_dir():
+        raise RuntimeError(f"private runtime directory is unsafe: {DATA_DIR}")
+    DATA_DIR.chmod(0o700, follow_symlinks=False)
     clean = {**DEFAULT_SETTINGS, **settings, "never_delete_files": True}
-    tmp = SETTINGS_FILE.with_suffix(".tmp")
-    tmp.write_text(json.dumps(clean, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(SETTINGS_FILE)
+    temporary_fd, temporary_raw = tempfile.mkstemp(
+        prefix=f".{SETTINGS_FILE.name}.",
+        dir=DATA_DIR,
+    )
+    temporary = Path(temporary_raw)
+    try:
+        with os.fdopen(temporary_fd, "w", encoding="utf-8") as stream:
+            json.dump(clean, stream, ensure_ascii=False, indent=2)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, SETTINGS_FILE)
+        SETTINGS_FILE.chmod(0o600, follow_symlinks=False)
+        directory_fd = os.open(
+            DATA_DIR,
+            os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0),
+        )
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        temporary.unlink(missing_ok=True)
     return clean
 
 

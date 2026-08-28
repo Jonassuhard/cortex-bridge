@@ -88,6 +88,14 @@ validated managed paths. The extension transfer limit is 25 MiB in v0.5.
 Screenshots must come from the visible bound ChatGPT tab and are written
 atomically under `CORTEX_HOME`.
 
+`CORTEX_HOME` is a dedicated local directory because it contains the Python
+environment, SQLite database, lifecycle locks and private control files. Large
+user-selected workspaces and rebuildable caches may point into a separately
+mounted encrypted APFS sparse bundle. A local bootstrap records the expected
+mount point, APFS volume UUID, encrypted image and storage root. Every official
+start verifies all four before launching; a missing or substituted volume
+fails closed.
+
 ## Process ownership and release boundary
 
 Lifecycle records include PID, start time, executable, argument hash, instance

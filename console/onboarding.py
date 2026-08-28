@@ -10,6 +10,8 @@ of the console so the panel always reflects reality.
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -26,8 +28,8 @@ import settings as settings_api
 
 router = APIRouter(prefix="/api")
 
-DATA_DIR = Path(__file__).resolve().parent / "data"
-MARKER_FILE = DATA_DIR / "onboarding-done.json"
+DATA_DIR = settings_api.RUNTIME_PATHS.home
+MARKER_FILE = settings_api.RUNTIME_PATHS.onboarding
 browser_driver_factory = create_browser_driver
 
 
@@ -233,10 +235,34 @@ def onboarding_completed() -> bool:
 
 
 def _set_completed(completed: bool) -> None:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    tmp = MARKER_FILE.with_suffix(".tmp")
-    tmp.write_text(json.dumps({"completed": completed}), encoding="utf-8")
-    tmp.replace(MARKER_FILE)
+    if DATA_DIR.is_symlink():
+        raise RuntimeError(f"private runtime directory is unsafe: {DATA_DIR}")
+    DATA_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if not DATA_DIR.is_dir():
+        raise RuntimeError(f"private runtime directory is unsafe: {DATA_DIR}")
+    DATA_DIR.chmod(0o700, follow_symlinks=False)
+    temporary_fd, temporary_raw = tempfile.mkstemp(
+        prefix=f".{MARKER_FILE.name}.",
+        dir=DATA_DIR,
+    )
+    temporary = Path(temporary_raw)
+    try:
+        with os.fdopen(temporary_fd, "w", encoding="utf-8") as stream:
+            json.dump({"completed": completed}, stream)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, MARKER_FILE)
+        MARKER_FILE.chmod(0o600, follow_symlinks=False)
+        directory_fd = os.open(
+            DATA_DIR,
+            os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0),
+        )
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _check(id_: str, label: str, ok: bool, detail: str, hint: str) -> dict[str, Any]:

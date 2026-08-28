@@ -9,7 +9,9 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import stat
 import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -27,18 +29,47 @@ from chat import router as chat_router
 from settings import router as settings_router
 from onboarding import router as onboarding_router
 from chrome_extension import router as chrome_extension_router
-from cortex_paths import build_paths, migrate_legacy_state
+from cortex_paths import (
+    FILE_FLAGS,
+    PRIVATE_FILE_MODE,
+    _ensure_private_directory,
+    _open_private_directory,
+    build_paths,
+    migrate_legacy_state,
+)
+from storage_guard import check_required_storage
 from version import current_version
 
 BASE_DIR = Path(__file__).resolve().parent
 RUNTIME_PATHS = build_paths()
-DATA_DIR = RUNTIME_PATHS.home
 STORE_FILE = RUNTIME_PATHS.iterations
 REPO_ROOT = BASE_DIR.parent
 FRONTEND_OUT = REPO_ROOT / "frontend" / "out"
 FRONTEND_FALLBACK = REPO_ROOT / "frontend" / "fallback"
 
-app = FastAPI(title="Cortex Bridge Console")
+
+@asynccontextmanager
+async def _application_lifespan(_: FastAPI):
+    """Enforce required external storage for every ASGI server startup."""
+    global _runtime_initialized
+    previous_umask: int | None = None
+    try:
+        storage_status = check_required_storage(RUNTIME_PATHS.home)
+        if storage_status != 0:
+            raise RuntimeError(
+                f"Required external storage guard denied startup with status {storage_status}."
+            )
+        previous_umask = os.umask(0o077)
+        _initialize_runtime()
+        yield
+    finally:
+        close_mission_store()
+        _runtime_initialized = False
+        if previous_umask is not None:
+            os.umask(previous_umask)
+
+
+app = FastAPI(title="Cortex Bridge Console", lifespan=_application_lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://127.0.0.1:3420", "http://localhost:3420"],
@@ -51,7 +82,6 @@ app.include_router(chat_router)
 app.include_router(settings_router)
 app.include_router(onboarding_router)
 app.include_router(chrome_extension_router)
-app.router.add_event_handler("shutdown", close_mission_store)
 
 if (FRONTEND_OUT / "_next").is_dir():
     app.mount("/_next", StaticFiles(directory=FRONTEND_OUT / "_next"), name="next-assets")
@@ -59,6 +89,7 @@ if (FRONTEND_OUT / "_next").is_dir():
 # ------------------------------------------------------------- persistence
 
 _iterations: list[dict] = []
+_runtime_initialized = False
 
 
 def _migrate_legacy_runtime() -> None:
@@ -66,7 +97,7 @@ def _migrate_legacy_runtime() -> None:
 
 
 def _load_store() -> None:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    _iterations.clear()
     if STORE_FILE.is_file():
         try:
             _iterations.extend(json.loads(STORE_FILE.read_text(encoding="utf-8")))
@@ -74,11 +105,65 @@ def _load_store() -> None:
             pass
 
 
+def _initialize_runtime() -> None:
+    global _runtime_initialized
+    if _runtime_initialized:
+        return
+    _migrate_legacy_runtime()
+    _load_store()
+    _runtime_initialized = True
+
+
 def _save_store() -> None:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    tmp = STORE_FILE.with_suffix(".tmp")
-    tmp.write_text(json.dumps(_iterations, indent=2), encoding="utf-8")
-    tmp.replace(STORE_FILE)
+    parent_details = _ensure_private_directory(STORE_FILE.parent)
+    parent_fd, opened_parent = _open_private_directory(
+        STORE_FILE.parent,
+        expected_device=parent_details.st_dev,
+        expected_inode=parent_details.st_ino,
+    )
+    temporary_name = f".{STORE_FILE.name}.{uuid.uuid4().hex}.tmp"
+    temporary_fd: int | None = None
+    try:
+        temporary_fd = os.open(
+            temporary_name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+            PRIVATE_FILE_MODE,
+            dir_fd=parent_fd,
+        )
+        with os.fdopen(temporary_fd, "w", encoding="utf-8") as stream:
+            temporary_fd = None
+            json.dump(_iterations, stream, indent=2)
+            stream.flush()
+            os.fchmod(stream.fileno(), PRIVATE_FILE_MODE)
+            os.fsync(stream.fileno())
+        os.replace(
+            temporary_name,
+            STORE_FILE.name,
+            src_dir_fd=parent_fd,
+            dst_dir_fd=parent_fd,
+        )
+        descriptor = os.open(STORE_FILE.name, FILE_FLAGS, dir_fd=parent_fd)
+        try:
+            details = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(details.st_mode)
+                or details.st_uid != os.getuid()
+                or details.st_dev != opened_parent.st_dev
+            ):
+                raise RuntimeError(f"private runtime file is unsafe: {STORE_FILE}")
+            os.fchmod(descriptor, PRIVATE_FILE_MODE)
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        os.fsync(parent_fd)
+    finally:
+        if temporary_fd is not None:
+            os.close(temporary_fd)
+        try:
+            os.unlink(temporary_name, dir_fd=parent_fd)
+        except FileNotFoundError:
+            pass
+        os.close(parent_fd)
 
 
 def _find(task_id: str) -> dict | None:
@@ -88,9 +173,6 @@ def _find(task_id: str) -> dict | None:
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
-
-_migrate_legacy_runtime()
-_load_store()
 
 # ----------------------------------------------------------------- schemas
 
@@ -165,6 +247,7 @@ async def status() -> dict:
 
 @app.post("/api/tasks", status_code=201)
 async def create_task(body: TaskIn) -> dict:
+    _initialize_runtime()
     if not body.goal.strip():
         raise HTTPException(status_code=422, detail="goal must not be empty")
     fixtures_allowed = os.environ.get(DEVELOPMENT_FIXTURE_ENV) == "1"
@@ -215,6 +298,7 @@ async def create_task(body: TaskIn) -> dict:
 
 @app.get("/api/tasks")
 async def list_tasks() -> list[dict]:
+    _initialize_runtime()
     return [
         {
             "id": it["id"],
@@ -232,6 +316,7 @@ async def list_tasks() -> list[dict]:
 
 @app.get("/api/tasks/{task_id}")
 async def get_task(task_id: str) -> dict:
+    _initialize_runtime()
     task = _find(task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="task not found")
@@ -240,6 +325,7 @@ async def get_task(task_id: str) -> dict:
 
 @app.post("/api/tasks/{task_id}/orchestrator-reply", status_code=201)
 async def orchestrator_reply(task_id: str, body: ReplyIn) -> dict:
+    _initialize_runtime()
     task = _find(task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="task not found")
@@ -253,6 +339,7 @@ async def orchestrator_reply(task_id: str, body: ReplyIn) -> dict:
 
 @app.get("/api/tasks/{task_id}/stream")
 async def stream_task(task_id: str) -> StreamingResponse:
+    _initialize_runtime()
     if _find(task_id) is None:
         raise HTTPException(status_code=404, detail="task not found")
 
@@ -298,7 +385,16 @@ async def frontend_fallback(full_path: str) -> FileResponse:
     raise HTTPException(status_code=404, detail="asset not found")
 
 
+def _configure_private_umask() -> None:
+    """Protect writes for direct CLI and installed console-script starts."""
+    os.umask(0o077)
+
+
 def main() -> None:
+    storage_status = check_required_storage(RUNTIME_PATHS.home)
+    if storage_status != 0:
+        raise SystemExit(storage_status)
+    _configure_private_umask()
     uvicorn.run(app, host="127.0.0.1", port=int(os.environ.get("PORT", 8420)), log_level="info")
 
 

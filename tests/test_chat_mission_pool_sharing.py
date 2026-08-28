@@ -366,7 +366,8 @@ class CrossRouteLeakRegressionTest(unittest.IsolatedAsyncioTestCase):
             capacity=2
         )
         chat_api.CHAT_RUNS_FILE = Path(self.tmp.name) / "chat-runs.json"
-        missions_api._store = Store(Path(self.tmp.name) / "missions.db")
+        self.test_mission_store = Store(Path(self.tmp.name) / "missions.db")
+        missions_api._store = self.test_mission_store
         chat_api._runs.clear()
         missions_api._runtimes.clear()
         missions_api._mission_leases.clear()
@@ -375,23 +376,38 @@ class CrossRouteLeakRegressionTest(unittest.IsolatedAsyncioTestCase):
         missions_api.optin_accepted = lambda: True
 
     async def asyncTearDown(self) -> None:
-        write_slots._registry = self.saved_registry
-        chat_api.ui_transport_factory = self.saved_chat_factory
-        chat_api.CHAT_RUNS_FILE = self.saved_chat_runs_file
-        chat_api._runs.clear()
-        chat_api._runs.update(self.saved_chat_runs)
-        missions_api.transport_factory = self.saved_mission_factory
-        missions_api.optin_accepted = self.saved_mission_optin
-        missions_api._store = self.saved_mission_store
-        missions_api._runtimes.clear()
-        missions_api._runtimes.update(self.saved_mission_runtimes)
-        missions_api._mission_leases.clear()
-        missions_api._mission_leases.update(self.saved_mission_leases)
-        missions_api._mission_write_urls.clear()
-        missions_api._mission_write_urls.update(self.saved_mission_urls)
-        missions_api._run_mission_task = self.saved_mission_runner
-        missions_api._global_stop = False
-        self.tmp.cleanup()
+        mission_tasks = [
+            runtime.task
+            for runtime in missions_api._runtimes.values()
+            if runtime.task is not None
+        ]
+        for task in mission_tasks:
+            if not task.done():
+                task.cancel()
+        if mission_tasks:
+            await asyncio.gather(*mission_tasks, return_exceptions=True)
+
+        try:
+            if missions_api._store is self.test_mission_store:
+                self.test_mission_store.close()
+        finally:
+            write_slots._registry = self.saved_registry
+            chat_api.ui_transport_factory = self.saved_chat_factory
+            chat_api.CHAT_RUNS_FILE = self.saved_chat_runs_file
+            chat_api._runs.clear()
+            chat_api._runs.update(self.saved_chat_runs)
+            missions_api.transport_factory = self.saved_mission_factory
+            missions_api.optin_accepted = self.saved_mission_optin
+            missions_api._store = self.saved_mission_store
+            missions_api._runtimes.clear()
+            missions_api._runtimes.update(self.saved_mission_runtimes)
+            missions_api._mission_leases.clear()
+            missions_api._mission_leases.update(self.saved_mission_leases)
+            missions_api._mission_write_urls.clear()
+            missions_api._mission_write_urls.update(self.saved_mission_urls)
+            missions_api._run_mission_task = self.saved_mission_runner
+            missions_api._global_stop = False
+            self.tmp.cleanup()
 
     async def test_failed_chat_frees_lease_for_mission(self):
         """A chat run whose transport constructor crashes must release its

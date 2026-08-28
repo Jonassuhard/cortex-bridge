@@ -2,7 +2,7 @@
 
 All notable changes are recorded here.
 
-## 0.5.4 - 2026-08-27
+## 0.5.4 - Unreleased
 
 ### Added
 
@@ -20,12 +20,32 @@ All notable changes are recorded here.
   restart (new `alarms` permission).
 - `cortex.sh selftest` runs a 4-step self-diagnostic (server, extension
   pairing, DOM probe, version consistency) and reports results in French.
+- Optional encrypted external storage can be bound to an exact APFS volume UUID
+  and sparse bundle. Official startup fails closed when the volume, writable
+  state, storage root or encrypted backing image cannot be verified.
+- Deterministic storage manifests inventory canonical artifacts without
+  exposing absolute paths or following external symlinks.
 
 ### Changed
 
 - `Cortex Bridge.command` now runs the full `cortex.sh go` flow instead of only
   starting the server.
 - The ChatGPT connection button is labelled **Ouvrir ChatGPT**.
+- Mutable runtime state is owner-only and remains on the local disk. Oversized
+  logs are rotated without deleting old backups; external-storage installs
+  archive them in the configured quarantine tree.
+
+### Fixed
+
+- Installation repairs virtual environments whose entry-point shebangs still
+  reference atomic staging paths, while preserving foreign replacements.
+- Install recovery and uninstall now bind virtual environments and the native
+  helper to exact identities and hashes. Within the documented threat model,
+  lexical quarantine plus post-move verification detects ordinary symlink and
+  path substitutions and preserves replacements whose identity is unproven.
+- Legacy state migration publishes only complete private files or directories
+  when the destination is still absent at atomic publication time; an existing
+  destination is preserved.
 
 ## 0.5.3 - 2026-08-25
 

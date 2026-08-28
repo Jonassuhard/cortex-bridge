@@ -7,11 +7,12 @@ import fcntl
 import hashlib
 import json
 import os
-import stat
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+from lifecycle_lock import open_lifecycle_lock
 
 
 REQUIRED_FIELDS = {
@@ -139,13 +140,8 @@ def write_record(path: Path, record: dict[str, Any]) -> None:
 def run_command_with_shared_lock(lock_path: Path, command: list[str]) -> int:
     if not command:
         raise ValueError("a command is required")
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
-    fd = os.open(lock_path, flags, 0o600)
+    fd = open_lifecycle_lock(lock_path)
     try:
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
-            raise RuntimeError(f"lifecycle lock is unsafe: {lock_path}")
-        os.fchmod(fd, 0o600)
         fcntl.flock(fd, fcntl.LOCK_SH)
         return subprocess.run(command, check=False).returncode
     finally:

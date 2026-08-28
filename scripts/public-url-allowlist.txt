@@ -30,7 +30,7 @@ https://github.com/openinterpreter/openinterpreter
 https://github.com/waishnav/devspace
 https://img.shields.io/badge/license-MIT-green.svg
 https://img.shields.io/badge/platform-macOS-lightgrey.svg
-https://img.shields.io/badge/version-0.5.3-blue.svg
+https://img.shields.io/badge/version-0.5.4-blue.svg
 https://nodejs.org/en/download
 https://jonassuhard.com/
 https://jonassuhard.com/projets/cortex-bridge

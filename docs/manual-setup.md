@@ -21,7 +21,7 @@ is only for the synthetic development test suite.
 2. Enable Developer mode.
 3. Select **Load unpacked**.
 4. Choose the repository's `chrome-extension` directory.
-5. Confirm Cortex Bridge 0.5.3 is enabled.
+5. Confirm Cortex Bridge 0.5.4 is enabled.
 
 This action is manual. No script should click the Chrome confirmation or grant
 permissions for the user.
@@ -38,4 +38,6 @@ connect ChatGPT**. Complete login or verification in the ChatGPT tab, then
 retry in Cortex.
 
 `CORTEX_HOME` must be absolute. Keep mutable runtime data outside the
-repository.
+repository and on the local disk. For large data on an encrypted external
+volume, follow [Optional encrypted external storage](../INSTALL.md#optional-encrypted-external-storage)
+instead of moving `CORTEX_HOME` itself.

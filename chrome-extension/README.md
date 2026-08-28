@@ -20,5 +20,5 @@ private mask cannot be confirmed and restored on the same document. Chrome shows
 Since ChatGPT's Chat/Work split, the content script refuses to compose on Work
 surfaces (`WORK_SURFACE_REJECTED`) and only ever writes to classic chats.
 
-Installation is intentionally manual for v0.5.3: open `chrome://extensions`,
+Installation is intentionally manual for v0.5.4: open `chrome://extensions`,
 enable Developer mode, choose **Load unpacked**, and select this directory.

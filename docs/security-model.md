@@ -100,6 +100,15 @@ listeners, stale records, and PID reuse. Start holds the installer's shared
 lifecycle lock until ownership is recorded; uninstall takes the exclusive
 lock and proceeds only when the runtime is verified stopped.
 
+Installer cleanup, legacy migration, external-storage configuration, and log
+rotation bind ordinary filesystem changes to private locks, open descriptors,
+devices, inodes, hashes, and atomic publication where macOS exposes them.
+These controls fail closed for cooperating Cortex processes and detect common
+path or symlink substitutions. They do not contain a malicious process already
+able to mutate the same paths as the same macOS user; that same-UID boundary
+and the native-launcher requirement described above apply to the whole runtime
+lifecycle, not only to Doctor.
+
 Public media must be synthetic or redacted. Release gates scan the tree and
 history for secrets, private markers, paths, links, unknown binaries, metadata,
 and OCR text. Live evidence never records account identity, cookies,

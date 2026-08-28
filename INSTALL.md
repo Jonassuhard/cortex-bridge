@@ -63,7 +63,7 @@ extension. This one-time step requires the person using Chrome:
 2. enable **Developer mode**;
 3. choose **Load unpacked**;
 4. select the absolute `chrome_extension_path` printed by the installer;
-5. confirm that **Cortex Bridge 0.5.3** is enabled.
+5. confirm that **Cortex Bridge 0.5.4** is enabled.
 
 The extension can access only `https://chatgpt.com/*` and
 `http://127.0.0.1:8420/*`. It does not request cookies, passwords, history, or
@@ -137,8 +137,52 @@ arguments or logs.
 
 Mutable data defaults to `~/.local/share/cortex-bridge`. Set an absolute
 `CORTEX_HOME` before installation to choose another location. Relative paths
-are rejected. The compiled attachment helper lives in `CORTEX_HOME/bin` with
-owner-only execution permissions. Symlinked helper paths are rejected.
+are rejected. Keep `CORTEX_HOME` on the local disk: it contains the virtual
+environment, database, process records and private control files. The compiled
+attachment helper lives in `CORTEX_HOME/bin` with owner-only execution
+permissions. Symlinked helper paths are rejected.
+
+### Optional encrypted external storage
+
+Large workspaces, evidence, archives and rebuildable browser caches may live in
+an encrypted APFS sparse bundle on an external disk. Mount the sparse bundle,
+then read the volume UUID with:
+
+```bash
+MOUNT_POINT="<mounted APFS sparse bundle path>"
+diskutil info "$MOUNT_POINT" | grep 'Volume UUID'
+```
+
+Publish the configuration only after Cortex has verified the exact mounted
+volume, APFS filesystem, writable state and encrypted backing image:
+
+```bash
+IMAGE_PATH="<encrypted .sparsebundle path>"
+STORAGE_ROOT="$MOUNT_POINT/CORTEX_BRIDGE"
+install -d -m 700 "$STORAGE_ROOT"
+test ! -L "$STORAGE_ROOT"
+python3 scripts/configure-external-storage.py \
+  --mount-path "$MOUNT_POINT" \
+  --volume-uuid "YOUR-VOLUME-UUID" \
+  --encrypted-image-path "$IMAGE_PATH" \
+  --storage-root "$STORAGE_ROOT"
+```
+
+The storage root must be a real directory owned by the current user with mode
+`0700`; neither it nor any existing component of its path may be a symlink.
+`CORTEX_HOME` and each existing path component leading to it must likewise be
+real directories, not symlinks. The command writes owner-only
+`storage-bootstrap.json` and `storage-required` files under the local
+`CORTEX_HOME`. Once enabled, `cortex.sh start` fails
+closed if that exact encrypted volume is absent, replaced, read-only or no
+longer verifiably encrypted. It never mounts the image and never receives or
+stores its password.
+
+Use the Cortex settings screen to select a workspace below the verified
+`storage_root`. Check `Owners: Enabled` in `diskutil info`, especially on a
+multi-user Mac. If ownership is disabled, stop: changing that disk setting
+requires an administrator decision and is intentionally not automated by
+Cortex.
 
 ## Stop and uninstall
 
@@ -148,11 +192,12 @@ owner-only execution permissions. Symlinked helper paths are rejected.
 ./scripts/uninstall.sh --approve-plan PLAN_HASH --json
 ```
 
-The uninstaller removes only manifest-owned runtime resources, including its
-recorded virtual environment and native helper. It does not delete the
-repository extension, Chrome data, settings, databases, runs, attachments, or
-logs. Remove the helper's stale Accessibility entry separately after the
-approved uninstall.
+Within the [documented local threat model](docs/security-model.md), the
+uninstaller removes only manifest-owned runtime resources, including its
+recorded virtual environment and native helper; a malicious same-UID process
+is not a containment target. It does not delete the repository extension,
+Chrome data, settings, databases, runs, attachments, or logs. Remove the
+helper's stale Accessibility entry separately after the approved uninstall.
 
 ## Agent-assisted installation
 

@@ -1,99 +1,67 @@
 # Cortex Bridge session primer
 
-Current state: 2026-08-26. Read this file with `README.md`,
-`docs/release-checklist.md` and `docs/verification/v0.5.3-test-report.md`.
+Current state: 2026-08-28.
 
-## Repository
+## Current project
 
-- Worktree: `.worktrees/codex-critical-qa`; branch `codex/critical-qa`.
-- Canonical version: **0.5.3** in `VERSION`, Python metadata, frontend package
-  and lock, Chrome manifest and installer metadata.
-- Canonical remote: `origin`; default branch: `main`; rebase base: `3bb2cdb`.
-- The branch is published at `origin/codex/critical-qa`; PR #13 targets `main`.
-  `main` is unchanged. Merge, tag and release still require explicit approval.
+- Worktree: `.worktrees/codex-v054-storage-consolidation`.
+- Branch: `codex/v054-storage-consolidation`; base commit: `b0c74bb`.
+- Target version: 0.5.4, currently marked unreleased.
+- The working tree contains the uncommitted storage-consolidation candidate.
+- No v0.5.4 tag, clean release commit, checklist, or evidence manifest exists.
 
 ## Product invariants
 
-- Product transport is the unpacked local extension in the user's real signed-in
-  Chrome profile and the same Chrome window. No API or separate Playwright
-  profile may substitute for this flow.
+- Product transport is the unpacked local extension in the user's real
+  signed-in Chrome profile. No API or separate Playwright profile substitutes
+  for that flow.
 - Cortex writes only to classic ChatGPT chats. Work/business surfaces fail
   closed with `WORK_SURFACE_REJECTED`.
 - At most two distinct conversations may write concurrently. A third retains
-  its draft and staged file in deterministic E2E coverage and is refused in
-  French before any browser action.
-- Local actions stay inside the selected workspace and approval policy.
-  Ambiguous browser delivery is never automatically replayed.
+  its draft and staged file and is refused before browser action.
+- Approval is the default policy. Automatic writes require an explicit
+  trusted-workspace setting; process commands keep their policy checks.
+- Ambiguous browser delivery is never replayed automatically.
 
-## Candidate work completed
+## Completed in the candidate
 
-- Protocol-v2 pairing, same-window tab allocation, exact route selection, FIFO
-  activation and trusted send-control revalidation.
-- Exact-tab CDP screenshots with serialized private masking, restoration proof
-  and discard-on-uncertainty behavior.
-- Durable fail-closed quarantine for uncertain writer tabs across every session
-  class and extension restart.
-- Exact durable pause/resume state, no second response consumer, and no pause
-  during an in-flight local effect.
-- Bounded, single-use file transfer; cancelled Swift compile/helper processes
-  are killed and reaped.
-- Install/start/uninstall share the lifecycle lock; uninstall accepts only a
-  verified stopped runtime and preserves foreign resources.
-- Optional Freebuff walkthrough with package pinning, source inspection,
-  immutable dry-run plan and exact `APPROVE <plan_hash>` consent.
+- Optional encrypted APFS storage is bound to an exact volume UUID, mount,
+  writable state, storage root, and encrypted sparse-bundle backing path.
+- Runtime startup fails closed if the configured external storage proof fails.
+- Relative deterministic manifests inventory canonical storage without
+  following external symlinks or exposing absolute paths.
+- Mutable private runtime state stays under local owner-only `CORTEX_HOME`;
+  large workspaces, evidence, archives, and rebuildable caches can live on the
+  verified external volume.
+- Installer, migration, log rotation, process ownership, and uninstall use
+  private locks plus descriptor, device, inode, and hash checks where macOS
+  exposes them. Malicious same-UID mutation remains outside the threat model.
+- Backend suites pass 822/822 under equipped Python 3.11 and 822/822 under
+  equipped Python 3.14. Extension passes 130/130. Frontend passes 155/155 unit
+  tests, 36/36 runtime/privacy contracts, 12 E2E tests with one intentional
+  guide skip, and 4/4 accessibility viewports.
+- A real isolated install, Doctor, start/status/API, two restarts, idempotent
+  reinstall, and uninstall completed without `sudo`; the foreign sentinel kept
+  the same inode and hash and no listener remained.
+- Python compilation, Bash syntax, ShellCheck, runtime verification, privacy
+  scanning over 343 files and 43 images, Gitleaks history scanning over 241
+  commits, link/version tests, and diff checks pass on the final candidate.
+- Independent clean-room review reproduced and closed lifecycle-lock poisoning,
+  unverified process cleanup, late-fsync log loss, symlinked manifest roots,
+  and public-parent lock replacement. Its final P0-P2 verdict is PASS.
 
-## Fresh v0.5.3 evidence
+## Open blockers
 
-- Backend: 629/629. Extension: 126/126. Mapped crash recovery: 6/6;
-  dedicated Chrome recovery/anti-replay: 6/6.
-- Frontend: 155/155 unit and 33/33 runtime/privacy; typecheck, lint and build pass.
-- Browser fixtures: 12 pass, one intentional guide-generation skip; a11y 4/4
-  at 375, 768 and 1440 px; zero fixture console/page/hydration errors.
-- Ten cold dual-writer runs: zero crossover, third draft and file retained.
-  Cached usability: 231.1 ms; switch p95/max: 141.7 ms.
-- Two normalized builds: 28 files each, aggregate SHA-256
-  `a401609dd88bc4fc2562ffd4563c07854105f3d4c8324198ee5a712ec180666a`.
-- Privacy: 329 files and 43 images. Links: 121, including 56 external. Gitleaks:
-  240 commits. Audits, ShellCheck, Python, runtime and diff checks pass.
-- A clean Git archive includes the extension, static chunk, Freebuff guide and
-  Swift helper. Extension 126/126 and packaging 6/6 pass from that archive; its
-  wheel includes the Swift source.
-- Isolated macOS lifecycle: immutable plan, install, Doctor, start/status/API,
-  stop, idempotent reinstall and uninstall pass without `sudo`; foreign
-  sentinels are preserved and no listener remains.
-- A detached self-diagnostic worktree completed install, replay refusal,
-  Doctor, start/status/API/tasks, stop, reinstall and uninstall, then was
-  removed without merge. Two failed evidence wrappers remain disclosed.
-- Owner-authorized live technical observations already recorded for this
-  candidate cover one text chat, two writers plus third refusal, one synthetic
-  file, one masked screenshot and three disposable mini-sites. No account or
-  conversation identity is public evidence.
-
-## Honest release state
-
-- Target verdict: **`OPT_IN_TECHNICAL_PREVIEW`**, never `READY`.
-- Consumer-site automation conflicts with the provider's published prohibition
-  on automatic/programmatic extraction. Owner approval does not remove it.
-- Still unproven: truly clean macOS account/VM lifecycle; live staged-file
-  preservation on third-writer refusal; real cold/warm switch under ten seconds;
-  live tab-close/reload recovery without resend.
-- `docs/verification/v0.5.3.json` must reference the final clean source commit
-  and then be committed alone.
-
-## Verified post-candidate fixes
-
-- A real Cortex-only send exposed one persisted turn plus its local overlay.
-- Reconciliation now requires new message identities captured at send start;
-  repeated identical turns and the poll-before-accept race have regression tests.
-- Pipeline truth now requires an exact conversation scope; global legacy,
-  contradictory and mismatched responses fail closed without A-to-B leakage.
-- Inspector is readable and French, hides idle mission controls, separates the
-  global stop and distinguishes executor availability from actual use.
-- Proof: 155/155 frontend, 33/33 runtime/privacy, typecheck, lint, canonical
-  build, live scoped API, anonymized Chrome capture and zero console issues.
-- PR #13 keeps source changes and the authorized manifest reseal in separate
-  commits. Its release gate fetches full history to verify the exact source.
+- The external volume reports `Owners: Disabled`. Changing that setting is an
+  administrator decision and is not automated.
+- Chrome currently loads the unpacked extension from the old Desktop source;
+  that source cannot be removed until Chrome is manually reloaded from the
+  canonical extension path.
+- The provider-terms conflict and owner-only live/release approvals are
+  unchanged. No v0.5.4 release evidence may be claimed yet.
 
 ## Next exact action
 
-Keep `main` unchanged. Review PR #13 after every check is green; merge, tag and release remain separately approved actions.
+Create the local branch commit, build canonical external and minimal local app
+copies from that exact commit, then switch and verify the live service without
+deleting any prior source.

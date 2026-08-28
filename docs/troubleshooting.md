@@ -135,4 +135,24 @@ ownership or signal it. Inspect Doctor and identify that process separately.
 Any option change creates a new hash. Generate a fresh dry run, review it, and
 approve that exact hash. Never reuse a hash from another plan or machine.
 
-Logs live under `CORTEX_HOME`. Remove personal content before sharing them.
+## External storage prevents startup
+
+When optional encrypted external storage is enabled, startup fails before the
+console process is created unless the configured disk is proven safe:
+
+| Error | Meaning | Action |
+| --- | --- | --- |
+| `STORAGE_BOOTSTRAP_MISSING` or `STORAGE_BOOTSTRAP_INVALID` | The local owner-only control file is absent or malformed | Mount the intended image and rerun the verified configuration command from [INSTALL.md](../INSTALL.md#optional-encrypted-external-storage). |
+| `STORAGE_VOLUME_MISSING` | The exact configured mount is absent or is not the reported mount point | Mount the encrypted sparse bundle, then retry. |
+| `STORAGE_UUID_MISMATCH` | A different volume is using the expected path | Eject the substituted volume. Do not edit the UUID merely to bypass the check. |
+| `STORAGE_FILESYSTEM_UNSAFE` or `STORAGE_VOLUME_READ_ONLY` | The mounted volume is not writable APFS | Use the intended writable APFS sparse bundle. |
+| `STORAGE_ENCRYPTION_UNVERIFIED` | macOS cannot prove that the mount belongs to the configured encrypted sparse bundle | Mount the exact configured image directly, then retry. |
+| `STORAGE_ROOT_UNSAFE` | The data root is missing, outside the mount or reached through a symlink | Restore the dedicated real directory inside the verified mount. |
+
+The guard does not mount, unlock or repair disks. It never receives the sparse
+bundle password. `CORTEX_HOME` itself must remain on the local disk.
+
+The active log stays under `CORTEX_HOME`. When external storage is configured,
+rotated archives move to `storage_root/99_QUARANTINE/logs`; otherwise they stay
+under `CORTEX_HOME/logs/archive`. Remove personal content before sharing any
+log or archive.
