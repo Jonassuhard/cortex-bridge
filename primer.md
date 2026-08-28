@@ -37,7 +37,7 @@ Current state: 2026-08-28.
 - Installer, migration, log rotation, process ownership, and uninstall use
   private locks plus descriptor, device, inode, and hash checks where macOS
   exposes them. Malicious same-UID mutation remains outside the threat model.
-- Backend suites pass 829/829 under equipped Python 3.11 and 829/829 under
+- Backend suites pass 847/847 under equipped Python 3.11 and 847/847 under
   equipped Python 3.14. Extension passes 130/130. Frontend passes 155/155 unit
   tests, 36/36 runtime/privacy contracts, 12 E2E tests with one intentional
   guide skip, and 4/4 accessibility viewports.
@@ -60,6 +60,10 @@ Current state: 2026-08-28.
 - The live 0.5.4 service runs from the minimal local app. Doctor and selftest
   pass, the real Chrome extension is paired on protocol v2 with zero pending
   commands, SQLite quick-check is `ok`, and two full restarts reconnected.
+- The selftest now fails closed on malformed or contradictory runtime,
+  extension, protocol, blocker, composer, and send-button states. Its 24 tests
+  pass under Python 3.11 and 3.14, and an independent adversarial review found
+  no remaining P0-P2 issue.
 
 ## Open blockers
 
