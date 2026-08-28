@@ -54,6 +54,9 @@ Current state: 2026-08-28.
 - Canonical Git source lives under external `10_SOURCE`; the minimal local app
   lives under `~/Library/Application Support/Cortex Bridge/app` and the
   Desktop launcher points there.
+- The 539 MB rebuildable Playwright cache was copied to external
+  `50_CACHE_REBUILDABLE`, verified by matching file-content, symlink-target,
+  and executable-list hashes, then removed from the private local runtime.
 - The live 0.5.4 service runs from the minimal local app. Doctor and selftest
   pass, the real Chrome extension is paired on protocol v2 with zero pending
   commands, SQLite quick-check is `ok`, and two full restarts reconnected.
@@ -69,6 +72,8 @@ Current state: 2026-08-28.
   rollback. They are not runtime-active and must not be removed implicitly.
 - Older Desktop/Documents source copies remain preserved; no duplicate was
   deleted during consolidation.
+- A private storage report is available at
+  `00_INDEX/STORAGE_REPORT_2026-08-28.md` on the encrypted external volume.
 - The provider-terms conflict and owner-only live/release approvals are
   unchanged. No v0.5.4 release evidence may be claimed yet.
 
