@@ -92,6 +92,45 @@ class InstallerTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         return json.loads(result.stdout)
 
+    def legacy_053_lock_fixture(
+        self,
+        home: Path | None = None,
+    ) -> tuple[Path, Path, Path, dict]:
+        resolved_home = (home or self.cortex_home).resolve()
+        resolved_home.mkdir(parents=True, mode=0o700)
+        resolved_home.chmod(0o700)
+        lock = resolved_home / ".install.lock"
+        lock.write_bytes(b"")
+        lock.chmod(0o600)
+        install_dir = resolved_home / "install"
+        install_dir.mkdir(mode=0o700)
+        install_dir.chmod(0o700)
+        manifest = install_dir / "owned.json"
+        helper = resolved_home / "bin" / "cortex-macos-ax-send"
+        payload = {
+            "chrome_extension_path": str((ROOT / "chrome-extension").resolve()),
+            "native_helper": {
+                "path": str(helper),
+                "sha256": "a" * 64,
+                "source_sha256": "b" * 64,
+            },
+            "owner": "cortex-bridge",
+            "plan_hash": "c" * 64,
+            "resources": [
+                str(resolved_home / "venv"),
+                str(manifest),
+                str(helper),
+            ],
+            "schema_version": 1,
+            "version": "0.5.3",
+        }
+        manifest.write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        manifest.chmod(0o600)
+        return resolved_home, lock, manifest, payload
+
     def break_installed_entrypoints_with_staging_shebangs(self) -> None:
         installed_bin = self.cortex_home.resolve() / "venv" / "bin"
         staged_bin = self.cortex_home.resolve() / ".install-staging" / "venv" / "bin"
@@ -1224,6 +1263,349 @@ class InstallerTest(unittest.TestCase):
                 self.assertIn("lock", result.stdout.lower())
                 self.assertEqual(lock.read_bytes(), payload)
                 self.assertEqual((lock.stat().st_dev, lock.stat().st_ino), identity)
+
+    def test_real_053_empty_lock_migrates_in_place_before_start_and_doctor(self):
+        home, lock, manifest, _payload = self.legacy_053_lock_fixture()
+        before_identity = (lock.stat().st_dev, lock.stat().st_ino)
+        before_manifest = manifest.read_bytes()
+        selected_python = self.root / "legacy-selected-python"
+        selected_python.write_text(
+            "#!/usr/bin/env python3\n"
+            "import os,sys\n"
+            "if len(sys.argv) >= 3 and sys.argv[1] == '-c' and sys.argv[2] == 'import fastapi,uvicorn,playwright,websockets':\n"
+            " raise SystemExit(1)\n"
+            f"os.execv({sys.executable!r}, [{sys.executable!r}, *sys.argv[1:]])\n",
+            encoding="utf-8",
+        )
+        selected_python.chmod(0o755)
+        environment = {
+            **self.environment,
+            "CORTEX_HOME": str(home),
+            "PYTHON_BIN": str(selected_python),
+        }
+
+        start = self.run_script("cortex.sh", "start", env=environment)
+        doctor = self.run_script("cortex.sh", "doctor", "--json", env=environment)
+
+        self.assertNotEqual(start.returncode, 0)
+        self.assertIn("runtime dependencies are incomplete", start.stderr)
+        self.assertEqual(doctor.returncode, 0, doctor.stderr or doctor.stdout)
+        self.assertEqual(json.loads(doctor.stdout)["schema_version"], 1)
+        self.assertEqual(
+            lock.read_bytes(),
+            b'{"owner":"cortex-bridge","schema_version":1,"type":"lifecycle_lock"}\n',
+        )
+        self.assertEqual((lock.stat().st_dev, lock.stat().st_ino), before_identity)
+        self.assertEqual(manifest.read_bytes(), before_manifest)
+
+    def test_concurrent_053_empty_lock_migration_keeps_the_original_inode(self):
+        home, lock, _manifest, _payload = self.legacy_053_lock_fixture()
+        original_identity = (lock.stat().st_dev, lock.stat().st_ino)
+        start = self.root / "legacy-lock-migration-start"
+        process_code = (
+            "import json,os,time\n"
+            "from pathlib import Path\n"
+            "from lifecycle_lock import open_lifecycle_lock\n"
+            "while not Path(os.environ['MIGRATION_START']).exists(): time.sleep(0.005)\n"
+            "lock=Path(os.environ['MIGRATION_LOCK'])\n"
+            "fd=open_lifecycle_lock(lock)\n"
+            "os.lseek(fd,0,os.SEEK_SET)\n"
+            "data=os.read(fd,4096)\n"
+            "details=os.fstat(fd)\n"
+            "Path(os.environ['MIGRATION_RESULT']).write_text(json.dumps({'dev':details.st_dev,'ino':details.st_ino,'hex':data.hex()}))\n"
+            "os.close(fd)\n"
+        )
+        processes: list[subprocess.Popen[str]] = []
+        results: list[Path] = []
+        try:
+            for index in range(4):
+                result_path = self.root / f"legacy-migration-{index}.json"
+                results.append(result_path)
+                environment = {
+                    **self.environment,
+                    "PYTHONPATH": f"{ROOT / 'console'}:{ROOT}",
+                    "MIGRATION_START": str(start),
+                    "MIGRATION_LOCK": str(lock),
+                    "MIGRATION_RESULT": str(result_path),
+                }
+                processes.append(
+                    subprocess.Popen(
+                        [sys.executable, "-c", process_code],
+                        cwd=ROOT,
+                        env=environment,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                    )
+                )
+            start.touch()
+            for process in processes:
+                stdout, stderr = process.communicate(timeout=5)
+                self.assertEqual(process.returncode, 0, stderr or stdout)
+        finally:
+            for process in processes:
+                if process.poll() is None:
+                    process.kill()
+                if process.stdout and not process.stdout.closed:
+                    process.communicate()
+
+        payloads = [json.loads(path.read_text(encoding="utf-8")) for path in results]
+        self.assertEqual(
+            {(payload["dev"], payload["ino"]) for payload in payloads},
+            {original_identity},
+        )
+        self.assertEqual(
+            {bytes.fromhex(payload["hex"]) for payload in payloads},
+            {b'{"owner":"cortex-bridge","schema_version":1,"type":"lifecycle_lock"}\n'},
+        )
+        self.assertEqual((lock.stat().st_dev, lock.stat().st_ino), original_identity)
+        self.assertEqual(list(home.glob(".install.lock.init-*")), [])
+
+    def test_legacy_migrator_accepts_same_inode_completed_before_exclusive_lock(self):
+        load_installer_module()
+        import lifecycle_lock
+
+        _home, lock, _manifest, _payload = self.legacy_053_lock_fixture()
+        original_identity = (lock.stat().st_dev, lock.stat().st_ino)
+        real_migrate = lifecycle_lock._migrate_legacy_empty_lock
+
+        def complete_same_inode_then_enter_migration(fd: int, *args, **kwargs):
+            os.lseek(fd, 0, os.SEEK_SET)
+            os.ftruncate(fd, 0)
+            os.write(
+                fd,
+                b'{"owner":"cortex-bridge","schema_version":1,"type":"lifecycle_lock"}\n',
+            )
+            os.fsync(fd)
+            return real_migrate(fd, *args, **kwargs)
+
+        with mock.patch.object(
+            lifecycle_lock,
+            "_migrate_legacy_empty_lock",
+            side_effect=complete_same_inode_then_enter_migration,
+        ):
+            try:
+                fd = lifecycle_lock.open_lifecycle_lock(lock)
+            except RuntimeError as exc:
+                self.fail(f"same migrated inode was rejected before exclusive lock: {exc}")
+        try:
+            opened = os.fstat(fd)
+            os.lseek(fd, 0, os.SEEK_SET)
+            marker = os.read(fd, 4096)
+        finally:
+            os.close(fd)
+
+        self.assertEqual((opened.st_dev, opened.st_ino), original_identity)
+        self.assertEqual(
+            marker,
+            b'{"owner":"cortex-bridge","schema_version":1,"type":"lifecycle_lock"}\n',
+        )
+
+    def test_empty_lock_migration_rejects_invalid_legacy_manifest_content(self):
+        installer = load_installer_module()
+        cases = (
+            "malformed",
+            "wrong_owner",
+            "wrong_schema",
+            "wrong_version",
+            "wrong_plan_hash",
+            "missing_manifest_resource",
+        )
+
+        for case in cases:
+            with self.subTest(case=case):
+                home, lock, manifest, payload = self.legacy_053_lock_fixture(
+                    self.root / f"legacy-invalid-{case}"
+                )
+                if case == "malformed":
+                    manifest.write_bytes(b'{"owner":"cortex-bridge"')
+                elif case == "wrong_owner":
+                    payload["owner"] = "foreign"
+                    manifest.write_text(json.dumps(payload), encoding="utf-8")
+                elif case == "wrong_schema":
+                    payload["schema_version"] = 2
+                    manifest.write_text(json.dumps(payload), encoding="utf-8")
+                elif case == "wrong_version":
+                    payload["version"] = "0.5.2"
+                    manifest.write_text(json.dumps(payload), encoding="utf-8")
+                elif case == "wrong_plan_hash":
+                    payload["plan_hash"] = "not-a-valid-plan-hash"
+                    manifest.write_text(json.dumps(payload), encoding="utf-8")
+                else:
+                    payload["resources"].remove(str(manifest))
+                    manifest.write_text(json.dumps(payload), encoding="utf-8")
+                manifest.chmod(0o600)
+                before_lock = lock.stat(follow_symlinks=False)
+                before_manifest = manifest.read_bytes()
+
+                with mock.patch.dict(os.environ, self.environment, clear=True):
+                    with self.assertRaisesRegex(RuntimeError, "lock|legacy|manifest"):
+                        fd = installer._open_lifecycle_lock(home)
+                        os.close(fd)
+
+                after_lock = lock.stat(follow_symlinks=False)
+                self.assertEqual(lock.read_bytes(), b"")
+                self.assertEqual(
+                    (after_lock.st_dev, after_lock.st_ino),
+                    (before_lock.st_dev, before_lock.st_ino),
+                )
+                self.assertEqual(manifest.read_bytes(), before_manifest)
+
+    def test_empty_lock_migration_rejects_unsafe_lock_or_manifest_metadata(self):
+        installer = load_installer_module()
+        cases = (
+            "public_lock",
+            "hardlinked_lock",
+            "public_install_directory",
+            "public_manifest",
+            "symlink_manifest",
+            "hardlinked_manifest",
+        )
+
+        for case in cases:
+            with self.subTest(case=case):
+                home, lock, manifest, _payload = self.legacy_053_lock_fixture(
+                    self.root / f"legacy-unsafe-{case}"
+                )
+                external = self.root / f"legacy-external-{case}"
+                if case == "public_lock":
+                    lock.chmod(0o644)
+                elif case == "hardlinked_lock":
+                    os.link(lock, external)
+                elif case == "public_install_directory":
+                    manifest.parent.chmod(0o755)
+                elif case == "public_manifest":
+                    manifest.chmod(0o644)
+                elif case == "symlink_manifest":
+                    manifest.rename(external)
+                    manifest.symlink_to(external)
+                else:
+                    os.link(manifest, external)
+                before_lock = lock.stat(follow_symlinks=False)
+                before_manifest = manifest.stat(follow_symlinks=False)
+                before_install_mode = stat.S_IMODE(manifest.parent.stat().st_mode)
+
+                with mock.patch.dict(os.environ, self.environment, clear=True):
+                    with self.assertRaisesRegex(RuntimeError, "lock|legacy|manifest"):
+                        fd = installer._open_lifecycle_lock(home)
+                        os.close(fd)
+
+                after_lock = lock.stat(follow_symlinks=False)
+                after_manifest = manifest.stat(follow_symlinks=False)
+                self.assertEqual(lock.read_bytes(), b"")
+                self.assertEqual(
+                    (
+                        after_lock.st_dev,
+                        after_lock.st_ino,
+                        after_lock.st_nlink,
+                        stat.S_IMODE(after_lock.st_mode),
+                    ),
+                    (
+                        before_lock.st_dev,
+                        before_lock.st_ino,
+                        before_lock.st_nlink,
+                        stat.S_IMODE(before_lock.st_mode),
+                    ),
+                )
+                self.assertEqual(
+                    (
+                        after_manifest.st_dev,
+                        after_manifest.st_ino,
+                        after_manifest.st_nlink,
+                        stat.S_IMODE(after_manifest.st_mode),
+                    ),
+                    (
+                        before_manifest.st_dev,
+                        before_manifest.st_ino,
+                        before_manifest.st_nlink,
+                        stat.S_IMODE(before_manifest.st_mode),
+                    ),
+                )
+                self.assertEqual(
+                    stat.S_IMODE(manifest.parent.stat().st_mode),
+                    before_install_mode,
+                )
+
+    def test_empty_lock_migration_rejects_lock_substitution_after_exclusive_lock(self):
+        load_installer_module()
+        import lifecycle_lock
+
+        home, lock, _manifest, _payload = self.legacy_053_lock_fixture()
+        displaced = self.root / "legacy-displaced-lock"
+        real_matches = lifecycle_lock._opened_name_matches
+        lock_checks = 0
+        substituted = False
+
+        def substitute_on_second_lock_check(fd: int, directory_fd: int, name: str):
+            nonlocal lock_checks, substituted
+            if name == lock.name:
+                lock_checks += 1
+                if lock_checks == 2:
+                    probe_fd = os.open(
+                        lock,
+                        os.O_RDWR | getattr(os, "O_NOFOLLOW", 0),
+                    )
+                    try:
+                        with self.assertRaises(BlockingIOError):
+                            fcntl.flock(probe_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    finally:
+                        os.close(probe_fd)
+                    lock.rename(displaced)
+                    lock.write_bytes(b"")
+                    lock.chmod(0o600)
+                    substituted = True
+            return real_matches(fd, directory_fd, name)
+
+        with mock.patch.object(
+            lifecycle_lock,
+            "_opened_name_matches",
+            side_effect=substitute_on_second_lock_check,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "changed|unsafe|provenance"):
+                fd = lifecycle_lock.open_lifecycle_lock(lock)
+                os.close(fd)
+
+        self.assertTrue(substituted)
+        self.assertEqual(lock.read_bytes(), b"")
+        self.assertEqual(displaced.read_bytes(), b"")
+
+    def test_empty_lock_migration_rejects_manifest_replacement_before_write(self):
+        load_installer_module()
+        import lifecycle_lock
+
+        _home, lock, manifest, payload = self.legacy_053_lock_fixture()
+        displaced = self.root / "legacy-displaced-manifest"
+        replacement_payload = {**payload, "plan_hash": "d" * 64}
+        replacement_bytes = json.dumps(replacement_payload).encode("utf-8")
+        original_bytes = manifest.read_bytes()
+        real_matches = lifecycle_lock._opened_name_matches
+        manifest_checks = 0
+        substituted = False
+
+        def substitute_on_second_manifest_check(fd: int, directory_fd: int, name: str):
+            nonlocal manifest_checks, substituted
+            if name == manifest.name:
+                manifest_checks += 1
+                if manifest_checks == 2:
+                    manifest.rename(displaced)
+                    manifest.write_bytes(replacement_bytes)
+                    manifest.chmod(0o600)
+                    substituted = True
+            return real_matches(fd, directory_fd, name)
+
+        with mock.patch.object(
+            lifecycle_lock,
+            "_opened_name_matches",
+            side_effect=substitute_on_second_manifest_check,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "changed|unsafe|provenance"):
+                fd = lifecycle_lock.open_lifecycle_lock(lock)
+                os.close(fd)
+
+        self.assertTrue(substituted)
+        self.assertEqual(lock.read_bytes(), b"")
+        self.assertEqual(displaced.read_bytes(), original_bytes)
+        self.assertEqual(manifest.read_bytes(), replacement_bytes)
 
     def test_failed_start_on_fresh_runtime_keeps_doctor_and_install_plan_usable(self):
         selected_python = self.root / "selected-python"

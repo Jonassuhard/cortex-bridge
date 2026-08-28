@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import ctypes
 import errno
+import fcntl
+import json
 import os
 import secrets
 import stat
@@ -16,6 +18,8 @@ LIFECYCLE_LOCK_MARKER = (
     b'"type":"lifecycle_lock"}\n'
 )
 RENAME_EXCL = 0x00000004
+LEGACY_INSTALL_VERSION = "0.5.3"
+MAX_LEGACY_MANIFEST_BYTES = 1024 * 1024
 DIRECTORY_FLAGS = (
     os.O_RDONLY
     | getattr(os, "O_DIRECTORY", 0)
@@ -221,32 +225,342 @@ def _create_temporary_lock(directory_fd: int, prefix: str) -> tuple[int, str]:
     raise RuntimeError("could not allocate lifecycle lock temporary")
 
 
+def _open_existing_lock(directory_fd: int, name: str) -> tuple[int, bool]:
+    base_flags = getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    try:
+        return os.open(name, os.O_RDWR | base_flags, dir_fd=directory_fd), True
+    except PermissionError:
+        return os.open(name, os.O_RDONLY | base_flags, dir_fd=directory_fd), False
+
+
+def _validate_lock_metadata(
+    fd: int,
+    directory_fd: int,
+    name: str,
+    lock_path: Path,
+    *,
+    exact_mode: int | None = None,
+) -> os.stat_result:
+    opened = os.fstat(fd)
+    home_details = os.fstat(directory_fd)
+    if (
+        not stat.S_ISREG(opened.st_mode)
+        or opened.st_uid != os.getuid()
+        or opened.st_nlink != 1
+        or stat.S_IMODE(opened.st_mode) & 0o077
+        or (exact_mode is not None and stat.S_IMODE(opened.st_mode) != exact_mode)
+        or opened.st_dev != home_details.st_dev
+        or not _opened_name_matches(fd, directory_fd, name)
+    ):
+        raise RuntimeError(f"lifecycle lock is unsafe: {lock_path}")
+    return opened
+
+
 def _validate_open_lock(
     fd: int,
     directory_fd: int,
     name: str,
     lock_path: Path,
 ) -> None:
-    opened = os.fstat(fd)
-    home_details = os.fstat(directory_fd)
-    try:
-        current = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
-    except OSError as exc:
-        raise RuntimeError(f"lifecycle lock is unsafe: {lock_path}") from exc
-    if (
-        not stat.S_ISREG(opened.st_mode)
-        or opened.st_uid != os.getuid()
-        or opened.st_nlink != 1
-        or stat.S_IMODE(opened.st_mode) & 0o077
-        or opened.st_dev != home_details.st_dev
-        or not stat.S_ISREG(current.st_mode)
-        or not _same_identity(current, (opened.st_dev, opened.st_ino))
-    ):
-        raise RuntimeError(f"lifecycle lock is unsafe: {lock_path}")
+    opened = _validate_lock_metadata(fd, directory_fd, name, lock_path)
     os.lseek(fd, 0, os.SEEK_SET)
     marker = os.read(fd, len(LIFECYCLE_LOCK_MARKER) + 1)
     if opened.st_size != len(LIFECYCLE_LOCK_MARKER) or marker != LIFECYCLE_LOCK_MARKER:
         raise RuntimeError(f"lifecycle lock provenance is invalid: {lock_path}")
+
+
+def _read_fd_limited(fd: int, limit: int) -> bytes:
+    os.lseek(fd, 0, os.SEEK_SET)
+    chunks: list[bytes] = []
+    total = 0
+    while chunk := os.read(fd, min(64 * 1024, limit + 1 - total)):
+        chunks.append(chunk)
+        total += len(chunk)
+        if total > limit:
+            raise RuntimeError("legacy install manifest is too large")
+    os.lseek(fd, 0, os.SEEK_SET)
+    return b"".join(chunks)
+
+
+def _open_legacy_manifest_fds(
+    home_fd: int,
+    home_path: Path,
+) -> tuple[int, int]:
+    install_fd: int | None = None
+    manifest_fd: int | None = None
+    try:
+        install_fd = os.open("install", DIRECTORY_FLAGS, dir_fd=home_fd)
+        manifest_flags = (
+            os.O_RDONLY
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0)
+        )
+        manifest_fd = os.open("owned.json", manifest_flags, dir_fd=install_fd)
+        result = install_fd, manifest_fd
+        install_fd = None
+        manifest_fd = None
+        return result
+    except OSError as exc:
+        raise RuntimeError(
+            "legacy lifecycle lock manifest is missing or unsafe: "
+            f"{home_path / 'install' / 'owned.json'}"
+        ) from exc
+    finally:
+        if manifest_fd is not None:
+            os.close(manifest_fd)
+        if install_fd is not None:
+            os.close(install_fd)
+
+
+def _validate_legacy_manifest(
+    home_fd: int,
+    install_fd: int,
+    manifest_fd: int,
+    home_path: Path,
+    *,
+    expected_raw: bytes | None = None,
+) -> bytes:
+    manifest_path = home_path / "install" / "owned.json"
+    home_details = os.fstat(home_fd)
+    install_details = os.fstat(install_fd)
+    try:
+        current_install = os.stat(
+            "install",
+            dir_fd=home_fd,
+            follow_symlinks=False,
+        )
+    except OSError as exc:
+        raise RuntimeError(f"legacy install directory changed: {manifest_path}") from exc
+    if (
+        not stat.S_ISDIR(install_details.st_mode)
+        or install_details.st_uid != os.getuid()
+        or install_details.st_dev != home_details.st_dev
+        or stat.S_IMODE(install_details.st_mode) != 0o700
+        or not stat.S_ISDIR(current_install.st_mode)
+        or not _same_identity(
+            current_install,
+            (install_details.st_dev, install_details.st_ino),
+        )
+    ):
+        raise RuntimeError(f"legacy install directory is unsafe: {manifest_path}")
+    manifest_details = os.fstat(manifest_fd)
+    if (
+        not stat.S_ISREG(manifest_details.st_mode)
+        or manifest_details.st_uid != os.getuid()
+        or manifest_details.st_nlink != 1
+        or manifest_details.st_dev != home_details.st_dev
+        or stat.S_IMODE(manifest_details.st_mode) != 0o600
+        or not _opened_name_matches(manifest_fd, install_fd, "owned.json")
+        or manifest_details.st_size <= 0
+        or manifest_details.st_size > MAX_LEGACY_MANIFEST_BYTES
+    ):
+        raise RuntimeError(f"legacy install manifest is unsafe: {manifest_path}")
+    raw = _read_fd_limited(manifest_fd, MAX_LEGACY_MANIFEST_BYTES)
+    after = os.fstat(manifest_fd)
+    if (
+        after.st_dev != manifest_details.st_dev
+        or after.st_ino != manifest_details.st_ino
+        or after.st_size != manifest_details.st_size
+        or len(raw) != manifest_details.st_size
+        or (expected_raw is not None and raw != expected_raw)
+    ):
+        raise RuntimeError(f"legacy install manifest changed: {manifest_path}")
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"legacy install manifest is malformed: {manifest_path}") from exc
+    plan_hash = payload.get("plan_hash") if isinstance(payload, dict) else None
+    resources = payload.get("resources") if isinstance(payload, dict) else None
+    if (
+        not isinstance(payload, dict)
+        or type(payload.get("schema_version")) is not int
+        or payload.get("schema_version") != 1
+        or payload.get("owner") != "cortex-bridge"
+        or payload.get("version") != LEGACY_INSTALL_VERSION
+        or not isinstance(plan_hash, str)
+        or len(plan_hash) != 64
+        or any(character not in "0123456789abcdefABCDEF" for character in plan_hash)
+        or not isinstance(resources, list)
+        or not all(isinstance(resource, str) for resource in resources)
+        or str(manifest_path) not in resources
+    ):
+        raise RuntimeError(f"legacy install manifest proof is invalid: {manifest_path}")
+    return raw
+
+
+def _write_all(fd: int, payload: bytes) -> None:
+    view = memoryview(payload)
+    while view:
+        written = os.write(fd, view)
+        if written <= 0:
+            raise OSError("could not write lifecycle lock marker")
+        view = view[written:]
+
+
+def _restore_empty_lock(fd: int) -> None:
+    os.ftruncate(fd, 0)
+    os.lseek(fd, 0, os.SEEK_SET)
+    os.fsync(fd)
+
+
+def _migrate_legacy_empty_lock(
+    fd: int,
+    writable: bool,
+    directory_fd: int,
+    lock_path: Path,
+    parent_descriptors: list[int],
+    parent_names: list[str],
+    expected_device: int,
+) -> None:
+    if not writable:
+        raise RuntimeError(f"legacy lifecycle lock is not writable: {lock_path}")
+    initial = os.fstat(fd)
+    if stat.S_IMODE(initial.st_mode) != 0o600:
+        raise RuntimeError(f"legacy lifecycle lock is unsafe: {lock_path}")
+    fcntl.flock(fd, fcntl.LOCK_EX)
+    install_fd: int | None = None
+    manifest_fd: int | None = None
+    wrote_marker = False
+    try:
+        _validate_pinned_directory_chain(
+            lock_path.parent,
+            parent_descriptors,
+            parent_names,
+            expected_device,
+        )
+        if stat.S_IMODE(os.fstat(directory_fd).st_mode) != 0o700:
+            raise RuntimeError(f"legacy lifecycle lock parent is not private: {lock_path}")
+        locked = _validate_lock_metadata(
+            fd,
+            directory_fd,
+            lock_path.name,
+            lock_path,
+            exact_mode=0o600,
+        )
+        os.lseek(fd, 0, os.SEEK_SET)
+        current = os.read(fd, len(LIFECYCLE_LOCK_MARKER) + 1)
+        if (
+            locked.st_size == len(LIFECYCLE_LOCK_MARKER)
+            and current == LIFECYCLE_LOCK_MARKER
+        ):
+            return
+        if locked.st_size != 0 or current != b"":
+            raise RuntimeError(f"lifecycle lock provenance is invalid: {lock_path}")
+        if (locked.st_dev, locked.st_ino) != (initial.st_dev, initial.st_ino):
+            raise RuntimeError(f"legacy lifecycle lock changed: {lock_path}")
+
+        install_fd, manifest_fd = _open_legacy_manifest_fds(
+            directory_fd,
+            lock_path.parent,
+        )
+        manifest_raw = _validate_legacy_manifest(
+            directory_fd,
+            install_fd,
+            manifest_fd,
+            lock_path.parent,
+        )
+        _validate_pinned_directory_chain(
+            lock_path.parent,
+            parent_descriptors,
+            parent_names,
+            expected_device,
+        )
+        before_write = _validate_lock_metadata(
+            fd,
+            directory_fd,
+            lock_path.name,
+            lock_path,
+            exact_mode=0o600,
+        )
+        if (
+            before_write.st_size != 0
+            or (before_write.st_dev, before_write.st_ino)
+            != (initial.st_dev, initial.st_ino)
+        ):
+            raise RuntimeError(f"legacy lifecycle lock changed: {lock_path}")
+        _validate_legacy_manifest(
+            directory_fd,
+            install_fd,
+            manifest_fd,
+            lock_path.parent,
+            expected_raw=manifest_raw,
+        )
+
+        os.lseek(fd, 0, os.SEEK_SET)
+        os.ftruncate(fd, 0)
+        try:
+            _write_all(fd, LIFECYCLE_LOCK_MARKER)
+            os.fsync(fd)
+            wrote_marker = True
+        except BaseException:
+            _restore_empty_lock(fd)
+            raise
+
+        _validate_pinned_directory_chain(
+            lock_path.parent,
+            parent_descriptors,
+            parent_names,
+            expected_device,
+        )
+        migrated = _validate_lock_metadata(
+            fd,
+            directory_fd,
+            lock_path.name,
+            lock_path,
+            exact_mode=0o600,
+        )
+        if (migrated.st_dev, migrated.st_ino) != (initial.st_dev, initial.st_ino):
+            raise RuntimeError(f"legacy lifecycle lock changed: {lock_path}")
+        _validate_open_lock(fd, directory_fd, lock_path.name, lock_path)
+        _validate_legacy_manifest(
+            directory_fd,
+            install_fd,
+            manifest_fd,
+            lock_path.parent,
+            expected_raw=manifest_raw,
+        )
+    except BaseException:
+        if wrote_marker:
+            _restore_empty_lock(fd)
+        raise
+    finally:
+        if manifest_fd is not None:
+            os.close(manifest_fd)
+        if install_fd is not None:
+            os.close(install_fd)
+        fcntl.flock(fd, fcntl.LOCK_UN)
+
+
+def _validate_or_migrate_lock(
+    fd: int,
+    writable: bool,
+    directory_fd: int,
+    lock_path: Path,
+    parent_descriptors: list[int],
+    parent_names: list[str],
+    expected_device: int,
+) -> None:
+    opened = _validate_lock_metadata(fd, directory_fd, lock_path.name, lock_path)
+    os.lseek(fd, 0, os.SEEK_SET)
+    current = os.read(fd, len(LIFECYCLE_LOCK_MARKER) + 1)
+    if opened.st_size == len(LIFECYCLE_LOCK_MARKER) and current == LIFECYCLE_LOCK_MARKER:
+        return
+    if opened.st_size == 0 and current == b"":
+        _migrate_legacy_empty_lock(
+            fd,
+            writable,
+            directory_fd,
+            lock_path,
+            parent_descriptors,
+            parent_names,
+            expected_device,
+        )
+        return
+    fcntl.flock(fd, fcntl.LOCK_SH)
+    try:
+        _validate_open_lock(fd, directory_fd, lock_path.name, lock_path)
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
 
 
 def open_lifecycle_lock(lock_path: Path) -> int:
@@ -257,13 +571,9 @@ def open_lifecycle_lock(lock_path: Path) -> int:
     )
     directory_fd = parent_descriptors[-1]
     fd: int | None = None
+    fd_writable = False
     temporary_fd: int | None = None
     temporary_name: str | None = None
-    existing_flags = (
-        os.O_RDONLY
-        | getattr(os, "O_NOFOLLOW", 0)
-        | getattr(os, "O_NONBLOCK", 0)
-    )
     try:
         _validate_pinned_directory_chain(
             lock_path.parent,
@@ -272,7 +582,7 @@ def open_lifecycle_lock(lock_path: Path) -> int:
             expected_device,
         )
         try:
-            fd = os.open(lock_path.name, existing_flags, dir_fd=directory_fd)
+            fd, fd_writable = _open_existing_lock(directory_fd, lock_path.name)
         except FileNotFoundError:
             temporary_fd, temporary_name = _create_temporary_lock(
                 directory_fd,
@@ -285,12 +595,7 @@ def open_lifecycle_lock(lock_path: Path) -> int:
                 expected_device,
             )
             os.fchmod(temporary_fd, 0o600)
-            view = memoryview(LIFECYCLE_LOCK_MARKER)
-            while view:
-                written = os.write(temporary_fd, view)
-                if written <= 0:
-                    raise OSError("could not write lifecycle lock marker")
-                view = view[written:]
+            _write_all(temporary_fd, LIFECYCLE_LOCK_MARKER)
             os.fsync(temporary_fd)
             if not _opened_name_matches(
                 temporary_fd,
@@ -332,9 +637,13 @@ def open_lifecycle_lock(lock_path: Path) -> int:
                     parent_names,
                     expected_device,
                 )
-                fd = os.open(lock_path.name, existing_flags, dir_fd=directory_fd)
+                fd, fd_writable = _open_existing_lock(
+                    directory_fd,
+                    lock_path.name,
+                )
             else:
                 fd = temporary_fd
+                fd_writable = True
                 temporary_fd = None
                 temporary_name = None
                 try:
@@ -363,7 +672,15 @@ def open_lifecycle_lock(lock_path: Path) -> int:
             parent_names,
             expected_device,
         )
-        _validate_open_lock(fd, directory_fd, lock_path.name, lock_path)
+        _validate_or_migrate_lock(
+            fd,
+            fd_writable,
+            directory_fd,
+            lock_path,
+            parent_descriptors,
+            parent_names,
+            expected_device,
+        )
         _validate_pinned_directory_chain(
             lock_path.parent,
             parent_descriptors,
