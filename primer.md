@@ -1,6 +1,6 @@
 # Cortex Bridge session primer
 
-Current state: 2026-08-28.
+Current state: 2026-08-31.
 
 ## Current project
 
@@ -10,6 +10,23 @@ Current state: 2026-08-28.
 - The storage candidate is committed locally on this branch and has not been
   pushed or merged.
 - No v0.5.4 tag, release checklist, or evidence manifest exists.
+
+## Hybrid intent routing design
+
+- The owner test proved the current Enter path sends obvious local-action text
+  through `/api/chat/send`; the transport completed, but no mission, approval,
+  tool, or filesystem change was created.
+- The owner approved the hybrid concept: deterministic high-precision rules,
+  local Ollama only for ambiguous intent, and a local clarification when needed.
+- The written design is at
+  `docs/superpowers/specs/2026-08-31-hybrid-intent-router-design.md` with frozen
+  SHA-256
+  `472ae88687f6df00be1aac7bb33af536b0456fdc7fd04b7bb5f95e637e4b38f5`.
+- Independent UX, architecture, and security reviews all returned PASS with no
+  P0/P1/P2 on those exact bytes.
+- This is design evidence only. The product has not implemented the router,
+  enrollment protocol, durable dispatch states, or routed `create_directory`
+  path, and the current running Cortex behavior is unchanged.
 
 ## Product invariants
 
@@ -83,6 +100,6 @@ Current state: 2026-08-28.
 
 ## Next exact action
 
-After explicit user confirmation, reload the unpacked Chrome extension from
-the minimal local app path; only then may the old Desktop/Documents copies and
-the preserved upgrade rollback be considered for external archival or removal.
+The owner reviews and approves the written hybrid-intent specification. Only
+after that review may an implementation plan be written and executed RED-first;
+the current app must not be described as having this feature yet.
