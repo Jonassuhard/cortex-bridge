@@ -141,7 +141,15 @@ protocol RandomSource {
 }
 
 protocol HdiutilRunning {
-    func run(argv: [String], secret: SecretBuffer?) throws -> Data
+    func run(argv: [String], secret: SecretBuffer?, deadline: Double) throws -> Data
+}
+
+protocol MonotonicClock {
+    func now() -> Double
+}
+
+struct SystemMonotonicClock: MonotonicClock {
+    func now() -> Double { monotonicSeconds() }
 }
 
 struct KeychainSelector {
@@ -367,19 +375,18 @@ final class SpawnDiagnostics {
     var stdinWriteLengths = [Int]()
 }
 
-private let productionChildTimeoutSeconds: Double = 45.0
+private let productionRequestDeadlineSeconds: Double = 40.0
+private let productionMountCompensationReserveSeconds: Double = 12.0
 private let productionTermGraceSeconds: Double = 2.0
 private let productionReapGraceSeconds: Double = 2.0
 private let productionGroupGraceSeconds: Double = 2.0
 
 #if CORTEX_STORAGE_HELPER_TESTING
-private let childTimeoutSeconds: Double = 0.30
 private let childTermGraceSeconds: Double = 0.15
 private let childReapGraceSeconds: Double = 0.15
 private let childGroupGraceSeconds: Double = 0.15
 private let childOutputLimit = 4_096
 #else
-private let childTimeoutSeconds = productionChildTimeoutSeconds
 private let childTermGraceSeconds = productionTermGraceSeconds
 private let childReapGraceSeconds = productionReapGraceSeconds
 private let childGroupGraceSeconds = productionGroupGraceSeconds
@@ -492,9 +499,16 @@ private func spawnChild(
     executable: String,
     argv: [String],
     secret: SecretBuffer?,
+    deadline: Double,
     diagnostics: SpawnDiagnostics? = nil
 ) throws -> Data {
     guard argv.count >= 2, argv[0] == executable else { throw HelperFailure.invalidRequest }
+    guard monotonicSeconds() < deadline else {
+        throw ProcessInvocationFailure(
+            reason: .timeout, stdout: Data(), stderr: Data(),
+            directChildReaped: true, processGroupGone: true
+        )
+    }
     var inputPipe = [Int32](repeating: -1, count: 2)
     var outputPipe = [Int32](repeating: -1, count: 2)
     var errorPipe = [Int32](repeating: -1, count: 2)
@@ -574,7 +588,6 @@ private func spawnChild(
     if secret == nil { closeDescriptor(&inputPipe[1]) }
     var childStatus: Int32 = 0
     var childReaped = false
-    let deadline = monotonicSeconds() + childTimeoutSeconds
     var failureReason: ProcessFailureReason?
 
     while !childReaped || !stdoutEOF || !stderrEOF {
@@ -677,9 +690,11 @@ private func spawnChild(
 }
 
 final class PosixHdiutilRunner: HdiutilRunning {
-    func run(argv: [String], secret: SecretBuffer?) throws -> Data {
+    func run(argv: [String], secret: SecretBuffer?, deadline: Double) throws -> Data {
         guard argv.first == hdiutilPath else { throw HelperFailure.invalidRequest }
-        return try spawnChild(executable: hdiutilPath, argv: argv, secret: secret)
+        return try spawnChild(
+            executable: hdiutilPath, argv: argv, secret: secret, deadline: deadline
+        )
     }
 }
 
@@ -909,9 +924,14 @@ func perform(
     request: HelperRequest,
     random: RandomSource,
     hdiutil: HdiutilRunning,
-    keychain: KeychainStoring
+    keychain: KeychainStoring,
+    clock: MonotonicClock = SystemMonotonicClock()
 ) throws -> HelperResponse {
     try validatedRequest(request)
+    let finalDeadline = clock.now() + productionRequestDeadlineSeconds
+    let normalDeadline = request.operation == .mount
+        ? finalDeadline - productionMountCompensationReserveSeconds
+        : finalDeadline
     let selector: (String) -> KeychainSelector = { account in
         KeychainSelector(account: account, transactionTag: transactionTag(request))
     }
@@ -931,11 +951,13 @@ func perform(
                 "-type", "SPARSEBUNDLE", "-size", size, "-fs", "APFS",
                 "-volname", volumeName, request.image_path,
             ],
-            secret: secret
+            secret: secret,
+            deadline: normalDeadline
         )
         let encryptionData = try hdiutil.run(
             argv: [hdiutilPath, "isencrypted", "-plist", request.image_path],
-            secret: nil
+            secret: nil,
+            deadline: normalDeadline
         )
         let facts = try parseEncryptionFacts(encryptionData, expectedUUID: nil)
         guard try keychain.countForAccount(facts.uuid) == 0 else {
@@ -967,7 +989,8 @@ func perform(
             throw HelperFailure.keychainSecretInvalid
         }
         let baselineInfo = try hdiutil.run(
-            argv: [hdiutilPath, "info", "-plist"], secret: nil
+            argv: [hdiutilPath, "info", "-plist"], secret: nil,
+            deadline: normalDeadline
         )
         let baselineDevices = try mappingDevices(
             from: baselineInfo, imagePath: request.image_path, mountPath: mountPath
@@ -984,11 +1007,13 @@ func perform(
                     hdiutilPath, "attach", "-stdinpass", "-owners", "on",
                     "-nobrowse", "-mountpoint", mountPath, request.image_path,
                 ],
-                secret: secret
+                secret: secret,
+                deadline: normalDeadline
             )
             let outputReceipts = attachReceiptDevices(from: attachOutput, mountPath: mountPath)
             let postInfo = try hdiutil.run(
-                argv: [hdiutilPath, "info", "-plist"], secret: nil
+                argv: [hdiutilPath, "info", "-plist"], secret: nil,
+                deadline: normalDeadline
             )
             let postDevices = try mappingDevices(
                 from: postInfo, imagePath: request.image_path, mountPath: mountPath
@@ -1008,11 +1033,13 @@ func perform(
 
             let encryptionData = try hdiutil.run(
                 argv: [hdiutilPath, "isencrypted", "-plist", request.image_path],
-                secret: nil
+                secret: nil,
+                deadline: normalDeadline
             )
             _ = try parseEncryptionFacts(encryptionData, expectedUUID: expected)
             let finalInfo = try hdiutil.run(
-                argv: [hdiutilPath, "info", "-plist"], secret: nil
+                argv: [hdiutilPath, "info", "-plist"], secret: nil,
+                deadline: normalDeadline
             )
             let finalDevices = try mappingDevices(
                 from: finalInfo, imagePath: request.image_path, mountPath: mountPath
@@ -1023,7 +1050,8 @@ func perform(
         } catch let failure as ProcessInvocationFailure {
             let outputReceipts = attachReceiptDevices(from: failure.stdout, mountPath: mountPath)
             if let currentInfo = try? hdiutil.run(
-                argv: [hdiutilPath, "info", "-plist"], secret: nil
+                argv: [hdiutilPath, "info", "-plist"], secret: nil,
+                deadline: finalDeadline
             ), let currentDevices = try? mappingDevices(
                 from: currentInfo, imagePath: request.image_path, mountPath: mountPath
             ), currentDevices.count == 1 {
@@ -1040,10 +1068,12 @@ func perform(
             guard let receipt else { throw HelperFailure.mountCleanupUnclear }
             do {
                 _ = try hdiutil.run(
-                    argv: [hdiutilPath, "detach", receipt], secret: nil
+                    argv: [hdiutilPath, "detach", receipt], secret: nil,
+                    deadline: finalDeadline
                 )
                 let cleanupInfo = try hdiutil.run(
-                    argv: [hdiutilPath, "info", "-plist"], secret: nil
+                    argv: [hdiutilPath, "info", "-plist"], secret: nil,
+                    deadline: finalDeadline
                 )
                 let remaining = try mappingDevices(
                     from: cleanupInfo, imagePath: request.image_path, mountPath: mountPath
@@ -1074,10 +1104,14 @@ func perform(
         let mountPath = try requiredMountPath(request)
         let encryptionData = try hdiutil.run(
             argv: [hdiutilPath, "isencrypted", "-plist", request.image_path],
-            secret: nil
+            secret: nil,
+            deadline: normalDeadline
         )
         _ = try parseEncryptionFacts(encryptionData, expectedUUID: expected)
-        let info = try hdiutil.run(argv: [hdiutilPath, "info", "-plist"], secret: nil)
+        let info = try hdiutil.run(
+            argv: [hdiutilPath, "info", "-plist"], secret: nil,
+            deadline: normalDeadline
+        )
         let devices = try mappingDevices(
             from: info, imagePath: request.image_path, mountPath: mountPath
         )
@@ -1087,10 +1121,12 @@ func perform(
         do {
             _ = try hdiutil.run(
                 argv: [hdiutilPath, "detach", devices[0]],
-                secret: nil
+                secret: nil,
+                deadline: normalDeadline
             )
             let detachedInfo = try hdiutil.run(
-                argv: [hdiutilPath, "info", "-plist"], secret: nil
+                argv: [hdiutilPath, "info", "-plist"], secret: nil,
+                deadline: normalDeadline
             )
             guard try imageEntryCount(
                 from: detachedInfo, imagePath: request.image_path
@@ -1200,16 +1236,32 @@ final class FakeRandomSource: RandomSource {
     }
 }
 
+final class FakeMonotonicClock: MonotonicClock {
+    private(set) var value: Double = 100.0
+
+    func now() -> Double { value }
+    func advance(_ seconds: Double) { value += seconds }
+}
+
 final class FakeHdiutilRunner: HdiutilRunning {
     let scenario: String
     let tracker: BufferTracker
+    let clock: FakeMonotonicClock
     var calls = [[String: Any]]()
     var attached: Bool
     var infoCalls = 0
+    var normalDeadline: Double?
+    var compensationStarted = false
 
-    init(scenario: String, tracker: BufferTracker, operation: Operation) {
+    init(
+        scenario: String,
+        tracker: BufferTracker,
+        operation: Operation,
+        clock: FakeMonotonicClock
+    ) {
         self.scenario = scenario
         self.tracker = tracker
+        self.clock = clock
         attached = operation == .detach
     }
 
@@ -1219,12 +1271,17 @@ final class FakeHdiutilRunner: HdiutilRunning {
         )
     }
 
-    func run(argv: [String], secret: SecretBuffer?) throws -> Data {
+    func run(argv: [String], secret: SecretBuffer?, deadline: Double) throws -> Data {
+        if normalDeadline == nil { normalDeadline = deadline }
         var call: [String: Any] = [
             "argv": argv,
             "environment": childEnvironment,
             "posix_spawn_cloexec_default": true,
             "unrelated_inherited_fd_count": 0,
+            "absolute_deadline": deadline,
+            "remaining_budget_before": max(0, deadline - clock.now()),
+            "deadline_phase": compensationStarted || deadline > normalDeadline!
+                ? "compensation" : "normal",
         ]
         if let secret {
             _ = tracker.track(secret)
@@ -1242,10 +1299,24 @@ final class FakeHdiutilRunner: HdiutilRunning {
 
         guard argv.count >= 2 else { throw HelperFailure.hdiutilFailure }
         let command = argv[1]
+        if scenario == "slow-series", command == "create" {
+            clock.advance(20)
+        }
+        if scenario == "deadline-compensation", command == "info", infoCalls == 0 {
+            clock.advance(26)
+        }
         if command == "attach" {
             if scenario == "hdiutil-error" { throw HelperFailure.hdiutilFailure }
             attached = true
             let receipt = Data("/dev/disk99\tApple_APFS\t/private/tmp/CORTEX_TEST_MOUNT\n".utf8)
+            if scenario == "deadline-compensation" {
+                clock.advance(2)
+                compensationStarted = true
+                throw ProcessInvocationFailure(
+                    reason: .timeout, stdout: receipt, stderr: Data(),
+                    directChildReaped: true, processGroupGone: true
+                )
+            }
             if scenario == "attach-timeout-with-receipt" {
                 throw ProcessInvocationFailure(
                     reason: .timeout, stdout: receipt, stderr: Data(),
@@ -1473,6 +1544,7 @@ private func runSpawnProbe() -> Int32 {
                 String(foreignDescriptor),
             ],
             secret: secret,
+            deadline: monotonicSeconds() + 0.30,
             diagnostics: diagnostics
         )
     } catch {
@@ -1547,7 +1619,8 @@ private func runProcessScenario(_ scenario: String) -> Int32 {
         _ = try spawnChild(
             executable: CommandLine.arguments[0],
             argv: [CommandLine.arguments[0], "--process-child", scenario],
-            secret: secret
+            secret: secret,
+            deadline: monotonicSeconds() + 0.30
         )
         writeJSONObject([
             "code": "UNEXPECTED_SUCCESS",
@@ -1572,7 +1645,8 @@ private func runProcessScenario(_ scenario: String) -> Int32 {
 
 private func runProcessPolicy() -> Int32 {
     writeJSONObject([
-        "child_timeout_seconds": productionChildTimeoutSeconds,
+        "request_deadline_seconds": productionRequestDeadlineSeconds,
+        "mount_compensation_reserve_seconds": productionMountCompensationReserveSeconds,
         "term_grace_seconds": productionTermGraceSeconds,
         "reap_grace_seconds": productionReapGraceSeconds,
         "group_grace_seconds": productionGroupGraceSeconds,
@@ -1582,8 +1656,9 @@ private func runProcessPolicy() -> Int32 {
 
 private func runTestHarness(request: HelperRequest, scenario: String) -> Int32 {
     let tracker = BufferTracker()
+    let clock = FakeMonotonicClock()
     let fakeHdiutil = FakeHdiutilRunner(
-        scenario: scenario, tracker: tracker, operation: request.operation
+        scenario: scenario, tracker: tracker, operation: request.operation, clock: clock
     )
     let fakeSecurity = FakeSecurityAdapter(scenario: scenario)
     let fakeKeychain = SystemKeychainStore(
@@ -1597,7 +1672,8 @@ private func runTestHarness(request: HelperRequest, scenario: String) -> Int32 {
             request: request,
             random: FakeRandomSource(tracker: tracker),
             hdiutil: fakeHdiutil,
-            keychain: fakeKeychain
+            keychain: fakeKeychain,
+            clock: clock
         )
         exitCode = 0
     } catch let failure as HelperFailure {

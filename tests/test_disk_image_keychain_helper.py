@@ -6,6 +6,7 @@ DiskImages effects are unreachable unless both explicit integration gates are
 present; the focused suite below never supplies the authorization environment.
 """
 
+import ast
 import json
 import inspect
 import os
@@ -113,48 +114,156 @@ class IntegrationWorkflowFailure(Exception):
     pass
 
 
-def _process_table():
-    completed = subprocess.run(
-        ["/bin/ps", "-axo", "pid=,ppid=,pgid="],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        check=False,
-        timeout=PROCESS_TREE_SCAN_TIMEOUT_SECONDS,
-        env={"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "LANG": "C", "LC_ALL": "C"},
-    )
-    if completed.returncode != 0 or completed.stderr:
+@dataclass(frozen=True)
+class ProcessIdentity:
+    pid: int
+    ppid: int
+    pgid: int
+    start_seconds: int
+    start_microseconds: int
+
+    @property
+    def stable_key(self):
+        return self.pid, self.start_seconds, self.start_microseconds
+
+
+class _ProcBSDInfo(ctypes.Structure):
+    _fields_ = [
+        ("pbi_flags", ctypes.c_uint32), ("pbi_status", ctypes.c_uint32),
+        ("pbi_xstatus", ctypes.c_uint32), ("pbi_pid", ctypes.c_uint32),
+        ("pbi_ppid", ctypes.c_uint32), ("pbi_uid", ctypes.c_uint32),
+        ("pbi_gid", ctypes.c_uint32), ("pbi_ruid", ctypes.c_uint32),
+        ("pbi_rgid", ctypes.c_uint32), ("pbi_svuid", ctypes.c_uint32),
+        ("pbi_svgid", ctypes.c_uint32), ("rfu_1", ctypes.c_uint32),
+        ("pbi_comm", ctypes.c_char * 16), ("pbi_name", ctypes.c_char * 32),
+        ("pbi_nfiles", ctypes.c_uint32), ("pbi_pgid", ctypes.c_uint32),
+        ("pbi_pjobc", ctypes.c_uint32), ("e_tdev", ctypes.c_uint32),
+        ("e_tpgid", ctypes.c_uint32), ("pbi_nice", ctypes.c_int32),
+        ("pbi_start_tvsec", ctypes.c_uint64),
+        ("pbi_start_tvusec", ctypes.c_uint64),
+    ]
+
+
+def _bounded_timeout(deadline, cap):
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise IntegrationWorkflowFailure
+    return min(cap, remaining)
+
+
+def _process_table(timeout=PROCESS_TREE_SCAN_TIMEOUT_SECONDS):
+    if timeout <= 0:
+        raise IntegrationWorkflowFailure
+    started = time.monotonic()
+    libc = ctypes.CDLL(None, use_errno=True)
+    list_all = libc.proc_listallpids
+    list_all.argtypes = [ctypes.c_void_p, ctypes.c_int]
+    list_all.restype = ctypes.c_int
+    pid_info = libc.proc_pidinfo
+    pid_info.argtypes = [
+        ctypes.c_int, ctypes.c_int, ctypes.c_uint64, ctypes.c_void_p, ctypes.c_int,
+    ]
+    pid_info.restype = ctypes.c_int
+    capacity = max(list_all(None, 0), 1) + 64
+    storage = (ctypes.c_int * capacity)()
+    count = list_all(storage, ctypes.sizeof(storage))
+    if count <= 0 or count >= capacity:
         raise IntegrationWorkflowFailure
     rows = []
-    for line in completed.stdout.splitlines():
-        fields = line.split()
-        if len(fields) != 3:
-            raise IntegrationWorkflowFailure
-        try:
-            rows.append(tuple(int(field) for field in fields))
-        except ValueError:
-            raise IntegrationWorkflowFailure from None
-    return rows
+    for pid in storage[:count]:
+        if pid <= 0:
+            continue
+        info = _ProcBSDInfo()
+        copied = pid_info(pid, 3, 0, ctypes.byref(info), ctypes.sizeof(info))
+        if copied != ctypes.sizeof(info):
+            continue
+        rows.append(ProcessIdentity(
+            int(info.pbi_pid), int(info.pbi_ppid), int(info.pbi_pgid),
+            int(info.pbi_start_tvsec), int(info.pbi_start_tvusec),
+        ))
+    if time.monotonic() - started > timeout:
+        raise IntegrationWorkflowFailure
+    return tuple(rows)
+
+
+class ProcessTreeTracker:
+    def __init__(self, root_identity):
+        self.root_identity = root_identity
+        self.owned_group = root_identity.pgid
+        self.tracked = {root_identity.stable_key: root_identity}
+        self.current = {root_identity.stable_key: root_identity}
+        self.adoption_open = True
+        self.scan_complete = True
+
+    @property
+    def tracked_identities(self):
+        return frozenset(self.tracked)
+
+    def mark_scan_unavailable(self):
+        self.scan_complete = False
+        self.adoption_open = False
+
+    def observe(self, rows):
+        current = {row.stable_key: row for row in rows}
+        root_current = current.get(self.root_identity.stable_key)
+        if root_current != self.root_identity:
+            self.adoption_open = False
+        if self.adoption_open:
+            known_pids = {identity.pid for identity in self.tracked.values()}
+            changed = True
+            while changed:
+                changed = False
+                for identity in rows:
+                    if identity.ppid in known_pids and identity.stable_key not in self.tracked:
+                        self.tracked[identity.stable_key] = identity
+                        known_pids.add(identity.pid)
+                        changed = True
+        self.current = current
+
+    def signalable_descendant_groups(self):
+        groups = set()
+        for key, tracked in self.tracked.items():
+            if key == self.root_identity.stable_key:
+                continue
+            current = self.current.get(key)
+            if current is not None and current.pgid == tracked.pgid and current.pgid > 1:
+                groups.add(current.pgid)
+        return groups
+
+
+@dataclass(frozen=True)
+class ObservedProcessResult:
+    completed: subprocess.CompletedProcess
+    observation_error: Exception | None
+
+
+def _root_process_tracker(pid, deadline):
+    rows = _process_table(_bounded_timeout(deadline, PROCESS_TREE_SCAN_TIMEOUT_SECONDS))
+    roots = [row for row in rows if row.pid == pid]
+    if len(roots) != 1:
+        raise IntegrationWorkflowFailure
+    tracker = ProcessTreeTracker(roots[0])
+    tracker.observe(rows)
+    return tracker
+
+
+def _refresh_process_tracker(tracker, deadline):
+    try:
+        rows = _process_table(_bounded_timeout(deadline, PROCESS_TREE_SCAN_TIMEOUT_SECONDS))
+        tracker.observe(rows)
+    except IntegrationWorkflowFailure:
+        tracker.mark_scan_unavailable()
+        raise
 
 
 def _descendant_process_groups(root_pid):
     rows = _process_table()
-    if not any(pid == root_pid for pid, _, _ in rows):
+    roots = [row for row in rows if row.pid == root_pid]
+    if len(roots) != 1:
         return set()
-    descendants = {root_pid}
-    changed = True
-    while changed:
-        changed = False
-        for pid, parent_pid, _ in rows:
-            if parent_pid in descendants and pid not in descendants:
-                descendants.add(pid)
-                changed = True
-    return {
-        pgid
-        for pid, _, pgid in rows
-        if pid in descendants and pgid > 1
-    }
+    tracker = ProcessTreeTracker(roots[0])
+    tracker.observe(rows)
+    return tracker.signalable_descendant_groups() | {tracker.owned_group}
 
 
 def _process_group_exists(pgid):
@@ -164,55 +273,81 @@ def _process_group_exists(pgid):
         return False
     except PermissionError:
         try:
-            return any(candidate_pgid == pgid for _, _, candidate_pgid in _process_table())
+            return any(identity.pgid == pgid for identity in _process_table())
         except IntegrationWorkflowFailure:
             return True
     return True
 
 
-def _terminate_process_tree(process, tracked_groups):
-    groups = set(tracked_groups)
-    groups.add(process.pid)
-    scan_complete = True
-    try:
-        groups.update(_descendant_process_groups(process.pid))
-    except IntegrationWorkflowFailure:
-        scan_complete = False
+def _close_process_pipes(process):
+    for stream_name in ("stdin", "stdout", "stderr"):
+        stream = getattr(process, stream_name, None)
+        if stream is not None and not stream.closed:
+            stream.close()
 
-    for pgid in sorted(groups, reverse=True):
-        try:
-            os.killpg(pgid, signal.SIGTERM)
-        except (ProcessLookupError, PermissionError):
-            pass
 
-    term_deadline = time.monotonic() + PROCESS_TERMINATION_GRACE_SECONDS
-    while time.monotonic() < term_deadline:
-        try:
-            groups.update(_descendant_process_groups(process.pid))
-        except IntegrationWorkflowFailure:
-            scan_complete = False
-        if process.poll() is not None and not any(
-            _process_group_exists(pgid) for pgid in groups
-        ):
-            return scan_complete
-        time.sleep(0.02)
-
-    for pgid in sorted(groups, reverse=True):
-        try:
-            os.killpg(pgid, signal.SIGKILL)
-        except (ProcessLookupError, PermissionError):
-            pass
-    try:
-        process.wait(timeout=PROCESS_TERMINATION_GRACE_SECONDS)
-    except subprocess.TimeoutExpired:
+def _terminate_process_tree(process, tracker):
+    if not isinstance(tracker, ProcessTreeTracker):
         return False
+    cleanup_deadline = time.monotonic() + 2 * PROCESS_TERMINATION_GRACE_SECONDS + 1
 
-    kill_deadline = time.monotonic() + PROCESS_TERMINATION_GRACE_SECONDS
-    while time.monotonic() < kill_deadline:
-        if not any(_process_group_exists(pgid) for pgid in groups):
-            return scan_complete
-        time.sleep(0.02)
-    return False
+    def refresh():
+        try:
+            rows = _process_table(
+                _bounded_timeout(cleanup_deadline, PROCESS_TREE_SCAN_TIMEOUT_SECONDS)
+            )
+            tracker.observe(rows)
+            return True
+        except IntegrationWorkflowFailure:
+            tracker.mark_scan_unavailable()
+            return False
+
+    refresh()
+    groups = tracker.signalable_descendant_groups() | {tracker.owned_group}
+    try:
+        for pgid in sorted(groups, reverse=True):
+            try:
+                os.killpg(pgid, signal.SIGTERM)
+            except (ProcessLookupError, PermissionError):
+                pass
+
+        term_deadline = time.monotonic() + PROCESS_TERMINATION_GRACE_SECONDS
+        while time.monotonic() < term_deadline:
+            refresh()
+            groups = tracker.signalable_descendant_groups() | {tracker.owned_group}
+            if process.poll() is not None and not any(
+                _process_group_exists(pgid) for pgid in groups
+            ):
+                return tracker.scan_complete
+            time.sleep(0.02)
+
+        refresh()
+        groups = tracker.signalable_descendant_groups() | {tracker.owned_group}
+        for pgid in sorted(groups, reverse=True):
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+        try:
+            process.wait(timeout=_bounded_timeout(
+                cleanup_deadline, PROCESS_TERMINATION_GRACE_SECONDS
+            ))
+        except (subprocess.TimeoutExpired, IntegrationWorkflowFailure):
+            return False
+
+        while time.monotonic() < cleanup_deadline:
+            refresh()
+            groups = tracker.signalable_descendant_groups() | {tracker.owned_group}
+            if not any(_process_group_exists(pgid) for pgid in groups):
+                return tracker.scan_complete
+            time.sleep(0.02)
+        return False
+    finally:
+        if process.poll() is None:
+            try:
+                os.killpg(tracker.owned_group, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
 
 
 def select_execution_mode(arguments, environment):
@@ -1038,7 +1173,7 @@ class DiskImageKeychainHelperTests(unittest.TestCase):
         internal_total = sum(
             policy[key]
             for key in (
-                "child_timeout_seconds",
+                "request_deadline_seconds",
                 "term_grace_seconds",
                 "reap_grace_seconds",
                 "group_grace_seconds",
@@ -1048,6 +1183,42 @@ class DiskImageKeychainHelperTests(unittest.TestCase):
             internal_total + HELPER_TIMEOUT_MARGIN_SECONDS,
             HELPER_OUTER_TIMEOUT_SECONDS,
         )
+
+    def test_sequential_hdiutil_calls_share_one_request_deadline(self):
+        completed, observation = self.run_helper(
+            "create", scenario="slow-series", expected_encryption_uuid=None
+        )
+        self.assertEqual(completed.returncode, 0)
+        calls = observation["hdiutil_calls"]
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(len({call["absolute_deadline"] for call in calls}), 1)
+        self.assertGreater(
+            calls[0]["remaining_budget_before"],
+            calls[1]["remaining_budget_before"],
+        )
+
+    def test_mount_reserves_final_deadline_window_for_exact_compensation(self):
+        completed, observation = self.run_helper(
+            "mount", scenario="deadline-compensation"
+        )
+        self.assertEqual(completed.returncode, 70)
+        self.assertEqual(observation["response"]["code"], "HDIUTIL_FAILED")
+        calls = observation["hdiutil_calls"]
+        normal_deadline = calls[0]["absolute_deadline"]
+        compensation_calls = [
+            call for call in calls if call.get("deadline_phase") == "compensation"
+        ]
+        self.assertTrue(compensation_calls)
+        compensation_deadline = compensation_calls[0]["absolute_deadline"]
+        self.assertGreater(compensation_deadline, normal_deadline)
+        self.assertTrue(
+            all(call["absolute_deadline"] == compensation_deadline for call in compensation_calls)
+        )
+        detach = [
+            call for call in compensation_calls if call["argv"][1] == "detach"
+        ]
+        self.assertEqual(len(detach), 1)
+        self.assertGreater(detach[0]["remaining_budget_before"], 0)
 
     def test_integration_runner_exits_64_when_either_effect_gate_is_missing(self):
         clean_environment = os.environ.copy()
@@ -1134,7 +1305,7 @@ class FakeSecurityAgentObserver:
         self.snapshots = list(snapshots or [(frozenset(), frozenset())])
         self.index = 0
 
-    def snapshot(self):
+    def snapshot(self, timeout=None):
         snapshot = self.snapshots[min(self.index, len(self.snapshots) - 1)]
         self.index += 1
         return snapshot
@@ -1174,6 +1345,17 @@ receipt = {
 record.write_text(json.dumps(receipt))
 if sys.argv[2] == "exit":
     time.sleep(0.3)
+elif sys.argv[2] == "nonzero":
+    time.sleep(0.3)
+    raise SystemExit(7)
+elif sys.argv[2] == "stdout-cap":
+    time.sleep(0.3)
+    os.write(1, b"A" * 1_048_577)
+    raise SystemExit(0)
+elif sys.argv[2] == "stderr-cap":
+    time.sleep(0.3)
+    os.write(2, b"B" * 1_048_577)
+    raise SystemExit(0)
 elif sys.argv[2] == "compensate":
     time.sleep(0.6)
     os.killpg(child.pid, signal.SIGKILL)
@@ -1236,7 +1418,7 @@ else:
         uninitialized.capability = None
         guarded_calls = (
             lambda: uninitialized.compile_production_helper(),
-            lambda: uninitialized._observe_bound(),
+            lambda: uninitialized._observe_bound(1),
             lambda: uninitialized.invoke_helper("mount", {}),
             lambda: uninitialized.verify_mounted("uuid", "/dev/disk99"),
             lambda: uninitialized.verify_detached("/dev/disk99"),
@@ -1255,7 +1437,7 @@ else:
             def __init__(self):
                 self.calls = 0
 
-            def snapshot(self):
+            def snapshot(self, timeout=None):
                 self.calls += 1
                 if self.calls < 4:
                     return frozenset(), frozenset()
@@ -1277,14 +1459,23 @@ else:
                 with mock.patch(
                     f"{__name__}._require_live_capability", return_value=None
                 ):
-                    with self.assertRaises(expected_error):
-                        effects._run(
+                    if trigger == "observation":
+                        observed = effects._run(
                             self._harmless_process_tree_command(
                                 record,
-                                "compensate" if trigger == "observation" else "sleep",
+                                "compensate",
                             ),
                             timeout=0.8,
                         )
+                        self.assertIsInstance(
+                            observed.observation_error, SecurityAgentDetected
+                        )
+                    else:
+                        with self.assertRaises(expected_error):
+                            effects._run(
+                                self._harmless_process_tree_command(record, "sleep"),
+                                timeout=0.8,
+                            )
                 receipt = self._assert_tree_gone_and_cleanup_if_needed(record)
                 if trigger == "observation":
                     self.assertTrue(receipt["compensated"])
@@ -1304,9 +1495,56 @@ else:
     def test_descendant_scan_never_adopts_children_after_root_pid_disappears(self):
         with mock.patch(
             f"{__name__}._process_table",
-            return_value=[(123, 999_999, 123), (456, 1, 456)],
+            return_value=[
+                ProcessIdentity(123, 999_999, 123, 1, 0),
+                ProcessIdentity(456, 1, 456, 2, 0),
+            ],
         ):
             self.assertEqual(_descendant_process_groups(999_999), set())
+
+    def test_process_tracker_revalidates_stable_identities_before_signaling_groups(self):
+        self.assertIn("ProcessIdentity", globals())
+        self.assertIn("ProcessTreeTracker", globals())
+        root = ProcessIdentity(100, 1, 100, 10, 1)
+        leader = ProcessIdentity(200, 100, 200, 20, 1)
+        member = ProcessIdentity(201, 200, 200, 21, 1)
+        tracker = ProcessTreeTracker(root)
+        tracker.observe((root, leader, member))
+
+        reparented_member = ProcessIdentity(201, 1, 200, 21, 1)
+        tracker.observe((reparented_member,))
+        self.assertEqual(tracker.signalable_descendant_groups(), {200})
+
+        reused_group = ProcessIdentity(300, 1, 200, 30, 1)
+        tracker.observe((reused_group,))
+        self.assertEqual(tracker.signalable_descendant_groups(), set())
+
+    def test_process_tracker_freezes_adoption_and_fails_closed_on_scan_loss(self):
+        self.assertIn("ProcessIdentity", globals())
+        self.assertIn("ProcessTreeTracker", globals())
+        root = ProcessIdentity(100, 1, 100, 10, 1)
+        first = ProcessIdentity(200, 100, 200, 20, 1)
+        late = ProcessIdentity(300, 200, 300, 30, 1)
+        tracker = ProcessTreeTracker(root)
+        tracker.observe((root, first))
+        tracker.observe((first, late))
+        self.assertNotIn(late.stable_key, tracker.tracked_identities)
+        tracker.mark_scan_unavailable()
+        self.assertFalse(tracker.scan_complete)
+
+    def test_every_communicate_call_has_an_explicit_timeout(self):
+        tree = ast.parse(Path(__file__).read_text())
+        calls = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "communicate"
+        ]
+        self.assertTrue(calls)
+        self.assertTrue(
+            all(any(keyword.arg == "timeout" for keyword in call.keywords) for call in calls)
+        )
 
     def test_observer_timeout_removes_descendant_group_after_direct_exit(self):
         with tempfile.TemporaryDirectory() as root:
@@ -1322,6 +1560,22 @@ else:
                         timeout=0.8,
                     )
             self._assert_tree_gone_and_cleanup_if_needed(record)
+
+    def test_observer_failures_always_remove_and_verify_descendant_groups(self):
+        for mode in ("sleep", "nonzero", "stdout-cap", "stderr-cap"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as root:
+                record = Path(root) / "tree.json"
+                observer = object.__new__(LiveSecurityAgentObserver)
+                observer.capability = None
+                with mock.patch(
+                    f"{__name__}._require_live_capability", return_value=None
+                ):
+                    with self.assertRaises(IntegrationWorkflowFailure):
+                        observer._run(
+                            self._harmless_process_tree_command(record, mode),
+                            timeout=0.8,
+                        )
+                self._assert_tree_gone_and_cleanup_if_needed(record)
 
     def test_fd_identity_substitution_and_concurrent_quarantine_target_fail_closed(self):
         effects = object.__new__(LiveIntegrationEffects)
@@ -1384,6 +1638,11 @@ else:
     def test_observer_enumerates_all_system_processes_without_spawning_ps(self):
         observer_source = inspect.getsource(LiveSecurityAgentObserver)
         self.assertIn("proc_listallpids", observer_source)
+        self.assertIn("PROC_PIDTBSDINFO", observer_source)
+        self.assertIn("pbi_start_tvsec", observer_source)
+        self.assertIn("pbi_start_tvusec", observer_source)
+        self.assertIn("pbi_pgid", observer_source)
+        self.assertIn("pbi_ppid", observer_source)
         self.assertNotIn('"/bin/ps"', observer_source)
 
     def test_nonempty_securityagent_baseline_is_unclear_before_any_effect(self):
@@ -1680,6 +1939,65 @@ else:
         self.assertNotIn("delete-disposable-item", effects.calls)
         self.assertNotIn("delete-image", effects.calls)
 
+    def test_invoke_helper_records_safe_mount_receipt_before_raising_observation(self):
+        self.assertIn("ObservedProcessResult", globals())
+        effects = object.__new__(LiveIntegrationEffects)
+        effects.capability = None
+        effects.invocation_counter = 0
+        effects.helper = Path("/private/tmp/fake-helper")
+        effects.image_path = Path("/private/tmp/CORTEX_TEST.sparsebundle")
+        effects.mount_path = Path("/private/tmp/CORTEX_TEST_MOUNT")
+        effects.preserve_image_and_item = False
+        effects.mounted_device = None
+        effects.encryption_uuid = None
+        response = {
+            "schema_version": 1,
+            "operation": "mount",
+            "code": "OK",
+            "encryption_uuid": "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE",
+            "device": "/dev/disk99",
+            "item_count": 1,
+        }
+        completed = subprocess.CompletedProcess(
+            ["helper"], 0, json.dumps(response) + "\n", ""
+        )
+        effects._run = mock.Mock(
+            return_value=ObservedProcessResult(completed, SecurityAgentDetected())
+        )
+        with mock.patch(
+            f"{__name__}._require_live_capability", return_value=None
+        ):
+            with self.assertRaises(SecurityAgentDetected):
+                effects.invoke_helper("mount", {})
+        self.assertEqual(effects.mounted_device, "/dev/disk99")
+        self.assertFalse(effects.preserve_image_and_item)
+
+    def test_detected_successful_mount_disposition_detaches_recorded_device_then_stays_fail(self):
+        class CausalDetectionEffects(FakeLiveEffects):
+            def __init__(self):
+                super().__init__()
+                self.mounted_device = None
+
+            def invoke_helper(self, operation, request):
+                if operation == "mount":
+                    self.calls.append("mount-securityagent-detected")
+                    self.mounted_device = "/dev/disk99"
+                    raise SecurityAgentDetected
+                return super().invoke_helper(operation, request)
+
+            def dispose_after_failure(self, *, encryption_uuid, cleanup_approved):
+                self.calls.append(f"detach-exact:{self.mounted_device}")
+                self.mounted_device = None
+
+        effects = CausalDetectionEffects()
+        outcome = run_live_integration_workflow(
+            effects=effects,
+            observer=FakeSecurityAgentObserver(),
+            cleanup_approved=False,
+        )
+        self.assertEqual((outcome.status, outcome.code), ("FAIL", "securityagent_detected"))
+        self.assertIn("detach-exact:/dev/disk99", effects.calls)
+
 
 def parse_securityagent_snapshot(decoded):
     if (
@@ -1726,11 +2044,16 @@ var processes = [String]()
 var processMetadataComplete = true
 if listedProcessCount > 0 {
     for processID in processIdentifiers.prefix(Int(listedProcessCount)) where processID > 0 {
+        var bsdInfo = proc_bsdinfo()
+        let bsdInfoSize = Int32(MemoryLayout<proc_bsdinfo>.size)
+        let copiedInfoSize = proc_pidinfo(
+            processID, PROC_PIDTBSDINFO, 0, &bsdInfo, bsdInfoSize
+        )
         var nameStorage = [CChar](repeating: 0, count: Int(MAXPATHLEN))
         var pathStorage = [CChar](repeating: 0, count: Int(MAXPATHLEN) * 4)
         let nameLength = proc_name(processID, &nameStorage, UInt32(nameStorage.count))
         let pathLength = proc_pidpath(processID, &pathStorage, UInt32(pathStorage.count))
-        guard nameLength > 0 || pathLength > 0 else {
+        guard copiedInfoSize == bsdInfoSize, nameLength > 0 || pathLength > 0 else {
             processMetadataComplete = false
             continue
         }
@@ -1739,7 +2062,11 @@ if listedProcessCount > 0 {
         let executable = path.split(separator: "/").last.map(String.init) ?? ""
         if name == "SecurityAgent" || executable == "SecurityAgent" {
             processIDs.insert(processID)
-            processes.append("process:\(processID):SecurityAgent")
+            processes.append(
+                "process:\(bsdInfo.pbi_pid):\(bsdInfo.pbi_ppid):" +
+                "\(bsdInfo.pbi_pgid):\(bsdInfo.pbi_start_tvsec):" +
+                "\(bsdInfo.pbi_start_tvusec):SecurityAgent"
+            )
         }
     }
 }
@@ -1808,43 +2135,54 @@ FileHandle.standardOutput.write(data)
         except OSError:
             raise IntegrationWorkflowFailure from None
         deadline = time.monotonic() + timeout
-        tracked_groups = {process.pid}
+        try:
+            tracker = _root_process_tracker(process.pid, deadline)
+        except IntegrationWorkflowFailure:
+            tracker = ProcessTreeTracker(ProcessIdentity(process.pid, 0, process.pid, 0, 0))
+            tracker.mark_scan_unavailable()
         stdout = stderr = b""
-        while True:
-            try:
-                tracked_groups.update(_descendant_process_groups(process.pid))
-            except IntegrationWorkflowFailure:
-                _terminate_process_tree(process, tracked_groups)
-                process.communicate()
-                raise
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                tree_gone = _terminate_process_tree(process, tracked_groups)
-                process.communicate()
-                if not tree_gone:
-                    raise IntegrationWorkflowFailure
+        failure = None
+        try:
+            if not tracker.scan_complete:
                 raise IntegrationWorkflowFailure
-            try:
-                stdout, stderr = process.communicate(timeout=min(0.10, remaining))
-                break
-            except subprocess.TimeoutExpired as timeout_error:
-                partial_stdout = timeout_error.output or b""
-                partial_stderr = timeout_error.stderr or b""
-                if len(partial_stdout) > 1_048_576 or len(partial_stderr) > 1_048_576:
-                    _terminate_process_tree(process, tracked_groups)
-                    process.communicate()
-                    raise IntegrationWorkflowFailure
-        if process.returncode != 0 or len(stdout) > 1_048_576 or len(stderr) > 1_048_576:
-            raise IntegrationWorkflowFailure
-        if any(_process_group_exists(pgid) for pgid in tracked_groups):
-            if not _terminate_process_tree(process, tracked_groups):
+            while True:
+                _refresh_process_tracker(tracker, deadline)
+                try:
+                    stdout, stderr = process.communicate(
+                        timeout=_bounded_timeout(deadline, 0.10)
+                    )
+                    break
+                except subprocess.TimeoutExpired as timeout_error:
+                    partial_stdout = timeout_error.output or b""
+                    partial_stderr = timeout_error.stderr or b""
+                    if len(partial_stdout) > 1_048_576 or len(partial_stderr) > 1_048_576:
+                        raise IntegrationWorkflowFailure
+            if process.returncode != 0 or len(stdout) > 1_048_576 or len(stderr) > 1_048_576:
                 raise IntegrationWorkflowFailure
-            raise IntegrationWorkflowFailure
+            _refresh_process_tracker(tracker, deadline)
+            if tracker.signalable_descendant_groups():
+                raise IntegrationWorkflowFailure
+        except Exception:
+            failure = IntegrationWorkflowFailure()
+        finally:
+            if failure is not None:
+                cleanup_ok = _terminate_process_tree(process, tracker)
+                try:
+                    process.communicate(
+                        timeout=PROCESS_TERMINATION_GRACE_SECONDS
+                    )
+                except subprocess.TimeoutExpired:
+                    cleanup_ok = False
+                if not cleanup_ok:
+                    failure = IntegrationWorkflowFailure()
+            _close_process_pipes(process)
+        if failure is not None:
+            raise failure
         return stdout
 
-    def snapshot(self):
+    def snapshot(self, timeout=10):
         _require_live_capability(self.capability)
-        payload = self._run([str(self.binary)], timeout=10)
+        payload = self._run([str(self.binary)], timeout=timeout)
         try:
             return parse_securityagent_snapshot(json.loads(payload))
         except (KeyError, TypeError, ValueError):
@@ -1959,21 +2297,20 @@ class LiveIntegrationEffects:
             "LC_ALL": "C",
         }
 
-    def _observe_bound(self):
+    def _observe_bound(self, timeout):
         self._require_capability()
         if self.observer is None or self.observer_baseline is None:
             return
-        processes, windows = self.observer.snapshot()
+        processes, windows = self.observer.snapshot(timeout=timeout)
         baseline_processes, baseline_windows = self.observer_baseline
         if processes - baseline_processes or windows - baseline_windows:
             raise SecurityAgentDetected
 
-    def _kill_process_group(self, process, tracked_groups=None):
+    def _kill_process_group(self, process, tracker):
         self._require_capability()
-        groups = set(tracked_groups or ())
-        if not _terminate_process_tree(process, groups):
+        if not _terminate_process_tree(process, tracker):
             raise IntegrationWorkflowFailure
-        process.communicate()
+        process.communicate(timeout=PROCESS_TERMINATION_GRACE_SECONDS)
 
     def _run(
         self,
@@ -1997,28 +2334,29 @@ class LiveIntegrationEffects:
         except OSError:
             raise IntegrationWorkflowFailure from None
         deadline = time.monotonic() + timeout
+        try:
+            tracker = _root_process_tracker(process.pid, deadline)
+        except IntegrationWorkflowFailure:
+            tracker = ProcessTreeTracker(ProcessIdentity(process.pid, 0, process.pid, 0, 0))
+            tracker.mark_scan_unavailable()
         first_communication = True
         stdout = stderr = ""
-        tracked_groups = {process.pid}
         pending_observation_error = None
+        failure = None
         try:
+            if not tracker.scan_complete:
+                raise IntegrationWorkflowFailure
             while True:
-                tracked_groups.update(_descendant_process_groups(process.pid))
+                _refresh_process_tracker(tracker, deadline)
                 if pending_observation_error is None:
                     try:
-                        self._observe_bound()
+                        self._observe_bound(_bounded_timeout(deadline, 1.0))
                     except (SecurityAgentDetected, ObservationUnavailable) as error:
                         pending_observation_error = error
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    self._kill_process_group(process, tracked_groups)
-                    if pending_observation_error is not None:
-                        raise pending_observation_error
-                    raise IntegrationWorkflowFailure
                 try:
                     stdout, stderr = process.communicate(
                         input=input_text if first_communication else None,
-                        timeout=min(0.10, remaining),
+                        timeout=_bounded_timeout(deadline, 0.10),
                     )
                     break
                 except subprocess.TimeoutExpired as timeout_error:
@@ -2031,38 +2369,37 @@ class LiveIntegrationEffects:
                         partial_stderr = partial_stderr.decode("utf-8", "replace")
                     if len(partial_stdout) > 1_048_576 or len(partial_stderr) > 1_048_576:
                         raise IntegrationWorkflowFailure
-            tracked_groups.update(_descendant_process_groups(process.pid))
+            _refresh_process_tracker(tracker, deadline)
             if pending_observation_error is None:
                 try:
-                    self._observe_bound()
+                    self._observe_bound(_bounded_timeout(deadline, 1.0))
                 except (SecurityAgentDetected, ObservationUnavailable) as error:
                     pending_observation_error = error
+            if len(stdout) > 1_048_576 or len(stderr) > 1_048_576:
+                raise IntegrationWorkflowFailure
+            if process.returncode not in accepted_returncodes:
+                raise IntegrationWorkflowFailure
+            if tracker.signalable_descendant_groups():
+                raise IntegrationWorkflowFailure
         except Exception:
-            if process.poll() is None or any(
-                _process_group_exists(pgid) for pgid in tracked_groups
-            ):
-                self._kill_process_group(process, tracked_groups)
-            else:
-                process.communicate()
-            if pending_observation_error is not None:
-                raise pending_observation_error
-            raise IntegrationWorkflowFailure from None
-        if len(stdout) > 1_048_576 or len(stderr) > 1_048_576:
-            raise IntegrationWorkflowFailure
-        if any(_process_group_exists(pgid) for pgid in tracked_groups):
-            self._kill_process_group(process, tracked_groups)
-            if pending_observation_error is not None:
-                raise pending_observation_error
-            raise IntegrationWorkflowFailure
-        if pending_observation_error is not None:
-            raise pending_observation_error
-        if process.returncode not in accepted_returncodes:
-            raise IntegrationWorkflowFailure
-        return subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
+            failure = IntegrationWorkflowFailure()
+        finally:
+            if failure is not None:
+                try:
+                    self._kill_process_group(process, tracker)
+                except Exception:
+                    failure = IntegrationWorkflowFailure()
+            _close_process_pipes(process)
+        if failure is not None:
+            raise failure
+        return ObservedProcessResult(
+            subprocess.CompletedProcess(argv, process.returncode, stdout, stderr),
+            pending_observation_error,
+        )
 
     def compile_production_helper(self):
         self._require_capability()
-        self._run(
+        result = self._run(
             [
                 "/usr/bin/xcrun",
                 "swiftc",
@@ -2073,6 +2410,8 @@ class LiveIntegrationEffects:
                 str(self.helper),
             ]
         )
+        if result.observation_error is not None:
+            raise result.observation_error
         os.chmod(self.helper, 0o700)
 
     def create_request(self):
@@ -2170,7 +2509,7 @@ class LiveIntegrationEffects:
             raise LiveCapabilityRequired
         self.invocation_counter += 1
         try:
-            completed = self._run(
+            observed = self._run(
                 [str(self.helper)],
                 input_text=json.dumps(request, separators=(",", ":")) + "\n",
                 timeout=HELPER_OUTER_TIMEOUT_SECONDS,
@@ -2182,6 +2521,7 @@ class LiveIntegrationEffects:
             if operation in {"create", "mount"}:
                 self.preserve_image_and_item = True
             raise
+        completed = observed.completed
         if completed.stderr or completed.stdout.count("\n") != 1:
             raise IntegrationWorkflowFailure
         try:
@@ -2194,6 +2534,8 @@ class LiveIntegrationEffects:
         if completed.returncode != 0 or response.get("code") != "OK":
             if response.get("code") == "MOUNT_CLEANUP_UNCLEAR" or operation in {"create", "mount"}:
                 self.preserve_image_and_item = True
+            if observed.observation_error is not None:
+                raise observed.observation_error
             raise IntegrationWorkflowFailure
         if operation == "create":
             self._capture_image_identity()
@@ -2202,15 +2544,20 @@ class LiveIntegrationEffects:
             self.mounted_device = response.get("device")
         elif operation == "detach":
             self.mounted_device = None
+        if observed.observation_error is not None:
+            raise observed.observation_error
         return response, f"fresh-helper-{self.invocation_counter}"
 
     def _plist_command(self, argv):
         self._require_capability()
-        completed = self._run(argv)
+        observed = self._run(argv)
         try:
-            return plistlib.loads(completed.stdout.encode("utf-8"))
+            payload = plistlib.loads(observed.completed.stdout.encode("utf-8"))
         except (ValueError, plistlib.InvalidFileException):
             raise IntegrationWorkflowFailure from None
+        if observed.observation_error is not None:
+            raise observed.observation_error
+        return payload
 
     def _verify_encryption_uuid(self, expected_uuid):
         self._require_capability()
