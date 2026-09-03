@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import re
 from dataclasses import dataclass
 from typing import Literal
@@ -14,13 +13,17 @@ _UUID = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
     re.IGNORECASE,
 )
-_UUID_IN_TEXT = re.compile(
-    r"(?<![0-9a-f])[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}(?![0-9a-f])",
-    re.IGNORECASE,
-)
 _CHECK_ID = re.compile(r"^[a-z][a-z0-9_]*$")
 _CODE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 _OPERATION = re.compile(r"^[a-z][a-z0-9_]*$")
+_EVIDENCE_TOKENS = frozenset(
+    {
+        "committed_transaction_verified",
+        "contract_passed",
+        "contract_rejected",
+        "contract_unclear",
+    }
+)
 
 
 def _require_verdict(value: object) -> None:
@@ -38,25 +41,8 @@ def _require_token(value: object, pattern: re.Pattern[str], name: str) -> None:
         raise ValueError(f"storage {name} is invalid")
 
 
-def _evidence_contains_environment_value(value: str) -> bool:
-    return any(
-        len(environment_value) >= 4 and environment_value in value
-        for environment_value in os.environ.values()
-        if isinstance(environment_value, str)
-    )
-
-
 def _require_redacted_evidence(value: object) -> None:
-    if type(value) is not str or not value:
-        raise ValueError("storage evidence is invalid")
-    if (
-        "/" in value
-        or "~" in value
-        or ":" in value
-        or any(ord(character) < 32 or ord(character) == 127 for character in value)
-        or _UUID_IN_TEXT.search(value) is not None
-        or _evidence_contains_environment_value(value)
-    ):
+    if type(value) is not str or value not in _EVIDENCE_TOKENS:
         raise ValueError("storage evidence is not redacted")
 
 

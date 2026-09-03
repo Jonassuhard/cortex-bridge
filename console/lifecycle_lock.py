@@ -10,6 +10,7 @@ import os
 import secrets
 import stat
 import sys
+import time
 from pathlib import Path
 
 
@@ -25,6 +26,31 @@ DIRECTORY_FLAGS = (
     | getattr(os, "O_DIRECTORY", 0)
     | getattr(os, "O_NOFOLLOW", 0)
 )
+
+
+class LifecycleLockTimeout(RuntimeError):
+    """A lifecycle marker could not be validated before its shared deadline."""
+
+
+def _raise_if_deadline_elapsed(deadline: float | None) -> None:
+    if deadline is not None and time.monotonic() >= deadline:
+        raise LifecycleLockTimeout("lifecycle lock deadline elapsed")
+
+
+def _flock_with_deadline(fd: int, operation: int, deadline: float | None) -> None:
+    if deadline is None:
+        fcntl.flock(fd, operation)
+        return
+    while True:
+        _raise_if_deadline_elapsed(deadline)
+        try:
+            fcntl.flock(fd, operation | fcntl.LOCK_NB)
+            return
+        except BlockingIOError:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise LifecycleLockTimeout("lifecycle lock deadline elapsed")
+            time.sleep(min(0.02, remaining))
 
 
 def ensure_private_directory(path: Path) -> bool:
@@ -411,13 +437,15 @@ def _migrate_legacy_empty_lock(
     parent_descriptors: list[int],
     parent_names: list[str],
     expected_device: int,
+    *,
+    deadline: float | None = None,
 ) -> None:
     if not writable:
         raise RuntimeError(f"legacy lifecycle lock is not writable: {lock_path}")
     initial = os.fstat(fd)
     if stat.S_IMODE(initial.st_mode) != 0o600:
         raise RuntimeError(f"legacy lifecycle lock is unsafe: {lock_path}")
-    fcntl.flock(fd, fcntl.LOCK_EX)
+    _flock_with_deadline(fd, fcntl.LOCK_EX, deadline)
     install_fd: int | None = None
     manifest_fd: int | None = None
     wrote_marker = False
@@ -539,6 +567,8 @@ def _validate_or_migrate_lock(
     parent_descriptors: list[int],
     parent_names: list[str],
     expected_device: int,
+    *,
+    deadline: float | None = None,
 ) -> None:
     opened = _validate_lock_metadata(fd, directory_fd, lock_path.name, lock_path)
     os.lseek(fd, 0, os.SEEK_SET)
@@ -554,18 +584,20 @@ def _validate_or_migrate_lock(
             parent_descriptors,
             parent_names,
             expected_device,
+            deadline=deadline,
         )
         return
-    fcntl.flock(fd, fcntl.LOCK_SH)
+    _flock_with_deadline(fd, fcntl.LOCK_SH, deadline)
     try:
         _validate_open_lock(fd, directory_fd, lock_path.name, lock_path)
     finally:
         fcntl.flock(fd, fcntl.LOCK_UN)
 
 
-def open_lifecycle_lock(lock_path: Path) -> int:
+def open_lifecycle_lock(lock_path: Path, *, deadline: float | None = None) -> int:
     """Open a canonical same-UID lifecycle lock without mutating foreign files."""
 
+    _raise_if_deadline_elapsed(deadline)
     parent_descriptors, parent_names, expected_device = _open_pinned_directory_chain(
         lock_path.parent
     )
@@ -575,6 +607,7 @@ def open_lifecycle_lock(lock_path: Path) -> int:
     temporary_fd: int | None = None
     temporary_name: str | None = None
     try:
+        _raise_if_deadline_elapsed(deadline)
         _validate_pinned_directory_chain(
             lock_path.parent,
             parent_descriptors,
@@ -680,7 +713,9 @@ def open_lifecycle_lock(lock_path: Path) -> int:
             parent_descriptors,
             parent_names,
             expected_device,
+            deadline=deadline,
         )
+        _raise_if_deadline_elapsed(deadline)
         _validate_pinned_directory_chain(
             lock_path.parent,
             parent_descriptors,

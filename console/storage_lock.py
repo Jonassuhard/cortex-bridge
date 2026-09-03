@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import fcntl
+import math
 import os
 import time
 from contextlib import contextmanager
@@ -11,6 +12,7 @@ from pathlib import Path
 from typing import ContextManager, Literal, Self
 
 from lifecycle_lock import (
+    LifecycleLockTimeout,
     _open_existing_lock,
     _open_pinned_directory_chain,
     _validate_open_lock,
@@ -30,21 +32,34 @@ class StorageLockError(RuntimeError):
 
 
 def _require_mode(mode: object) -> LockMode:
-    if mode not in {"shared", "exclusive"}:
+    if type(mode) is not str or mode not in {"shared", "exclusive"}:
         raise ValueError("storage lock mode is invalid")
     return mode  # type: ignore[return-value]
 
 
 def _require_timeout(value: object) -> float:
-    if type(value) not in {int, float} or value < 0:
+    if (
+        type(value) not in {int, float}
+        or not math.isfinite(float(value))
+        or value < 0
+    ):
         raise ValueError("storage lock timeout is invalid")
     return float(value)
 
 
-def _acquire(fd: int, mode: LockMode, timeout_seconds: float) -> None:
+def _deadline(timeout_seconds: float) -> float:
+    return time.monotonic() + timeout_seconds
+
+
+def _raise_if_deadline_elapsed(deadline: float) -> None:
+    if time.monotonic() >= deadline:
+        raise StorageLockError("STORAGE_LOCK_TIMEOUT")
+
+
+def _acquire(fd: int, mode: LockMode, deadline: float) -> None:
     flag = fcntl.LOCK_SH if mode == "shared" else fcntl.LOCK_EX
-    deadline = time.monotonic() + timeout_seconds
     while True:
+        _raise_if_deadline_elapsed(deadline)
         try:
             fcntl.flock(fd, flag | fcntl.LOCK_NB)
             return
@@ -81,19 +96,22 @@ class StorageLock:
         self.close()
 
 
-def _open_existing_marker(home: Path) -> int:
+def _open_existing_marker(home: Path, deadline: float) -> int:
+    _raise_if_deadline_elapsed(deadline)
     if home.is_symlink() or not home.exists() or not home.is_dir():
         raise StorageLockError("STORAGE_LOCK_MISSING")
     descriptors: list[int] | None = None
     fd: int | None = None
     try:
         descriptors, _names, _device = _open_pinned_directory_chain(home)
+        _raise_if_deadline_elapsed(deadline)
         directory_fd = descriptors[-1]
         try:
             fd, _writable = _open_existing_lock(directory_fd, _LOCK_NAME)
         except FileNotFoundError as exc:
             raise StorageLockError("STORAGE_LOCK_MISSING") from exc
         _validate_open_lock(fd, directory_fd, _LOCK_NAME, home / _LOCK_NAME)
+        _raise_if_deadline_elapsed(deadline)
         result = fd
         fd = None
         return result
@@ -117,16 +135,26 @@ def open_storage_lock(
 ) -> StorageLock:
     lock_mode = _require_mode(mode)
     timeout = _require_timeout(timeout_seconds)
+    return _open_storage_lock_until(home, lock_mode, _deadline(timeout))
+
+
+def _open_storage_lock_until(
+    home: Path,
+    mode: LockMode,
+    deadline: float,
+) -> StorageLock:
     try:
-        fd = open_lifecycle_lock(home / _LOCK_NAME)
+        fd = open_lifecycle_lock(home / _LOCK_NAME, deadline=deadline)
+    except LifecycleLockTimeout as exc:
+        raise StorageLockError("STORAGE_LOCK_TIMEOUT") from exc
     except RuntimeError as exc:
         raise StorageLockError("STORAGE_LOCK_UNSAFE") from exc
     try:
-        _acquire(fd, lock_mode, timeout)
+        _acquire(fd, mode, deadline)
     except BaseException:
         os.close(fd)
         raise
-    return StorageLock(fd=fd, mode=lock_mode)
+    return StorageLock(fd=fd, mode=mode)
 
 
 def open_existing_storage_lock(
@@ -137,9 +165,10 @@ def open_existing_storage_lock(
 ) -> StorageLock:
     lock_mode = _require_mode(mode)
     timeout = _require_timeout(timeout_seconds)
-    fd = _open_existing_marker(home)
+    deadline = _deadline(timeout)
+    fd = _open_existing_marker(home, deadline)
     try:
-        _acquire(fd, lock_mode, timeout)
+        _acquire(fd, lock_mode, deadline)
     except BaseException:
         os.close(fd)
         raise
@@ -155,6 +184,7 @@ def ordered_storage_locks(
     timeout_seconds: float = 5.0,
 ) -> ContextManager[tuple[int | None, StorageLock]]:
     timeout = _require_timeout(timeout_seconds)
+    deadline = _deadline(timeout)
     checked_storage_mode = _require_mode(storage_mode)
     install_fd: int | None = None
     storage_lock: StorageLock | None = None
@@ -162,15 +192,13 @@ def ordered_storage_locks(
         if install_mode is not None:
             checked_install_mode = _require_mode(install_mode)
             try:
-                install_fd = open_lifecycle_lock(home / ".install.lock")
+                install_fd = open_lifecycle_lock(home / ".install.lock", deadline=deadline)
+            except LifecycleLockTimeout as exc:
+                raise StorageLockError("STORAGE_LOCK_TIMEOUT") from exc
             except RuntimeError as exc:
                 raise StorageLockError("STORAGE_LOCK_UNSAFE") from exc
-            _acquire(install_fd, checked_install_mode, timeout)
-        storage_lock = open_storage_lock(
-            home,
-            checked_storage_mode,
-            timeout_seconds=timeout,
-        )
+            _acquire(install_fd, checked_install_mode, deadline)
+        storage_lock = _open_storage_lock_until(home, checked_storage_mode, deadline)
         yield install_fd, storage_lock
     finally:
         if storage_lock is not None:
