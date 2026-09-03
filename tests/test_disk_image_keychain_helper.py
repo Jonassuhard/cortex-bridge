@@ -33,6 +33,10 @@ AUTHORIZATION = "YES_DISPOSABLE_64_MIB_ONLY"
 COMMAND_TIMEOUT_SECONDS = 60
 HELPER_OUTER_TIMEOUT_SECONDS = 55
 HELPER_TIMEOUT_MARGIN_SECONDS = 2
+HELPER_PRE_MONITOR_CAP_SECONDS = 1
+HELPER_POST_MONITOR_CAP_SECONDS = 1
+PYTHON_PROCESS_TERMINATION_BUDGET_SECONDS = 6
+SWIFT_FINAL_REQUEST_BUDGET_SECONDS = 40
 PROCESS_TREE_SCAN_TIMEOUT_SECONDS = 2
 PROCESS_TERMINATION_GRACE_SECONDS = 1
 
@@ -115,6 +119,55 @@ class IntegrationWorkflowFailure(Exception):
 
 
 @dataclass(frozen=True)
+class HelperDeadlinePlan:
+    execution_deadline: float
+    post_monitor_deadline: float
+    cleanup_deadline: float
+    hard_deadline: float
+
+
+def _helper_deadline_plan(start):
+    hard_deadline = start + HELPER_OUTER_TIMEOUT_SECONDS
+    cleanup_deadline = hard_deadline - HELPER_TIMEOUT_MARGIN_SECONDS
+    post_monitor_deadline = (
+        cleanup_deadline - PYTHON_PROCESS_TERMINATION_BUDGET_SECONDS
+    )
+    execution_deadline = post_monitor_deadline - HELPER_POST_MONITOR_CAP_SECONDS
+    return HelperDeadlinePlan(
+        execution_deadline=execution_deadline,
+        post_monitor_deadline=post_monitor_deadline,
+        cleanup_deadline=cleanup_deadline,
+        hard_deadline=hard_deadline,
+    )
+
+
+def _process_deadline_plan(start, timeout):
+    if timeout == HELPER_OUTER_TIMEOUT_SECONDS:
+        return _helper_deadline_plan(start)
+    hard_deadline = start + timeout
+    margin = min(HELPER_TIMEOUT_MARGIN_SECONDS, max(0.01, timeout * 0.01))
+    cleanup_budget = min(
+        PYTHON_PROCESS_TERMINATION_BUDGET_SECONDS,
+        max(0.05, timeout * 0.08),
+    )
+    post_budget = min(
+        HELPER_POST_MONITOR_CAP_SECONDS,
+        max(0.01, timeout * 0.02),
+    )
+    cleanup_deadline = hard_deadline - margin
+    post_monitor_deadline = cleanup_deadline - cleanup_budget
+    execution_deadline = post_monitor_deadline - post_budget
+    if execution_deadline <= start:
+        raise IntegrationWorkflowFailure
+    return HelperDeadlinePlan(
+        execution_deadline=execution_deadline,
+        post_monitor_deadline=post_monitor_deadline,
+        cleanup_deadline=cleanup_deadline,
+        hard_deadline=hard_deadline,
+    )
+
+
+@dataclass(frozen=True)
 class ProcessIdentity:
     pid: int
     ppid: int
@@ -194,6 +247,7 @@ class ProcessTreeTracker:
         self.current = {root_identity.stable_key: root_identity}
         self.adoption_open = True
         self.scan_complete = True
+        self.identity_reused = False
 
     @property
     def tracked_identities(self):
@@ -204,21 +258,54 @@ class ProcessTreeTracker:
         self.adoption_open = False
 
     def observe(self, rows):
-        current = {row.stable_key: row for row in rows}
-        root_current = current.get(self.root_identity.stable_key)
-        if root_current != self.root_identity:
+        rows = tuple(rows)
+        snapshot = {row.stable_key: row for row in rows}
+        root_current = snapshot.get(self.root_identity.stable_key)
+        if (
+            root_current is None
+            or root_current.pgid != self.root_identity.pgid
+        ):
             self.adoption_open = False
+        tracked_pids = {identity.pid for identity in self.tracked.values()}
+        if any(
+            row.pid in tracked_pids
+            and (
+                row.stable_key not in self.tracked
+                or row.pgid != self.tracked[row.stable_key].pgid
+            )
+            for row in rows
+        ):
+            self.identity_reused = True
+
+        active = {
+            key: snapshot[key]
+            for key, tracked in self.tracked.items()
+            if key in snapshot and snapshot[key].pgid == tracked.pgid
+        }
         if self.adoption_open:
-            known_pids = {identity.pid for identity in self.tracked.values()}
+            active_parent_pids = {identity.pid for identity in active.values()}
             changed = True
             while changed:
                 changed = False
                 for identity in rows:
-                    if identity.ppid in known_pids and identity.stable_key not in self.tracked:
+                    if (
+                        identity.ppid in active_parent_pids
+                        and identity.stable_key not in self.tracked
+                        and identity.pid not in tracked_pids
+                    ):
                         self.tracked[identity.stable_key] = identity
-                        known_pids.add(identity.pid)
+                        active[identity.stable_key] = identity
+                        active_parent_pids.add(identity.pid)
+                        tracked_pids.add(identity.pid)
                         changed = True
-        self.current = current
+        tracked_groups = {identity.pgid for identity in self.tracked.values()}
+        active_groups = {identity.pgid for identity in active.values()}
+        if any(
+            row.pgid in tracked_groups and row.pgid not in active_groups
+            for row in rows
+        ):
+            self.identity_reused = True
+        self.current = active
 
     def signalable_descendant_groups(self):
         groups = set()
@@ -230,11 +317,26 @@ class ProcessTreeTracker:
                 groups.add(current.pgid)
         return groups
 
+    def signalable_groups(self):
+        return {
+            identity.pgid
+            for identity in self.current.values()
+            if identity.pgid > 1
+        }
+
+    def cleanup_verified(self):
+        return (
+            self.scan_complete
+            and not self.current
+            and not self.identity_reused
+        )
+
 
 @dataclass(frozen=True)
 class ObservedProcessResult:
     completed: subprocess.CompletedProcess
     observation_error: Exception | None
+    supervision_error: Exception | None = None
 
 
 def _root_process_tracker(pid, deadline):
@@ -256,8 +358,10 @@ def _refresh_process_tracker(tracker, deadline):
         raise
 
 
-def _descendant_process_groups(root_pid):
-    rows = _process_table()
+def _descendant_process_groups(root_pid, *, deadline):
+    rows = _process_table(
+        _bounded_timeout(deadline, PROCESS_TREE_SCAN_TIMEOUT_SECONDS)
+    )
     roots = [row for row in rows if row.pid == root_pid]
     if len(roots) != 1:
         return set()
@@ -266,14 +370,19 @@ def _descendant_process_groups(root_pid):
     return tracker.signalable_descendant_groups() | {tracker.owned_group}
 
 
-def _process_group_exists(pgid):
+def _process_group_exists(pgid, *, deadline):
     try:
         os.killpg(pgid, 0)
     except ProcessLookupError:
         return False
     except PermissionError:
         try:
-            return any(identity.pgid == pgid for identity in _process_table())
+            return any(
+                identity.pgid == pgid
+                for identity in _process_table(
+                    _bounded_timeout(deadline, PROCESS_TREE_SCAN_TIMEOUT_SECONDS)
+                )
+            )
         except IntegrationWorkflowFailure:
             return True
     return True
@@ -286,15 +395,14 @@ def _close_process_pipes(process):
             stream.close()
 
 
-def _terminate_process_tree(process, tracker):
+def _terminate_process_tree(process, tracker, *, deadline):
     if not isinstance(tracker, ProcessTreeTracker):
         return False
-    cleanup_deadline = time.monotonic() + 2 * PROCESS_TERMINATION_GRACE_SECONDS + 1
 
     def refresh():
         try:
             rows = _process_table(
-                _bounded_timeout(cleanup_deadline, PROCESS_TREE_SCAN_TIMEOUT_SECONDS)
+                _bounded_timeout(deadline, PROCESS_TREE_SCAN_TIMEOUT_SECONDS)
             )
             tracker.observe(rows)
             return True
@@ -302,52 +410,65 @@ def _terminate_process_tree(process, tracker):
             tracker.mark_scan_unavailable()
             return False
 
-    refresh()
-    groups = tracker.signalable_descendant_groups() | {tracker.owned_group}
-    try:
-        for pgid in sorted(groups, reverse=True):
+    def signal_current_groups(signal_number):
+        signal_ok = True
+        for pgid in sorted(tracker.signalable_groups(), reverse=True):
+            if not refresh() or pgid not in tracker.signalable_groups():
+                return False
             try:
-                os.killpg(pgid, signal.SIGTERM)
-            except (ProcessLookupError, PermissionError):
-                pass
+                os.killpg(pgid, signal_number)
+            except ProcessLookupError:
+                continue
+            except PermissionError:
+                signal_ok = False
+        return signal_ok
 
-        term_deadline = time.monotonic() + PROCESS_TERMINATION_GRACE_SECONDS
-        while time.monotonic() < term_deadline:
-            refresh()
-            groups = tracker.signalable_descendant_groups() | {tracker.owned_group}
-            if process.poll() is not None and not any(
-                _process_group_exists(pgid) for pgid in groups
-            ):
-                return tracker.scan_complete
-            time.sleep(0.02)
+    def verified_absent():
+        return process.poll() is not None and tracker.cleanup_verified()
 
-        refresh()
-        groups = tracker.signalable_descendant_groups() | {tracker.owned_group}
-        for pgid in sorted(groups, reverse=True):
-            try:
-                os.killpg(pgid, signal.SIGKILL)
-            except (ProcessLookupError, PermissionError):
-                pass
+    if not refresh():
+        return False
+    if verified_absent():
+        return True
+    if not tracker.signalable_groups():
+        return False
+    if not signal_current_groups(signal.SIGTERM):
+        return False
+
+    remaining = deadline - time.monotonic()
+    term_deadline = min(
+        deadline,
+        time.monotonic()
+        + min(PROCESS_TERMINATION_GRACE_SECONDS, max(0.0, remaining / 3)),
+    )
+    while time.monotonic() < term_deadline:
+        if not refresh():
+            return False
+        if verified_absent():
+            return True
+        time.sleep(min(0.02, max(0.0, term_deadline - time.monotonic())))
+
+    if not refresh():
+        return False
+    if verified_absent():
+        return True
+    if not signal_current_groups(signal.SIGKILL):
+        return False
+    if process.poll() is None:
         try:
-            process.wait(timeout=_bounded_timeout(
-                cleanup_deadline, PROCESS_TERMINATION_GRACE_SECONDS
-            ))
+            process.wait(
+                timeout=_bounded_timeout(deadline, PROCESS_TERMINATION_GRACE_SECONDS)
+            )
         except (subprocess.TimeoutExpired, IntegrationWorkflowFailure):
             return False
 
-        while time.monotonic() < cleanup_deadline:
-            refresh()
-            groups = tracker.signalable_descendant_groups() | {tracker.owned_group}
-            if not any(_process_group_exists(pgid) for pgid in groups):
-                return tracker.scan_complete
-            time.sleep(0.02)
-        return False
-    finally:
-        if process.poll() is None:
-            try:
-                os.killpg(tracker.owned_group, signal.SIGKILL)
-            except (ProcessLookupError, PermissionError):
-                pass
+    while time.monotonic() < deadline:
+        if not refresh():
+            return False
+        if verified_absent():
+            return True
+        time.sleep(min(0.02, max(0.0, deadline - time.monotonic())))
+    return False
 
 
 def select_execution_mode(arguments, environment):
@@ -423,29 +544,58 @@ def _require_response(response, operation, *, uuid_value=None, device=None, item
 
 def run_live_integration_workflow(*, effects, observer, cleanup_approved):
     try:
-        baseline_processes, baseline_windows = observer.snapshot()
+        baseline_processes, baseline_windows = observer.snapshot(
+            timeout=HELPER_PRE_MONITOR_CAP_SECONDS
+        )
     except Exception:
-        return IntegrationOutcome("UNCLEAR", "securityagent_observer_unavailable")
+        return IntegrationOutcome("UNCLEAR", "observer_unavailable")
     if baseline_processes or baseline_windows:
         return IntegrationOutcome("UNCLEAR", "securityagent_baseline_nonempty")
     if hasattr(effects, "bind_observer"):
         effects.bind_observer(observer, (baseline_processes, baseline_windows))
     encryption_uuid = None
 
+    def latch_observation(error):
+        if hasattr(effects, "_latch_terminal_observation"):
+            effects._latch_terminal_observation(error)
+
     def reject_new_securityagent():
-        processes, windows = observer.snapshot()
+        try:
+            processes, windows = observer.snapshot(
+                timeout=HELPER_POST_MONITOR_CAP_SECONDS
+            )
+        except Exception:
+            error = ObservationUnavailable()
+            latch_observation(error)
+            raise error from None
         if processes - baseline_processes or windows - baseline_windows:
-            raise SecurityAgentDetected
+            error = SecurityAgentDetected()
+            latch_observation(error)
+            raise error
 
     def dispose(outcome):
+        disposition_failed = False
         try:
             effects.dispose_after_failure(
                 encryption_uuid=encryption_uuid,
                 cleanup_approved=cleanup_approved,
             )
         except Exception:
-            if outcome.code == "securityagent_detected":
-                return outcome
+            disposition_failed = True
+        terminal_observation = getattr(
+            effects, "terminal_observation_error", None
+        )
+        if (
+            outcome.code == "securityagent_detected"
+            or isinstance(terminal_observation, SecurityAgentDetected)
+        ):
+            return IntegrationOutcome("FAIL", "securityagent_detected")
+        if (
+            outcome.code == "observer_unavailable"
+            or isinstance(terminal_observation, ObservationUnavailable)
+        ):
+            return IntegrationOutcome("UNCLEAR", "observer_unavailable")
+        if disposition_failed:
             return IntegrationOutcome("UNCLEAR", "disposition_failed")
         return outcome
 
@@ -528,7 +678,16 @@ def run_live_integration_workflow(*, effects, observer, cleanup_approved):
         return IntegrationOutcome("PASS", "integration_verified")
     except SecurityAgentDetected:
         return dispose(IntegrationOutcome("FAIL", "securityagent_detected"))
+    except ObservationUnavailable:
+        return dispose(IntegrationOutcome("UNCLEAR", "observer_unavailable"))
     except Exception:
+        terminal_observation = getattr(
+            effects, "terminal_observation_error", None
+        )
+        if isinstance(terminal_observation, SecurityAgentDetected):
+            return dispose(IntegrationOutcome("FAIL", "securityagent_detected"))
+        if isinstance(terminal_observation, ObservationUnavailable):
+            return dispose(IntegrationOutcome("UNCLEAR", "observer_unavailable"))
         return dispose(IntegrationOutcome("FAIL", "integration_failed"))
 
 
@@ -1170,6 +1329,10 @@ class DiskImageKeychainHelperTests(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         policy = json.loads(completed.stdout)
+        self.assertEqual(
+            policy["request_deadline_seconds"],
+            SWIFT_FINAL_REQUEST_BUDGET_SECONDS,
+        )
         internal_total = sum(
             policy[key]
             for key in (
@@ -1219,6 +1382,105 @@ class DiskImageKeychainHelperTests(unittest.TestCase):
         ]
         self.assertEqual(len(detach), 1)
         self.assertGreater(detach[0]["remaining_budget_before"], 0)
+
+    def test_child_hard_deadline_contains_full_termination_budget(self):
+        completed, observation = self.run_helper(
+            "mount", scenario="hard-deadline-compensation"
+        )
+        self.assertEqual(completed.returncode, 70)
+        self.assertEqual(observation["response"]["code"], "HDIUTIL_FAILED")
+        timed_out = next(
+            call
+            for call in observation["hdiutil_calls"]
+            if call["argv"][1] == "isencrypted"
+        )
+        self.assertTrue(timed_out["spawned"])
+        self.assertEqual(
+            timed_out["hard_deadline"] - timed_out["work_deadline"],
+            timed_out["termination_budget"],
+        )
+        self.assertEqual(
+            timed_out["termination_started_at"], timed_out["work_deadline"]
+        )
+        self.assertEqual(timed_out["finished_at"], timed_out["hard_deadline"])
+
+    def test_late_normal_child_leaves_complete_compensation_window(self):
+        completed, observation = self.run_helper(
+            "mount", scenario="hard-deadline-compensation"
+        )
+        self.assertEqual(completed.returncode, 70)
+        calls = observation["hdiutil_calls"]
+        normal = [call for call in calls if call["deadline_phase"] == "normal"]
+        compensation = [
+            call for call in calls if call["deadline_phase"] == "compensation"
+        ]
+        self.assertTrue(normal)
+        self.assertEqual(compensation[0]["argv"][1], "detach")
+        normal_hard_deadline = normal[0]["hard_deadline"]
+        final_deadline = compensation[0]["hard_deadline"]
+        self.assertEqual(
+            final_deadline - normal_hard_deadline,
+            observation["mount_compensation_budget"],
+        )
+        self.assertEqual(compensation[0]["started_at"], normal_hard_deadline)
+        self.assertTrue(all(call["hard_deadline"] == normal_hard_deadline for call in normal))
+        self.assertTrue(all(call["hard_deadline"] == final_deadline for call in compensation))
+        self.assertLessEqual(compensation[-1]["finished_at"], final_deadline)
+
+    def test_required_compensation_child_is_not_spawned_without_cleanup_time(self):
+        completed, observation = self.run_helper(
+            "mount", scenario="compensation-window-exhausted"
+        )
+        self.assertEqual(completed.returncode, 70)
+        self.assertEqual(
+            observation["response"]["code"], "MOUNT_CLEANUP_UNCLEAR"
+        )
+        compensation = [
+            call
+            for call in observation["hdiutil_calls"]
+            if call["deadline_phase"] == "compensation"
+        ]
+        self.assertEqual(
+            [call["argv"][1] for call in compensation],
+            ["detach", "info"],
+        )
+        self.assertTrue(compensation[0]["spawned"])
+        self.assertFalse(compensation[1]["spawned"])
+        self.assertEqual(
+            compensation[1]["started_at"], compensation[1]["work_deadline"]
+        )
+
+    def test_python_outer_deadline_covers_both_monitors_swift_and_cleanup(self):
+        required_names = (
+            "HELPER_PRE_MONITOR_CAP_SECONDS",
+            "HELPER_POST_MONITOR_CAP_SECONDS",
+            "PYTHON_PROCESS_TERMINATION_BUDGET_SECONDS",
+            "SWIFT_FINAL_REQUEST_BUDGET_SECONDS",
+        )
+        for name in required_names:
+            self.assertIn(name, globals())
+        covered = (
+            globals()["HELPER_PRE_MONITOR_CAP_SECONDS"]
+            + globals()["SWIFT_FINAL_REQUEST_BUDGET_SECONDS"]
+            + globals()["HELPER_POST_MONITOR_CAP_SECONDS"]
+            + globals()["PYTHON_PROCESS_TERMINATION_BUDGET_SECONDS"]
+            + HELPER_TIMEOUT_MARGIN_SECONDS
+        )
+        self.assertLess(covered, HELPER_OUTER_TIMEOUT_SECONDS)
+        plan = _helper_deadline_plan(100.0)
+        self.assertEqual(plan.hard_deadline, 100.0 + HELPER_OUTER_TIMEOUT_SECONDS)
+        self.assertGreaterEqual(
+            plan.execution_deadline - 100.0,
+            HELPER_PRE_MONITOR_CAP_SECONDS + SWIFT_FINAL_REQUEST_BUDGET_SECONDS,
+        )
+        self.assertEqual(
+            plan.cleanup_deadline - plan.post_monitor_deadline,
+            PYTHON_PROCESS_TERMINATION_BUDGET_SECONDS,
+        )
+        self.assertEqual(
+            plan.hard_deadline - plan.cleanup_deadline,
+            HELPER_TIMEOUT_MARGIN_SECONDS,
+        )
 
     def test_integration_runner_exits_64_when_either_effect_gate_is_missing(self):
         clean_environment = os.environ.copy()
@@ -1373,6 +1635,7 @@ else:
             time.sleep(0.01)
         self.assertTrue(record_path.is_file(), "process tree did not publish its receipt")
         receipt = json.loads(record_path.read_text())
+        verification_deadline = time.monotonic() + 2
         survivors = []
         for pid in receipt["pids"]:
             try:
@@ -1381,7 +1644,7 @@ else:
                 continue
             survivors.append(("pid", pid))
         for pgid in receipt["pgids"]:
-            if _process_group_exists(pgid):
+            if _process_group_exists(pgid, deadline=verification_deadline):
                 survivors.append(("pgid", pgid))
         for pgid in receipt["pgids"]:
             try:
@@ -1481,16 +1744,24 @@ else:
                     self.assertTrue(receipt["compensated"])
 
     def test_process_tree_termination_fails_closed_when_descendant_scan_is_unavailable(self):
-        process = mock.Mock(pid=999_999)
+        root = ProcessIdentity(999_999, 1, 999_999, 10, 1)
+        tracker = ProcessTreeTracker(root)
+        process = mock.Mock(pid=root.pid)
         process.poll.return_value = 0
         process.wait.return_value = 0
         with mock.patch(
-            f"{__name__}._descendant_process_groups",
+            f"{__name__}._process_table",
             side_effect=IntegrationWorkflowFailure,
-        ), mock.patch(
-            f"{__name__}._process_group_exists", return_value=False
-        ), mock.patch("os.killpg"):
-            self.assertFalse(_terminate_process_tree(process, set()))
+        ) as scanner, mock.patch("os.killpg") as signal_group:
+            self.assertFalse(
+                _terminate_process_tree(
+                    process,
+                    tracker,
+                    deadline=time.monotonic() + 0.1,
+                )
+            )
+        scanner.assert_called()
+        signal_group.assert_not_called()
 
     def test_descendant_scan_never_adopts_children_after_root_pid_disappears(self):
         with mock.patch(
@@ -1500,7 +1771,12 @@ else:
                 ProcessIdentity(456, 1, 456, 2, 0),
             ],
         ):
-            self.assertEqual(_descendant_process_groups(999_999), set())
+            self.assertEqual(
+                _descendant_process_groups(
+                    999_999, deadline=time.monotonic() + 0.1
+                ),
+                set(),
+            )
 
     def test_process_tracker_revalidates_stable_identities_before_signaling_groups(self):
         self.assertIn("ProcessIdentity", globals())
@@ -1519,6 +1795,71 @@ else:
         tracker.observe((reused_group,))
         self.assertEqual(tracker.signalable_descendant_groups(), set())
 
+    def test_process_tracker_does_not_traverse_through_reused_historical_child_pid(self):
+        root = ProcessIdentity(100, 1, 100, 10, 1)
+        child = ProcessIdentity(200, 100, 200, 20, 1)
+        tracker = ProcessTreeTracker(root)
+        tracker.observe((root, child))
+
+        reused_child = ProcessIdentity(200, 1, 900, 99, 9)
+        foreign_grandchild = ProcessIdentity(300, 200, 300, 30, 1)
+        tracker.observe((root, reused_child, foreign_grandchild))
+
+        self.assertNotIn(foreign_grandchild.stable_key, tracker.tracked_identities)
+        self.assertEqual(tracker.signalable_descendant_groups(), set())
+
+    def test_reused_root_identity_and_pgid_are_never_signaled(self):
+        root = ProcessIdentity(100, 1, 100, 10, 1)
+        tracker = ProcessTreeTracker(root)
+        tracker.observe((root,))
+        reused_root = ProcessIdentity(100, 1, 100, 90, 9)
+        foreign_member = ProcessIdentity(101, 100, 100, 91, 1)
+        process = mock.Mock(pid=root.pid)
+        process.poll.return_value = 0
+        process.wait.return_value = 0
+
+        with mock.patch(
+            f"{__name__}._process_table",
+            return_value=(reused_root, foreign_member),
+        ), mock.patch("os.killpg") as signal_group:
+            cleanup_ok = _terminate_process_tree(
+                process,
+                tracker,
+                deadline=time.monotonic() + 0.1,
+            )
+
+        self.assertFalse(cleanup_ok)
+        signal_group.assert_not_called()
+
+    def test_group_leader_gone_still_signals_exact_surviving_member_group_only(self):
+        root = ProcessIdentity(100, 1, 100, 10, 1)
+        leader = ProcessIdentity(200, 100, 200, 20, 1)
+        member = ProcessIdentity(201, 200, 200, 21, 1)
+        tracker = ProcessTreeTracker(root)
+        tracker.observe((root, leader, member))
+        scans = iter(((member,), (member,), ()))
+
+        def next_scan(*_args, **_kwargs):
+            return next(scans, ())
+
+        process = mock.Mock(pid=root.pid)
+        process.poll.return_value = 0
+        process.wait.return_value = 0
+        with mock.patch(
+            f"{__name__}._process_table", side_effect=next_scan
+        ), mock.patch("os.killpg") as signal_group:
+            cleanup_ok = _terminate_process_tree(
+                process,
+                tracker,
+                deadline=time.monotonic() + 0.2,
+            )
+
+        self.assertTrue(cleanup_ok)
+        self.assertIn(mock.call(200, signal.SIGTERM), signal_group.call_args_list)
+        self.assertFalse(
+            any(call.args[0] == 100 for call in signal_group.call_args_list)
+        )
+
     def test_process_tracker_freezes_adoption_and_fails_closed_on_scan_loss(self):
         self.assertIn("ProcessIdentity", globals())
         self.assertIn("ProcessTreeTracker", globals())
@@ -1529,6 +1870,7 @@ else:
         tracker.observe((root, first))
         tracker.observe((first, late))
         self.assertNotIn(late.stable_key, tracker.tracked_identities)
+        self.assertEqual(tracker.signalable_descendant_groups(), {200})
         tracker.mark_scan_unavailable()
         self.assertFalse(tracker.scan_complete)
 
@@ -1576,6 +1918,64 @@ else:
                             timeout=0.8,
                         )
                 self._assert_tree_gone_and_cleanup_if_needed(record)
+
+    def test_observer_success_depends_on_the_same_terminal_cleanup_block(self):
+        root = ProcessIdentity(4242, 1, 4242, 10, 1)
+        for cleanup_ok in (True, False):
+            with self.subTest(cleanup_ok=cleanup_ok):
+                process = mock.Mock(pid=root.pid)
+                process.communicate.return_value = (b'{"ok":true}\n', b"")
+                process.returncode = 0
+                process.poll.return_value = 0
+                tracker = ProcessTreeTracker(root)
+                tracker.observe(())
+                observer = object.__new__(LiveSecurityAgentObserver)
+                observer.capability = None
+                with mock.patch(
+                    f"{__name__}._require_live_capability", return_value=None
+                ), mock.patch(
+                    "subprocess.Popen", return_value=process
+                ), mock.patch(
+                    f"{__name__}._root_process_tracker", return_value=tracker
+                ), mock.patch(
+                    f"{__name__}._refresh_process_tracker", return_value=None
+                ), mock.patch(
+                    f"{__name__}._terminate_process_tree",
+                    return_value=cleanup_ok,
+                ) as cleanup:
+                    if cleanup_ok:
+                        self.assertEqual(
+                            observer._run(["fake-observer"], timeout=1),
+                            b'{"ok":true}\n',
+                        )
+                    else:
+                        with self.assertRaises(IntegrationWorkflowFailure):
+                            observer._run(["fake-observer"], timeout=1)
+                cleanup.assert_called_once()
+
+    def test_observer_process_scan_overrun_uses_bounded_terminal_cleanup(self):
+        root = ProcessIdentity(4343, 1, 4343, 10, 1)
+        tracker = ProcessTreeTracker(root)
+        process = mock.Mock(pid=root.pid)
+        process.poll.return_value = None
+        observer = object.__new__(LiveSecurityAgentObserver)
+        observer.capability = None
+        with mock.patch(
+            f"{__name__}._require_live_capability", return_value=None
+        ), mock.patch(
+            "subprocess.Popen", return_value=process
+        ), mock.patch(
+            f"{__name__}._root_process_tracker", return_value=tracker
+        ), mock.patch(
+            f"{__name__}._refresh_process_tracker",
+            side_effect=IntegrationWorkflowFailure,
+        ), mock.patch(
+            f"{__name__}._terminate_process_tree", return_value=False
+        ) as cleanup:
+            with self.assertRaises(IntegrationWorkflowFailure):
+                observer._run(["fake-observer"], timeout=1)
+        cleanup.assert_called_once()
+        self.assertIn("deadline", cleanup.call_args.kwargs)
 
     def test_fd_identity_substitution_and_concurrent_quarantine_target_fail_closed(self):
         effects = object.__new__(LiveIntegrationEffects)
@@ -1972,31 +2372,299 @@ else:
         self.assertEqual(effects.mounted_device, "/dev/disk99")
         self.assertFalse(effects.preserve_image_and_item)
 
-    def test_detected_successful_mount_disposition_detaches_recorded_device_then_stays_fail(self):
-        class CausalDetectionEffects(FakeLiveEffects):
-            def __init__(self):
-                super().__init__()
-                self.mounted_device = None
+    def test_detected_mount_uses_real_disposition_to_detach_then_quarantine(self):
+        encryption_uuid = "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE"
+        with tempfile.TemporaryDirectory() as temporary_root:
+            root = Path(temporary_root)
+            image_path = root / "CORTEX_TEST.sparsebundle"
+            mount_path = root / "CORTEX_TEST_MOUNT"
+            quarantine_path = root / "CORTEX_TEST.sparsebundle.quarantine"
+            image_path.mkdir()
+            mount_path.mkdir()
+            helper = root / "disk-image-keychain"
+            helper.touch()
 
+            effects = object.__new__(LiveIntegrationEffects)
+            effects.capability = LiveCapability(_LIVE_CAPABILITY_SEAL, True)
+            effects.observer = None
+            effects.observer_baseline = None
+            effects.private_root = root
+            effects.root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+            effects.plan = LiveIntegrationPlan(
+                image_path=image_path,
+                mount_path=mount_path,
+                quarantine_path=quarantine_path,
+                transaction_id="12345678-1234-4234-8234-123456789abc",
+                size="64m",
+                filesystem="APFS",
+                volume_name="CORTEX_BRIDGE_SPIKE",
+            )
+            effects.image_path = image_path
+            effects.mount_path = mount_path
+            effects.quarantine_path = quarantine_path
+            effects.transaction_id = effects.plan.transaction_id
+            effects.helper = helper
+            effects.image_identity = None
+            effects.image_fd = None
+            effects.image_name = image_path.name
+            effects.image_quarantined = False
+            effects.preserve_image_and_item = False
+            effects.encryption_uuid = None
+            effects.mounted_device = None
+            effects.invocation_counter = 0
+            effects.terminal_observation_error = None
+            effects.disposition_active = False
+            events = []
+
+            def helper_response(operation, *, device=None, item_count=None):
+                return {
+                    "schema_version": 1,
+                    "operation": operation,
+                    "code": "OK",
+                    "encryption_uuid": encryption_uuid,
+                    "device": device,
+                    "item_count": item_count,
+                }
+
+            def fake_run(
+                argv,
+                *,
+                input_text=None,
+                timeout=COMMAND_TIMEOUT_SECONDS,
+                accepted_returncodes=(0,),
+            ):
+                del timeout, accepted_returncodes
+                if argv[:2] == ["/usr/bin/xcrun", "swiftc"]:
+                    events.append("compile")
+                    completed = subprocess.CompletedProcess(argv, 0, "", "")
+                    return ObservedProcessResult(completed, None)
+                if argv == [str(helper)]:
+                    operation = json.loads(input_text)["operation"]
+                    events.append(f"helper:{operation}")
+                    if operation == "create":
+                        response = helper_response(operation, item_count=1)
+                        observation_error = None
+                    elif operation == "mount":
+                        response = helper_response(
+                            operation, device="/dev/disk99", item_count=1
+                        )
+                        observation_error = SecurityAgentDetected()
+                    elif operation == "detach":
+                        response = helper_response(operation, device="/dev/disk99")
+                        observation_error = SecurityAgentDetected()
+                    else:
+                        self.fail(f"unexpected Keychain helper operation: {operation}")
+                    completed = subprocess.CompletedProcess(
+                        argv, 0, json.dumps(response) + "\n", ""
+                    )
+                    return ObservedProcessResult(completed, observation_error)
+                if argv == ["/usr/bin/hdiutil", "info", "-plist"]:
+                    events.append("plist:info")
+                    payload = plistlib.dumps({"images": []}).decode("utf-8")
+                    completed = subprocess.CompletedProcess(argv, 0, payload, "")
+                    return ObservedProcessResult(
+                        completed, SecurityAgentDetected()
+                    )
+                self.fail(f"unexpected fake subprocess: {argv}")
+
+            test_case = self
+
+            class FakeRename:
+                argtypes = None
+                restype = None
+
+                def __call__(self, source_fd, source, target_fd, target, flags):
+                    test_case.assertEqual(flags, 0x00000004)
+                    events.append("rename:quarantine")
+                    os.rename(
+                        os.fsdecode(source),
+                        os.fsdecode(target),
+                        src_dir_fd=source_fd,
+                        dst_dir_fd=target_fd,
+                    )
+                    return 0
+
+            class FakeLibC:
+                renameatx_np = FakeRename()
+
+            effects._run = fake_run
+            try:
+                with mock.patch("ctypes.CDLL", return_value=FakeLibC()):
+                    outcome = run_live_integration_workflow(
+                        effects=effects,
+                        observer=FakeSecurityAgentObserver(),
+                        cleanup_approved=True,
+                    )
+                self.assertEqual(
+                    (outcome.status, outcome.code),
+                    ("FAIL", "securityagent_detected"),
+                )
+                self.assertEqual(effects.mounted_device, None)
+                self.assertIsInstance(
+                    effects.terminal_observation_error, SecurityAgentDetected
+                )
+                self.assertTrue(quarantine_path.is_dir())
+                self.assertFalse(image_path.exists())
+                self.assertEqual(
+                    events,
+                    [
+                        "compile",
+                        "helper:create",
+                        "helper:mount",
+                        "helper:detach",
+                        "plist:info",
+                        "rename:quarantine",
+                    ],
+                )
+                self.assertNotIn("helper:inspect-item", events)
+                self.assertNotIn("helper:delete-disposable-item", events)
+            finally:
+                for descriptor_name in ("image_fd", "root_fd"):
+                    descriptor = getattr(effects, descriptor_name, None)
+                    if isinstance(descriptor, int) and descriptor >= 0:
+                        os.close(descriptor)
+                        setattr(effects, descriptor_name, -1)
+
+    def test_nonzero_helper_response_latches_terminal_observation_before_error(self):
+        for observation_error in (
+            SecurityAgentDetected(),
+            ObservationUnavailable(),
+        ):
+            with self.subTest(error=type(observation_error).__name__):
+                effects = object.__new__(LiveIntegrationEffects)
+                effects.capability = None
+                effects.invocation_counter = 0
+                effects.helper = Path("/private/tmp/fake-helper")
+                effects.image_path = Path("/private/tmp/CORTEX_TEST.sparsebundle")
+                effects.mount_path = Path("/private/tmp/CORTEX_TEST_MOUNT")
+                effects.preserve_image_and_item = False
+                effects.mounted_device = None
+                effects.encryption_uuid = None
+                effects.terminal_observation_error = None
+                effects.disposition_active = False
+                response = {
+                    "schema_version": 1,
+                    "operation": "mount",
+                    "code": "HDIUTIL_FAILED",
+                    "encryption_uuid": None,
+                    "device": None,
+                    "item_count": None,
+                }
+                completed = subprocess.CompletedProcess(
+                    ["helper"], 70, json.dumps(response) + "\n", ""
+                )
+                effects._run = mock.Mock(
+                    return_value=ObservedProcessResult(
+                        completed, observation_error
+                    )
+                )
+                with mock.patch(
+                    f"{__name__}._require_live_capability", return_value=None
+                ):
+                    with self.assertRaises(type(observation_error)):
+                        effects.invoke_helper("mount", {})
+                self.assertIs(
+                    effects.terminal_observation_error, observation_error
+                )
+
+    def test_observer_unavailable_during_workflow_is_terminal_unclear(self):
+        class UnavailableDuringMountEffects(FakeLiveEffects):
             def invoke_helper(self, operation, request):
                 if operation == "mount":
-                    self.calls.append("mount-securityagent-detected")
-                    self.mounted_device = "/dev/disk99"
-                    raise SecurityAgentDetected
+                    self.calls.append("mount-observer-unavailable")
+                    raise ObservationUnavailable
                 return super().invoke_helper(operation, request)
 
-            def dispose_after_failure(self, *, encryption_uuid, cleanup_approved):
-                self.calls.append(f"detach-exact:{self.mounted_device}")
-                self.mounted_device = None
-
-        effects = CausalDetectionEffects()
+        effects = UnavailableDuringMountEffects()
         outcome = run_live_integration_workflow(
             effects=effects,
             observer=FakeSecurityAgentObserver(),
             cleanup_approved=False,
         )
-        self.assertEqual((outcome.status, outcome.code), ("FAIL", "securityagent_detected"))
-        self.assertIn("detach-exact:/dev/disk99", effects.calls)
+        self.assertEqual(
+            (outcome.status, outcome.code),
+            ("UNCLEAR", "observer_unavailable"),
+        )
+        self.assertTrue(effects.item_present)
+        self.assertNotIn("delete-disposable-item", effects.calls)
+
+    def test_securityagent_latched_during_failed_disposition_keeps_priority(self):
+        class DetectionDuringDispositionEffects(FakeLiveEffects):
+            def __init__(self):
+                super().__init__()
+                self.terminal_observation_error = None
+
+            def invoke_helper(self, operation, request):
+                if operation == "mount":
+                    self.calls.append("mount-failed")
+                    raise IntegrationWorkflowFailure
+                return super().invoke_helper(operation, request)
+
+            def dispose_after_failure(self, *, encryption_uuid, cleanup_approved):
+                self.calls.append("disposition-detected-then-failed")
+                self.terminal_observation_error = SecurityAgentDetected()
+                raise IntegrationWorkflowFailure
+
+        effects = DetectionDuringDispositionEffects()
+        outcome = run_live_integration_workflow(
+            effects=effects,
+            observer=FakeSecurityAgentObserver(),
+            cleanup_approved=False,
+        )
+        self.assertEqual(
+            (outcome.status, outcome.code),
+            ("FAIL", "securityagent_detected"),
+        )
+
+    def test_disposition_never_deletes_item_after_inspect_latches_securityagent(self):
+        encryption_uuid = "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE"
+        effects = object.__new__(LiveIntegrationEffects)
+        effects.capability = LiveCapability(_LIVE_CAPABILITY_SEAL, True)
+        effects.preserve_image_and_item = False
+        effects.mounted_device = None
+        effects.terminal_observation_error = None
+        effects.disposition_active = False
+        effects.root_fd = -1
+        effects.image_fd = -1
+        events = []
+
+        effects._image_entry_present = mock.Mock(return_value=True)
+        effects.request = mock.Mock(
+            side_effect=lambda operation, *_args, **_kwargs: {
+                "operation": operation
+            }
+        )
+        effects.quarantine_exact_image = mock.Mock(
+            side_effect=lambda: events.append("quarantine")
+        )
+        effects.delete_exact_image = mock.Mock(
+            side_effect=lambda: events.append("delete-image")
+        )
+
+        def invoke_helper(operation, request):
+            del request
+            events.append(operation)
+            if operation == "inspect-item":
+                effects.terminal_observation_error = SecurityAgentDetected()
+                return (
+                    {
+                        "schema_version": 1,
+                        "operation": operation,
+                        "code": "OK",
+                        "encryption_uuid": encryption_uuid,
+                        "device": None,
+                        "item_count": 1,
+                    },
+                    "helper-inspect",
+                )
+            self.fail("Keychain delete ran after SecurityAgent was latched")
+
+        effects.invoke_helper = invoke_helper
+        effects.dispose_after_failure(
+            encryption_uuid=encryption_uuid,
+            cleanup_approved=True,
+        )
+        self.assertEqual(events, ["inspect-item", "quarantine"])
 
 
 def parse_securityagent_snapshot(decoded):
@@ -2119,6 +2787,7 @@ FileHandle.standardOutput.write(data)
 
     def _run(self, argv, *, timeout):
         _require_live_capability(self.capability)
+        plan = _process_deadline_plan(time.monotonic(), timeout)
         try:
             process = subprocess.Popen(
                 argv,
@@ -2134,9 +2803,8 @@ FileHandle.standardOutput.write(data)
             )
         except OSError:
             raise IntegrationWorkflowFailure from None
-        deadline = time.monotonic() + timeout
         try:
-            tracker = _root_process_tracker(process.pid, deadline)
+            tracker = _root_process_tracker(process.pid, plan.execution_deadline)
         except IntegrationWorkflowFailure:
             tracker = ProcessTreeTracker(ProcessIdentity(process.pid, 0, process.pid, 0, 0))
             tracker.mark_scan_unavailable()
@@ -2146,10 +2814,10 @@ FileHandle.standardOutput.write(data)
             if not tracker.scan_complete:
                 raise IntegrationWorkflowFailure
             while True:
-                _refresh_process_tracker(tracker, deadline)
+                _refresh_process_tracker(tracker, plan.execution_deadline)
                 try:
                     stdout, stderr = process.communicate(
-                        timeout=_bounded_timeout(deadline, 0.10)
+                        timeout=_bounded_timeout(plan.execution_deadline, 0.10)
                     )
                     break
                 except subprocess.TimeoutExpired as timeout_error:
@@ -2159,22 +2827,17 @@ FileHandle.standardOutput.write(data)
                         raise IntegrationWorkflowFailure
             if process.returncode != 0 or len(stdout) > 1_048_576 or len(stderr) > 1_048_576:
                 raise IntegrationWorkflowFailure
-            _refresh_process_tracker(tracker, deadline)
+            _refresh_process_tracker(tracker, plan.post_monitor_deadline)
             if tracker.signalable_descendant_groups():
                 raise IntegrationWorkflowFailure
         except Exception:
             failure = IntegrationWorkflowFailure()
         finally:
-            if failure is not None:
-                cleanup_ok = _terminate_process_tree(process, tracker)
-                try:
-                    process.communicate(
-                        timeout=PROCESS_TERMINATION_GRACE_SECONDS
-                    )
-                except subprocess.TimeoutExpired:
-                    cleanup_ok = False
-                if not cleanup_ok:
-                    failure = IntegrationWorkflowFailure()
+            cleanup_ok = _terminate_process_tree(
+                process, tracker, deadline=plan.cleanup_deadline
+            )
+            if not cleanup_ok:
+                failure = IntegrationWorkflowFailure()
             _close_process_pipes(process)
         if failure is not None:
             raise failure
@@ -2270,6 +2933,8 @@ class LiveIntegrationEffects:
         self.encryption_uuid = None
         self.mounted_device = None
         self.invocation_counter = 0
+        self.terminal_observation_error = None
+        self.disposition_active = False
 
     def __del__(self):
         for descriptor_name in ("image_fd", "root_fd"):
@@ -2306,11 +2971,17 @@ class LiveIntegrationEffects:
         if processes - baseline_processes or windows - baseline_windows:
             raise SecurityAgentDetected
 
-    def _kill_process_group(self, process, tracker):
+    def _latch_terminal_observation(self, error):
+        if (
+            isinstance(error, SecurityAgentDetected)
+            or getattr(self, "terminal_observation_error", None) is None
+        ):
+            self.terminal_observation_error = error
+
+    def _kill_process_group(self, process, tracker, *, deadline):
         self._require_capability()
-        if not _terminate_process_tree(process, tracker):
+        if not _terminate_process_tree(process, tracker, deadline=deadline):
             raise IntegrationWorkflowFailure
-        process.communicate(timeout=PROCESS_TERMINATION_GRACE_SECONDS)
 
     def _run(
         self,
@@ -2321,6 +2992,7 @@ class LiveIntegrationEffects:
         accepted_returncodes=(0,),
     ):
         self._require_capability()
+        plan = _process_deadline_plan(time.monotonic(), timeout)
         try:
             process = subprocess.Popen(
                 argv,
@@ -2333,9 +3005,8 @@ class LiveIntegrationEffects:
             )
         except OSError:
             raise IntegrationWorkflowFailure from None
-        deadline = time.monotonic() + timeout
         try:
-            tracker = _root_process_tracker(process.pid, deadline)
+            tracker = _root_process_tracker(process.pid, plan.execution_deadline)
         except IntegrationWorkflowFailure:
             tracker = ProcessTreeTracker(ProcessIdentity(process.pid, 0, process.pid, 0, 0))
             tracker.mark_scan_unavailable()
@@ -2343,21 +3014,30 @@ class LiveIntegrationEffects:
         stdout = stderr = ""
         pending_observation_error = None
         failure = None
+        supervision_error = None
+        communication_completed = False
         try:
             if not tracker.scan_complete:
                 raise IntegrationWorkflowFailure
             while True:
-                _refresh_process_tracker(tracker, deadline)
+                _refresh_process_tracker(tracker, plan.execution_deadline)
                 if pending_observation_error is None:
                     try:
-                        self._observe_bound(_bounded_timeout(deadline, 1.0))
+                        self._observe_bound(
+                            _bounded_timeout(
+                                plan.execution_deadline,
+                                HELPER_PRE_MONITOR_CAP_SECONDS,
+                            )
+                        )
                     except (SecurityAgentDetected, ObservationUnavailable) as error:
                         pending_observation_error = error
+                        self._latch_terminal_observation(error)
                 try:
                     stdout, stderr = process.communicate(
                         input=input_text if first_communication else None,
-                        timeout=_bounded_timeout(deadline, 0.10),
+                        timeout=_bounded_timeout(plan.execution_deadline, 0.10),
                     )
+                    communication_completed = True
                     break
                 except subprocess.TimeoutExpired as timeout_error:
                     first_communication = False
@@ -2369,25 +3049,40 @@ class LiveIntegrationEffects:
                         partial_stderr = partial_stderr.decode("utf-8", "replace")
                     if len(partial_stdout) > 1_048_576 or len(partial_stderr) > 1_048_576:
                         raise IntegrationWorkflowFailure
-            _refresh_process_tracker(tracker, deadline)
-            if pending_observation_error is None:
-                try:
-                    self._observe_bound(_bounded_timeout(deadline, 1.0))
-                except (SecurityAgentDetected, ObservationUnavailable) as error:
-                    pending_observation_error = error
             if len(stdout) > 1_048_576 or len(stderr) > 1_048_576:
                 raise IntegrationWorkflowFailure
             if process.returncode not in accepted_returncodes:
                 raise IntegrationWorkflowFailure
+            try:
+                _refresh_process_tracker(tracker, plan.post_monitor_deadline)
+            except IntegrationWorkflowFailure:
+                supervision_error = IntegrationWorkflowFailure()
+            if pending_observation_error is None:
+                try:
+                    self._observe_bound(
+                        _bounded_timeout(
+                            plan.post_monitor_deadline,
+                            HELPER_POST_MONITOR_CAP_SECONDS,
+                        )
+                    )
+                except (SecurityAgentDetected, ObservationUnavailable) as error:
+                    pending_observation_error = error
+                    self._latch_terminal_observation(error)
+                except IntegrationWorkflowFailure:
+                    supervision_error = IntegrationWorkflowFailure()
             if tracker.signalable_descendant_groups():
-                raise IntegrationWorkflowFailure
+                supervision_error = IntegrationWorkflowFailure()
         except Exception:
             failure = IntegrationWorkflowFailure()
         finally:
-            if failure is not None:
-                try:
-                    self._kill_process_group(process, tracker)
-                except Exception:
+            try:
+                self._kill_process_group(
+                    process, tracker, deadline=plan.cleanup_deadline
+                )
+            except Exception:
+                if communication_completed:
+                    supervision_error = IntegrationWorkflowFailure()
+                else:
                     failure = IntegrationWorkflowFailure()
             _close_process_pipes(process)
         if failure is not None:
@@ -2395,6 +3090,7 @@ class LiveIntegrationEffects:
         return ObservedProcessResult(
             subprocess.CompletedProcess(argv, process.returncode, stdout, stderr),
             pending_observation_error,
+            supervision_error,
         )
 
     def compile_production_helper(self):
@@ -2411,7 +3107,10 @@ class LiveIntegrationEffects:
             ]
         )
         if result.observation_error is not None:
+            self._latch_terminal_observation(result.observation_error)
             raise result.observation_error
+        if result.supervision_error is not None:
+            raise result.supervision_error
         os.chmod(self.helper, 0o700)
 
     def create_request(self):
@@ -2531,21 +3230,48 @@ class LiveIntegrationEffects:
         serialized = json.dumps(response, separators=(",", ":"))
         if str(self.image_path) in serialized or str(self.mount_path) in serialized:
             raise IntegrationWorkflowFailure
+        if (
+            set(response)
+            != {
+                "schema_version",
+                "operation",
+                "code",
+                "encryption_uuid",
+                "device",
+                "item_count",
+            }
+            or response.get("schema_version") != 1
+            or response.get("operation") != operation
+            or not isinstance(response.get("code"), str)
+        ):
+            raise IntegrationWorkflowFailure
+        if operation == "create" and isinstance(response.get("encryption_uuid"), str):
+            self._capture_image_identity()
+            self.encryption_uuid = response["encryption_uuid"]
+        elif operation == "mount" and isinstance(response.get("device"), str):
+            self.mounted_device = response["device"]
+        elif operation == "detach" and response.get("code") == "OK":
+            self.mounted_device = None
+        if observed.observation_error is not None:
+            self._latch_terminal_observation(observed.observation_error)
         if completed.returncode != 0 or response.get("code") != "OK":
             if response.get("code") == "MOUNT_CLEANUP_UNCLEAR" or operation in {"create", "mount"}:
                 self.preserve_image_and_item = True
-            if observed.observation_error is not None:
+            if (
+                observed.observation_error is not None
+                and not getattr(self, "disposition_active", False)
+            ):
                 raise observed.observation_error
+            if observed.supervision_error is not None:
+                raise observed.supervision_error
             raise IntegrationWorkflowFailure
-        if operation == "create":
-            self._capture_image_identity()
-            self.encryption_uuid = response.get("encryption_uuid")
-        elif operation == "mount":
-            self.mounted_device = response.get("device")
-        elif operation == "detach":
-            self.mounted_device = None
-        if observed.observation_error is not None:
+        if (
+            observed.observation_error is not None
+            and not getattr(self, "disposition_active", False)
+        ):
             raise observed.observation_error
+        if observed.supervision_error is not None:
+            raise observed.supervision_error
         return response, f"fresh-helper-{self.invocation_counter}"
 
     def _plist_command(self, argv):
@@ -2556,7 +3282,11 @@ class LiveIntegrationEffects:
         except (ValueError, plistlib.InvalidFileException):
             raise IntegrationWorkflowFailure from None
         if observed.observation_error is not None:
-            raise observed.observation_error
+            self._latch_terminal_observation(observed.observation_error)
+            if not getattr(self, "disposition_active", False):
+                raise observed.observation_error
+        if observed.supervision_error is not None:
+            raise observed.supervision_error
         return payload
 
     def _verify_encryption_uuid(self, expected_uuid):
@@ -2673,51 +3403,62 @@ class LiveIntegrationEffects:
         self._require_capability()
         if cleanup_approved and not self.capability.cleanup_approved:
             raise LiveCapabilityRequired
-        if self.preserve_image_and_item:
-            raise IntegrationWorkflowFailure
-        if self.mounted_device is not None and encryption_uuid:
-            mounted_device = self.mounted_device
-            response, _ = self.invoke_helper(
-                "detach", self.request("detach", encryption_uuid)
+        previous_disposition_state = getattr(self, "disposition_active", False)
+        self.disposition_active = True
+        try:
+            if self.preserve_image_and_item:
+                raise IntegrationWorkflowFailure
+            if self.mounted_device is not None and encryption_uuid:
+                mounted_device = self.mounted_device
+                response, _ = self.invoke_helper(
+                    "detach", self.request("detach", encryption_uuid)
+                )
+                _require_response(
+                    response,
+                    "detach",
+                    uuid_value=encryption_uuid,
+                    device=mounted_device,
+                )
+            if not self._image_entry_present():
+                return
+            if getattr(self, "terminal_observation_error", None) is not None:
+                self.quarantine_exact_image()
+                return
+            if not cleanup_approved:
+                self.quarantine_exact_image()
+                return
+            if not encryption_uuid:
+                self.quarantine_exact_image()
+                raise IntegrationWorkflowFailure
+            inspected, _ = self.invoke_helper(
+                "inspect-item", self.request("inspect-item", encryption_uuid)
             )
             _require_response(
-                response,
-                "detach",
+                inspected,
+                "inspect-item",
                 uuid_value=encryption_uuid,
-                device=mounted_device,
+                item_count=1,
             )
-        if not self._image_entry_present():
-            return
-        if not cleanup_approved:
-            self.quarantine_exact_image()
-            return
-        if not encryption_uuid:
-            self.quarantine_exact_image()
-            raise IntegrationWorkflowFailure
-        inspected, _ = self.invoke_helper(
-            "inspect-item", self.request("inspect-item", encryption_uuid)
-        )
-        _require_response(
-            inspected,
-            "inspect-item",
-            uuid_value=encryption_uuid,
-            item_count=1,
-        )
-        deleted, _ = self.invoke_helper(
-            "delete-disposable-item",
-            self.request(
+            if getattr(self, "terminal_observation_error", None) is not None:
+                self.quarantine_exact_image()
+                return
+            deleted, _ = self.invoke_helper(
                 "delete-disposable-item",
-                encryption_uuid,
-                cleanup_approved=True,
-            ),
-        )
-        _require_response(
-            deleted,
-            "delete-disposable-item",
-            uuid_value=encryption_uuid,
-            item_count=0,
-        )
-        self.delete_exact_image()
+                self.request(
+                    "delete-disposable-item",
+                    encryption_uuid,
+                    cleanup_approved=True,
+                ),
+            )
+            _require_response(
+                deleted,
+                "delete-disposable-item",
+                uuid_value=encryption_uuid,
+                item_count=0,
+            )
+            self.delete_exact_image()
+        finally:
+            self.disposition_active = previous_disposition_state
 
 
 class DiskImageKeychainLiveIntegrationTests(unittest.TestCase):

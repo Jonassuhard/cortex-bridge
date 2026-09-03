@@ -393,6 +393,10 @@ private let childGroupGraceSeconds = productionGroupGraceSeconds
 private let childOutputLimit = 1_048_576
 #endif
 
+private let childTerminationBudgetSeconds = childTermGraceSeconds
+    + childReapGraceSeconds
+    + childGroupGraceSeconds
+
 private func monotonicSeconds() -> Double {
     var time = timespec()
     clock_gettime(CLOCK_MONOTONIC, &time)
@@ -432,54 +436,87 @@ private func appendAvailable(
     }
 }
 
-private func terminateAndReap(pid: pid_t, status: inout Int32) -> (Bool, Bool) {
+private func pauseUntil(_ deadline: Double) {
+    let remaining = deadline - monotonicSeconds()
+    guard remaining > 0 else { return }
+    usleep(useconds_t(min(10_000.0, remaining * 1_000_000.0)))
+}
+
+private func terminateAndReap(
+    pid: pid_t,
+    status: inout Int32,
+    hardDeadline: Double
+) -> (Bool, Bool) {
+    guard monotonicSeconds() < hardDeadline else { return (false, false) }
     _ = Darwin.kill(-pid, SIGTERM)
-    let termDeadline = monotonicSeconds() + childTermGraceSeconds
+    let termDeadline = min(
+        hardDeadline, monotonicSeconds() + childTermGraceSeconds
+    )
     var reaped = false
     while monotonicSeconds() < termDeadline {
         let result = waitpid(pid, &status, WNOHANG)
         if result == pid { reaped = true; break }
         if result < 0 && errno == ECHILD { reaped = true; break }
-        usleep(10_000)
+        if result < 0 && errno != EINTR { break }
+        pauseUntil(termDeadline)
     }
+    guard monotonicSeconds() < hardDeadline else { return (reaped, false) }
     _ = Darwin.kill(-pid, SIGKILL)
     if !reaped {
-        let reapDeadline = monotonicSeconds() + childReapGraceSeconds
+        let reapDeadline = min(
+            hardDeadline, monotonicSeconds() + childReapGraceSeconds
+        )
         while monotonicSeconds() < reapDeadline {
             let result = waitpid(pid, &status, WNOHANG)
             if result == pid { reaped = true; break }
             if result < 0 && errno == ECHILD { reaped = true; break }
             if result < 0 && errno == EINTR { continue }
-            usleep(10_000)
+            if result < 0 { break }
+            pauseUntil(reapDeadline)
         }
     }
-    let groupDeadline = monotonicSeconds() + childGroupGraceSeconds
+    let groupDeadline = min(
+        hardDeadline, monotonicSeconds() + childGroupGraceSeconds
+    )
     var groupGone = false
     while monotonicSeconds() < groupDeadline {
         if Darwin.kill(-pid, 0) == -1 && errno == ESRCH {
             groupGone = true
             break
         }
-        usleep(10_000)
+        pauseUntil(groupDeadline)
+    }
+    if !groupGone,
+       monotonicSeconds() < hardDeadline,
+       Darwin.kill(-pid, 0) == -1,
+       errno == ESRCH {
+        groupGone = true
     }
     return (reaped, groupGone)
 }
 
-private func ensureProcessGroupGone(_ pid: pid_t) -> Bool {
+private func ensureProcessGroupGone(_ pid: pid_t, hardDeadline: Double) -> Bool {
+    guard monotonicSeconds() < hardDeadline else { return false }
     if Darwin.kill(-pid, 0) == -1 && errno == ESRCH { return true }
     _ = Darwin.kill(-pid, SIGTERM)
-    var deadline = monotonicSeconds() + childTermGraceSeconds
+    var deadline = min(
+        hardDeadline, monotonicSeconds() + childTermGraceSeconds
+    )
     while monotonicSeconds() < deadline {
         if Darwin.kill(-pid, 0) == -1 && errno == ESRCH { return true }
-        usleep(10_000)
+        pauseUntil(deadline)
     }
+    guard monotonicSeconds() < hardDeadline else { return false }
     _ = Darwin.kill(-pid, SIGKILL)
-    deadline = monotonicSeconds() + childGroupGraceSeconds
+    deadline = min(
+        hardDeadline, monotonicSeconds() + childGroupGraceSeconds
+    )
     while monotonicSeconds() < deadline {
         if Darwin.kill(-pid, 0) == -1 && errno == ESRCH { return true }
-        usleep(10_000)
+        pauseUntil(deadline)
     }
-    return false
+    guard monotonicSeconds() < hardDeadline else { return false }
+    return Darwin.kill(-pid, 0) == -1 && errno == ESRCH
 }
 
 private func waitStatusExited(_ status: Int32) -> Bool {
@@ -503,7 +540,8 @@ private func spawnChild(
     diagnostics: SpawnDiagnostics? = nil
 ) throws -> Data {
     guard argv.count >= 2, argv[0] == executable else { throw HelperFailure.invalidRequest }
-    guard monotonicSeconds() < deadline else {
+    let workDeadline = deadline - childTerminationBudgetSeconds
+    guard monotonicSeconds() < workDeadline else {
         throw ProcessInvocationFailure(
             reason: .timeout, stdout: Data(), stderr: Data(),
             directChildReaped: true, processGroupGone: true
@@ -553,6 +591,12 @@ private func spawnChild(
           posix_spawnattr_setpgroup(&attributes, 0) == 0
     else { throw HelperFailure.hdiutilFailure }
 
+    guard monotonicSeconds() < workDeadline else {
+        throw ProcessInvocationFailure(
+            reason: .timeout, stdout: Data(), stderr: Data(),
+            directChildReaped: true, processGroupGone: true
+        )
+    }
     var pid = pid_t()
     let spawnStatus: Int32 = withCStringArray(argv) { argvPointer in
         withCStringArray(childEnvironment) { environmentPointer in
@@ -572,7 +616,9 @@ private func spawnChild(
         try setNonBlocking(errorPipe[0])
     } catch {
         var status: Int32 = 0
-        let (reaped, groupGone) = terminateAndReap(pid: pid, status: &status)
+        let (reaped, groupGone) = terminateAndReap(
+            pid: pid, status: &status, hardDeadline: deadline
+        )
         throw ProcessInvocationFailure(
             reason: .supervision, stdout: Data(), stderr: Data(),
             directChildReaped: reaped, processGroupGone: groupGone
@@ -591,13 +637,20 @@ private func spawnChild(
     var failureReason: ProcessFailureReason?
 
     while !childReaped || !stdoutEOF || !stderrEOF {
-        if monotonicSeconds() >= deadline { failureReason = .timeout; break }
+        if monotonicSeconds() >= workDeadline { failureReason = .timeout; break }
         var pollDescriptors = [
             pollfd(fd: inputPipe[1], events: inputPipe[1] >= 0 ? Int16(POLLOUT) : 0, revents: 0),
             pollfd(fd: outputPipe[0], events: Int16(POLLIN), revents: 0),
             pollfd(fd: errorPipe[0], events: Int16(POLLIN), revents: 0),
         ]
-        let pollResult = Darwin.poll(&pollDescriptors, nfds_t(pollDescriptors.count), 20)
+        let remainingMilliseconds = max(
+            0, Int32((workDeadline - monotonicSeconds()) * 1_000.0)
+        )
+        let pollResult = Darwin.poll(
+            &pollDescriptors,
+            nfds_t(pollDescriptors.count),
+            min(20, remainingMilliseconds)
+        )
         if pollResult < 0 && errno != EINTR { failureReason = .supervision; break }
 
         do {
@@ -644,7 +697,9 @@ private func spawnChild(
 
     if let reason = failureReason {
         closeDescriptor(&inputPipe[1])
-        let (reaped, groupGone) = terminateAndReap(pid: pid, status: &childStatus)
+        let (reaped, groupGone) = terminateAndReap(
+            pid: pid, status: &childStatus, hardDeadline: deadline
+        )
         throw ProcessInvocationFailure(
             reason: reason,
             stdout: stdout,
@@ -654,13 +709,15 @@ private func spawnChild(
         )
     }
     guard childReaped else {
-        let (reaped, groupGone) = terminateAndReap(pid: pid, status: &childStatus)
+        let (reaped, groupGone) = terminateAndReap(
+            pid: pid, status: &childStatus, hardDeadline: deadline
+        )
         throw ProcessInvocationFailure(
             reason: .supervision, stdout: stdout, stderr: stderr,
             directChildReaped: reaped, processGroupGone: groupGone
         )
     }
-    let groupGone = ensureProcessGroupGone(pid)
+    let groupGone = ensureProcessGroupGone(pid, hardDeadline: deadline)
     guard groupGone else {
         throw ProcessInvocationFailure(
             reason: .supervision, stdout: stdout, stderr: stderr,
@@ -927,8 +984,8 @@ func perform(
     keychain: KeychainStoring,
     clock: MonotonicClock = SystemMonotonicClock()
 ) throws -> HelperResponse {
-    try validatedRequest(request)
     let finalDeadline = clock.now() + productionRequestDeadlineSeconds
+    try validatedRequest(request)
     let normalDeadline = request.operation == .mount
         ? finalDeadline - productionMountCompensationReserveSeconds
         : finalDeadline
@@ -1011,6 +1068,12 @@ func perform(
                 deadline: normalDeadline
             )
             let outputReceipts = attachReceiptDevices(from: attachOutput, mountPath: mountPath)
+            guard outputReceipts.count <= 1 else {
+                throw HelperFailure.mountCleanupUnclear
+            }
+            if outputReceipts.count == 1 {
+                receipt = outputReceipts[0]
+            }
             let postInfo = try hdiutil.run(
                 argv: [hdiutilPath, "info", "-plist"], secret: nil,
                 deadline: normalDeadline
@@ -1018,14 +1081,17 @@ func perform(
             let postDevices = try mappingDevices(
                 from: postInfo, imagePath: request.image_path, mountPath: mountPath
             )
-            guard postDevices.count <= 1 else { throw HelperFailure.mountCleanupUnclear }
+            if postDevices.count > 1 {
+                receipt = nil
+                throw HelperFailure.mountCleanupUnclear
+            }
             if postDevices.count == 1 {
                 guard outputReceipts.isEmpty || outputReceipts == postDevices else {
+                    receipt = nil
                     throw HelperFailure.mountCleanupUnclear
                 }
                 receipt = postDevices[0]
-            } else if outputReceipts.count == 1 {
-                receipt = outputReceipts[0]
+            } else if receipt != nil {
                 throw HelperFailure.invalidMountMapping
             } else {
                 throw HelperFailure.mountCleanupUnclear
@@ -1048,15 +1114,12 @@ func perform(
                   try imageEntryCount(from: finalInfo, imagePath: request.image_path) == 1
             else { throw HelperFailure.invalidMountMapping }
         } catch let failure as ProcessInvocationFailure {
-            let outputReceipts = attachReceiptDevices(from: failure.stdout, mountPath: mountPath)
-            if let currentInfo = try? hdiutil.run(
-                argv: [hdiutilPath, "info", "-plist"], secret: nil,
-                deadline: finalDeadline
-            ), let currentDevices = try? mappingDevices(
-                from: currentInfo, imagePath: request.image_path, mountPath: mountPath
-            ), currentDevices.count == 1 {
-                if outputReceipts.isEmpty || currentDevices == outputReceipts {
-                    receipt = currentDevices[0]
+            if receipt == nil {
+                let outputReceipts = attachReceiptDevices(
+                    from: failure.stdout, mountPath: mountPath
+                )
+                if outputReceipts.count == 1 {
+                    receipt = outputReceipts[0]
                 }
             }
             originalFailure = HelperFailure.hdiutilFailure
@@ -1273,15 +1336,23 @@ final class FakeHdiutilRunner: HdiutilRunning {
 
     func run(argv: [String], secret: SecretBuffer?, deadline: Double) throws -> Data {
         if normalDeadline == nil { normalDeadline = deadline }
+        let startedAt = clock.now()
+        let workDeadline = deadline - childTerminationBudgetSeconds
         var call: [String: Any] = [
             "argv": argv,
             "environment": childEnvironment,
             "posix_spawn_cloexec_default": true,
             "unrelated_inherited_fd_count": 0,
             "absolute_deadline": deadline,
-            "remaining_budget_before": max(0, deadline - clock.now()),
+            "hard_deadline": deadline,
+            "work_deadline": workDeadline,
+            "termination_budget": deadline - workDeadline,
+            "started_at": startedAt,
+            "remaining_budget_before": max(0, deadline - startedAt),
             "deadline_phase": compensationStarted || deadline > normalDeadline!
                 ? "compensation" : "normal",
+            "spawned": startedAt < workDeadline,
+            "termination_started_at": NSNull(),
         ]
         if let secret {
             _ = tracker.track(secret)
@@ -1296,6 +1367,15 @@ final class FakeHdiutilRunner: HdiutilRunning {
             call["terminal_nul_count"] = 1
         }
         calls.append(call)
+        let callIndex = calls.count - 1
+        defer { calls[callIndex]["finished_at"] = clock.now() }
+
+        guard startedAt < workDeadline else {
+            throw ProcessInvocationFailure(
+                reason: .timeout, stdout: Data(), stderr: Data(),
+                directChildReaped: true, processGroupGone: true
+            )
+        }
 
         guard argv.count >= 2 else { throw HelperFailure.hdiutilFailure }
         let command = argv[1]
@@ -1335,10 +1415,24 @@ final class FakeHdiutilRunner: HdiutilRunning {
             if scenario == "compensation-detach-failure" {
                 throw HelperFailure.hdiutilFailure
             }
+            if scenario == "compensation-window-exhausted" {
+                clock.advance(max(0, workDeadline - clock.now()))
+            }
             attached = false
             return Data()
         }
         if command == "isencrypted" {
+            if (scenario == "hard-deadline-compensation"
+                || scenario == "compensation-window-exhausted"), attached {
+                clock.advance(max(0, workDeadline - clock.now()))
+                calls[callIndex]["termination_started_at"] = clock.now()
+                clock.advance(max(0, deadline - clock.now()))
+                compensationStarted = true
+                throw ProcessInvocationFailure(
+                    reason: .timeout, stdout: Data(), stderr: Data(),
+                    directChildReaped: true, processGroupGone: true
+                )
+            }
             if scenario == "bad-encryption" || scenario == "post-encryption-failure"
                 || scenario == "compensation-detach-failure" {
                 return try plist([
@@ -1544,7 +1638,7 @@ private func runSpawnProbe() -> Int32 {
                 String(foreignDescriptor),
             ],
             secret: secret,
-            deadline: monotonicSeconds() + 0.30,
+            deadline: monotonicSeconds() + 0.80,
             diagnostics: diagnostics
         )
     } catch {
@@ -1620,7 +1714,7 @@ private func runProcessScenario(_ scenario: String) -> Int32 {
             executable: CommandLine.arguments[0],
             argv: [CommandLine.arguments[0], "--process-child", scenario],
             secret: secret,
-            deadline: monotonicSeconds() + 0.30
+            deadline: monotonicSeconds() + 0.80
         )
         writeJSONObject([
             "code": "UNEXPECTED_SUCCESS",
@@ -1715,6 +1809,7 @@ private func runTestHarness(request: HelperRequest, scenario: String) -> Int32 {
         "all_keychain_staging_zeroed": fakeSecurity.allStagingZeroed,
         "secret_materializations": fakeSecurity.secretMaterializations,
         "security_agent_observations": 0,
+        "mount_compensation_budget": productionMountCompensationReserveSeconds,
     ])
     return exitCode
 }
