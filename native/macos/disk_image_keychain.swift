@@ -103,6 +103,7 @@ enum HelperFailure: Error {
     case keychainNotFound
     case keychainAmbiguous
     case keychainInteractionForbidden
+    case keychainSecretInvalid
     case keychainFailure
     case invalidMountMapping
     case mountCleanupUnclear
@@ -118,6 +119,7 @@ enum HelperFailure: Error {
         case .keychainNotFound: return "KEYCHAIN_ITEM_NOT_FOUND"
         case .keychainAmbiguous: return "KEYCHAIN_ITEM_AMBIGUOUS"
         case .keychainInteractionForbidden: return "KEYCHAIN_INTERACTION_FORBIDDEN"
+        case .keychainSecretInvalid: return "KEYCHAIN_SECRET_INVALID"
         case .keychainFailure: return "KEYCHAIN_FAILED"
         case .invalidMountMapping: return "MOUNT_MAPPING_INVALID"
         case .mountCleanupUnclear: return "MOUNT_CLEANUP_UNCLEAR"
@@ -365,13 +367,22 @@ final class SpawnDiagnostics {
     var stdinWriteLengths = [Int]()
 }
 
+private let productionChildTimeoutSeconds: Double = 45.0
+private let productionTermGraceSeconds: Double = 2.0
+private let productionReapGraceSeconds: Double = 2.0
+private let productionGroupGraceSeconds: Double = 2.0
+
 #if CORTEX_STORAGE_HELPER_TESTING
 private let childTimeoutSeconds: Double = 0.30
-private let childGraceSeconds: Double = 0.15
+private let childTermGraceSeconds: Double = 0.15
+private let childReapGraceSeconds: Double = 0.15
+private let childGroupGraceSeconds: Double = 0.15
 private let childOutputLimit = 4_096
 #else
-private let childTimeoutSeconds: Double = 60.0
-private let childGraceSeconds: Double = 2.0
+private let childTimeoutSeconds = productionChildTimeoutSeconds
+private let childTermGraceSeconds = productionTermGraceSeconds
+private let childReapGraceSeconds = productionReapGraceSeconds
+private let childGroupGraceSeconds = productionGroupGraceSeconds
 private let childOutputLimit = 1_048_576
 #endif
 
@@ -416,23 +427,26 @@ private func appendAvailable(
 
 private func terminateAndReap(pid: pid_t, status: inout Int32) -> (Bool, Bool) {
     _ = Darwin.kill(-pid, SIGTERM)
-    let graceDeadline = monotonicSeconds() + childGraceSeconds
+    let termDeadline = monotonicSeconds() + childTermGraceSeconds
     var reaped = false
-    while monotonicSeconds() < graceDeadline {
+    while monotonicSeconds() < termDeadline {
         let result = waitpid(pid, &status, WNOHANG)
         if result == pid { reaped = true; break }
+        if result < 0 && errno == ECHILD { reaped = true; break }
         usleep(10_000)
     }
     _ = Darwin.kill(-pid, SIGKILL)
     if !reaped {
-        while true {
-            let result = waitpid(pid, &status, 0)
+        let reapDeadline = monotonicSeconds() + childReapGraceSeconds
+        while monotonicSeconds() < reapDeadline {
+            let result = waitpid(pid, &status, WNOHANG)
             if result == pid { reaped = true; break }
+            if result < 0 && errno == ECHILD { reaped = true; break }
             if result < 0 && errno == EINTR { continue }
-            break
+            usleep(10_000)
         }
     }
-    let groupDeadline = monotonicSeconds() + childGraceSeconds
+    let groupDeadline = monotonicSeconds() + childGroupGraceSeconds
     var groupGone = false
     while monotonicSeconds() < groupDeadline {
         if Darwin.kill(-pid, 0) == -1 && errno == ESRCH {
@@ -447,13 +461,13 @@ private func terminateAndReap(pid: pid_t, status: inout Int32) -> (Bool, Bool) {
 private func ensureProcessGroupGone(_ pid: pid_t) -> Bool {
     if Darwin.kill(-pid, 0) == -1 && errno == ESRCH { return true }
     _ = Darwin.kill(-pid, SIGTERM)
-    var deadline = monotonicSeconds() + childGraceSeconds
+    var deadline = monotonicSeconds() + childTermGraceSeconds
     while monotonicSeconds() < deadline {
         if Darwin.kill(-pid, 0) == -1 && errno == ESRCH { return true }
         usleep(10_000)
     }
     _ = Darwin.kill(-pid, SIGKILL)
-    deadline = monotonicSeconds() + childGraceSeconds
+    deadline = monotonicSeconds() + childGroupGraceSeconds
     while monotonicSeconds() < deadline {
         if Darwin.kill(-pid, 0) == -1 && errno == ESRCH { return true }
         usleep(10_000)
@@ -701,6 +715,19 @@ func encodeBase64URL(_ random: SecretBuffer) throws -> SecretBuffer {
     return encoded
 }
 
+private func isValidDiskImageSecret(_ secret: SecretBuffer) -> Bool {
+    guard secret.count == 43 else { return false }
+    return secret.withUnsafeBytes { bytes in
+        bytes.allSatisfy { byte in
+            (byte >= 65 && byte <= 90)
+                || (byte >= 97 && byte <= 122)
+                || (byte >= 48 && byte <= 57)
+                || byte == 45
+                || byte == 95
+        }
+    }
+}
+
 private func normalizedKey(_ key: String) -> String {
     key.lowercased().replacingOccurrences(of: "_", with: "-")
 }
@@ -936,6 +963,9 @@ func perform(
         let mountPath = try requiredMountPath(request)
         let secret = try keychain.read(selector: selector(expected))
         defer { secret.zeroize() }
+        guard isValidDiskImageSecret(secret) else {
+            throw HelperFailure.keychainSecretInvalid
+        }
         let baselineInfo = try hdiutil.run(
             argv: [hdiutilPath, "info", "-plist"], secret: nil
         )
@@ -1357,7 +1387,18 @@ final class FakeSecurityAdapter: SecurityCalling {
         }
         if isRead {
             secretMaterializations += 1
-            return (errSecSuccess, Data(repeating: 65, count: 43))
+            var secret = [UInt8](repeating: 65, count: 43)
+            switch scenario {
+            case "secret-length-42": secret.removeLast()
+            case "secret-length-44": secret.append(65)
+            case "secret-nul": secret[0] = 0
+            case "secret-plus": secret[0] = 43
+            case "secret-slash": secret[0] = 47
+            case "secret-padding": secret[0] = 61
+            case "secret-non-ascii": secret[0] = 0xFF
+            default: break
+            }
+            return (errSecSuccess, Data(secret))
         }
         return (errSecSuccess, (0..<count).map { _ in ["matched": true] })
     }
@@ -1529,6 +1570,16 @@ private func runProcessScenario(_ scenario: String) -> Int32 {
     return 0
 }
 
+private func runProcessPolicy() -> Int32 {
+    writeJSONObject([
+        "child_timeout_seconds": productionChildTimeoutSeconds,
+        "term_grace_seconds": productionTermGraceSeconds,
+        "reap_grace_seconds": productionReapGraceSeconds,
+        "group_grace_seconds": productionGroupGraceSeconds,
+    ])
+    return 0
+}
+
 private func runTestHarness(request: HelperRequest, scenario: String) -> Int32 {
     let tracker = BufferTracker()
     let fakeHdiutil = FakeHdiutilRunner(
@@ -1593,6 +1644,88 @@ private func runTestHarness(request: HelperRequest, scenario: String) -> Int32 {
 }
 #endif
 
+private func topLevelObjectKeys(_ input: Data) -> [String]? {
+    let bytes = [UInt8](input)
+    var index = 0
+
+    func isWhitespace(_ byte: UInt8) -> Bool {
+        byte == 0x20 || byte == 0x09 || byte == 0x0A || byte == 0x0D
+    }
+
+    func skippingWhitespace(_ start: Int) -> Int {
+        var cursor = start
+        while cursor < bytes.count, isWhitespace(bytes[cursor]) { cursor += 1 }
+        return cursor
+    }
+
+    func endOfString(_ start: Int) -> Int? {
+        guard start < bytes.count, bytes[start] == 0x22 else { return nil }
+        var cursor = start + 1
+        while cursor < bytes.count {
+            if bytes[cursor] == 0x22 { return cursor + 1 }
+            if bytes[cursor] == 0x5C {
+                cursor += 1
+                guard cursor < bytes.count else { return nil }
+            }
+            cursor += 1
+        }
+        return nil
+    }
+
+    index = skippingWhitespace(index)
+    guard index < bytes.count, bytes[index] == 0x7B else { return nil }
+    index += 1
+    var depth = 1
+    var expectingKey = true
+    var keys = [String]()
+
+    while index < bytes.count, depth > 0 {
+        index = skippingWhitespace(index)
+        guard index < bytes.count else { return nil }
+
+        if depth == 1, expectingKey {
+            if bytes[index] == 0x7D {
+                depth = 0
+                index += 1
+                break
+            }
+            let start = index
+            guard let end = endOfString(start) else { return nil }
+            let encodedKey = Data(bytes[start..<end])
+            guard let key = try? JSONSerialization.jsonObject(
+                with: encodedKey,
+                options: [.fragmentsAllowed]
+            ) as? String else { return nil }
+            index = skippingWhitespace(end)
+            guard index < bytes.count, bytes[index] == 0x3A else { return nil }
+            keys.append(key)
+            expectingKey = false
+            index += 1
+            continue
+        }
+
+        switch bytes[index] {
+        case 0x22:
+            guard let end = endOfString(index) else { return nil }
+            index = end
+        case 0x7B, 0x5B:
+            depth += 1
+            index += 1
+        case 0x7D, 0x5D:
+            depth -= 1
+            index += 1
+        case 0x2C where depth == 1:
+            expectingKey = true
+            index += 1
+        default:
+            index += 1
+        }
+    }
+
+    guard depth == 0, skippingWhitespace(index) == bytes.count else { return nil }
+    return keys
+}
+
 private func runMain() -> Int32 {
     signal(SIGPIPE, SIG_IGN)
     let arguments = Array(CommandLine.arguments.dropFirst())
@@ -1600,6 +1733,9 @@ private func runMain() -> Int32 {
     #if CORTEX_STORAGE_HELPER_TESTING
     if arguments.count == 1, arguments[0] == "--spawn-probe" {
         return runSpawnProbe()
+    }
+    if arguments.count == 1, arguments[0] == "--process-policy" {
+        return runProcessPolicy()
     }
     if arguments.count == 2, arguments[0] == "--process-scenario" {
         return runProcessScenario(arguments[1])
@@ -1629,6 +1765,9 @@ private func runMain() -> Int32 {
         "cleanup_approved",
     ]
     guard !input.isEmpty,
+          let topLevelKeys = topLevelObjectKeys(input),
+          topLevelKeys.count == exactRequestKeys.count,
+          Set(topLevelKeys) == exactRequestKeys,
           let rawObject = try? JSONSerialization.jsonObject(with: input),
           let rawDictionary = rawObject as? [String: Any],
           Set(rawDictionary.keys) == exactRequestKeys,
