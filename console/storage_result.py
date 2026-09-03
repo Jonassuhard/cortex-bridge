@@ -16,6 +16,7 @@ _UUID = re.compile(
 _CHECK_ID = re.compile(r"^[a-z][a-z0-9_]*$")
 _CODE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 _OPERATION = re.compile(r"^[a-z][a-z0-9_]*$")
+_SHA256_EVIDENCE = re.compile(r"^sha256_[0-9a-f]{64}$")
 _EVIDENCE_TOKENS = frozenset(
     {
         "committed_transaction_verified",
@@ -42,7 +43,9 @@ def _require_token(value: object, pattern: re.Pattern[str], name: str) -> None:
 
 
 def _require_redacted_evidence(value: object) -> None:
-    if type(value) is not str or value not in _EVIDENCE_TOKENS:
+    if type(value) is not str or (
+        value not in _EVIDENCE_TOKENS and _SHA256_EVIDENCE.fullmatch(value) is None
+    ):
         raise ValueError("storage evidence is not redacted")
 
 

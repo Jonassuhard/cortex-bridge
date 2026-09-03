@@ -51,15 +51,9 @@ def _deadline(timeout_seconds: float) -> float:
     return time.monotonic() + timeout_seconds
 
 
-def _raise_if_deadline_elapsed(deadline: float) -> None:
-    if time.monotonic() >= deadline:
-        raise StorageLockError("STORAGE_LOCK_TIMEOUT")
-
-
 def _acquire(fd: int, mode: LockMode, deadline: float) -> None:
     flag = fcntl.LOCK_SH if mode == "shared" else fcntl.LOCK_EX
     while True:
-        _raise_if_deadline_elapsed(deadline)
         try:
             fcntl.flock(fd, flag | fcntl.LOCK_NB)
             return
@@ -97,21 +91,18 @@ class StorageLock:
 
 
 def _open_existing_marker(home: Path, deadline: float) -> int:
-    _raise_if_deadline_elapsed(deadline)
     if home.is_symlink() or not home.exists() or not home.is_dir():
         raise StorageLockError("STORAGE_LOCK_MISSING")
     descriptors: list[int] | None = None
     fd: int | None = None
     try:
         descriptors, _names, _device = _open_pinned_directory_chain(home)
-        _raise_if_deadline_elapsed(deadline)
         directory_fd = descriptors[-1]
         try:
             fd, _writable = _open_existing_lock(directory_fd, _LOCK_NAME)
         except FileNotFoundError as exc:
             raise StorageLockError("STORAGE_LOCK_MISSING") from exc
         _validate_open_lock(fd, directory_fd, _LOCK_NAME, home / _LOCK_NAME)
-        _raise_if_deadline_elapsed(deadline)
         result = fd
         fd = None
         return result

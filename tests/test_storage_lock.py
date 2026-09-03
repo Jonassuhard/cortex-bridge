@@ -26,6 +26,41 @@ from storage_result import CheckResult, OperationResult, StorageStatus  # noqa: 
 
 
 class StorageResultTest(unittest.TestCase):
+    def test_check_evidence_accepts_only_safe_literals_or_an_exact_lowercase_sha256(self) -> None:
+        digest = "a" * 64
+        accepted = (
+            "committed_transaction_verified",
+            "contract_passed",
+            "contract_rejected",
+            "contract_unclear",
+            f"sha256_{digest}",
+        )
+        rejected = (
+            f"sha256_{'a' * 63}",
+            f"sha256_{'a' * 65}",
+            f"sha256_{('a' * 63) + 'g'}",
+            f"sha256_{'A' * 64}",
+            f"prefix_sha256_{digest}",
+            f"sha256_{digest}_suffix",
+            f"digest_{digest}",
+            "email_alice@example.com",
+            "password=hunter2",
+            "contract passed",
+            "contrat_validé",
+            r"\\server\\private",
+        )
+
+        for evidence in accepted:
+            with self.subTest(accepted=evidence):
+                self.assertEqual(
+                    CheckResult("journal", "PASS", evidence).evidence,
+                    evidence,
+                )
+        for evidence in rejected:
+            with self.subTest(rejected=evidence):
+                with self.assertRaises(ValueError):
+                    CheckResult("journal", "PASS", evidence)
+
     def test_status_serializes_the_canonical_redacted_schema(self) -> None:
         result = OperationResult(
             operation="status",
@@ -228,6 +263,35 @@ class StorageLockTest(unittest.TestCase):
             with self.subTest(timeout=timeout):
                 with self.assertRaises(ValueError):
                     open_storage_lock(self.home, "shared", timeout_seconds=timeout)
+
+    def test_zero_timeout_acquires_free_marker_and_ordered_locks(self) -> None:
+        with open_storage_lock(self.home, "exclusive", timeout_seconds=0):
+            pass
+        with ordered_storage_locks(
+            self.home,
+            install_mode="exclusive",
+            storage_mode="exclusive",
+            timeout_seconds=0,
+        ) as (install_fd, storage_lock_handle):
+            self.assertIsInstance(install_fd, int)
+            self.assertEqual(storage_lock_handle.mode, "exclusive")
+
+    def test_zero_timeout_contended_ordered_lock_skips_callback(self) -> None:
+        process, _ready, release = self._start_shared_holder()
+        try:
+            callback_ran = False
+            with self.assertRaisesRegex(StorageLockError, "STORAGE_LOCK_TIMEOUT"):
+                with ordered_storage_locks(
+                    self.home,
+                    install_mode="exclusive",
+                    storage_mode="exclusive",
+                    timeout_seconds=0,
+                ):
+                    callback_ran = True
+            self.assertFalse(callback_ran)
+            self.assertTrue((self.home / ".install.lock").is_file())
+        finally:
+            self._release_holder(process, release)
 
     def test_open_existing_missing_fails_closed_without_mutating_private_home(self) -> None:
         before_identity = (self.home.stat().st_dev, self.home.stat().st_ino)
