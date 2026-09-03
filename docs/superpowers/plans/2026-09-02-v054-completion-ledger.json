@@ -1,0 +1,99 @@
+{
+  "schema_version": 1,
+  "planning_commit": "d704775eeb479005b2628719ec2ce31835f78077",
+  "master_plan_sha256": "feb289f0f435bda8d9dee3109228465b8a863fa0ceb43399b147e098a80554a2",
+  "spec_sha256": {
+    "2026-08-31-hybrid-intent-router-design.md": "472ae88687f6df00be1aac7bb33af536b0456fdc7fd04b7bb5f95e637e4b38f5",
+    "2026-09-02-storage-cutover-and-qa-design.md": "2034280b1b4943c2b602eba888b58742e2d77b428bdc63dc5f93a4b59c72cb5f",
+    "2026-09-03-local-alias-action-addendum.md": "38dff2d114ddf3a8f2262f3ac2b37dcbec9fd33951934c5d5c03a9a0c4acc08b"
+  },
+  "subordinate_plan_sha256": {
+    "E": "7974f73e672077956d5e03a6416711791524ab520a8549b729ec4a2feb7c102c",
+    "I": "73987192c4d5dbe3d0fcabf3637bd46f60b0ef50f15c8184b93452b1e7e66fc8",
+    "L": "b8dda2316401eaee1b6408aa6cc68136b783524d6b99e5b30f64db7c30e83277",
+    "S": "97b20fec13e7030dbb06bf39aa1d2ffdeb353ca33527e4155d3e9defd3994275",
+    "U": "25d04484e4dcf337728ce96f0af642d3894be71dea0ef9a616f2552cd9121245"
+  },
+  "phases": {
+    "S": {
+      "base_commit": null,
+      "implementation_commit": null,
+      "focused_tests": null,
+      "full_gate": null,
+      "review_id": null,
+      "review_verdict": null,
+      "blockers": null
+    },
+    "E": {
+      "base_commit": null,
+      "implementation_commit": null,
+      "focused_tests": null,
+      "full_gate": null,
+      "review_id": null,
+      "review_verdict": null,
+      "blockers": null,
+      "effect_schema_version": 3,
+      "effect_owner_registry": [
+        "mission",
+        "direct_ui",
+        "admin_ui",
+        "local_alias_action"
+      ],
+      "effect_category_registry": [
+        "filesystem",
+        "process",
+        "browser",
+        "sensitive_read"
+      ],
+      "installed_local_worker_identity": {
+        "manifest_key": "fixed_workers.local-alias-worker",
+        "relative_path": "app/executor/local_alias_worker.py",
+        "sha256": null,
+        "device": null,
+        "inode": null,
+        "uid": null,
+        "mode": null,
+        "interpreter_relative_path": "venv/bin/python",
+        "interpreter_sha256": null,
+        "interpreter_device": null,
+        "interpreter_inode": null,
+        "interpreter_uid": null,
+        "interpreter_mode": null
+      }
+    },
+    "U": {
+      "base_commit": null,
+      "implementation_commit": null,
+      "focused_tests": null,
+      "full_gate": null,
+      "review_id": null,
+      "review_verdict": null,
+      "blockers": null
+    },
+    "I": {
+      "base_commit": null,
+      "implementation_commit": null,
+      "focused_tests": null,
+      "full_gate": null,
+      "review_id": null,
+      "review_verdict": null,
+      "blockers": null,
+      "execution_class_registry": [
+        "general_mission",
+        "local_alias_action"
+      ],
+      "local_operation_registry": [
+        "create_directory"
+      ]
+    },
+    "L": {
+      "base_commit": null,
+      "implementation_commit": null,
+      "focused_tests": null,
+      "full_gate": null,
+      "review_id": null,
+      "review_verdict": null,
+      "blockers": null
+    }
+  }
+}
