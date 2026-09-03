@@ -21,6 +21,7 @@ from typing import Any
 from cortex_paths import build_paths
 from lifecycle_lock import LIFECYCLE_LOCK_MARKER, ensure_private_directory, open_lifecycle_lock
 from process_ownership import classify, load_record
+from storage_lock import ordered_storage_locks
 from version import current_version
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -1527,15 +1528,12 @@ def _ensure_private_directory(path: Path) -> bool:
 
 @contextmanager
 def _exclusive_install_lock(home: Path):
-    fd = _open_lifecycle_lock(home)
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
+    with ordered_storage_locks(
+        home,
+        install_mode="exclusive",
+        storage_mode="exclusive",
+    ):
         yield
-    finally:
-        try:
-            fcntl.flock(fd, fcntl.LOCK_UN)
-        finally:
-            os.close(fd)
 
 
 def _open_lifecycle_lock(home: Path) -> int:

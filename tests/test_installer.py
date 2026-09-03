@@ -1742,6 +1742,20 @@ class InstallerTest(unittest.TestCase):
         self.assertEqual(details.st_nlink, 1)
         self.assertEqual(details.st_mode & 0o077, 0)
 
+    def test_approved_install_creates_the_canonical_storage_state_lock(self):
+        self.approved_install()
+        lock = self.cortex_home.resolve() / "storage-state.lock"
+
+        self.assertEqual(
+            lock.read_bytes(),
+            b'{"owner":"cortex-bridge","schema_version":1,"type":"lifecycle_lock"}\n',
+        )
+        details = lock.stat(follow_symlinks=False)
+        self.assertTrue(stat.S_ISREG(details.st_mode))
+        self.assertEqual(details.st_uid, os.getuid())
+        self.assertEqual(details.st_nlink, 1)
+        self.assertEqual(stat.S_IMODE(details.st_mode), 0o600)
+
     def test_real_process_shared_lock_excludes_exclusive_until_release(self):
         home = self.cortex_home.resolve()
         ready = self.root / "shared-lock-ready"
