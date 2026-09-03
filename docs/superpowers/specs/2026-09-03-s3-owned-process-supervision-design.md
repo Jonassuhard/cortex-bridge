@@ -1,153 +1,117 @@
 # Cortex Bridge S3 Owned-Process Supervision Design
 
-**Status:** Architecture A and written specification approved by the owner
-**Date:** 2026-09-03
+**Status:** Revision 3 review candidate; implementation is frozen until the
+exact spec and plan bytes receive three fresh blind read-only reviews with
+`P0=0`, `P1=0`, `P2=0` and `PASS`
+**Date:** 2026-09-04
+**Reviewed baseline:** `2b407be00c9ff95ee64d62b52e7634576f12e051`
 **Target:** v0.5.4 candidate
 **Supersedes:** the incremental S3 supervision and live-harness design in the
-current Phase S implementation plan; all other storage requirements remain in
-force
+current Phase S plan; all unrelated storage requirements remain in force
 
 ## Decision
 
-S3 will replace its current boolean-based process cleanup and effect routing
-with three explicit boundaries:
+S3 replaces its boolean process-cleanup and generic effect-routing boundaries
+with four closed mechanisms:
 
-1. a Swift owned-process supervisor whose only signal authority is an exact,
-   unreaped Darwin session anchor;
-2. a Python integration session whose monotone state and typed permits decide
-   which commands may run after a terminal observer event;
-3. a safe test architecture that models process trees in memory and gives the
-   helper only one self-expiring direct fixture child for the real deadline
-   probe; that fixture creates no descendants;
-4. a bounded binary control channel through which Python asks the helper to
-   cancel and settle its own active `hdiutil` session before Python may reap or
-   escalate against the helper.
+1. a Swift supervisor whose only group-signal authority is a private,
+   consumable `RunningSessionAnchor` or `ExitedUnreapedSessionAnchor`;
+2. exact Swift command provenance and single-use issuance registries for
+   settlement, attach compensation and absence verification;
+3. a Python `LiveExecutionCapability` minted only by the exact live triple
+   gate, plus typed workflow requests and receipt-bound terminal disposition;
+4. a bounded Unix control socket and two independent exhaustive test models,
+   with one self-expiring direct fixture child as the only real child route.
 
-This is an architectural replacement, not a sixth incremental patch. S4 and
-all later Phase S work remain blocked until this design is implemented, passes
-the no-effect gates, and receives an independent approval.
+The previous exact bytes were rejected by three independent reviewers. This
+revision is a design candidate, not implementation evidence. Task 1 cannot
+start until this revision and its implementation plan pass the three required
+reviews.
 
 No live Keychain, DiskImages, `hdiutil`, mount, detach, quarantine,
-SecurityAgent, Chrome, runtime, push, merge, tag or release action is implied
-or authorized by this design.
+SecurityAgent, Chrome, runtime, push, merge, tag or release action is
+authorized by this document.
 
-## Verified failure state
+## Trust boundary and claim
 
-The candidate at `2b85e504f762dbc4ae89ce88c3478ccacedb6889` passed its
-reported fake suite but failed independent review. The failure is structural:
+Production process supervision is deliberately narrow:
 
-- `ProcessInvocationFailure` exposes independently forgeable
-  `directChildReaped` and `processGroupGone` booleans. Mount compensation can
-  consume stdout containing a device receipt without first requiring a
-  terminal process proof.
-- Swift can reap the direct child and subsequently signal `-pid`. A recycled
-  process-group identifier can therefore receive TERM or KILL without a
-  current owned identity.
-- Python uses `input_text` and `safety_only` as effect classification. A
-  no-stdin compile or plist command can continue after a terminal observation,
-  and the generic safety boolean can authorize arbitrary argv.
-- The short Darwin process record contains PID, PPID, PGID and UID, but the
-  current fallback retains only UID. A related foreign-UID or partial process
-  can be excluded before lineage uncertainty is recorded.
-- The default test suite creates real process trees, persists numeric PID/PGID
-  receipts, probes them numerically, and can call `os.killpg` during cleanup.
-  Those tests are not harmless merely because they avoid Keychain.
-- The production mount compensation reserve overlaps two complete child
-  teardown budgets. It can construct a verification command that has no valid
-  work window.
+- the executable is fixed to `/usr/bin/hdiutil`;
+- the supervisor proves exact leader reap, successful closure of every
+  supervisor-owned pipe, and absence of the original process group at one
+  post-reap signal-zero observation;
+- that evidence is named `NativeSettlementProof`;
+- it does not prove that an intentionally escaping descendant cannot exist.
 
-The root cause is the absence of unforgeable process ownership, explicit
-effect capabilities, and independent test oracles. Adding more conditionals to
-the existing booleans would retain those defects.
+An observed escape, a related incomplete observation, a non-`ESRCH` group
+observation, or any failed close yields an unresolved outcome and cancellation
+byte `0x14`. A hostile descendant that changes session and avoids every bounded
+observation is a residual limit. Neither `NativeSettlementProof` nor byte
+`0x13` is described as descendant containment.
+
+The test fixture uses the production supervisor but is not the production
+trust boundary. It proves only the behavior of one fixed self-expiring direct
+child and the external witness/nonce observations defined below.
 
 ## Goals
 
-- Make it impossible for application or test code to signal a process group
-  using only a numeric PID or PGID.
-- Keep the exact direct child/session identity alive and unreaped until the
-  last permissible group signal has been issued.
-- Permit a mount compensation only after the preceding invocation has a
-  complete output and a supervisor-created quiescence proof.
-- Revoke every ordinary effect at the first SecurityAgent or observer-
-  unavailable event, independently of stdin usage.
-- Permit only exact, receipt-derived detach, absence verification and
-  descriptor-relative quarantine after a terminal event.
-- Preserve terminal cause priority and already parsed image/device receipts
-  through nonzero responses and cleanup failures.
-- Treat incomplete process metadata, lineage ambiguity, identity change,
-  deadline exhaustion and cleanup uncertainty as fail-closed outcomes.
-- Give every child invocation a disjoint work and finalization window inside
-  one absolute request deadline.
-- Preserve the helper as the sole owner of any isolated `hdiutil` session
-  during terminal cancellation, and require a quiescent/unresolved
-  acknowledgement before Python escalates against the helper.
-- Replace dangerous real process-tree tests with deterministic model
-  exploration and one harmless, externally witnessed direct-child probe.
-- Retain the existing public helper JSON schema, Keychain schema, secret
-  handling rules and effect gates.
+- Prevent raw PID or PGID metadata from becoming signal authority or a durable
+  receipt.
+- Keep the original leader waitable until the final permissible original-group
+  signal has completed.
+- Revalidate a running leader with the complete
+  `proc_bsdinfo -> getsid -> proc_bsdinfo` sandwich.
+- Revalidate an exited, unreaped leader with a second exact
+  `waitid(WNOWAIT)` observation, without depending on `getsid` for a zombie.
+- Require exact `waitpid == pid` before issuing a post-reap group observation
+  token.
+- Bind every Swift settled outcome and permit to one exact command context,
+  output, image, mount and transaction.
+- Stop every ordinary Python effect at the first terminal observer event,
+  independently of stdin use.
+- Permit post-terminal work only through a pre-existing receipt chain for one
+  exact detach, one exact absence query and descriptor-relative quarantine.
+- Give request input, control traffic, every child, cleanup and response
+  emission finite portions of one absolute monotonic deadline.
+- Keep Master and Wire secret allocations distinct and erase Wire before every
+  outcome or terminal control frame.
+- Replace dangerous real process-tree tests with independent process/effect
+  models and one bounded guardian/witness fixture.
+- Preserve the public helper response, stable error codes, exact Keychain
+  schema, strict request keys and no-UI policy.
 
 ## Non-goals
 
-- No general macOS sandbox, cgroup substitute, Endpoint Security client,
-  launch daemon or privileged broker.
-- No attempt to supervise arbitrary hostile executables. Production execution
-  remains limited to fixed Apple system binaries and the compiled Cortex
-  helper.
-- No claim that polling Darwin process metadata is an atomic proof against a
-  malicious descendant that deliberately changes session.
-- No live proof of Keychain UI suppression, `hdiutil` behavior, APFS mount
-  behavior or SecurityAgent observation in this implementation phase.
-- No change to storage paths, vault lifecycle, manifest installation, Chrome
-  transport or user interface. S4's helper invocation interface must be
-  rebaselined for the new deadline/control-channel contract before S4 starts.
-- No weakening of timeouts, review thresholds, authorization gates or cleanup
-  requirements to make tests pass.
+- No general macOS sandbox, Endpoint Security client, privileged broker,
+  launch daemon or pidfd substitute.
+- No supervision claim for arbitrary hostile executables.
+- No atomic identity-and-signal claim for Darwin process metadata.
+- No live proof of Keychain UI suppression, DiskImages behavior, APFS mount
+  behavior or SecurityAgent completeness.
+- No change to storage paths, vault lifecycle, Chrome transport or UI.
+- No S4 code in the S3 implementation range.
+- No weakening of timeouts, authorization, cleanup or review gates.
 
-## Alternatives considered
-
-### A. Anchored supervisor and typed effect session — selected
-
-Use a suspended, isolated Darwin session whose leader remains unreaped while
-signals are possible. Replace generic Python runners with a closed command
-catalogue and receipt-derived permits. Use a pure process model plus one direct
-child probe.
-
-This closes the identified races without introducing a privileged service or
-changing the helper's public protocol.
-
-### B. Separate broker or launch daemon — rejected for v0.5.4
-
-A persistent native broker could own process lifetime and effects more
-strongly, but it would add installation, upgrade, IPC, signing, permissions and
-recovery surfaces before S4 exists. It is disproportionate to the fixed local
-`hdiutil` use case.
-
-### C. Extend the current booleans — rejected
-
-Checking two more flags before detach would not close PGID reuse, generic
-safety authorization, partial lineage, overlapping deadlines or dangerous
-test cleanup. Five fix rounds have already demonstrated that this boundary is
-not stable.
-
-## Component boundaries
+## Component and file boundaries
 
 | File | Responsibility |
 | --- | --- |
-| `native/macos/disk_image_keychain.swift` | Production Keychain/DiskImages helper plus the internal typed Darwin supervisor. It remains one Swift source so S4's reviewed single-source attestation contract does not change. |
-| `tests/disk_image_keychain_harness.py` | Test-only process model, scripted adapters, terminal effect session and gated live orchestration. It is not discovered as a test module and contains no default live execution. |
-| `tests/test_disk_image_keychain_helper.py` | Assertions, exhaustive state traces, safe direct-child probe, CLI gate tests and authorized-live suite selection. It contains no raw process-tree cleanup. |
+| `native/macos/disk_image_keychain.swift` | Public Keychain/DiskImages helper, bounded request/control parser, private Darwin supervisor, exact command provenance, secret lifetime and testing-only Swift adapters. |
+| `tests/disk_image_keychain_harness.py` | New test-only process/effect models, typed live session, closed requests, process adapter, helper control client, ledgers and deterministic trace reducers. |
+| `tests/test_disk_image_keychain_helper.py` | Assertions, independent reference predicates, exhaustive traces, build/route gates, guardian/witness launchers, dynamic test inventory and the separately gated live class. |
 
-No S4-owned file changes in this rearchitecture.
+Only these three files may change between `IMPLEMENTATION_BASE` and
+`S3_FINAL`. The spec and plan belong to the preceding reviewed documentation
+commit, not the implementation range.
 
 ## Swift owned-process supervisor
 
-### Closed types
+### Exact private authority
 
-The production helper replaces `ProcessInvocationFailure` and its two booleans
-with outcomes nested under `OwnedProcessSupervisor`:
+The supervisor owns these non-public types:
 
-```swift
-struct ProcessBirthIdentity {
+~~~swift
+struct ProcessBirthIdentity: Equatable {
     let pid: pid_t
     let startSeconds: UInt64
     let startMicroseconds: UInt64
@@ -156,6 +120,146 @@ struct ProcessBirthIdentity {
     let sessionID: pid_t
 }
 
+struct MonotonicInstant: Comparable {
+    let nanoseconds: UInt64
+
+    static func < (lhs: MonotonicInstant, rhs: MonotonicInstant) -> Bool {
+        lhs.nanoseconds < rhs.nanoseconds
+    }
+}
+
+private struct RunningSessionAnchor {
+    fileprivate let issuanceID: UInt64
+}
+
+private struct ExitedUnreapedSessionAnchor {
+    fileprivate let issuanceID: UInt64
+}
+
+private struct ReapedGroupObservationToken {
+    fileprivate let issuanceID: UInt64
+}
+
+private enum SignalAnchor {
+    case running(RunningSessionAnchor)
+    case exited(ExitedUnreapedSessionAnchor)
+}
+~~~
+
+The issuance registry stores the `ProcessBirthIdentity`, current lifecycle
+generation and consumption state. Copying a Swift value does not duplicate its
+authority:
+
+- exact suspended identity validation issues one
+  `RunningSessionAnchor`;
+- an exact `waitid(P_PID, pid, WEXITED | WNOHANG | WNOWAIT)` terminal
+  observation consumes that running issuance and issues one
+  `ExitedUnreapedSessionAnchor`;
+- exact `waitpid == pid` consumes the exited issuance permanently and issues
+  one `ReapedGroupObservationToken`;
+- `observeGroupAfterReap` consumes that token before its sole signal-zero
+  observation;
+- a stale, forged, wrong-generation, wrong-command or already consumed value
+  is rejected before any syscall.
+
+A running anchor is revalidated immediately before SIGCONT and each TERM/KILL
+through a complete first `proc_bsdinfo`, `getsid(pid)`, and complete second
+`proc_bsdinfo`. Both records must equal the stored PID, birth seconds,
+birth microseconds, effective UID and process group, and `getsid` must equal
+the stored session.
+
+An exited anchor is revalidated immediately before each TERM/KILL and reap by
+zero-initializing `siginfo_t` and repeating exact waitable `waitid`. The
+second observation must return zero with the exact child PID, `SIGCHLD` and
+one of `CLD_EXITED`, `CLD_KILLED` or `CLD_DUMPED`. `getsid` is not called
+after the exact exit transition; `getsid == ESRCH` for the zombie therefore
+does not invalidate an otherwise exact exited anchor.
+
+### Closed kernel and I/O contracts
+
+~~~swift
+enum TerminationSignal {
+    case term
+    case kill
+}
+
+protocol ProcessKernel {
+    func spawnSuspendedSession(
+        _ request: SpawnRequest,
+        deadline: MonotonicInstant
+    ) -> SpawnResult
+    func validateSuspendedIdentity(
+        _ child: SuspendedChild,
+        deadline: MonotonicInstant
+    ) -> IdentityResult
+    func resumeSuspended(
+        _ anchor: RunningSessionAnchor,
+        deadline: MonotonicInstant
+    ) -> ResumeResult
+    func observeExitWithoutReaping(
+        _ anchor: RunningSessionAnchor,
+        deadline: MonotonicInstant
+    ) -> ExitObservation
+    func signalOwnedGroup(
+        _ signal: TerminationSignal,
+        anchoredBy anchor: SignalAnchor,
+        deadline: MonotonicInstant
+    ) -> SignalResult
+    func reapObservedChild(
+        _ anchor: ExitedUnreapedSessionAnchor,
+        deadline: MonotonicInstant
+    ) -> ReapResult
+    func observeGroupAfterReap(
+        _ token: ReapedGroupObservationToken,
+        deadline: MonotonicInstant
+    ) -> GroupPresence
+    func abortAndReapSuspendedDirectChild(
+        _ child: SuspendedChild,
+        deadline: MonotonicInstant
+    ) -> SuspendedAbortResult
+}
+
+protocol ProcessIO {
+    func poll(
+        _ request: PollRequest,
+        deadline: MonotonicInstant
+    ) -> PollResult
+    func read(
+        _ descriptor: OwnedDescriptor,
+        limit: Int,
+        deadline: MonotonicInstant
+    ) -> IOResult
+    func write(
+        _ descriptor: OwnedDescriptor,
+        bytes: UnsafeRawBufferPointer,
+        deadline: MonotonicInstant
+    ) -> IOResult
+    func close(
+        _ descriptor: inout OwnedDescriptor,
+        deadline: MonotonicInstant
+    ) -> CloseResult
+}
+~~~
+
+The result spaces are exhaustive:
+
+| Type | Values | Success rule |
+| --- | --- | --- |
+| `SpawnResult` | `spawned(SuspendedChild)`, `refused(SpawnRefusal)`, `deadlineExpired`, `failed(POSIXFailure)` | Only `spawned` proceeds. |
+| `IdentityResult` | `exact(RunningSessionAnchor)`, `incomplete`, `changed`, `unavailable`, `deadlineExpired` | Only `exact` proceeds. |
+| `ResumeResult` | `resumed`, `childGone`, `identityChanged`, `deadlineExpired`, `interruptedAtDeadline`, `failed(POSIXFailure)` | Only `resumed` proceeds. |
+| `ExitObservation` | `running`, `exactExited(ExitStatus, ExitedUnreapedSessionAnchor)`, `wrongPID`, `wrongSignal`, `wrongCode`, `interrupted`, `deadlineExpired`, `failed(POSIXFailure)` | Only `running` or `exactExited` is non-failing. |
+| `SignalResult` | `delivered`, `alreadyAbsent`, `identityChanged`, `notWaitable`, `permissionDenied`, `deadlineExpired`, `interruptedAtDeadline`, `failed(POSIXFailure)` | `delivered` proceeds; `alreadyAbsent` proceeds only for an exact exited anchor. |
+| `ReapResult` | `exactlyReaped(ReapedGroupObservationToken)`, `stillRunning`, `noChild`, `wrongPID`, `deadlineExpired`, `interruptedAtDeadline`, `failed(POSIXFailure)` | Only `exactlyReaped` proceeds. |
+| `GroupPresence` | `absentESRCH`, `present`, `permissionDenied`, `deadlineExpired`, `interruptedAtDeadline`, `failed(POSIXFailure)` | Only `absentESRCH` contributes to settlement. |
+| `PollResult` | `ready(ReadySet)`, `timedOut`, `interrupted`, `deadlineExpired`, `failed(POSIXFailure)` | Ready proceeds; interrupted retries only while time remains. |
+| `IOResult` | `bytes(Int)`, `endOfFile`, `wouldBlock`, `interrupted`, `brokenPipe`, `deadlineExpired`, `failed(POSIXFailure)` | Positive bytes, EOF and bounded retry states are non-failing in their valid context. |
+| `CloseResult` | `closed`, `alreadyClosed`, `interruptedStateUnknown`, `deadlineExpired`, `failed(POSIXFailure)` | Only `closed` and `alreadyClosed` satisfy settlement. |
+| `SuspendedAbortResult` | `exactlyReaped`, `stillRunning`, `noChild`, `wrongPID`, `deadlineExpired`, `failed(POSIXFailure)` | Only `exactlyReaped` proves direct-child abort. |
+
+Invocation results are closed and constructor-controlled:
+
+~~~swift
 struct OwnedProcessSupervisor {
     enum InvocationOutcome {
         case settled(SettledInvocation)
@@ -164,212 +268,331 @@ struct OwnedProcessSupervisor {
     }
 
     struct SettledInvocation {
-        let cause: InvocationCause
         let exitStatus: ExitStatus
         let stdout: CompleteCapturedOutput
         let stderr: CompleteCapturedOutput
-        private let quiescence: ProcessQuiescenceProof
-        private init(cause: InvocationCause, exitStatus: ExitStatus,
-                     stdout: CompleteCapturedOutput,
-                     stderr: CompleteCapturedOutput,
-                     quiescence: ProcessQuiescenceProof) {
-            self.cause = cause
+        private let context: ExactCommandContext
+        private let settlement: NativeSettlementProof
+
+        private init(
+            exitStatus: ExitStatus,
+            stdout: CompleteCapturedOutput,
+            stderr: CompleteCapturedOutput,
+            context: ExactCommandContext,
+            settlement: NativeSettlementProof
+        ) {
             self.exitStatus = exitStatus
             self.stdout = stdout
             self.stderr = stderr
-            self.quiescence = quiescence
+            self.context = context
+            self.settlement = settlement
         }
     }
 
-    struct CompensableAttach {
-        let device: String
-        private let quiescence: ProcessQuiescenceProof
-        private init(device: String, quiescence: ProcessQuiescenceProof) {
-            self.device = device
-            self.quiescence = quiescence
-        }
-    }
-
-    private struct ProcessQuiescenceProof {
-        let terminalGeneration: UInt64
+    struct UnresolvedInvocation {
+        let reason: UnresolvedReason
+        let stdoutByteCount: Int
+        let stderrByteCount: Int
+        let stdoutTruncated: Bool
+        let stderrTruncated: Bool
     }
 }
-```
+~~~
 
-The proof, settled outcome, compensable attach, unreaped session anchor and raw
-numeric process identifiers have nested `private` initializers. A static gate
-permits their construction only inside the supervisor's validating reducers.
-Scripted tests drive kernel events; they cannot instantiate a successful proof
-or compensation permit.
+`CompleteCapturedOutput` is issued only after EOF, a successful cap check and
+successful closure. `UnresolvedInvocation` exposes no captured bytes, command
+context, device, UUID or permit source. `SpawnRefusal` contains only a closed
+non-secret reason. All successful constructors, including
+`NativeSettlementProof`, remain private to validating supervisor reducers.
 
-`UnresolvedInvocation` may expose a stable reason, captured byte counts and
-truncation flags. It never exposes captured stdout as a source of a device or
-Keychain receipt.
+Every failing branch latches the invocation unresolved permanently. Later
+success cannot erase it. Every owned descriptor is passed independently to
+`ProcessIO.close` even after an earlier close result fails. If its deadline
+has passed, the adapter returns `deadlineExpired` without issuing a new I/O
+syscall; the invocation remains unresolved and process exit provides the final
+kernel descriptor closure.
 
-`OwnedProcessSupervisor.compensableAttach(from:mountPath:)` is the only
-`CompensableAttach` factory. It accepts a `SettledInvocation`, parses that
-invocation's complete attach output internally, and returns a permit only for
-exactly one device bound to the requested mount. Callers cannot supply a device
-string independently of the settled output.
+### Spawn, drain and lifecycle
 
-The create operation separates two secret lifetimes:
+Production spawn uses:
 
-- `MasterSecret` remains owned by `perform` until `SecItemAdd` completes, then
-  is zeroized in its enclosing `defer`;
-- `WireSecret` is a per-invocation mutable copy used only by the child pipe and
-  zeroized by the supervisor before any invocation outcome is returned.
+~~~text
+POSIX_SPAWN_CLOEXEC_DEFAULT
+POSIX_SPAWN_SETSID
+POSIX_SPAWN_START_SUSPENDED
+~~~
 
-Settling one child can therefore never zeroize the master before the Keychain
-add.
+`POSIX_SPAWN_SETPGROUP` and `posix_spawnattr_setpgroup` are forbidden. Before
+SIGCONT or child stdin, exact identity requires PID, birth seconds,
+birth microseconds, effective UID, `processGroupID == pid` and
+`sessionID == pid`. Invalid identity invokes only a positive-PID
+direct-child abort while the suspended child remains waitable. It never issues
+a group signal.
 
-### Kernel boundary
+The monotone lifecycle is:
 
-The supervisor is the only consumer of these closed kernel and I/O protocols:
-
-```swift
-enum TerminationSignal { case term, kill }
-
-enum ExitObservation {
-    case running
-    case exited(ExitStatus)
-    case interrupted
-    case invalid(WaitFailure)
-}
-
-protocol ProcessKernel {
-    func spawnSuspendedSession(_ request: SpawnRequest) throws -> SuspendedChild
-    func exactIdentity(of child: SuspendedChild) -> IdentityObservation
-    func resumeSuspended(
-        _ anchor: UnreapedSessionAnchor,
-        deadline: MonotonicInstant
-    ) -> ResumeResult
-    func abortAndReapSuspended(
-        _ child: SuspendedChild,
-        deadline: MonotonicInstant
-    ) -> SuspendedAbortResult
-    func observeExitWithoutReaping(
-        _ anchor: UnreapedSessionAnchor
-    ) -> ExitObservation
-    func signalOwnedGroup(
-        _ signal: TerminationSignal,
-        anchoredBy anchor: UnreapedSessionAnchor,
-        deadline: MonotonicInstant
-    ) -> SignalResult
-    func reapObservedChild(
-        _ anchor: UnreapedSessionAnchor,
-        deadline: MonotonicInstant
-    ) -> ReapResult
-    func observeGroupAfterReap(_ group: ReapedOwnedGroup) -> GroupPresence
-}
-
-protocol ProcessIO {
-    func poll(_ request: PollRequest, deadline: MonotonicInstant) -> PollResult
-    func read(_ descriptor: OwnedDescriptor, limit: Int,
-              deadline: MonotonicInstant) -> IOResult
-    func write(_ descriptor: OwnedDescriptor, bytes: UnsafeRawBufferPointer,
-               deadline: MonotonicInstant) -> IOResult
-    func close(_ descriptor: inout OwnedDescriptor,
-               deadline: MonotonicInstant) -> CloseResult
-}
-```
-
-The supporting types are closed as follows:
-
-| Type | Closed values or fields |
-| --- | --- |
-| `MonotonicInstant` | finite monotonic seconds; ordering only, no wall clock |
-| `SpawnRequest` | fixed executable, argv, sanitized environment, stdin/stdout/stderr and test-only inherited descriptor tuple |
-| `SuspendedChild` | private spawned PID plus unconsumed ownership token |
-| `IdentityObservation` | `exact(ProcessBirthIdentity)`, `incomplete`, `changed`, `unavailable` |
-| `ResumeResult` | `resumed`, `childGone`, `unresolved` |
-| `SuspendedAbortResult` | `exactlyReaped`, `unresolved` |
-| `SignalResult` | `delivered`, `alreadyGone`, `identityChanged`, `unresolved` |
-| `ReapResult` | `exact(ReapedOwnedGroup)`, `unresolved` |
-| `GroupPresence` | `absent`, `present`, `unknown` |
-| `PollResult` | ready-descriptor tuple, timeout, interrupted, failure |
-| `IOResult` | byte count, EOF, would-block, interrupted, failure |
-| `CloseResult` | closed, already-closed, failure |
-
-`ScriptedProcessKernel`, `ScriptedProcessIO` and `ScriptedClock` emit only
-these observations. They never return a settled invocation directly.
-
-The Darwin adapter uses `POSIX_SPAWN_CLOEXEC_DEFAULT`,
-`POSIX_SPAWN_SETSID` and `POSIX_SPAWN_START_SUSPENDED`. Before SIGCONT or one
-stdin byte, it reads full `proc_bsdinfo`, obtains `getsid(pid)`, then rereads
-full `proc_bsdinfo`. Both records must describe the same birth identity. It
-requires:
-
-- the spawned PID;
-- the captured birth timestamp;
-- the current effective UID;
-- `processGroupID == pid`;
-- `sessionID == pid`.
-
-Any short, missing or contradictory identity kills only the still-suspended
-direct child while it remains waitable, reaps that exact child, and returns
-`unresolved`. `abortAndReapSuspended` uses no group signal and accepts success
-only from `waitpid == exact pid` before its deadline.
-
-With `POSIX_SPAWN_CLOEXEC_DEFAULT`, the production child inherits only stdin,
-stdout and stderr. Testing builds may additionally inherit the exact guardian
-and witness descriptors through `posix_spawn_file_actions_addinherit_np`; no
-other descriptor is admitted.
-
-### Lifecycle algorithm
-
-The lifecycle is monotone:
-
-```text
+~~~text
 prepared
-  -> suspended(anchor)
-  -> running(anchor)
-  -> exitObserved(anchor)
-  -> terminating(anchor)
-  -> reaped
-  -> groupAbsent
-  -> settled
+  -> suspended
+  -> running(RunningSessionAnchor)
+  -> exited(ExitedUnreapedSessionAnchor)
+  -> reaped(ReapedGroupObservationToken)
+  -> originalGroupAbsent
+  -> pipesClosed
+  -> settled(NativeSettlementProof)
 
 Any state -> unresolved
-```
+~~~
 
-Rules:
+The supervisor:
 
-1. Reject spawn if the invocation window cannot contain its minimum work and
-   complete finalization budget.
-2. Create nonblocking CLOEXEC pipes and spawn the isolated suspended session.
-3. Capture and validate the exact session anchor, then call
-   `resumeSuspended(anchor, deadline)` before stdin.
-4. Drain stdout and stderr fairly. Check the absolute work and hard deadlines
-   before and after every read and append. Enforce an independent 1 MiB limit
-   per stream in production.
-5. Zero-initialize `siginfo_t`, then observe exit with
-   `waitid(P_PID, childPID, WEXITED | WNOHANG | WNOWAIT)`. An exit exists only
-   when return code is zero, `si_pid == childPID`, `si_signo == SIGCHLD`, and
-   `si_code` is `CLD_EXITED`, `CLD_KILLED` or `CLD_DUMPED`. `si_pid == 0`
-   means running. `EINTR` retries within the same deadline. Never reap in the
-   drain loop.
-6. During finalization, revalidate the unreaped anchor immediately before each
-   permitted TERM or KILL. The adapter accepts the anchor token, never a raw
-   integer.
-7. Once KILL has been attempted, issue no further group signal.
-8. Reap only after an exact exit observation. Only `waitpid == exact pid`
-   proves reap; `ECHILD`, zero, identity mismatch or timeout is unresolved.
-9. After reap, perform only a no-signal group absence observation. `ESRCH` is
-   absent; success, `EPERM` or another error is unresolved.
-10. Close every pipe independently, zeroize only the per-invocation wire
-    secret and remain inside the hard deadline. Only then can the supervisor create
-    `ProcessQuiescenceProof` and return `settled`.
+1. refuses a spawn that cannot contain minimum work, finalization and epilogue
+   inside the received absolute deadline;
+2. creates nonblocking CLOEXEC pipes and the suspended session;
+3. validates identity, rechecks control, revalidates the running anchor, then
+   sends SIGCONT;
+4. polls control, stdout, stderr and child stdin fairly; control readiness wins
+   any simultaneous readiness set;
+5. checks the hard deadline before and after poll, read, write, append,
+   observation, signal, reap and close;
+6. caps production stdout and stderr independently at 1 MiB;
+7. never reaps in the drain loop;
+8. on finalization, closes child stdin, revalidates the current running or
+   exited anchor before TERM, repeats before KILL, and emits no signal after a
+   KILL attempt;
+9. obtains an exact exited anchor, exact reap token and one post-reap
+   `absentESRCH` observation in that order;
+10. attempts every pipe close independently and erases Wire;
+11. issues `NativeSettlementProof` only when no unresolved branch was latched.
 
-The adapter's one internal negative-PGID signal site is allowed only inside
-`signalOwnedGroup`, after exact unreaped-anchor validation. Its closed signal
-enum permits TERM and KILL only. No other Swift or Python code can call it or
-recover the raw PGID, and no TERM may follow a KILL.
+There are exactly two negative-PGID syscall categories inside each private
+Darwin adapter:
 
-### Invocation and compensation outcomes
+- `signalOwnedGroup` translates a valid running or exited-unreaped anchor to
+  TERM or KILL;
+- `observeGroupAfterReap` translates a valid reap token to signal zero.
 
-`HdiutilRunning` changes from a throwing `Data` API to:
+The Swift source has one call site for each category inside
+`DarwinProcessKernel`. The Python live adapter has one call site for each
+category inside `DarwinOwnedProcessAdapter`. Every `killpg` use and every
+other negative target is forbidden. Positive-PID direct-child abort remains a
+separate, typed suspended-child operation.
 
-```swift
+Both post-reap observation methods consume their token before the syscall, so
+a copied or replayed token produces zero additional observation.
+
+### Exact native settlement
+
+`NativeSettlementProof` has a private initializer and is issued only after:
+
+- exact `waitpid == originalLeaderPID` consumed the exited anchor;
+- every supervisor-owned pipe returned `closed` or `alreadyClosed`;
+- `observeGroupAfterReap` returned `absentESRCH` once for the original group;
+- no failure, deadline overrun, identity change or incomplete observation was
+  latched.
+
+It proves those facts only. `present`, `permissionDenied`, an error, an
+observed related escape, an incomplete descriptor close, or missing evidence
+produces unresolved and cancellation byte `0x14`.
+
+## Helper request and control boundary
+
+### Production command line and descriptor provenance
+
+The production helper accepts exactly:
+
+~~~text
+disk-image-keychain --control-fd DECIMAL_FD --swift-hard-deadline-ns DECIMAL_NS
+~~~
+
+Both decimals use ASCII digits only, have no sign or whitespace, reject a
+leading zero except the single digit zero, and must fit their destination
+integer. The deadline must be nonzero and later than the current
+`CLOCK_MONOTONIC` value.
+
+Python creates the Unix stream socket with CLOEXEC. `subprocess.Popen`
+temporarily makes the child end inheritable because it is named in
+`pass_fds`. Production therefore uses exactly:
+
+~~~python
+subprocess.Popen(
+    argv,
+    stdin=subprocess.PIPE,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    close_fds=True,
+    pass_fds=(control_fd,),
+    start_new_session=True,
+)
+~~~
+
+Python closes the child socket end immediately after successful spawn and
+closes both socket ends on spawn failure. No other descriptor is passed.
+
+Before reading an effectful request, Swift validates that the inherited FD is
+open, non-stdio, unique, connected, `AF_UNIX` and `SOCK_STREAM`. It then
+immediately sets both `FD_CLOEXEC` and `O_NONBLOCK`. The FD is excluded from
+all `hdiutil` file actions. A bounded `PROC_PIDLISTFDS` inventory must equal
+stdin, stdout, stderr and that control FD in production; the testing route's
+inventory additionally admits only its named guardian and witness FDs. An
+absent, duplicate, closed, stdio, regular-file, wrong-family, wrong-type,
+incomplete inventory or extra descriptor fails before request parsing, child
+creation or write.
+
+### Bounded request reader
+
+`readDataToEndOfFile()` is forbidden. `BoundedRequestReader` shares the
+received Swift hard deadline with `HelperControlChannel` and:
+
+- polls stdin and control together;
+- processes control first when both are ready;
+- accepts at most 65,536 request bytes;
+- requires stdin EOF before parsing;
+- performs no JSON parse on a partial request;
+- treats EAGAIN as a bounded retry, EINTR as a same-deadline retry, and every
+  other read/poll failure as unresolved;
+- discards and erases its request buffer on cancellation or terminal failure.
+
+Cancellation before parse or before child creation issues a private
+`NoActiveChildProof` and returns terminal frame `0x13`. A partial request
+without EOF never spawns. If no cancellation arrives before the hard deadline,
+the helper closes descriptors and exits invalid/unresolved; Python reports
+`UNCLEAR` because no accepted-request or terminal acknowledgement exists.
+
+### Binary grammar
+
+Each frame is exactly one byte:
+
+| Direction | Byte | Meaning |
+| --- | --- | --- |
+| Python to helper | `0x01` | Latch cancellation once. |
+| Helper to Python | `0x10` | Strict ten-key request and transmitted absolute deadline accepted; no child is active. |
+| Helper to Python | `0x11` | One original-group anchor is active. |
+| Helper to Python | `0x12` | That active child produced `NativeSettlementProof`. |
+| Helper to Python | `0x13` | Cancellation settled either before any child activation or through `NativeSettlementProof`. |
+| Helper to Python | `0x14` | Cancellation unresolved; original-group or escaped-descendant survival is possible. |
+
+The helper grammar is:
+
+~~~text
+start -> accepted
+accepted -> active -> settled -> active
+accepted -> active -> settled -> normal-exit
+accepted -> cancel-settled
+accepted -> active -> cancel-settled
+accepted -> active -> cancel-unresolved
+start -> cancel-settled
+~~~
+
+`accepted` emits `0x10` once. Each `active` emits `0x11` once. Its matching
+`settled` emits `0x12` once. A mount request may repeat the
+`0x11 -> 0x12` pair for distinct exact command contexts. `0x13` or `0x14` is
+terminal and appears at most once.
+
+Unknown Python bytes, a duplicate cancel byte, control EOF, socket close,
+partial frames, duplicate `0x10`, `0x12` without an unmatched `0x11`,
+two unmatched `0x11` frames, a nonterminal frame after cancellation, any
+frame after `0x13` or `0x14`, helper exit without a terminal frame after
+cancel, and a missing acknowledgement remain `UNCLEAR`. EAGAIN alone is not
+terminal; it is retried only within the same deadline.
+
+`observerTerminalLatchedAt` is the first Python terminal-observer timestamp.
+After it, Python issues no new ordinary command, capability or unbound effect.
+Only the already receipt-rooted disposition chain may continue.
+
+`helperCancelLatchedAt` is the first Swift `0x01` timestamp. After it, Swift
+does not spawn, SIGCONT, write child stdin, emit normal response bytes or emit
+nonterminal control frames. The cancellation reducer may emit exactly one
+`0x13` or `0x14` and close descriptors. Swift rechecks control immediately
+before every spawn, SIGCONT, child write and nonterminal control write.
+
+## Absolute deadlines
+
+### Python outer and transmitted Swift deadline
+
+For each live helper invocation Python creates one outer deadline at the first
+pre-observation:
+
+~~~python
+outer_started_ns = time.monotonic_ns()
+outer_hard_ns = outer_started_ns + 115_000_000_000
+pre_observation_hard_ns = outer_started_ns + 1_000_000_000
+~~~
+
+After successful pre-observation, Python creates the Swift deadline exactly
+once:
+
+~~~python
+swift_hard_ns = min(
+    time.monotonic_ns() + 70_000_000_000,
+    outer_hard_ns - 44_000_000_000,
+)
+~~~
+
+It passes that exact non-secret integer through
+`--swift-hard-deadline-ns`. Retry, parse delay, spawn delay, late `0x10`,
+observer event, cancellation or disposition never changes either deadline.
+Python does not TERM, KILL or reap a running helper before
+`swift_hard_ns` unless the helper exits or sends terminal `0x13` or `0x14`.
+A missing acknowledgement waits to the transmitted deadline, then exact
+helper cleanup remains `UNCLEAR descendant_potentially_surviving`.
+
+Swift never computes `now + 70 seconds`. It validates the received value and
+derives `swift_epoch_ns = swift_hard_ns - 70_000_000_000`. Late request parse,
+late `0x10` and delayed child spawn shorten the remaining phase. An expired,
+overflowing or too-close deadline refuses work; it never creates a replacement
+epoch.
+
+### Swift production phase cutoffs
+
+All values below are absolute offsets from `swift_epoch_ns`:
+
+| Phase | Admission | Hard stop | Required work and finalization |
+| --- | ---: | ---: | --- |
+| normal create/attach/validation | command-specific fit before 36 s | 36 s | create/attach: 8 s work plus 6 s finalization; info/isencrypted: 4 s work plus 6 s finalization |
+| attach receipt transition | 36 s | 38 s | no child |
+| compensation detach | at or before 38 s | 52 s | 8 s work plus 6 s finalization |
+| detach/absence transition | 52 s | 54 s | no child |
+| absence info | at or before 54 s | 66 s | 6 s work plus 6 s finalization |
+| response, close and erasure | 66 s | 70 s | no new child |
+
+Cutoff equality is admitted only when the entire command-specific budget still
+fits. Cutoff plus one monotonic nanosecond is refused. A phase never borrows
+time from its successor.
+
+The 115-second outer envelope reserves 1 second pre-observation, at most
+70 seconds through the transmitted Swift deadline, 1 second post-observation,
+14 seconds receipt-derived detach, 12 seconds absence proof, 2 seconds
+descriptor quarantine/ledger publication, 6 seconds exact helper cleanup,
+5 seconds scheduler/process margin and 4 seconds unallocated margin.
+
+These are operational bounds, not syscall preemption claims.
+
+## Swift command provenance and single-use permits
+
+`HdiutilCommand` is a closed enum:
+
+~~~swift
+enum InfoPurpose: Equatable {
+    case baseline
+    case validation
+    case postDetachAbsence
+}
+
+enum HdiutilCommand: Equatable {
+    case create(image: String, volume: String, size: String, transaction: UUID)
+    case attach(image: String, mount: String, transaction: UUID)
+    case detach(device: String, image: String, mount: String, transaction: UUID)
+    case info(image: String, mount: String, transaction: UUID, purpose: InfoPurpose)
+    case isEncrypted(image: String, transaction: UUID)
+}
+~~~
+
+`ExactCommandContext` stores the enum value, fixed executable, exact argv,
+stdin policy, phase window and invocation generation. It is created only by
+the closed command catalogue.
+
+~~~swift
 protocol HdiutilInvoking {
     func invoke(
         _ command: HdiutilCommand,
@@ -377,228 +600,274 @@ protocol HdiutilInvoking {
         window: InvocationWindow
     ) -> OwnedProcessSupervisor.InvocationOutcome
 }
-```
+~~~
 
-Every operation must pattern-match the outcome:
+Every `SettledInvocation` privately retains its exact command context and
+`NativeSettlementProof`. The supervisor's private issuance registry enforces:
 
-- `notSpawned` and `unresolved` prohibit every subsequent helper invocation;
-- only `settled` output is parsed;
-- a settled nonzero attach may yield `CompensableAttach` only from complete
-  stdout containing exactly one valid device for the requested mount;
-- truncated, capped, malformed or ambiguous output never yields a receipt;
-- a detach requires `CompensableAttach`;
-- the absence proof requires a separately settled `hdiutil info` response with
-  zero matching devices and zero image entries;
-- any missing proof returns the stable public code `MOUNT_CLEANUP_UNCLEAR`.
+- `issueAttachCompensationPermit(from:)` accepts only a settled
+  `.attach(image, mount, transaction)`, complete uncapped stdout and exactly
+  one valid device whose output mount equals that context's mount;
+- callers cannot supply or replace the parsed device;
+- consuming that permit constructs the single exact
+  `.detach(device, image, mount, transaction)` command;
+- `issueAbsenceQueryPermit(from:consuming:)` requires the exact settled detach
+  produced by that permit and binds the next command to
+  `.info(image, mount, transaction, purpose: .postDetachAbsence)`;
+- absence succeeds only from that settled complete info output with zero
+  matching devices and zero image entries;
+- copied values, wrong context, wrong output, stale generation, second
+  issuance and replay are rejected before spawn.
 
-The helper's six-key JSON response remains unchanged.
+`notSpawned` and `unresolved` never expose parseable receipt authority.
+Either outcome latches the enclosing helper request closed and prohibits every
+later `HdiutilInvoking.invoke` call in that request.
+Settled nonzero attach output may issue a compensation permit only when all
+the preceding conditions hold. Missing evidence returns
+`MOUNT_CLEANUP_UNCLEAR`.
 
-### Helper cancellation control channel
+## Secret lifetime
 
-Every production `disk-image-keychain` invocation receives one inherited Unix
-`SOCK_STREAM | SOCK_CLOEXEC` control descriptor through
-`--control-fd <decimal-fd>`. The JSON request remains on stdin and no secret
-uses the control channel. The helper rejects an absent, duplicate, stdio,
-closed, non-socket or extra control descriptor before parsing an effectful
-request.
+`MasterSecret` and `WireSecret` are distinct final classes backed by separate
+erasable `UnsafeMutableRawPointer` allocations. Wire construction copies bytes
+directly from Master without using `String`, `[UInt8]` or non-erasable
+`Data`. Their allocation ranges must never overlap.
 
-The binary protocol is one byte per frame:
+For create:
 
-| Direction | Byte | Meaning |
-| --- | --- | --- |
-| Python → helper | `0x01` | cancel the current operation |
-| Helper → Python | `0x10` | request parsed; no child is active |
-| Helper → Python | `0x11` | child anchor validated; child is active |
-| Helper → Python | `0x12` | active child has a quiescence proof |
-| Helper → Python | `0x13` | cancellation settled; no owned child remains |
-| Helper → Python | `0x14` | cancellation unresolved; descendant survival is possible |
+1. Master is generated once.
+2. Each secret-consuming child receives a fresh Wire allocation.
+3. Wire is erased before every `notSpawned`, spawn failure, invalid suspended
+   identity, partial write, EPIPE, output cap, timeout, TERM/KILL result,
+   `0x13`, `0x14`, close failure or returned invocation outcome.
+4. Master remains readable through the exact `SecItemAdd` call.
+5. Master is erased on every return or throw immediately after
+   `SecItemAdd` completes or fails.
 
-The helper sets the descriptor nonblocking and includes it in the same bounded
-poll loop as stdin/stdout/stderr. On `0x01`, it closes child stdin, performs
-anchored finalization, sends exactly one terminal cancellation frame, closes
-the control descriptor and exits. `0x13` is emitted only after
-`ProcessQuiescenceProof`; `0x14` never authorizes compensation or success.
+For mount, the Keychain result is held in a Master allocation, copied once to
+Wire for attach, and erased after that invocation outcome. No outcome or
+terminal frame may be emitted while Wire remains nonzero. Erasure failure is
+unresolved and cannot produce success or `0x13`.
 
-Python sends `0x01` once when its observer enters terminal state. It waits for
-the helper's terminal frame within the original absolute outer deadline. It
-does not TERM/KILL/reap the helper before `0x13`, `0x14`, helper exit or expiry
-of the helper's complete 70-second inner budget. If escalation is required
-after that bound, Python may terminate only its exact unreaped helper child and
-must return `UNCLEAR descendant_potentially_surviving`; it cannot claim that
-the isolated `hdiutil` session was reached.
+## Python live execution boundary
 
-## Deadline policy
+### Sealed capability and typed requests
 
-All deadlines are absolute monotonic timestamps. A retry never receives a new
-request budget.
+The exact triple gate is:
 
-Production mount request:
+- flags `--integration` and `--allow-effects`, each exactly once;
+- environment key exactly
+  `CORTEX_KEYCHAIN_TEST_EFFECT_AUTHORIZATION`;
+- environment value exactly `YES_DISPOSABLE_64_MIB_ONLY`.
 
-```text
-request hard deadline: 70 s
-[ 0 s, 36 s) normal attach and validation, including child finalization
-[36 s, 38 s) receipt parse and detach-permit transition
-[36 s, 52 s) detach phase; admission closes at 38 s
-[52 s, 54 s) detach-receipt and absence-permit transition
-[54 s, 66 s) absence phase; admission closes at 54 s
-[66 s, 70 s) pipe close, secret zeroization and response epilogue
-```
+`--cleanup-approved` is an optional third flag recorded inside the minted
+capability. Prefix, suffix, case variants, duplicate flags, omitted flags,
+extra flags and the old aliases are refused before observer or effects factory
+construction.
 
-Each spawned child reserves six seconds inside its own phase for TERM, KILL,
-exact reap and final group observation. Therefore:
+Only the private gate function can register a `LiveExecutionCapability`.
+`EffectSession` validates capability identity against that issuance registry
+in its constructor. A field-equivalent or directly constructed value is
+rejected.
 
-- `create` and `attach` require at least eight seconds of work before their
-  six-second finalization reserve;
-- `info` and `isencrypted` require at least four seconds of work before their
-  six-second finalization reserve;
-- the normal phase stops spawning whenever the selected command's minimum work
-  plus six seconds no longer fit;
-- detach is admitted no later than 38 seconds and has at least eight seconds
-  of work plus six seconds of finalization before 52 seconds;
-- absence is admitted no later than 54 seconds and has six seconds of work plus
-  six seconds of finalization before 66 seconds;
-- the two two-second transition reserves are not child work and cannot be
-  borrowed;
-- no compensation phase borrows from its successor.
+`EffectSession.authorize_cleanup()` accepts no argument. It issues one
+`CleanupGrant` only while ACTIVE and only if the registered capability
+contains cleanup approval.
 
-The Python outer deadline is 115 seconds and is created once:
+Workflow methods accept these frozen request types:
 
-```text
-1 s pre-observation
-+ 70 s complete Swift request
-+ 1 s post-observation
-+ 14 s receipt-derived safety detach
-+ 12 s receipt-derived absence proof
-+ 2 s descriptor quarantine and ledger publication
-+ 6 s Python helper/process finalization
-+ 5 s scheduler/process margin
-+ 4 s unallocated hard margin
-= 115 s configured
-```
+~~~python
+@dataclass(frozen=True, slots=True)
+class CreateImageRequest:
+    image_path: Path
+    volume_name: str
+    size: str
+    transaction_id: uuid.UUID
 
-No retry, observer event, cancellation frame or disposition transition resets
-this timestamp. Admission is tested both at every cutoff and at cutoff plus one
-monotonic tick.
+@dataclass(frozen=True, slots=True)
+class MountImageRequest:
+    image_path: Path
+    mount_path: Path
+    transaction_id: uuid.UUID
+    expected_encryption_uuid: str
 
-These values are operational bounds, not real-time guarantees. A syscall that
-does not return before a deadline produces an unclear/fail-closed result; the
-deadline is not described as preemption.
+@dataclass(frozen=True, slots=True)
+class DetachImageRequest:
+    image_path: Path
+    mount_path: Path
+    transaction_id: uuid.UUID
+    expected_encryption_uuid: str
 
-## Python terminal effect session
+@dataclass(frozen=True, slots=True)
+class InspectItemRequest:
+    image_path: Path
+    transaction_id: uuid.UUID
+    expected_encryption_uuid: str
 
-### Monotone state
+@dataclass(frozen=True, slots=True)
+class DeleteItemRequest:
+    image_path: Path
+    transaction_id: uuid.UUID
+    expected_encryption_uuid: str
+~~~
 
-The live harness uses one session state:
+No request type contains `operation` or `cleanup_approved`. Private builders
+construct the exact ten-key JSON object and set both values from the fixed
+method and validated grant. Callers cannot provide a generic mapping or argv.
 
-```text
+The public workflow catalogue is:
+
+| Method | Authority and fixed effect |
+| --- | --- |
+| `compile_helper(source: Path, target: Path) -> CommandReceipt` | Ordinary capability; fixed Swift compiler invocation. |
+| `create_image(request: CreateImageRequest) -> CommandReceipt` | Ordinary capability; exact create JSON. |
+| `mount_image(request: MountImageRequest) -> CommandReceipt` | Ordinary capability; exact mount JSON. |
+| `detach_normal(request: DetachImageRequest) -> CommandReceipt` | Ordinary capability; exact normal detach JSON. |
+| `inspect_item(request: InspectItemRequest) -> CommandReceipt` | Ordinary capability; exact inspect JSON. |
+| `delete_item(request: DeleteItemRequest, grant: CleanupGrant) -> CommandReceipt` | Active cleanup grant; exact delete JSON with approval true. |
+| `probe_encryption(image: Path) -> CommandReceipt` | Ordinary capability; fixed `hdiutil isencrypted -plist`. |
+| `probe_disk(device: str) -> CommandReceipt` | Ordinary capability; fixed `diskutil info -plist`. |
+| `probe_mapping(image: Path, mount: Path) -> CommandReceipt` | Ordinary capability; fixed `hdiutil info -plist` parser. |
+| `detach_for_disposition(permit: DetachPermit) -> DetachReceipt` | Exact `/usr/bin/hdiutil detach RECEIPT_DEVICE`. |
+| `prove_absence_for_disposition(permit: AbsencePermit) -> DetachedUnmountedProof` | One exact `/usr/bin/hdiutil info -plist`. |
+| `quarantine_for_disposition(permit: QuarantinePermit) -> QuarantineReceipt` | Descriptor-relative rename only. |
+
+There is no generic runner, public argv, `safety_only` or
+`disposition_active`.
+
+### Separate observer and process data
+
+`ObserverBaseline` and `SecurityAgentSnapshot` are frozen observer types.
+`ProcessSnapshot` is the Darwin process-lineage type. They share no base class
+or conversion. `EffectSession.activate` accepts only an exact complete
+`ObserverBaseline`; observation accepts only `SecurityAgentSnapshot`; the
+process tracker accepts only `ProcessSnapshot`. Cross-use raises before any
+spawn. Activation also requires both observer collections to be empty; a
+complete but nonempty baseline returns
+`UNCLEAR securityagent_baseline_nonempty` before capability use or effect.
+
+~~~python
+@dataclass(frozen=True, slots=True)
+class ObserverBaseline:
+    processes: frozenset
+    windows: frozenset
+    complete: bool
+
+@dataclass(frozen=True, slots=True)
+class SecurityAgentSnapshot:
+    processes: frozenset
+    windows: frozenset
+    complete: bool
+    observed_at_ns: int
+~~~
+
+Every collection is defensively converted to tuple or frozenset in
+`__post_init__`.
+
+### Terminal state and receipts
+
+~~~text
 PREPARING -> ACTIVE -> CLOSED
                  \-> TERMINAL -> DISPOSING -> CLOSED
-```
+~~~
 
-- `PREPARING`: no accepted observer baseline, zero effects.
-- `ACTIVE`: complete baseline and ordinary permit available.
-- `TERMINAL`: first SecurityAgent or observer-unavailable event, irreversible.
-- `DISPOSING`: only receipt-derived safety permits are accepted.
-- `CLOSED`: final verdict and artifact ledger frozen.
+`EffectSession` exposes only these state transitions:
 
-Terminal events are appended as immutable records containing cause, command,
-stage and monotonic observation time. SecurityAgent always determines `FAIL
-securityagent_detected`; otherwise observer unavailability determines
-`UNCLEAR observer_unavailable`. Later cleanup errors are secondary evidence and
-never overwrite that verdict.
+~~~python
+def activate(self, baseline: ObserverBaseline) -> OrdinaryPermit
+def ordinary_permit(self) -> OrdinaryPermit
+def authorize_cleanup(self) -> CleanupGrant
+def record_mount(self, receipt: MountReceipt) -> None
+def record_preterminal_unmounted(
+    self,
+    receipt: CommandReceipt,
+) -> PreTerminalUnmountedProof
+def latch_terminal(self, event: TerminalEvent) -> None
+def begin_disposition(self) -> None
+def detach_permit(self, receipt: MountReceipt) -> DetachPermit
+def absence_permit(self, receipt: DetachReceipt) -> AbsencePermit
+def quarantine_permit(
+    self,
+    proof: PreTerminalUnmountedProof | DetachedUnmountedProof,
+) -> QuarantinePermit
+def close_success(self, receipt: CommandReceipt) -> FinalVerdict
+def close(self, receipt: DispositionReceipt) -> FinalVerdict
+~~~
 
-### Typed permits
+The first SecurityAgent or observer-unavailable event sets
+`observerTerminalLatchedAt` once and increments the session epoch. It revokes
+ordinary authority permanently and immediately starts bounded cancellation of
+the active command, with or without stdin. SecurityAgent determines
+`FAIL securityagent_detected` whenever observed; otherwise observer
+unavailability determines `UNCLEAR observer_unavailable`. Cleanup errors are
+secondary evidence.
 
-- `OrdinaryPermit(session, epoch)` is valid only in `ACTIVE` and is revoked
-  permanently at `TERMINAL`.
-- `CleanupGrant` is issued once by `authorize_cleanup(True)` only in `ACTIVE`
-  when the separately gated CLI selection recorded cleanup approval. It can
-  authorize exact disposable Keychain deletion only while the same session and
-  epoch remain active.
-- `DetachPermit` is created only from a parsed, recorded mount receipt and is
-  bound to session, transaction, image, mount, UUID, device and epoch. It is
-  emitted at most once and consumed at most once.
-- `AbsencePermit` is emitted at most once from a successful exact detach and
-  authorizes one fixed `hdiutil info -plist` absence query.
-- `QuarantinePermit` requires the descriptor-bound image identity plus an
-  immutable `PreTerminalUnmountedProof` or `DetachedUnmountedProof`. The first
-  is recorded while `ACTIVE` from an already completed mapping receipt; the
-  second is emitted only from the exact detach/absence chain.
+`DetachPermit` is issued at most once after `begin_disposition` from an exact
+mount receipt recorded in the immediately preceding ACTIVE epoch. The registry
+binds both that origin epoch and the current disposition epoch together with
+session, transaction, image, mount, encryption UUID and device.
+`AbsencePermit` is issued only from its exact successful detach in the same
+disposition epoch.
+`QuarantinePermit` requires the same descriptor-bound image and either a
+pre-terminal exact unmounted proof or the exact detach/absence chain.
 
-All receipt collections are converted defensively to tuples in
-`__post_init__`. Permits carry a closure-local token checked by identity plus a
-private issuance/consumption registry and an epoch incremented on every
-observation, including failed observations. This is a trusted-harness boundary,
-not resistance to hostile Python introspection.
+All permit values use a private issuance/consumption registry. Copying a value
+does not duplicate authority. Wrong session, stale epoch, forged token, second
+issuance or replay produces zero spawn.
 
-There is no `safety_only` argument, `disposition_active` flag or public generic
-argv runner.
+After terminal, inspect, delete, compile, create, mount, normal detach,
+encryption/disk/mapping probes and ordinary reconciliation are forbidden.
+Only exact receipt-rooted detach, one absence query and descriptor-relative
+quarantine may run. Unknown mapping preserves every artifact without query,
+inspection, deletion or quarantine.
 
-### Closed command catalogue
+The receipt-to-permit derivation is internal safety-state reduction, not a new
+ordinary effect or capability. A receipt from any epoch other than the
+immediately preceding ACTIVE epoch is stale and cannot enter disposition.
 
-Workflow code can call only fixed methods:
+Artifact state is:
 
-```text
-compile_helper
-create_image
-mount_image
-detach_normal
-inspect_item
-delete_item
-probe_encryption
-probe_disk
-probe_mapping
-detach_for_disposition
-prove_absence_for_disposition
-quarantine_for_disposition
-```
-
-Each method owns a fixed executable, argv/request schema, effect class, stdin
-policy, accepted return codes, output parser, cap and deadline profile.
-
-After `TERMINAL`, compile, create, mount, inspect, delete, encryption/disk/
-mapping probes and ordinary filesystem reconciliation are forbidden before
-spawn. Only `detach_for_disposition`, its one exact absence proof and
-descriptor-relative quarantine can proceed with matching permits. If any
-permit or proof is unavailable, the artifacts are preserved without an
-improvised query or deletion.
-
-If a terminal event is observed while any ordinary process is already running,
-the runner begins bounded cancellation immediately whether or not the command
-has stdin. For the native helper it uses the control channel and preserves the
-helper as owner of its `hdiutil` session. For direct compile/info processes it
-uses the exact Python session anchor. Complete output may be parsed only to
-retain a non-secret artifact receipt; it cannot authorize another ordinary
-command.
-
-Post-terminal detach does not call the helper's public `.detach` operation.
-`detach_for_disposition` executes exactly
-`/usr/bin/hdiutil detach <device-from-receipt>` through the anchored Python
-adapter. `prove_absence_for_disposition` then executes exactly one
-`/usr/bin/hdiutil info -plist`. No `isencrypted`, generic mapping preflight,
-Keychain inspection or extra reconciliation is permitted between them.
-
-### Artifact and disposition ledger
-
-Replace `preserve_image_and_item` with typed states:
-
-```text
+~~~text
 image: absent | exact | quarantined | deleted | unknown
 mount: proven_unmounted | exact_mounted | unknown
 keychain: absent | exact_present | deleted | unknown
-```
+~~~
 
-Every transition records its causal command receipt. A disposition receipt
-states whether exact detach, absence proof and quarantine occurred and why any
-artifact was preserved. A generic workflow exception cannot erase a captured
-UUID, device or terminal cause.
+Complete non-secret create or mount receipts are recorded before terminal or
+nonzero propagation. Unresolved native output is never receipt authority.
 
-## Exact process snapshots in the Python harness
+### Python owned-process adapter
 
-The process adapter returns deeply immutable snapshots:
+Direct compile and plist commands use private
+`PythonRunningSessionAnchor` and `PythonExitedUnreapedSessionAnchor` values
+with the same transition and revalidation rules as Swift. The adapter does not
+use `Popen.communicate()` as terminal proof.
 
-```python
-@dataclass(frozen=True)
+`ProcessSnapshot` retains exact PID, PPID, PGID, UID, SID and birth seconds/
+microseconds, plus partial records retaining PID, PPID, PGID and UID. Raw
+numeric fields may exist transiently inside these snapshots. They never form
+signal authority or a durable receipt.
+
+~~~python
+@dataclass(frozen=True, slots=True)
+class ExactProcessIdentity:
+    pid: int
+    ppid: int
+    pgid: int
+    uid: int
+    sid: int
+    start_seconds: int
+    start_microseconds: int
+
+@dataclass(frozen=True, slots=True)
+class PartialProcessIdentity:
+    pid: int
+    ppid: int
+    pgid: int
+    uid: int
+    missing_fields: frozenset[str]
+
+@dataclass(frozen=True, slots=True)
 class ProcessSnapshot:
     exact_identities: tuple
     partial_identities: tuple
@@ -606,248 +875,311 @@ class ProcessSnapshot:
     enumeration_complete: bool
     tree_complete: bool
     uncertainty_reasons: tuple
+~~~
 
-    def __post_init__(self):
-        object.__setattr__(self, "exact_identities", tuple(self.exact_identities))
-        object.__setattr__(self, "partial_identities", tuple(self.partial_identities))
-        object.__setattr__(self, "vanished_pids", frozenset(self.vanished_pids))
-        object.__setattr__(self, "uncertainty_reasons", tuple(self.uncertainty_reasons))
-```
+Lineage is computed before UID filtering. Related partial or foreign-UID
+records, tracked UID/SID/group changes, late children, reused births,
+incomplete scans and zero-byte records that remain live latch uncertainty
+permanently. Only a zero-byte read followed by a full reread and `ESRCH`
+produces a vanished PID.
 
-An exact identity includes PID, PPID, PGID, UID and birth seconds/
-microseconds. A short BSD record remains partial but retains PID, PPID, PGID
-and UID.
+For the native-helper path, `HelperControlClient` uses the exact transmitted
+Swift deadline and frame grammar. It sends cancel once after
+`observerTerminalLatchedAt` and never escalates early. `0x14`, missing ACK,
+invalid order, socket failure or expiry returns
+`UNCLEAR descendant_potentially_surviving`.
 
-Rules:
+## Independent test architecture
 
-- collect the complete snapshot before filtering by UID;
-- a partial or foreign-UID record linked by PPID/PGID to an owned identity is
-  never adopted or signalled, but permanently marks lineage uncertain;
-- zero bytes mean vanished only after an immediate full reread and `ESRCH`;
-- adoption requires an exact same-UID child whose exact parent is active in the
-  same complete snapshot;
-- after adoption closes, a new related process permanently marks lineage
-  uncertain;
-- a historical or reused PID never becomes a parent;
-- a signal permit requires a fresh complete snapshot proving the exact,
-  same-UID anchored session membership and expires at the next observation;
-- cleanup succeeds only with exact root reap, a complete final snapshot, no
-  tracked survivor, no related partial/foreign process, no identity reuse and
-  no lineage uncertainty.
+### Process model
 
-The gated real harness uses the same unreaped-session-anchor rule as Swift. Its
-private `DarwinOwnedProcessAdapter.signal_owned_group` is the only Python site
-allowed to translate a validated, unconsumed anchor into a group signal. The
-adapter revalidates the complete root/session identity immediately before the
-signal; no caller receives its numeric PGID. The default suite never executes
-that gated signal path. The harness does not use `Popen.communicate()` as a
-terminal proof because that API reaps the child before group finalization.
+`ProcessModelReducer` owns its state and private permit registry. Its ordered
+alphabet is:
 
-## Safe test architecture
+~~~python
+PROCESS_EVENTS = (
+    "spawn_valid",
+    "exact_child",
+    "related_partial",
+    "foreign_uid_bridge",
+    "tracked_uid_changed",
+    "tracked_sid_changed",
+    "group_changed",
+    "root_exit_exact",
+    "exact_reap",
+    "scan_incomplete",
+    "late_child",
+    "parent_birth_reused",
+)
+~~~
 
-### Pure exhaustive model
+### Effect model
 
-All descendant, PID reuse, PGID reuse, UID transition, partial metadata,
-observer ordering and deadline cases use scripted adapters and a deterministic
-breadth-first exploration of short state traces. No third-party property-test
-dependency is added.
+`EffectModelReducer` is independent of the process reducer and has its own
+private permit registry. Its ordered alphabet is:
 
-After every transition, the model asserts:
+~~~python
+EFFECT_EVENTS = (
+    "activate",
+    "ordinary",
+    "mount_receipt",
+    "issue_detach",
+    "terminal",
+    "consume_detach",
+    "settled_detach",
+    "consume_absence",
+    "inspect",
+    "delete",
+)
+~~~
 
-- zero ordinary spawn or stdin write after a terminal event;
-- no signal without a fresh exact identity and unreaped session anchor;
-- no signal after reap;
-- incomplete snapshot or uncertain lineage implies cleanup is not verified;
-- no adoption after closure;
-- no inspect or delete after a terminal event;
-- complete response capture precedes nonzero/terminal propagation;
-- no phase consumes another phase's deadline;
-- all pipes receive an independent close attempt.
+Every model action records a zero-based `transition_index`. The reference
+predicates live in `tests/test_disk_image_keychain_helper.py`, replay the raw
+trace prefix through that index, consume only primitive action fields, import
+no reducer state or permit type, and maintain their own expected issuance and
+consumption sets.
 
-### Real harmless deadline and cancellation probes
+Both explorers enumerate every product at every depth zero through five with
+no visited set, state hash or deduplication. The process count is 271,453
+traces and the effect count is 111,111 traces.
 
-The only default real-process test launches the testing helper as Python's
-owned child. The helper exercises the production supervisor with exactly one
-direct fixture child compiled into the testing build. That fixture creates no
-descendant and exposes no PID or PGID receipt.
+The reference predicates reject fresh forged permits, copied replay, stale
+permits, raw numeric signals, signal after reap, signal after uncertainty,
+omitted reap, false cleanup, and ordinary spawn/inspect/delete after terminal.
 
-- Python owns a guardian pipe, witness pipe, control socket and random nonce.
-- The child emits `START:<nonce>`, produces bounded continuous output, watches
-  guardian EOF and arms its independent 0.90-second monotonic death timer before
-  emitting START.
-- The deadline case lets the 0.50-second supervisor deadline fire. The
-  cancellation case sends `0x01` and requires helper `0x13` plus witness EOF
-  before helper exit/final reap. The two descriptors may become readable in
-  either polling order; the scripted kernel proves `0x13` is emitted only after
-  internal quiescence.
-- The test closes the guardian in `finally`, requires matching START and
-  witness EOF, and reaps its own still-unreaped helper `Popen` child.
-- If containment fails, direct `Popen.kill()` is permitted only while that
-  exact child remains unreaped; no group signal is used.
-- Test-owned limits are hard `0.50 s`, scheduler tolerance `0.15 s`, output cap
-  `64 KiB`, outer containment `1.20 s`, and a final direct-helper kill/reap
-  reserve of `0.15 s` inside that same absolute deadline.
-- Helper completion and witness EOF are polled together. `witnessEOFAt` must be
-  between 0.50 and 0.65 seconds after start in the deadline case; measuring
-  before EOF is forbidden.
-- After EOF and helper reap, one bounded `/bin/ps -axo command=` snapshot is
-  filtered in memory for the nonce. Any scan failure/incompleteness or nonce
-  match fails the probe; command lines are never logged or stored.
-- External wall time, control frame, witness EOF and nonce absence are the real
-  oracles. Exact fixture-child `waitpid` remains a scripted kernel-adapter proof
-  with an omitted-reap mutant; the real probe does not claim to observe that
-  syscall.
-- Every wait derives its timeout from the one `started + 1.20 s` deadline. No
-  relative timeout is added after it expires.
+Separate scripted Swift matrices cover every value of `ResumeResult`,
+`SignalResult`, `ReapResult`, `GroupPresence`, `PollResult`, `IOResult` and
+`CloseResult`. Each pipe position fails independently. Process model cases
+cover tracked UID and SID changes.
 
-The real `ignore-term-grandchild` and numeric process-tree cleanup probes are
-removed before the default suite can run again.
+### Removal and closed testing routes
 
-## Required regressions
+Before any default suite may run, source and tests for these routes are removed
+completely:
 
-The identifiers below are normative. The implementation plan maps every row to
-one selected test ID and records its RED reason before the corresponding
-implementation change.
+~~~text
+--spawn-probe
+--fd-child
+--deadline-drain-probe
+--process-policy
+--process-scenario
+--process-child
+~~~
 
-| ID | Required test boundary | Required oracle |
-| --- | --- | --- |
-| R01 | unresolved attach containing device text | zero detach; `MOUNT_CLEANUP_UNCLEAR` |
-| R02 | settled attach with group still present | zero detach |
-| R03 | truncated attach output | zero receipt and zero detach |
-| R04 | capped attach output | zero receipt and zero detach |
-| R05 | exact settled attach | one detach followed by one absence proof |
-| R06 | leader exit while descendant holds a pipe | all signals precede exact reap |
-| R07 | PGID reuse after reap | observation only; zero signal |
-| R08 | short/changed birth, UID, PGID or SID | zero stdin and zero group signal |
-| R09 | waitid no-event, wrong PID/code, prefilled buffer and EINTR | only exact SIGCHLD terminal codes become exit |
-| R10 | `ECHILD` from reap | unresolved, never a proof |
-| R11 | insufficient work/finalization window | zero spawn |
-| R12 | detach at admission cutoff and cutoff plus one tick | exact cutoff admitted; later time rejected |
-| R13 | absence at admission cutoff and cutoff plus one tick | exact cutoff admitted; later time rejected |
-| R14 | normal work at cutoff | compensation windows retain their original absolute bounds |
-| R15 | terminal pre-observation for every ordinary command including normal detach | zero spawn regardless of stdin |
-| R16 | terminal event during compile/info | immediate bounded cancellation; no workflow continuation |
-| R17 | caller-supplied arbitrary argv | cannot obtain a safety permit |
-| R18 | wrong/stale/replayed detach permit | zero spawn; exact first permit consumed once |
-| R19 | two permits requested for one mount receipt | second issuance rejected before spawn |
-| R20 | absence permit before versus after exact detach | only exact settled detach emits one permit |
-| R21 | exact post-terminal disposition | direct `hdiutil detach <receipt-device>`, one `hdiutil info -plist`, then descriptor rename |
-| R22 | unknown mapping after terminal | preserve without info, inspect, delete or quarantine |
-| R23 | terminal path across all artifact states | no Keychain inspect/delete |
-| R24 | all terminal/cleanup event orderings | SecurityAgent priority, otherwise observer-unavailable priority |
-| R25 | complete nonzero create/mount response plus terminal event | UUID/device recorded before terminal propagation |
-| R26 | short foreign-UID child of exact owned parent | permanent lineage uncertainty and cleanup false |
-| R27 | partial bridge to exact grandchild | grandchild not signalled; cleanup false |
-| R28 | zero/full-reread/live | partial identity, not vanished; cleanup false |
-| R29 | zero/full-reread/`ESRCH` | exact vanished result |
-| R30 | late child after adoption closes | no adoption/signal; cleanup never recovers |
-| R31 | reused parent birth identity | no adoption/signal; cleanup never recovers |
-| R32 | changed group membership after permit | stale permit rejected before syscall |
-| R33 | identity changes between TERM and KILL | zero KILL; unresolved |
-| R34 | state already issued KILL | zero later TERM or KILL |
-| R35 | invalid identity for suspended child | bounded direct-child abort and exact reap; zero group signal |
-| R36 | observer init, scan, cap, timeout, termination and every pipe-close exception | normalized terminal result plus every bounded cleanup/close attempt |
-| R37 | valid output plus unclear process cleanup | never returns success or a compensation permit |
-| R38 | clock jumps before/after poll/read/write/append/close/reap/scan | no action beyond the one hard deadline |
-| R39 | create master and per-invocation wire secret | wire zeroized at child outcome; master remains through Keychain add then zeroizes |
-| R40 | Python cancellation while fixture child is active | `0x01`; witness EOF and helper `0x13` precede helper exit/reap and outer deadline |
-| R41 | production/testing builds and invalid testing FDs | production routes absent; invalid FDs exit 64 with zero spawn/write |
-| R42 | default-test manifest under Python 3.11 and 3.14 | exact same IDs; every non-live class once; live class absent |
-| R43 | deadline/cancel real probes repeated twenty times each | 40/40 within external bounds, matching nonce, EOF and no nonce survivor |
-| R44 | structural source scan | no old numeric receipts/helpers, unique proof factories and signal sites only |
-| R45 | missing-authorization CLI matrix in an environment allowlist | four exit-64 empty-output refusals and zero live-runner construction |
+Their Swift handler symbols and Python tests are also absent. Wire and CLOEXEC
+assertions move to scripted scenarios or the new guardian/witness route.
 
-## Local proof gates
+The final closed testing-only route literal is:
 
-The checkpoint can be approved locally only when all of the following are
-fresh:
+~~~text
+--test-scenario
+--test-supervisor-scenario
+--guardian-witness-probe
+--guardian-witness-child
+~~~
 
-- focused RED evidence exists before implementation changes for every R01–R45
-  regression, including sensitivity traces for a false cleanup, stale permit,
-  raw numeric signal and omitted reap;
-- exhaustive process/effect traces through depth five run without state
-  deduplication and pass against a separate reference predicate;
-- `DEFAULT_TEST_CASES` is a closed ordered tuple; a meta-test proves every
-  non-live `TestCase` and every `test_*` ID is selected exactly once, and the
-  live class is absent;
-- the exact default test-ID list is byte-identical under equipped Python 3.11
-  and 3.14;
-- the complete default Task 3 suite passes with zero skip in an `env -i`
-  allowlist containing only fixed `PATH`, `LANG=C`, `LC_ALL=C` and
-  `PYTHONHASHSEED=0`;
-- the real guardian/witness deadline and cancellation probes pass once in-suite
-  and twenty times as a flake gate;
-- Swift production helper and extracted observer sources typecheck without
-  execution;
-- integration-only, effects-only, combined-effects and cleanup-only invocations
-  each run in that same `env -i` allowlist, exit `64` with empty stdout/stderr,
-  and construct neither live observer nor live effects. The only positive
-  triple-gate test injects a recording `live_runner`; it never executes the live
-  suite;
-- the real authorization key remains exactly
-  `CORTEX_KEYCHAIN_TEST_EFFECT_AUTHORIZATION`; no similarly named substitute is
-  accepted;
-- Python compiles in memory; AST gates prove every subprocess/wait/scan has a
-  bounded deadline and every `Popen` creates a new session;
-- no Python group signal exists outside the private anchored
-  `DarwinOwnedProcessAdapter.signal_owned_group`; no numeric PID/PGID receipt,
-  `child_pid`, generic `safety_only`, `disposition_active`, or forgeable
-  process-success boolean remains;
-- the default suite proves the private Python group-signal adapter is never
-  invoked;
-- the only negative-PGID signal in Swift is private to the anchored Darwin
-  kernel adapter;
-- production compilation excludes all scripted-kernel, deadline-witness and
-  cancellation-witness routes; invoking those routes returns exit 64 with
-  empty output and zero spawn;
-- testing builds reject identical, reversed, closed, stdio, regular-file and
-  unlisted guardian/witness/control descriptors before child spawn or witness
-  write;
-- `git diff --check` and both Gitleaks history/worktree scans pass;
-- the implementation diff from the separately recorded reviewed-plan base
-  contains only the three files in this design;
-- an independent reviewer reports `P0=0`, `P1=0`, `P2=0` and `PASS`.
+Every route is inside `#if CORTEX_STORAGE_HELPER_TESTING`. A production binary
+rejects each supplied route with exit 64, empty stdout/stderr and zero spawn,
+while `strings` finds neither route token nor handler symbol in that binary.
+`--guardian-witness-child` is the only real child route.
 
-No live integration result can be inferred from these gates. A later live
-spike still requires a separate action-time authorization and must report
-`PASS`, `FAIL` or `UNCLEAR` from actual evidence.
+### Guardian/witness probe
 
-## Compatibility and rollout
+The test launcher owns guardian and witness pipes, a Unix control socket and a
+random 32-hex nonce. The fixture:
 
-- Keep the public six-key helper response and existing stable error codes.
-- Keep the exact Keychain item attributes, 43-byte secret format, no-UI query
-  policy, strict request schema and secret zeroization contract.
-- Keep all live entry points behind the existing double gate and cleanup behind
-  its separate approval.
-- Layer the architectural commit after `2b85e504`; do not rewrite or hide the
-  failed-review history.
-- Mark S3 complete only after the local gates and independent review pass.
-- Rebaseline and independently re-review S4 after S3. Its source-manifest shape
-  remains single-source, but `run_attested_helper` must accept one absolute
-  deadline, create/validate the helper control socket internally for
-  `disk-image-keychain`, pass only the approved descriptor, and preserve the
-  cancellation acknowledgement contract before process escalation.
+- creates no descendant;
+- arms its absolute self-expiry at start plus 0.90 seconds before emitting
+  `START:NONCE`;
+- emits bounded paced output;
+- watches guardian EOF;
+- closes witness on exit;
+- exposes no PID or PGID receipt.
 
-## Residual limits
+Its transitive closed call graph permits only argument validation,
+`clock_gettime`, `poll`, `read`, `write`, bounded memory operations,
+`nanosleep`, `close` and `_exit`. Reachability of `posix_spawn`, `fork`,
+`vfork`, `exec`, `system`, Foundation `Process`, `NSTask` or dynamic loading
+fails the structural test.
 
-- Darwin has no public pidfd equivalent. The unreaped session anchor prevents
-  reuse of the owned session leader while signals are possible, but it is not a
-  general atomic identity-and-signal primitive.
-- A deliberately hostile descendant can change session, close inherited pipes
-  or block in the kernel. Such evidence is `UNCLEAR`; it is never converted to
-  successful cleanup.
-- `proc_pidinfo`, Security.framework and the scheduler are synchronous and not
-  mathematically preemptible. Deadlines are operational bounds with
-  fail-closed overrun handling.
+Each probe creates exactly:
+
+~~~text
+workCutoff = start + 0.50 seconds
+supervisorHard = start + 0.65 seconds
+outerHard = start + 1.20 seconds
+~~~
+
+The helper receives `supervisorHard` as its absolute test deadline. No
+supervisor I/O or group signal is issued after it. Direct exact-helper
+kill/reap containment and one bounded `/bin/ps -axo command=` nonce scan must
+finish before `outerHard`. Command lines are filtered in memory and never
+logged or stored.
+
+The deadline probe requires witness EOF between 0.50 and 0.65 seconds. The
+cancellation probe requires `0x11`, one `0x01`, witness EOF and `0x13` before
+helper exit/exact helper reap; EOF and ACK may arrive in either polling order.
+The real oracle does not claim to observe the fixture child's internal
+`waitpid`. Exact child reap remains a scripted-kernel assertion with an
+omitted-reap mutant.
+
+### Dynamic default inventory
+
+`DEFAULT_TEST_CASES` is a closed ordered tuple. At runtime a meta-test discovers
+every class defined in `tests.test_disk_image_keychain_helper` whose direct or
+indirect base is `unittest.TestCase` and whose `__module__` equals that module.
+It excludes only the exact identity
+`DiskImageKeychainLiveIntegrationTests`. The discovered identities must equal
+the tuple identities; no class-name allowlist may replace this comparison.
+
+`REGRESSION_TEST_IDS` has exact keys `R01` through `R45` and fully qualified
+unittest IDs. Its 45 values are unique and each appears exactly once in the
+flattened default suite.
+
+The complete default suite runs independently under equipped Python 3.11 and
+Python 3.14 in:
+
+~~~text
+env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin LANG=C LC_ALL=C PYTHONHASHSEED=0
+~~~
+
+A recording result captures the ordered `startTest` ID stream. Both streams
+must be byte-identical, both runs succeed, and neither contains a skip or the
+live class. R42 compares the two interpreters through a non-executing
+`default_test_ids()` subprocess so it cannot recursively run itself; the final
+external gate runs both complete suites and compares their recorded
+`startTest` streams. Nested same-interpreter launches use `sys.executable`.
+
+## Normative regressions
+
+Each identifier maps to one unique method in the implementation plan.
+
+| ID | Boundary and required oracle |
+| --- | --- |
+| R01 | Unresolved attach containing device text: compensation reducer logs attach only and returns `MOUNT_CLEANUP_UNCLEAR`. |
+| R02 | Attach has complete output and exact exit/reap but original group observation is present: supervisor returns unresolved and compensation reducer logs attach only. |
+| R03 | Truncated attach output: compensation reducer logs attach only and issues no receipt. |
+| R04 | Capped attach output: attach only, no receipt. |
+| R05 | Exact settled attach: one detach, one bound info query, one absence proof. |
+| R06 | Leader exit with held pipe, including post-WNOWAIT `getsid == ESRCH`: exited-anchor validation, all signals before exact reap. |
+| R07 | PGID reuse after reap: token-bound signal-zero observation only, zero TERM/KILL. |
+| R08 | Short or changed birth, UID, PGID or SID: zero SIGCONT, stdin and group signal. |
+| R09 | waitid no-event, wrong PID, wrong signal/code, prefilled buffer and EINTR: only exact terminal child issues exited anchor. |
+| R10 | `ECHILD` from reap: unresolved and no settlement proof. |
+| R11 | Insufficient command work/finalization window: zero spawn. |
+| R12 | Detach cutoff equality versus next nanosecond: equality admitted only if full fit; later refused. |
+| R13 | Absence cutoff equality versus next nanosecond: equality admitted only if full fit; later refused. |
+| R14 | Normal cutoff: compensation windows retain their original absolute bounds. |
+| R15 | Terminal pre-observation across every ordinary typed method: zero spawn. |
+| R16 | Terminal during compile or info: immediate bounded cancellation and no continuation. |
+| R17 | Caller operation, cleanup mapping or arbitrary argv: construction rejected before live factory. |
+| R18 | Wrong, stale, forged or replayed detach permit: zero spawn; exact first permit consumed once. |
+| R19 | Two permits requested from one mount receipt: second issuance rejected. |
+| R20 | Absence permit before versus after exact detach: only exact bound detach issues one. |
+| R21 | Exact terminal disposition: direct receipt-device detach, one info query, descriptor rename. |
+| R22 | Unknown mapping after terminal: preserve without info, inspect, delete or quarantine. |
+| R23 | Every terminal artifact state: zero Keychain inspect/delete. |
+| R24 | Every terminal/cleanup ordering: SecurityAgent priority, otherwise observer-unavailable priority. |
+| R25 | Complete nonzero create/mount plus terminal: UUID/device recorded before propagation. |
+| R26 | Related partial or foreign-UID record: permanent lineage uncertainty and cleanup false. |
+| R27 | Partial bridge to exact grandchild: no grandchild signal and cleanup false. |
+| R28 | Zero/full-reread/live: partial, not vanished, cleanup false. |
+| R29 | Zero/full-reread/ESRCH: exact vanished result. |
+| R30 | Late child after adoption closes: no adoption/signal and no recovery. |
+| R31 | Reused parent birth: no adoption/signal and no recovery. |
+| R32 | Tracked UID, SID or group change: permit expires before syscall. |
+| R33 | TERM-to-KILL exited-anchor matrix, including `getsid == ESRCH`: exact second waitid can proceed; identity/waitability change blocks KILL. |
+| R34 | KILL already issued: zero later TERM/KILL. |
+| R35 | Invalid suspended identity: bounded positive-PID abort, exact reap, zero group signal. |
+| R36 | Observer init/scan/cap/timeout/termination and every native/Python close result: normalized terminal outcome and every independent close attempt. |
+| R37 | Valid output with unresolved native settlement: no success or permit. |
+| R38 | Clock jump before/after every request/control/poll/read/write/append/close/reap/scan boundary: no new action after hard deadline. |
+| R39 | Create/mount Master/Wire matrix across every terminal path: no alias, Wire erased first, create Master lives exactly through `SecItemAdd`. |
+| R40 | Active-child cancellation: `0x01`, narrow `0x13` and witness EOF before helper exit/reap and outer deadline. |
+| R41 | Production/testing route and FD matrices: production symbols absent; invalid descriptors refuse before spawn/write. |
+| R42 | Dynamic default inventory on Python 3.11/3.14: byte-identical ordered IDs, every non-live class once, zero skip. |
+| R43 | Deadline and cancellation probes twenty fresh runs each: 40/40 within bounds, matching nonce, EOF, ACK and no nonce survivor. |
+| R44 | Structural scan: old routes absent, fixed command/capability factories sealed, and only typed signal sites remain. |
+| R45 | Authorization-key prefix/suffix/case/old-alias and complete flag matrix: exit 64, empty streams and zero live object construction. |
+
+## RED chronology and local proof gates
+
+Before production code in each task, every mapped regression runs individually.
+The ignored SDD ledger records the test-source SHA-256, interpreter path and
+version, command, exit code, failing assertion and expected reason. If the
+current implementation already passes a regression, the plan's exact unsafe
+mutant for that ID is enabled and the same test must reject it, including R45.
+
+Final local approval requires:
+
+- every individual RED or mutant-sensitivity receipt;
+- both exhaustive models through depth five without deduplication;
+- complete result/close branch matrices;
+- dynamic default inventory and executable `REGRESSION_TEST_IDS` proof;
+- independent Python 3.11 and 3.14 default-suite passes with byte-identical
+  ordered started-test streams and zero skip;
+- one in-suite and twenty fresh runs of each real probe;
+- Swift production and extracted observer typechecks without execution;
+- four missing-authorization CLI shapes plus every key/flag near miss refusing
+  before any live factory;
+- production/test route and descriptor boundary proof;
+- Python AST proof for absolute deadlines, `close_fds=True`, the exact
+  production `pass_fds` tuple and `start_new_session=True`;
+- source proof for no old routes, no `readDataToEndOfFile`, no generic request
+  mappings, no process-success booleans, no unauthorized signal sites and no
+  production testing symbol;
+- `git diff --check` and both Gitleaks scans;
+- exact implementation path set of the three component files;
+- three fresh blind read-only final reviews with zero P0/P1/P2 and `PASS`.
+
+No local gate implies a live integration result.
+
+## Checkpoint, primer and S4 separation
+
+Before Task 1 the ignored ledger freezes:
+
+- `IMPLEMENTATION_BASE`;
+- reviewed spec and plan SHA-256 values;
+- `PRIMER_DIFF_SHA256` from
+  `git diff --binary -- primer.md | shasum -a 256`.
+
+Every task records `TASK_N_BASE`, `TASK_N_HEAD`, exact changed paths, test
+receipt and the unchanged primer-diff hash. Reviewers receive both
+`TASK_N_BASE..TASK_N_HEAD` and
+`IMPLEMENTATION_BASE..TASK_N_HEAD`. `primer.md` is never edited, staged or
+committed.
+
+After final S3 review, freeze `S3_FINAL` before any S4 documentation. The
+separate documentation-only S4 rebaseline commit may change exactly:
+
+- `docs/superpowers/specs/2026-09-02-storage-cutover-and-qa-design.md`;
+- `docs/superpowers/plans/2026-09-02-v054-storage-runtime-foundation.md`;
+- `docs/superpowers/plans/2026-09-02-v054-completion-program.md`.
+
+That commit updates `run_attested_helper` to create and validate the helper
+control socket internally, pass the exact absolute Swift deadline and sole
+approved descriptor, preserve the cancellation acknowledgement contract, and
+keep the single-source helper manifest. It is outside
+`IMPLEMENTATION_BASE..S3_FINAL` and requires its own hashes and independent
+review before S4 code starts.
+
+## Compatibility and residual limits
+
+- The public response remains exactly
+  `schema_version`, `operation`, `code`, `encryption_uuid`, `device` and
+  `item_count`.
+- Existing stable error codes, Keychain attributes, 43-character Base64URL
+  secret, no-UI queries and strict ten-key request remain unchanged.
+- The live class remains separately selected and requires fresh action-time
+  authorization; the default suite cannot select it.
+- Darwin lacks a public pidfd equivalent. An unreaped leader prevents reuse of
+  that leader identity while signals remain possible but is not an atomic
+  identity-and-signal primitive.
+- Synchronous Darwin and Security.framework calls are not mathematically
+  preemptible; overruns fail closed.
 - Killing `hdiutil` does not prove that no partial disk-image effect occurred.
-  Only a settled invocation plus exact detach and absence proof permits
-  compensation success.
-- If the helper control channel cannot return a terminal frame after its inner
-  deadline, Python cannot prove the isolated child session gone. Direct-helper
-  escalation is permitted only with `UNCLEAR descendant_potentially_surviving`
-  and no compensation success.
-- Fake/model tests cannot prove actual Keychain UI absence, DiskImages behavior
-  or observer completeness. Those claims remain unavailable until an expressly
-  authorized live spike.
+- An escaped hostile descendant may evade the one original-group observation.
+- Model and fixture tests do not prove real Keychain, DiskImages,
+  SecurityAgent or APFS behavior.
 - The previously documented malicious same-UID filesystem replacement race
-  remains outside the frozen threat model and is not broadened by this design.
+  remains outside the frozen threat model.
