@@ -1,6 +1,6 @@
 # Cortex Bridge S3 Owned-Process Supervision Design
 
-**Status:** Architecture A approved by the owner; written specification pending review
+**Status:** Architecture A and written specification approved by the owner
 **Date:** 2026-09-03
 **Target:** v0.5.4 candidate
 **Supersedes:** the incremental S3 supervision and live-harness design in the
@@ -16,8 +16,9 @@ with three explicit boundaries:
    unreaped Darwin session anchor;
 2. a Python integration session whose monotone state and typed permits decide
    which commands may run after a terminal observer event;
-3. a safe test architecture that models process trees in memory and uses only
-   one self-expiring direct child for the real deadline probe.
+3. a safe test architecture that models process trees in memory and gives the
+   helper only one self-expiring direct fixture child for the real deadline
+   probe; that fixture creates no descendants.
 
 This is an architectural replacement, not a sixth incremental patch. S4 and
 all later Phase S work remain blocked until this design is implemented, passes
@@ -484,8 +485,10 @@ After every transition, the model asserts:
 
 ### One real harmless probe
 
-The only default real-process test launches one direct child compiled into the
-testing build. It creates no grandchild and exposes no PID or PGID receipt.
+The only default real-process test launches the testing helper as Python's
+owned child. The helper exercises the production supervisor with exactly one
+direct fixture child compiled into the testing build. That fixture creates no
+descendant and exposes no PID or PGID receipt.
 
 - Python owns a guardian pipe and a witness pipe plus a random nonce.
 - The child emits `START:<nonce>`, produces bounded continuous output, watches
