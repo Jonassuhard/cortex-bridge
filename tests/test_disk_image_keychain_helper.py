@@ -148,7 +148,7 @@ def _process_deadline_plan(start, timeout):
     margin = min(HELPER_TIMEOUT_MARGIN_SECONDS, max(0.01, timeout * 0.01))
     cleanup_budget = min(
         PYTHON_PROCESS_TERMINATION_BUDGET_SECONDS,
-        max(0.05, timeout * 0.08),
+        max(0.07, timeout * 0.13),
     )
     post_budget = min(
         HELPER_POST_MONITOR_CAP_SECONDS,
@@ -180,6 +180,20 @@ class ProcessIdentity:
         return self.pid, self.start_seconds, self.start_microseconds
 
 
+@dataclass(frozen=True)
+class ProcessSnapshot:
+    identities: tuple[ProcessIdentity, ...]
+    complete: bool
+    unreadable_pids: frozenset[int] = frozenset()
+    vanished_pids: frozenset[int] = frozenset()
+
+    def __iter__(self):
+        return iter(self.identities)
+
+    def __len__(self):
+        return len(self.identities)
+
+
 class _ProcBSDInfo(ctypes.Structure):
     _fields_ = [
         ("pbi_flags", ctypes.c_uint32), ("pbi_status", ctypes.c_uint32),
@@ -197,6 +211,24 @@ class _ProcBSDInfo(ctypes.Structure):
     ]
 
 
+class _ProcBSDShortInfo(ctypes.Structure):
+    _fields_ = [
+        ("pbsi_pid", ctypes.c_uint32),
+        ("pbsi_ppid", ctypes.c_uint32),
+        ("pbsi_pgid", ctypes.c_uint32),
+        ("pbsi_status", ctypes.c_uint32),
+        ("pbsi_comm", ctypes.c_char * 16),
+        ("pbsi_flags", ctypes.c_uint32),
+        ("pbsi_uid", ctypes.c_uint32),
+        ("pbsi_gid", ctypes.c_uint32),
+        ("pbsi_ruid", ctypes.c_uint32),
+        ("pbsi_rgid", ctypes.c_uint32),
+        ("pbsi_svuid", ctypes.c_uint32),
+        ("pbsi_svgid", ctypes.c_uint32),
+        ("pbsi_rfu", ctypes.c_uint32),
+    ]
+
+
 def _bounded_timeout(deadline, cap):
     remaining = deadline - time.monotonic()
     if remaining <= 0:
@@ -204,9 +236,16 @@ def _bounded_timeout(deadline, cap):
     return min(cap, remaining)
 
 
-def _process_table(timeout=PROCESS_TREE_SCAN_TIMEOUT_SECONDS):
+def _process_table(
+    timeout=PROCESS_TREE_SCAN_TIMEOUT_SECONDS,
+    *,
+    relevant_pids=None,
+):
     if timeout <= 0:
         raise IntegrationWorkflowFailure
+    relevant_pids = (
+        None if relevant_pids is None else frozenset(relevant_pids)
+    )
     started = time.monotonic()
     libc = ctypes.CDLL(None, use_errno=True)
     list_all = libc.proc_listallpids
@@ -223,20 +262,97 @@ def _process_table(timeout=PROCESS_TREE_SCAN_TIMEOUT_SECONDS):
     if count <= 0 or count >= capacity:
         raise IntegrationWorkflowFailure
     rows = []
-    for pid in storage[:count]:
-        if pid <= 0:
-            continue
+    unreadable_pids = set()
+    vanished_pids = set()
+
+    def read_identity(pid):
         info = _ProcBSDInfo()
         copied = pid_info(pid, 3, 0, ctypes.byref(info), ctypes.sizeof(info))
         if copied != ctypes.sizeof(info):
-            continue
-        rows.append(ProcessIdentity(
+            return copied, None
+        return copied, ProcessIdentity(
             int(info.pbi_pid), int(info.pbi_ppid), int(info.pbi_pgid),
             int(info.pbi_start_tvsec), int(info.pbi_start_tvusec),
-        ))
+        )
+
+    def read_short_uid(pid):
+        info = _ProcBSDShortInfo()
+        copied = pid_info(
+            pid, 13, 0, ctypes.byref(info), ctypes.sizeof(info)
+        )
+        if copied != ctypes.sizeof(info) or int(info.pbsi_pid) != pid:
+            return None
+        return int(info.pbsi_uid)
+
+    for pid in storage[:count]:
+        if pid <= 0:
+            continue
+        copied, identity = read_identity(pid)
+        if identity is not None:
+            rows.append(identity)
+            continue
+        is_relevant = relevant_pids is not None and pid in relevant_pids
+        if copied != 0:
+            try:
+                os.kill(pid, 0)
+            except PermissionError:
+                short_uid = read_short_uid(pid)
+                if (
+                    is_relevant
+                    or short_uid is None
+                    or short_uid == os.getuid()
+                ):
+                    unreadable_pids.add(pid)
+            except ProcessLookupError:
+                unreadable_pids.add(pid)
+                vanished_pids.add(pid)
+            except OSError:
+                unreadable_pids.add(pid)
+            else:
+                short_uid = read_short_uid(pid)
+                if (
+                    is_relevant
+                    or short_uid is None
+                    or short_uid == os.getuid()
+                ):
+                    unreadable_pids.add(pid)
+            continue
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            vanished_pids.add(pid)
+            continue
+        except PermissionError:
+            short_uid = read_short_uid(pid)
+            if (
+                is_relevant
+                or short_uid is None
+                or short_uid == os.getuid()
+            ):
+                unreadable_pids.add(pid)
+            continue
+        except OSError:
+            unreadable_pids.add(pid)
+            continue
+        copied, identity = read_identity(pid)
+        if identity is not None:
+            rows.append(identity)
+        else:
+            short_uid = read_short_uid(pid)
+            if (
+                is_relevant
+                or short_uid is None
+                or short_uid == os.getuid()
+            ):
+                unreadable_pids.add(pid)
     if time.monotonic() - started > timeout:
         raise IntegrationWorkflowFailure
-    return tuple(rows)
+    return ProcessSnapshot(
+        tuple(rows),
+        complete=not unreadable_pids,
+        unreadable_pids=frozenset(unreadable_pids),
+        vanished_pids=frozenset(vanished_pids),
+    )
 
 
 class ProcessTreeTracker:
@@ -248,6 +364,7 @@ class ProcessTreeTracker:
         self.adoption_open = True
         self.scan_complete = True
         self.identity_reused = False
+        self.lineage_uncertain = False
 
     @property
     def tracked_identities(self):
@@ -256,9 +373,23 @@ class ProcessTreeTracker:
     def mark_scan_unavailable(self):
         self.scan_complete = False
         self.adoption_open = False
+        self.current = {}
 
     def observe(self, rows):
-        rows = tuple(rows)
+        snapshot_value = rows
+        if isinstance(snapshot_value, ProcessSnapshot):
+            rows = snapshot_value.identities
+            tracked_pids = {
+                identity.pid for identity in self.tracked.values()
+            }
+            if (
+                not snapshot_value.complete
+                or snapshot_value.unreadable_pids.intersection(tracked_pids)
+            ):
+                self.scan_complete = False
+                self.adoption_open = False
+        else:
+            rows = tuple(rows)
         snapshot = {row.stable_key: row for row in rows}
         root_current = snapshot.get(self.root_identity.stable_key)
         if (
@@ -298,6 +429,15 @@ class ProcessTreeTracker:
                         active_parent_pids.add(identity.pid)
                         tracked_pids.add(identity.pid)
                         changed = True
+        else:
+            active_parent_pids = {identity.pid for identity in active.values()}
+            if any(
+                identity.ppid in active_parent_pids
+                and identity.stable_key not in self.tracked
+                and identity.pid not in tracked_pids
+                for identity in rows
+            ):
+                self.lineage_uncertain = True
         tracked_groups = {identity.pgid for identity in self.tracked.values()}
         active_groups = {identity.pgid for identity in active.values()}
         if any(
@@ -329,6 +469,7 @@ class ProcessTreeTracker:
             self.scan_complete
             and not self.current
             and not self.identity_reused
+            and not self.lineage_uncertain
         )
 
 
@@ -340,7 +481,12 @@ class ObservedProcessResult:
 
 
 def _root_process_tracker(pid, deadline):
-    rows = _process_table(_bounded_timeout(deadline, PROCESS_TREE_SCAN_TIMEOUT_SECONDS))
+    rows = _process_table(
+        _bounded_timeout(deadline, PROCESS_TREE_SCAN_TIMEOUT_SECONDS),
+        relevant_pids={pid},
+    )
+    if isinstance(rows, ProcessSnapshot) and not rows.complete:
+        raise IntegrationWorkflowFailure
     roots = [row for row in rows if row.pid == pid]
     if len(roots) != 1:
         raise IntegrationWorkflowFailure
@@ -351,8 +497,15 @@ def _root_process_tracker(pid, deadline):
 
 def _refresh_process_tracker(tracker, deadline):
     try:
-        rows = _process_table(_bounded_timeout(deadline, PROCESS_TREE_SCAN_TIMEOUT_SECONDS))
+        rows = _process_table(
+            _bounded_timeout(deadline, PROCESS_TREE_SCAN_TIMEOUT_SECONDS),
+            relevant_pids={
+                identity.pid for identity in tracker.tracked.values()
+            },
+        )
         tracker.observe(rows)
+        if isinstance(rows, ProcessSnapshot) and not rows.complete:
+            raise IntegrationWorkflowFailure
     except IntegrationWorkflowFailure:
         tracker.mark_scan_unavailable()
         raise
@@ -360,8 +513,11 @@ def _refresh_process_tracker(tracker, deadline):
 
 def _descendant_process_groups(root_pid, *, deadline):
     rows = _process_table(
-        _bounded_timeout(deadline, PROCESS_TREE_SCAN_TIMEOUT_SECONDS)
+        _bounded_timeout(deadline, PROCESS_TREE_SCAN_TIMEOUT_SECONDS),
+        relevant_pids={root_pid},
     )
+    if isinstance(rows, ProcessSnapshot) and not rows.complete:
+        raise IntegrationWorkflowFailure
     roots = [row for row in rows if row.pid == root_pid]
     if len(roots) != 1:
         return set()
@@ -399,10 +555,15 @@ def _terminate_process_tree(process, tracker, *, deadline):
     if not isinstance(tracker, ProcessTreeTracker):
         return False
 
-    def refresh():
+    def refresh(relevant_pids=None):
         try:
+            if relevant_pids is None:
+                relevant_pids = {
+                    identity.pid for identity in tracker.tracked.values()
+                }
             rows = _process_table(
-                _bounded_timeout(deadline, PROCESS_TREE_SCAN_TIMEOUT_SECONDS)
+                _bounded_timeout(deadline, PROCESS_TREE_SCAN_TIMEOUT_SECONDS),
+                relevant_pids=relevant_pids,
             )
             tracker.observe(rows)
             return True
@@ -413,7 +574,15 @@ def _terminate_process_tree(process, tracker, *, deadline):
     def signal_current_groups(signal_number):
         signal_ok = True
         for pgid in sorted(tracker.signalable_groups(), reverse=True):
-            if not refresh() or pgid not in tracker.signalable_groups():
+            relevant_pids = {
+                identity.pid
+                for identity in tracker.tracked.values()
+                if identity.pgid == pgid
+            }
+            if (
+                not refresh_until(deadline, relevant_pids=relevant_pids)
+                or pgid not in tracker.signalable_groups()
+            ):
                 return False
             try:
                 os.killpg(pgid, signal_number)
@@ -426,7 +595,16 @@ def _terminate_process_tree(process, tracker, *, deadline):
     def verified_absent():
         return process.poll() is not None and tracker.cleanup_verified()
 
-    if not refresh():
+    def refresh_until(refresh_deadline, *, relevant_pids=None):
+        while time.monotonic() < refresh_deadline:
+            if refresh(relevant_pids):
+                return True
+            time.sleep(
+                min(0.01, max(0.0, refresh_deadline - time.monotonic()))
+            )
+        return False
+
+    if not refresh_until(deadline):
         return False
     if verified_absent():
         return True
@@ -442,13 +620,12 @@ def _terminate_process_tree(process, tracker, *, deadline):
         + min(PROCESS_TERMINATION_GRACE_SECONDS, max(0.0, remaining / 3)),
     )
     while time.monotonic() < term_deadline:
-        if not refresh():
-            return False
-        if verified_absent():
+        refreshed = refresh()
+        if refreshed and verified_absent():
             return True
         time.sleep(min(0.02, max(0.0, term_deadline - time.monotonic())))
 
-    if not refresh():
+    if not refresh_until(deadline):
         return False
     if verified_absent():
         return True
@@ -463,9 +640,8 @@ def _terminate_process_tree(process, tracker, *, deadline):
             return False
 
     while time.monotonic() < deadline:
-        if not refresh():
-            return False
-        if verified_absent():
+        refreshed = refresh()
+        if refreshed and verified_absent():
             return True
         time.sleep(min(0.02, max(0.0, deadline - time.monotonic())))
     return False
@@ -847,6 +1023,44 @@ class DiskImageKeychainHelperTests(unittest.TestCase):
             },
         )
         self.assertFalse(observation["home_present"])
+
+    def test_real_spawn_child_continuous_output_obeys_the_hard_deadline(self):
+        started = time.monotonic()
+        completed = subprocess.run(
+            [str(self.binary), "--deadline-drain-probe"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=COMMAND_TIMEOUT_SECONDS,
+            env={"PATH": os.environ.get("PATH", "/usr/bin:/bin")},
+        )
+        elapsed = time.monotonic() - started
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(completed.stderr, "")
+        self.assertEqual(completed.stdout.count("\n"), 1)
+        observation = json.loads(completed.stdout)
+        self.assertEqual(observation["code"], "PROCESS_TIMEOUT")
+        self.assertLessEqual(
+            elapsed,
+            observation["hard_budget_seconds"]
+            + observation["scheduler_tolerance_seconds"],
+        )
+        self.assertTrue(observation["direct_child_reaped"])
+        self.assertTrue(observation["process_group_gone"])
+        self.assertLessEqual(
+            observation["captured_output_count"],
+            observation["output_limit"],
+        )
+        self.assertTrue(observation["secret_buffer_zeroed"])
+        child_pid = observation["child_pid"]
+        with self.assertRaises(ProcessLookupError):
+            os.kill(child_pid, 0)
+        self.assertFalse(
+            _process_group_exists(
+                child_pid,
+                deadline=time.monotonic() + PROCESS_TREE_SCAN_TIMEOUT_SECONDS,
+            )
+        )
 
     def test_create_adds_only_the_exact_keychain_schema(self):
         _, observation = self.run_helper("create", expected_encryption_uuid=None)
@@ -1371,17 +1585,27 @@ class DiskImageKeychainHelperTests(unittest.TestCase):
         compensation_calls = [
             call for call in calls if call.get("deadline_phase") == "compensation"
         ]
-        self.assertTrue(compensation_calls)
-        compensation_deadline = compensation_calls[0]["absolute_deadline"]
-        self.assertGreater(compensation_deadline, normal_deadline)
-        self.assertTrue(
-            all(call["absolute_deadline"] == compensation_deadline for call in compensation_calls)
+        self.assertEqual(
+            [call["argv"][1] for call in compensation_calls],
+            ["detach", "info"],
         )
-        detach = [
-            call for call in compensation_calls if call["argv"][1] == "detach"
-        ]
-        self.assertEqual(len(detach), 1)
-        self.assertGreater(detach[0]["remaining_budget_before"], 0)
+        detach, absence = compensation_calls
+        self.assertGreater(detach["absolute_deadline"], normal_deadline)
+        self.assertLess(
+            detach["absolute_deadline"], absence["absolute_deadline"]
+        )
+        self.assertGreater(detach["remaining_budget_before"], 0)
+        self.assertGreater(absence["remaining_budget_before"], 0)
+        self.assertTrue(detach["spawned"])
+        self.assertTrue(absence["spawned"])
+        self.assertEqual(
+            detach["hard_deadline"] - detach["work_deadline"],
+            detach["termination_budget"],
+        )
+        self.assertEqual(
+            absence["hard_deadline"] - absence["work_deadline"],
+            absence["termination_budget"],
+        )
 
     def test_child_hard_deadline_contains_full_termination_budget(self):
         completed, observation = self.run_helper(
@@ -1417,15 +1641,25 @@ class DiskImageKeychainHelperTests(unittest.TestCase):
         self.assertTrue(normal)
         self.assertEqual(compensation[0]["argv"][1], "detach")
         normal_hard_deadline = normal[0]["hard_deadline"]
-        final_deadline = compensation[0]["hard_deadline"]
+        detach_hard_deadline = compensation[0]["hard_deadline"]
+        final_deadline = compensation[-1]["hard_deadline"]
         self.assertEqual(
             final_deadline - normal_hard_deadline,
             observation["mount_compensation_budget"],
         )
         self.assertEqual(compensation[0]["started_at"], normal_hard_deadline)
         self.assertTrue(all(call["hard_deadline"] == normal_hard_deadline for call in normal))
-        self.assertTrue(all(call["hard_deadline"] == final_deadline for call in compensation))
-        self.assertLessEqual(compensation[-1]["finished_at"], final_deadline)
+        self.assertLess(detach_hard_deadline, final_deadline)
+        self.assertEqual(
+            [call["hard_deadline"] for call in compensation],
+            [detach_hard_deadline, final_deadline],
+        )
+        self.assertTrue(
+            all(
+                call["finished_at"] <= call["hard_deadline"]
+                for call in compensation
+            )
+        )
 
     def test_required_compensation_child_is_not_spawned_without_cleanup_time(self):
         completed, observation = self.run_helper(
@@ -1619,15 +1853,123 @@ elif sys.argv[2] == "stderr-cap":
     os.write(2, b"B" * 1_048_577)
     raise SystemExit(0)
 elif sys.argv[2] == "compensate":
-    time.sleep(0.6)
-    os.killpg(child.pid, signal.SIGKILL)
-    child.wait()
+    time.sleep(0.45)
     receipt["compensated"] = True
     record.write_text(json.dumps(receipt))
 else:
     time.sleep(30)
 """
         return [str(PYTHON), "-c", parent_source, str(record_path), mode, child_source]
+
+    @staticmethod
+    def _fake_proc_libc(pid, copy_results, identity, *, short_uid=None):
+        copy_results = iter(copy_results)
+
+        class FakeProcBSDShortInfo(ctypes.Structure):
+            _fields_ = [
+                ("pbsi_pid", ctypes.c_uint32),
+                ("pbsi_ppid", ctypes.c_uint32),
+                ("pbsi_pgid", ctypes.c_uint32),
+                ("pbsi_status", ctypes.c_uint32),
+                ("pbsi_comm", ctypes.c_char * 16),
+                ("pbsi_flags", ctypes.c_uint32),
+                ("pbsi_uid", ctypes.c_uint32),
+                ("pbsi_gid", ctypes.c_uint32),
+                ("pbsi_ruid", ctypes.c_uint32),
+                ("pbsi_rgid", ctypes.c_uint32),
+                ("pbsi_svuid", ctypes.c_uint32),
+                ("pbsi_svgid", ctypes.c_uint32),
+                ("pbsi_rfu", ctypes.c_uint32),
+            ]
+
+        class FakeFunction:
+            def __init__(self, implementation):
+                self.implementation = implementation
+                self.argtypes = None
+                self.restype = None
+
+            def __call__(self, *args):
+                return self.implementation(*args)
+
+        def list_all(storage, _size):
+            if storage is None:
+                return 1
+            storage[0] = pid
+            return 1
+
+        def pid_info(_pid, flavor, _arg, storage, _size):
+            if flavor == 13:
+                if short_uid is None:
+                    return 0
+                target = ctypes.cast(
+                    storage, ctypes.POINTER(FakeProcBSDShortInfo)
+                ).contents
+                target.pbsi_pid = identity.pid
+                target.pbsi_ppid = identity.ppid
+                target.pbsi_pgid = identity.pgid
+                target.pbsi_uid = short_uid
+                return ctypes.sizeof(FakeProcBSDShortInfo)
+            copied = next(copy_results)
+            if copied == ctypes.sizeof(_ProcBSDInfo):
+                target = ctypes.cast(
+                    storage, ctypes.POINTER(_ProcBSDInfo)
+                ).contents
+                target.pbi_pid = identity.pid
+                target.pbi_ppid = identity.ppid
+                target.pbi_pgid = identity.pgid
+                target.pbi_start_tvsec = identity.start_seconds
+                target.pbi_start_tvusec = identity.start_microseconds
+            return copied
+
+        class FakeLibC:
+            proc_listallpids = FakeFunction(list_all)
+            proc_pidinfo = FakeFunction(pid_info)
+
+        return FakeLibC()
+
+    @staticmethod
+    def _configured_live_effects(root, *, cleanup_approved=True):
+        root = Path(root)
+        image_path = root / "CORTEX_TEST.sparsebundle"
+        mount_path = root / "CORTEX_TEST_MOUNT"
+        quarantine_path = root / "CORTEX_TEST.sparsebundle.quarantine"
+        image_path.mkdir()
+        mount_path.mkdir()
+        helper = root / "disk-image-keychain"
+        helper.touch()
+        effects = object.__new__(LiveIntegrationEffects)
+        effects.capability = LiveCapability(
+            _LIVE_CAPABILITY_SEAL, cleanup_approved
+        )
+        effects.observer = None
+        effects.observer_baseline = None
+        effects.private_root = root
+        effects.root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+        effects.plan = LiveIntegrationPlan(
+            image_path=image_path,
+            mount_path=mount_path,
+            quarantine_path=quarantine_path,
+            transaction_id="12345678-1234-4234-8234-123456789abc",
+            size="64m",
+            filesystem="APFS",
+            volume_name="CORTEX_BRIDGE_SPIKE",
+        )
+        effects.image_path = image_path
+        effects.mount_path = mount_path
+        effects.quarantine_path = quarantine_path
+        effects.transaction_id = effects.plan.transaction_id
+        effects.helper = helper
+        effects.image_identity = None
+        effects.image_fd = None
+        effects.image_name = image_path.name
+        effects.image_quarantined = False
+        effects.preserve_image_and_item = False
+        effects.encryption_uuid = None
+        effects.mounted_device = None
+        effects.invocation_counter = 0
+        effects.terminal_observation_error = None
+        effects.disposition_active = False
+        return effects
 
     def _assert_tree_gone_and_cleanup_if_needed(self, record_path):
         deadline = time.monotonic() + 2
@@ -1743,6 +2085,211 @@ else:
                 if trigger == "observation":
                     self.assertTrue(receipt["compensated"])
 
+    def test_preobservation_writes_zero_bytes_for_every_ordinary_helper_operation(self):
+        class RecordingStream:
+            def __init__(self):
+                self.chunks = []
+                self.closed = False
+
+            def write(self, value):
+                encoded = value.encode("utf-8") if isinstance(value, str) else value
+                self.chunks.append(encoded)
+                return len(value)
+
+            def flush(self):
+                return None
+
+            def close(self):
+                self.closed = True
+
+        encryption_uuid = "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE"
+        for operation in (
+            "create",
+            "mount",
+            "inspect-item",
+            "delete-disposable-item",
+        ):
+            with self.subTest(operation=operation):
+                response = {
+                    "schema_version": 1,
+                    "operation": operation,
+                    "code": "OK",
+                    "encryption_uuid": encryption_uuid,
+                    "device": "/dev/disk99" if operation == "mount" else None,
+                    "item_count": 1,
+                }
+                stdin = RecordingStream()
+                process = mock.Mock(pid=4510)
+                process.stdin = stdin
+                process.stdout = RecordingStream()
+                process.stderr = RecordingStream()
+                process.returncode = 0
+                process.poll.return_value = 0
+
+                def communicate(*, input=None, timeout=None):
+                    del timeout
+                    if input is not None:
+                        stdin.write(input)
+                    return json.dumps(response) + "\n", ""
+
+                process.communicate.side_effect = communicate
+                root = ProcessIdentity(process.pid, 1, process.pid, 10, 1)
+                tracker = ProcessTreeTracker(root)
+                tracker.observe(())
+                effects = object.__new__(LiveIntegrationEffects)
+                effects.capability = LiveCapability(_LIVE_CAPABILITY_SEAL, True)
+                effects.helper = Path("/private/tmp/fake-helper")
+                effects.image_path = Path("/private/tmp/CORTEX_TEST.sparsebundle")
+                effects.mount_path = Path("/private/tmp/CORTEX_TEST_MOUNT")
+                effects.invocation_counter = 0
+                effects.preserve_image_and_item = False
+                effects.encryption_uuid = None
+                effects.mounted_device = None
+                effects.terminal_observation_error = None
+                effects.disposition_active = False
+                effects.observer = FakeSecurityAgentObserver(
+                    [(frozenset({"process:new-securityagent"}), frozenset())]
+                )
+                effects.observer_baseline = (frozenset(), frozenset())
+                effects._capture_image_identity = mock.Mock()
+
+                with mock.patch(
+                    "subprocess.Popen", return_value=process
+                ), mock.patch(
+                    f"{__name__}._root_process_tracker", return_value=tracker
+                ), mock.patch(
+                    f"{__name__}._refresh_process_tracker", return_value=None
+                ), mock.patch(
+                    f"{__name__}._terminate_process_tree", return_value=True
+                ) as cleanup:
+                    with self.assertRaises(SecurityAgentDetected):
+                        effects.invoke_helper(operation, {"operation": operation})
+
+                self.assertEqual(b"".join(stdin.chunks), b"")
+                cleanup.assert_called_once()
+
+    def test_latched_terminal_observation_blocks_new_ordinary_processes_before_spawn(self):
+        class CloseSpy:
+            def __init__(self):
+                self.closed = False
+
+            def close(self):
+                self.closed = True
+
+        effects = object.__new__(LiveIntegrationEffects)
+        effects.capability = LiveCapability(_LIVE_CAPABILITY_SEAL, False)
+        terminal = ObservationUnavailable()
+        effects.terminal_observation_error = terminal
+        effects.disposition_active = False
+        effects.observer = None
+        effects.observer_baseline = None
+        process = mock.Mock(pid=4515)
+        process.stdin = CloseSpy()
+        process.stdout = CloseSpy()
+        process.stderr = CloseSpy()
+        process.communicate.return_value = ("", "")
+        process.returncode = 0
+        process.poll.return_value = 0
+        root = ProcessIdentity(process.pid, 1, process.pid, 10, 1)
+        tracker = ProcessTreeTracker(root)
+        tracker.observe(())
+        with mock.patch(
+            "subprocess.Popen", return_value=process
+        ) as spawn, mock.patch(
+            f"{__name__}._root_process_tracker", return_value=tracker
+        ), mock.patch(
+            f"{__name__}._refresh_process_tracker", return_value=None
+        ), mock.patch(
+            f"{__name__}._terminate_process_tree", return_value=True
+        ):
+            with self.assertRaises(ObservationUnavailable):
+                effects._run(["fake-compiler"], timeout=1)
+        spawn.assert_not_called()
+
+    def test_terminal_disposition_can_send_only_the_recorded_detach_request(self):
+        class RecordingStream:
+            def __init__(self):
+                self.chunks = []
+                self.closed = False
+
+            def write(self, value):
+                encoded = value.encode("utf-8") if isinstance(value, str) else value
+                self.chunks.append(encoded)
+                return len(value)
+
+            def flush(self):
+                return None
+
+            def close(self):
+                self.closed = True
+
+        encryption_uuid = "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE"
+        response = {
+            "schema_version": 1,
+            "operation": "detach",
+            "code": "OK",
+            "encryption_uuid": encryption_uuid,
+            "device": "/dev/disk99",
+            "item_count": None,
+        }
+        stdin = RecordingStream()
+        process = mock.Mock(pid=4520)
+        process.stdin = stdin
+        process.stdout = RecordingStream()
+        process.stderr = RecordingStream()
+        process.returncode = 0
+        process.poll.return_value = 0
+
+        def communicate(*, input=None, timeout=None):
+            del timeout
+            if input is not None:
+                stdin.write(input)
+            return json.dumps(response) + "\n", ""
+
+        process.communicate.side_effect = communicate
+        root = ProcessIdentity(process.pid, 1, process.pid, 10, 1)
+        tracker = ProcessTreeTracker(root)
+        tracker.observe(())
+        effects = object.__new__(LiveIntegrationEffects)
+        effects.capability = LiveCapability(_LIVE_CAPABILITY_SEAL, True)
+        effects.helper = Path("/private/tmp/fake-helper")
+        effects.image_path = Path("/private/tmp/CORTEX_TEST.sparsebundle")
+        effects.mount_path = Path("/private/tmp/CORTEX_TEST_MOUNT")
+        effects.invocation_counter = 0
+        effects.preserve_image_and_item = False
+        effects.encryption_uuid = encryption_uuid
+        effects.mounted_device = "/dev/disk99"
+        effects.terminal_observation_error = SecurityAgentDetected()
+        effects.disposition_active = True
+        effects.observer = None
+        effects.observer_baseline = None
+
+        with mock.patch(
+            "subprocess.Popen", return_value=process
+        ), mock.patch(
+            f"{__name__}._root_process_tracker", return_value=tracker
+        ), mock.patch(
+            f"{__name__}._refresh_process_tracker", return_value=None
+        ), mock.patch(
+            f"{__name__}._terminate_process_tree", return_value=True
+        ):
+            detached, _ = effects.invoke_helper(
+                "detach",
+                {
+                    "operation": "detach",
+                    "expected_encryption_uuid": encryption_uuid,
+                },
+            )
+
+        wire = b"".join(stdin.chunks)
+        self.assertGreater(len(wire), 0)
+        self.assertEqual(json.loads(wire), {
+            "operation": "detach",
+            "expected_encryption_uuid": encryption_uuid,
+        })
+        self.assertEqual(detached["device"], "/dev/disk99")
+        self.assertIsNone(effects.mounted_device)
+
     def test_process_tree_termination_fails_closed_when_descendant_scan_is_unavailable(self):
         root = ProcessIdentity(999_999, 1, 999_999, 10, 1)
         tracker = ProcessTreeTracker(root)
@@ -1794,6 +2341,127 @@ else:
         reused_group = ProcessIdentity(300, 1, 200, 30, 1)
         tracker.observe((reused_group,))
         self.assertEqual(tracker.signalable_descendant_groups(), set())
+
+    def test_short_process_metadata_copy_makes_snapshot_and_cleanup_incomplete(self):
+        root = ProcessIdentity(4100, 1, 4100, 10, 1)
+        short_copy = ctypes.sizeof(_ProcBSDInfo) - 1
+        with mock.patch(
+            "ctypes.CDLL",
+            return_value=self._fake_proc_libc(
+                root.pid, [short_copy], root
+            ),
+        ), mock.patch("os.kill") as pid_probe:
+            snapshot = _process_table(timeout=1)
+
+        self.assertIs(getattr(snapshot, "complete", None), False)
+        pid_probe.assert_called_once_with(root.pid, 0)
+        tracker = ProcessTreeTracker(root)
+        tracker.observe(snapshot)
+        self.assertEqual(tracker.signalable_groups(), set())
+        self.assertFalse(tracker.cleanup_verified())
+
+    def test_zero_process_metadata_for_live_pid_is_incomplete_after_recheck(self):
+        root = ProcessIdentity(4200, 1, 4200, 10, 1)
+        with mock.patch(
+            "ctypes.CDLL",
+            return_value=self._fake_proc_libc(root.pid, [0, 0], root),
+        ), mock.patch("os.kill", return_value=None) as pid_probe:
+            snapshot = _process_table(timeout=1)
+
+        self.assertIs(getattr(snapshot, "complete", None), False)
+        self.assertIn(root.pid, getattr(snapshot, "unreadable_pids", ()))
+        pid_probe.assert_called_once_with(root.pid, 0)
+        tracker = ProcessTreeTracker(root)
+        tracker.observe(snapshot)
+        self.assertEqual(tracker.signalable_groups(), set())
+        self.assertFalse(tracker.cleanup_verified())
+
+    def test_untracked_same_uid_metadata_gap_makes_owned_snapshot_incomplete(self):
+        unknown = ProcessIdentity(4250, 1, 4250, 10, 1)
+        with mock.patch(
+            "ctypes.CDLL",
+            return_value=self._fake_proc_libc(
+                unknown.pid, [0, 0], unknown, short_uid=os.getuid()
+            ),
+        ), mock.patch("os.kill", return_value=None) as pid_probe:
+            snapshot = _process_table(timeout=1, relevant_pids={999_999})
+
+        self.assertFalse(snapshot.complete)
+        self.assertIn(unknown.pid, snapshot.unreadable_pids)
+        pid_probe.assert_called_once_with(unknown.pid, 0)
+
+    def test_unreadable_other_uid_pid_does_not_poison_owned_snapshot(self):
+        foreign = ProcessIdentity(4260, 1, 4260, 10, 1)
+        with mock.patch(
+            "ctypes.CDLL",
+            return_value=self._fake_proc_libc(
+                foreign.pid, [0, 0], foreign, short_uid=os.getuid() + 1
+            ),
+        ), mock.patch("os.kill", side_effect=PermissionError) as pid_probe:
+            snapshot = _process_table(timeout=1, relevant_pids={999_999})
+
+        self.assertTrue(snapshot.complete)
+        self.assertNotIn(foreign.pid, snapshot.unreadable_pids)
+        pid_probe.assert_called_once_with(foreign.pid, 0)
+
+    def test_unreadable_same_uid_metadata_gap_makes_snapshot_incomplete(self):
+        unknown = ProcessIdentity(4265, 1, 4265, 10, 1)
+        with mock.patch(
+            "ctypes.CDLL",
+            return_value=self._fake_proc_libc(
+                unknown.pid, [0], unknown, short_uid=os.getuid()
+            ),
+        ), mock.patch("os.kill", side_effect=PermissionError) as pid_probe:
+            snapshot = _process_table(timeout=1, relevant_pids={999_999})
+
+        self.assertFalse(snapshot.complete)
+        self.assertIn(unknown.pid, snapshot.unreadable_pids)
+        pid_probe.assert_called_once_with(unknown.pid, 0)
+
+    def test_live_foreign_uid_metadata_gap_does_not_poison_owned_snapshot(self):
+        foreign = ProcessIdentity(4270, 1, 4270, 10, 1)
+        with mock.patch(
+            "ctypes.CDLL",
+            return_value=self._fake_proc_libc(
+                foreign.pid, [0, 0], foreign, short_uid=os.getuid() + 1
+            ),
+        ), mock.patch("os.kill", return_value=None) as pid_probe:
+            snapshot = _process_table(timeout=1, relevant_pids={999_999})
+
+        self.assertTrue(snapshot.complete)
+        self.assertNotIn(foreign.pid, snapshot.unreadable_pids)
+        pid_probe.assert_called_once_with(foreign.pid, 0)
+
+    def test_zero_process_metadata_for_vanished_pid_is_complete_after_recheck(self):
+        vanished = ProcessIdentity(4300, 1, 4300, 10, 1)
+        with mock.patch(
+            "ctypes.CDLL",
+            return_value=self._fake_proc_libc(vanished.pid, [0, 0], vanished),
+        ), mock.patch(
+            "os.kill", side_effect=ProcessLookupError
+        ) as pid_probe:
+            snapshot = _process_table(timeout=1)
+
+        self.assertIs(getattr(snapshot, "complete", None), True)
+        self.assertEqual(tuple(snapshot), ())
+        self.assertIn(vanished.pid, getattr(snapshot, "vanished_pids", ()))
+        pid_probe.assert_called_once_with(vanished.pid, 0)
+
+    def test_zero_process_metadata_recheck_recovers_a_still_readable_identity(self):
+        root = ProcessIdentity(4400, 1, 4400, 10, 1)
+        with mock.patch(
+            "ctypes.CDLL",
+            return_value=self._fake_proc_libc(
+                root.pid,
+                [0, ctypes.sizeof(_ProcBSDInfo)],
+                root,
+            ),
+        ), mock.patch("os.kill") as pid_probe:
+            snapshot = _process_table(timeout=1)
+
+        self.assertIs(getattr(snapshot, "complete", None), True)
+        self.assertEqual(tuple(snapshot), (root,))
+        pid_probe.assert_called_once_with(root.pid, 0)
 
     def test_process_tracker_does_not_traverse_through_reused_historical_child_pid(self):
         root = ProcessIdentity(100, 1, 100, 10, 1)
@@ -1874,6 +2542,38 @@ else:
         tracker.mark_scan_unavailable()
         self.assertFalse(tracker.scan_complete)
 
+    def test_child_seen_after_adoption_closes_is_never_adopted_or_signaled(self):
+        root = ProcessIdentity(100, 1, 100, 10, 1)
+        child = ProcessIdentity(200, 100, 200, 20, 1)
+        late = ProcessIdentity(300, 200, 300, 30, 1)
+        tracker = ProcessTreeTracker(root)
+        tracker.observe((root, child))
+        tracker.observe((child,))
+        tracker.observe((child, late))
+
+        self.assertNotIn(late.stable_key, tracker.tracked_identities)
+        self.assertTrue(getattr(tracker, "lineage_uncertain", False))
+        self.assertFalse(tracker.cleanup_verified())
+
+        scans = iter(((child, late), (child, late), ()))
+        process = mock.Mock(pid=root.pid)
+        process.poll.return_value = 0
+        process.wait.return_value = 0
+        with mock.patch(
+            f"{__name__}._process_table",
+            side_effect=lambda *_args, **_kwargs: next(scans, ()),
+        ), mock.patch("os.killpg") as signal_group:
+            cleanup_ok = _terminate_process_tree(
+                process,
+                tracker,
+                deadline=time.monotonic() + 0.1,
+            )
+
+        self.assertFalse(cleanup_ok)
+        self.assertFalse(
+            any(call.args[0] == late.pgid for call in signal_group.call_args_list)
+        )
+
     def test_every_communicate_call_has_an_explicit_timeout(self):
         tree = ast.parse(Path(__file__).read_text())
         calls = [
@@ -1896,7 +2596,7 @@ else:
             with mock.patch(
                 f"{__name__}._require_live_capability", return_value=None
             ):
-                with self.assertRaises(IntegrationWorkflowFailure):
+                with self.assertRaises(ObservationUnavailable):
                     observer._run(
                         self._harmless_process_tree_command(record, "exit"),
                         timeout=0.8,
@@ -1912,7 +2612,7 @@ else:
                 with mock.patch(
                     f"{__name__}._require_live_capability", return_value=None
                 ):
-                    with self.assertRaises(IntegrationWorkflowFailure):
+                    with self.assertRaises(ObservationUnavailable):
                         observer._run(
                             self._harmless_process_tree_command(record, mode),
                             timeout=0.8,
@@ -1949,7 +2649,7 @@ else:
                             b'{"ok":true}\n',
                         )
                     else:
-                        with self.assertRaises(IntegrationWorkflowFailure):
+                        with self.assertRaises(ObservationUnavailable):
                             observer._run(["fake-observer"], timeout=1)
                 cleanup.assert_called_once()
 
@@ -1972,10 +2672,150 @@ else:
         ), mock.patch(
             f"{__name__}._terminate_process_tree", return_value=False
         ) as cleanup:
-            with self.assertRaises(IntegrationWorkflowFailure):
+            with self.assertRaises(ObservationUnavailable):
                 observer._run(["fake-observer"], timeout=1)
         cleanup.assert_called_once()
         self.assertIn("deadline", cleanup.call_args.kwargs)
+
+    def test_observer_run_normalizes_failures_and_closes_every_pipe(self):
+        class CloseSpy:
+            def __init__(self):
+                self.closed = False
+
+            def close(self):
+                self.closed = True
+
+        root = ProcessIdentity(4545, 1, 4545, 10, 1)
+        for scenario in (
+            "tracker-init",
+            "termination",
+            "nonzero",
+            "stdout-cap",
+            "timeout",
+            "partial-scan",
+        ):
+            with self.subTest(scenario=scenario):
+                process = mock.Mock(pid=root.pid)
+                process.stdin = CloseSpy()
+                process.stdout = CloseSpy()
+                process.stderr = CloseSpy()
+                process.returncode = 0
+                process.poll.return_value = 0
+                process.wait.return_value = 0
+                process.communicate.return_value = (b'{"ok":true}\n', b"")
+                tracker = ProcessTreeTracker(root)
+                tracker.observe(())
+                root_tracker_effect = None
+                refresh_effect = None
+                terminate_effect = None
+                bounded_effect = None
+                if scenario == "tracker-init":
+                    root_tracker_effect = RuntimeError("tracker init exploded")
+                elif scenario == "termination":
+                    terminate_effect = RuntimeError("termination exploded")
+                elif scenario == "nonzero":
+                    process.returncode = 7
+                elif scenario == "stdout-cap":
+                    process.communicate.return_value = (b"A" * 1_048_577, b"")
+                elif scenario == "timeout":
+                    process.communicate.side_effect = subprocess.TimeoutExpired(
+                        ["fake-observer"], 0.01
+                    )
+                    bounded_effect = [0.01, IntegrationWorkflowFailure()]
+                elif scenario == "partial-scan":
+                    refresh_effect = IntegrationWorkflowFailure()
+
+                now = time.monotonic()
+                plan = HelperDeadlinePlan(
+                    execution_deadline=now + 1,
+                    post_monitor_deadline=now + 2,
+                    cleanup_deadline=now + 3,
+                    hard_deadline=now + 4,
+                )
+                observer = object.__new__(LiveSecurityAgentObserver)
+                observer.capability = None
+                with mock.patch(
+                    f"{__name__}._require_live_capability", return_value=None
+                ), mock.patch(
+                    f"{__name__}._process_deadline_plan", return_value=plan
+                ), mock.patch(
+                    "subprocess.Popen", return_value=process
+                ), mock.patch(
+                    f"{__name__}._root_process_tracker",
+                    return_value=tracker,
+                    side_effect=root_tracker_effect,
+                ), mock.patch(
+                    f"{__name__}._refresh_process_tracker",
+                    return_value=None,
+                    side_effect=refresh_effect,
+                ), mock.patch(
+                    f"{__name__}._terminate_process_tree",
+                    return_value=True,
+                    side_effect=terminate_effect,
+                ) as cleanup:
+                    bounded_patch = (
+                        mock.patch(
+                            f"{__name__}._bounded_timeout",
+                            side_effect=bounded_effect,
+                        )
+                        if bounded_effect is not None
+                        else mock.patch(
+                            f"{__name__}._bounded_timeout", return_value=0.1
+                        )
+                    )
+                    with bounded_patch:
+                        try:
+                            observer._run(["fake-observer"], timeout=1)
+                        except Exception as error:
+                            observed_error = error
+                        else:
+                            self.fail("observer failure unexpectedly returned")
+                        self.assertIsInstance(
+                            observed_error, ObservationUnavailable
+                        )
+
+                cleanup.assert_called_once()
+                self.assertEqual(
+                    cleanup.call_args.kwargs["deadline"], plan.cleanup_deadline
+                )
+                self.assertLess(
+                    cleanup.call_args.kwargs["deadline"], plan.hard_deadline
+                )
+                self.assertTrue(process.stdin.closed)
+                self.assertTrue(process.stdout.closed)
+                self.assertTrue(process.stderr.closed)
+
+    def test_snapshot_and_bound_observation_normalize_unexpected_failures(self):
+        observer = object.__new__(LiveSecurityAgentObserver)
+        observer.capability = None
+        observer.binary = Path("/private/tmp/fake-observer")
+        observer._run = mock.Mock(side_effect=RuntimeError("observer failed"))
+        with mock.patch(
+            f"{__name__}._require_live_capability", return_value=None
+        ):
+            try:
+                observer.snapshot(timeout=1)
+            except Exception as error:
+                snapshot_error = error
+            else:
+                self.fail("snapshot failure unexpectedly returned")
+            self.assertIsInstance(snapshot_error, ObservationUnavailable)
+
+        effects = object.__new__(LiveIntegrationEffects)
+        effects.capability = None
+        effects.observer = mock.Mock()
+        effects.observer.snapshot.side_effect = RuntimeError("observer failed")
+        effects.observer_baseline = (frozenset(), frozenset())
+        with mock.patch(
+            f"{__name__}._require_live_capability", return_value=None
+        ):
+            try:
+                effects._observe_bound(1)
+            except Exception as error:
+                bound_error = error
+            else:
+                self.fail("bound observer failure unexpectedly returned")
+            self.assertIsInstance(bound_error, ObservationUnavailable)
 
     def test_fd_identity_substitution_and_concurrent_quarantine_target_fail_closed(self):
         effects = object.__new__(LiveIntegrationEffects)
@@ -2432,14 +3272,17 @@ else:
                 input_text=None,
                 timeout=COMMAND_TIMEOUT_SECONDS,
                 accepted_returncodes=(0,),
+                safety_only=False,
             ):
                 del timeout, accepted_returncodes
                 if argv[:2] == ["/usr/bin/xcrun", "swiftc"]:
+                    self.assertFalse(safety_only)
                     events.append("compile")
                     completed = subprocess.CompletedProcess(argv, 0, "", "")
                     return ObservedProcessResult(completed, None)
                 if argv == [str(helper)]:
                     operation = json.loads(input_text)["operation"]
+                    self.assertEqual(safety_only, operation == "detach")
                     events.append(f"helper:{operation}")
                     if operation == "create":
                         response = helper_response(operation, item_count=1)
@@ -2459,12 +3302,7 @@ else:
                     )
                     return ObservedProcessResult(completed, observation_error)
                 if argv == ["/usr/bin/hdiutil", "info", "-plist"]:
-                    events.append("plist:info")
-                    payload = plistlib.dumps({"images": []}).decode("utf-8")
-                    completed = subprocess.CompletedProcess(argv, 0, payload, "")
-                    return ObservedProcessResult(
-                        completed, SecurityAgentDetected()
-                    )
+                    self.fail("ordinary plist process ran after terminal observation")
                 self.fail(f"unexpected fake subprocess: {argv}")
 
             test_case = self
@@ -2512,7 +3350,6 @@ else:
                         "helper:create",
                         "helper:mount",
                         "helper:detach",
-                        "plist:info",
                         "rename:quarantine",
                     ],
                 )
@@ -2524,6 +3361,209 @@ else:
                     if isinstance(descriptor, int) and descriptor >= 0:
                         os.close(descriptor)
                         setattr(effects, descriptor_name, -1)
+
+    def test_real_disposition_handles_successful_and_nonzero_create_and_mount(self):
+        encryption_uuid = "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE"
+        cases = (
+            ("create", 0, "OK", encryption_uuid, None, SecurityAgentDetected),
+            ("create", 70, "HDIUTIL_FAILED", None, None, ObservationUnavailable),
+            ("mount", 0, "OK", encryption_uuid, "/dev/disk99", SecurityAgentDetected),
+            (
+                "mount",
+                70,
+                "HDIUTIL_FAILED",
+                None,
+                "/dev/disk99",
+                ObservationUnavailable,
+            ),
+        )
+        for (
+            operation,
+            returncode,
+            response_code,
+            response_uuid,
+            response_device,
+            terminal_type,
+        ) in cases:
+            with self.subTest(
+                operation=operation,
+                returncode=returncode,
+                terminal=terminal_type.__name__,
+            ), tempfile.TemporaryDirectory() as temporary_root:
+                effects = self._configured_live_effects(temporary_root)
+                events = []
+                origin_completed = False
+                terminal = terminal_type()
+                if operation == "mount":
+                    effects.encryption_uuid = encryption_uuid
+                    effects._capture_image_identity()
+
+                def helper_response(
+                    response_operation,
+                    *,
+                    code,
+                    uuid_value,
+                    device,
+                ):
+                    return {
+                        "schema_version": 1,
+                        "operation": response_operation,
+                        "code": code,
+                        "encryption_uuid": uuid_value,
+                        "device": device,
+                        "item_count": 1 if response_operation == "create" else None,
+                    }
+
+                def fake_run(
+                    argv,
+                    *,
+                    input_text=None,
+                    timeout=COMMAND_TIMEOUT_SECONDS,
+                    accepted_returncodes=(0,),
+                    safety_only=False,
+                ):
+                    nonlocal origin_completed
+                    del timeout, accepted_returncodes
+                    if argv != [str(effects.helper)]:
+                        self.fail(
+                            f"ordinary subprocess ran after terminal observation: {argv}"
+                        )
+                    request = json.loads(input_text)
+                    invoked_operation = request["operation"]
+                    events.append(f"helper:{invoked_operation}")
+                    if not origin_completed:
+                        self.assertEqual(invoked_operation, operation)
+                        self.assertFalse(safety_only)
+                        origin_completed = True
+                        response = helper_response(
+                            operation,
+                            code=response_code,
+                            uuid_value=response_uuid,
+                            device=response_device,
+                        )
+                        completed = subprocess.CompletedProcess(
+                            argv,
+                            returncode,
+                            json.dumps(response) + "\n",
+                            "",
+                        )
+                        return ObservedProcessResult(completed, terminal)
+                    self.assertEqual(invoked_operation, "detach")
+                    self.assertTrue(safety_only)
+                    response = helper_response(
+                        "detach",
+                        code="OK",
+                        uuid_value=encryption_uuid,
+                        device="/dev/disk99",
+                    )
+                    completed = subprocess.CompletedProcess(
+                        argv, 0, json.dumps(response) + "\n", ""
+                    )
+                    return ObservedProcessResult(completed, terminal)
+
+                test_case = self
+
+                class FakeRename:
+                    argtypes = None
+                    restype = None
+
+                    def __call__(
+                        self, source_fd, source, target_fd, target, flags
+                    ):
+                        test_case.assertEqual(flags, 0x00000004)
+                        events.append("rename:quarantine")
+                        os.rename(
+                            os.fsdecode(source),
+                            os.fsdecode(target),
+                            src_dir_fd=source_fd,
+                            dst_dir_fd=target_fd,
+                        )
+                        return 0
+
+                class FakeLibC:
+                    renameatx_np = FakeRename()
+
+                effects._run = fake_run
+                try:
+                    with self.assertRaises(terminal_type):
+                        effects.invoke_helper(
+                            operation,
+                            {
+                                "operation": operation,
+                                "expected_encryption_uuid": encryption_uuid,
+                            },
+                        )
+                    self.assertFalse(effects.preserve_image_and_item)
+                    disposition_uuid = (
+                        encryption_uuid
+                        if operation == "mount" or response_uuid is not None
+                        else None
+                    )
+                    with mock.patch("ctypes.CDLL", return_value=FakeLibC()):
+                        effects.dispose_after_failure(
+                            encryption_uuid=disposition_uuid,
+                            cleanup_approved=True,
+                        )
+
+                    expected_events = [f"helper:{operation}"]
+                    if operation == "mount":
+                        expected_events.append("helper:detach")
+                        self.assertIsNone(effects.mounted_device)
+                    expected_events.append("rename:quarantine")
+                    self.assertEqual(events, expected_events)
+                    self.assertFalse(effects.image_path.exists())
+                    self.assertTrue(effects.quarantine_path.is_dir())
+                    self.assertIs(effects.terminal_observation_error, terminal)
+                finally:
+                    for descriptor_name in ("image_fd", "root_fd"):
+                        descriptor = getattr(effects, descriptor_name, None)
+                        if isinstance(descriptor, int) and descriptor >= 0:
+                            os.close(descriptor)
+                            setattr(effects, descriptor_name, -1)
+
+    def test_real_terminal_disposition_keeps_verdict_when_quarantine_fails(self):
+        for terminal_type in (SecurityAgentDetected, ObservationUnavailable):
+            with self.subTest(
+                terminal=terminal_type.__name__
+            ), tempfile.TemporaryDirectory() as temporary_root:
+                effects = self._configured_live_effects(temporary_root)
+                terminal = terminal_type()
+                effects.terminal_observation_error = terminal
+                effects._capture_image_identity()
+                events = []
+
+                def no_ordinary_process(*_args, **_kwargs):
+                    self.fail("ordinary process ran after terminal observation")
+
+                class RejectedRename:
+                    argtypes = None
+                    restype = None
+
+                    def __call__(self, *_args):
+                        events.append("rename:rejected")
+                        return -1
+
+                class FakeLibC:
+                    renameatx_np = RejectedRename()
+
+                effects._run = no_ordinary_process
+                try:
+                    with mock.patch("ctypes.CDLL", return_value=FakeLibC()):
+                        with self.assertRaises(IntegrationWorkflowFailure):
+                            effects.dispose_after_failure(
+                                encryption_uuid=None,
+                                cleanup_approved=True,
+                            )
+                    self.assertEqual(events, ["rename:rejected"])
+                    self.assertTrue(effects.image_path.is_dir())
+                    self.assertFalse(effects.quarantine_path.exists())
+                    self.assertIs(effects.terminal_observation_error, terminal)
+                finally:
+                    for descriptor_name in ("image_fd", "root_fd"):
+                        descriptor = getattr(effects, descriptor_name, None)
+                        if isinstance(descriptor, int) and descriptor >= 0:
+                            os.close(descriptor)
+                            setattr(effects, descriptor_name, -1)
 
     def test_nonzero_helper_response_latches_terminal_observation_before_error(self):
         for observation_error in (
@@ -2566,6 +3606,95 @@ else:
                 self.assertIs(
                     effects.terminal_observation_error, observation_error
                 )
+
+    def test_completed_nonzero_create_and_mount_keep_reconcilable_state(self):
+        encryption_uuid = "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE"
+        for operation, device in (
+            ("create", None),
+            ("mount", "/dev/disk99"),
+        ):
+            with self.subTest(operation=operation):
+                effects = object.__new__(LiveIntegrationEffects)
+                effects.capability = None
+                effects.invocation_counter = 0
+                effects.helper = Path("/private/tmp/fake-helper")
+                effects.image_path = Path("/private/tmp/CORTEX_TEST.sparsebundle")
+                effects.mount_path = Path("/private/tmp/CORTEX_TEST_MOUNT")
+                effects.preserve_image_and_item = False
+                effects.mounted_device = None
+                effects.encryption_uuid = None
+                effects.terminal_observation_error = None
+                effects.disposition_active = False
+                effects._capture_image_identity = mock.Mock()
+                response = {
+                    "schema_version": 1,
+                    "operation": operation,
+                    "code": "HDIUTIL_FAILED",
+                    "encryption_uuid": None,
+                    "device": device,
+                    "item_count": None,
+                }
+                completed = subprocess.CompletedProcess(
+                    ["helper"], 70, json.dumps(response) + "\n", ""
+                )
+                effects._run = mock.Mock(
+                    return_value=ObservedProcessResult(completed, None)
+                )
+                with mock.patch(
+                    f"{__name__}._require_live_capability", return_value=None
+                ):
+                    with self.assertRaises(IntegrationWorkflowFailure):
+                        effects.invoke_helper(operation, {"operation": operation})
+
+                self.assertFalse(effects.preserve_image_and_item)
+                if operation == "create":
+                    effects._capture_image_identity.assert_called_once_with()
+                    self.assertIsNone(effects.encryption_uuid)
+                else:
+                    effects._capture_image_identity.assert_not_called()
+                    self.assertEqual(effects.mounted_device, device)
+
+    def test_completed_create_response_is_stored_before_postmonitor_failure(self):
+        encryption_uuid = "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE"
+        effects = object.__new__(LiveIntegrationEffects)
+        effects.capability = None
+        effects.invocation_counter = 0
+        effects.helper = Path("/private/tmp/fake-helper")
+        effects.image_path = Path("/private/tmp/CORTEX_TEST.sparsebundle")
+        effects.mount_path = Path("/private/tmp/CORTEX_TEST_MOUNT")
+        effects.preserve_image_and_item = False
+        effects.mounted_device = None
+        effects.encryption_uuid = None
+        effects.terminal_observation_error = None
+        effects.disposition_active = False
+        effects._capture_image_identity = mock.Mock()
+        response = {
+            "schema_version": 1,
+            "operation": "create",
+            "code": "OK",
+            "encryption_uuid": encryption_uuid,
+            "device": None,
+            "item_count": 1,
+        }
+        completed = subprocess.CompletedProcess(
+            ["helper"], 0, json.dumps(response) + "\n", ""
+        )
+        effects._run = mock.Mock(
+            return_value=ObservedProcessResult(
+                completed,
+                None,
+                ObservationUnavailable(),
+            )
+        )
+        with mock.patch(
+            f"{__name__}._require_live_capability", return_value=None
+        ):
+            with self.assertRaises(ObservationUnavailable):
+                effects.invoke_helper("create", {"operation": "create"})
+
+        effects._capture_image_identity.assert_called_once_with()
+        self.assertEqual(effects.encryption_uuid, encryption_uuid)
+        self.assertFalse(effects.preserve_image_and_item)
 
     def test_observer_unavailable_during_workflow_is_terminal_unclear(self):
         class UnavailableDuringMountEffects(FakeLiveEffects):
@@ -2635,7 +3764,7 @@ else:
             }
         )
         effects.quarantine_exact_image = mock.Mock(
-            side_effect=lambda: events.append("quarantine")
+            side_effect=lambda **_kwargs: events.append("quarantine")
         )
         effects.delete_exact_image = mock.Mock(
             side_effect=lambda: events.append("delete-image")
@@ -2665,6 +3794,81 @@ else:
             cleanup_approved=True,
         )
         self.assertEqual(events, ["inspect-item", "quarantine"])
+
+    def test_disposition_quarantines_if_delete_completion_latches_securityagent(self):
+        encryption_uuid = "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE"
+        effects = object.__new__(LiveIntegrationEffects)
+        effects.capability = LiveCapability(_LIVE_CAPABILITY_SEAL, True)
+        effects.preserve_image_and_item = False
+        effects.mounted_device = None
+        effects.terminal_observation_error = None
+        effects.disposition_active = False
+        events = []
+        effects._image_entry_present = mock.Mock(return_value=True)
+        effects.request = mock.Mock(
+            side_effect=lambda operation, *_args, **_kwargs: {
+                "operation": operation
+            }
+        )
+        effects.quarantine_exact_image = mock.Mock(
+            side_effect=lambda **_kwargs: events.append("quarantine")
+        )
+        effects.delete_exact_image = mock.Mock(
+            side_effect=lambda: events.append("delete-image")
+        )
+
+        def invoke_helper(operation, request):
+            del request
+            events.append(operation)
+            if operation == "delete-disposable-item":
+                effects.terminal_observation_error = SecurityAgentDetected()
+            return (
+                {
+                    "schema_version": 1,
+                    "operation": operation,
+                    "code": "OK",
+                    "encryption_uuid": encryption_uuid,
+                    "device": None,
+                    "item_count": 1 if operation == "inspect-item" else 0,
+                },
+                f"helper-{operation}",
+            )
+
+        effects.invoke_helper = invoke_helper
+        effects.dispose_after_failure(
+            encryption_uuid=encryption_uuid,
+            cleanup_approved=True,
+        )
+        self.assertEqual(
+            events,
+            ["inspect-item", "delete-disposable-item", "quarantine"],
+        )
+
+    def test_image_delete_quarantines_if_reconciliation_latches_securityagent(self):
+        effects = object.__new__(LiveIntegrationEffects)
+        effects.capability = LiveCapability(_LIVE_CAPABILITY_SEAL, True)
+        effects.terminal_observation_error = None
+        effects.image_quarantined = False
+        effects.image_name = "image.sparsebundle"
+        effects.root_fd = 9
+
+        def reconcile_then_detect():
+            effects.terminal_observation_error = SecurityAgentDetected()
+
+        effects._require_reconciled_unmounted = mock.Mock(
+            side_effect=reconcile_then_detect
+        )
+        effects._require_exact_image = mock.Mock()
+        effects._image_entry_present = mock.Mock(return_value=False)
+        effects.quarantine_exact_image = mock.Mock()
+        with mock.patch("shutil.rmtree") as remove_tree:
+            effects.delete_exact_image()
+
+        effects.quarantine_exact_image.assert_called_once_with(
+            mapping_reconciled=True
+        )
+        effects._require_exact_image.assert_not_called()
+        remove_tree.assert_not_called()
 
 
 def parse_securityagent_snapshot(decoded):
@@ -2801,18 +4005,13 @@ FileHandle.standardOutput.write(data)
                 },
                 start_new_session=True,
             )
-        except OSError:
-            raise IntegrationWorkflowFailure from None
+        except Exception:
+            raise ObservationUnavailable from None
+        tracker = None
+        stdout = stderr = b""
+        unavailable = False
         try:
             tracker = _root_process_tracker(process.pid, plan.execution_deadline)
-        except IntegrationWorkflowFailure:
-            tracker = ProcessTreeTracker(ProcessIdentity(process.pid, 0, process.pid, 0, 0))
-            tracker.mark_scan_unavailable()
-        stdout = stderr = b""
-        failure = None
-        try:
-            if not tracker.scan_complete:
-                raise IntegrationWorkflowFailure
             while True:
                 _refresh_process_tracker(tracker, plan.execution_deadline)
                 try:
@@ -2829,26 +4028,36 @@ FileHandle.standardOutput.write(data)
                 raise IntegrationWorkflowFailure
             _refresh_process_tracker(tracker, plan.post_monitor_deadline)
             if tracker.signalable_descendant_groups():
-                raise IntegrationWorkflowFailure
+                raise ObservationUnavailable
         except Exception:
-            failure = IntegrationWorkflowFailure()
+            unavailable = True
         finally:
-            cleanup_ok = _terminate_process_tree(
-                process, tracker, deadline=plan.cleanup_deadline
-            )
-            if not cleanup_ok:
-                failure = IntegrationWorkflowFailure()
-            _close_process_pipes(process)
-        if failure is not None:
-            raise failure
+            try:
+                try:
+                    cleanup_ok = _terminate_process_tree(
+                        process, tracker, deadline=plan.cleanup_deadline
+                    )
+                    if not cleanup_ok:
+                        unavailable = True
+                except Exception:
+                    unavailable = True
+            finally:
+                try:
+                    _close_process_pipes(process)
+                except Exception:
+                    unavailable = True
+        if unavailable:
+            raise ObservationUnavailable from None
         return stdout
 
     def snapshot(self, timeout=10):
         _require_live_capability(self.capability)
-        payload = self._run([str(self.binary)], timeout=timeout)
         try:
+            payload = self._run([str(self.binary)], timeout=timeout)
             return parse_securityagent_snapshot(json.loads(payload))
-        except (KeyError, TypeError, ValueError):
+        except ObservationUnavailable:
+            raise
+        except Exception:
             raise ObservationUnavailable from None
 
 
@@ -2966,7 +4175,12 @@ class LiveIntegrationEffects:
         self._require_capability()
         if self.observer is None or self.observer_baseline is None:
             return
-        processes, windows = self.observer.snapshot(timeout=timeout)
+        try:
+            processes, windows = self.observer.snapshot(timeout=timeout)
+        except ObservationUnavailable:
+            raise
+        except Exception:
+            raise ObservationUnavailable from None
         baseline_processes, baseline_windows = self.observer_baseline
         if processes - baseline_processes or windows - baseline_windows:
             raise SecurityAgentDetected
@@ -2990,8 +4204,20 @@ class LiveIntegrationEffects:
         input_text=None,
         timeout=COMMAND_TIMEOUT_SECONDS,
         accepted_returncodes=(0,),
+        safety_only=False,
     ):
         self._require_capability()
+        terminal_observation = getattr(
+            self, "terminal_observation_error", None
+        )
+        if (
+            isinstance(
+                terminal_observation,
+                (SecurityAgentDetected, ObservationUnavailable),
+            )
+            and not safety_only
+        ):
+            raise terminal_observation
         plan = _process_deadline_plan(time.monotonic(), timeout)
         try:
             process = subprocess.Popen(
@@ -3005,11 +4231,7 @@ class LiveIntegrationEffects:
             )
         except OSError:
             raise IntegrationWorkflowFailure from None
-        try:
-            tracker = _root_process_tracker(process.pid, plan.execution_deadline)
-        except IntegrationWorkflowFailure:
-            tracker = ProcessTreeTracker(ProcessIdentity(process.pid, 0, process.pid, 0, 0))
-            tracker.mark_scan_unavailable()
+        tracker = None
         first_communication = True
         stdout = stderr = ""
         pending_observation_error = None
@@ -3017,8 +4239,7 @@ class LiveIntegrationEffects:
         supervision_error = None
         communication_completed = False
         try:
-            if not tracker.scan_complete:
-                raise IntegrationWorkflowFailure
+            tracker = _root_process_tracker(process.pid, plan.execution_deadline)
             while True:
                 _refresh_process_tracker(tracker, plan.execution_deadline)
                 if pending_observation_error is None:
@@ -3032,6 +4253,31 @@ class LiveIntegrationEffects:
                     except (SecurityAgentDetected, ObservationUnavailable) as error:
                         pending_observation_error = error
                         self._latch_terminal_observation(error)
+                        if (
+                            not safety_only
+                            and first_communication
+                            and input_text is not None
+                        ):
+                            if (
+                                process.stdin is not None
+                                and not process.stdin.closed
+                            ):
+                                process.stdin.close()
+                            raise error
+                if first_communication and input_text is not None and not safety_only:
+                    terminal_observation = getattr(
+                        self, "terminal_observation_error", None
+                    )
+                    if isinstance(
+                        terminal_observation,
+                        (SecurityAgentDetected, ObservationUnavailable),
+                    ):
+                        if (
+                            process.stdin is not None
+                            and not process.stdin.closed
+                        ):
+                            process.stdin.close()
+                        raise terminal_observation
                 try:
                     stdout, stderr = process.communicate(
                         input=input_text if first_communication else None,
@@ -3052,6 +4298,8 @@ class LiveIntegrationEffects:
             if len(stdout) > 1_048_576 or len(stderr) > 1_048_576:
                 raise IntegrationWorkflowFailure
             if process.returncode not in accepted_returncodes:
+                if pending_observation_error is not None:
+                    raise pending_observation_error
                 raise IntegrationWorkflowFailure
             try:
                 _refresh_process_tracker(tracker, plan.post_monitor_deadline)
@@ -3072,6 +4320,8 @@ class LiveIntegrationEffects:
                     supervision_error = IntegrationWorkflowFailure()
             if tracker.signalable_descendant_groups():
                 supervision_error = IntegrationWorkflowFailure()
+        except (SecurityAgentDetected, ObservationUnavailable) as error:
+            failure = error
         except Exception:
             failure = IntegrationWorkflowFailure()
         finally:
@@ -3082,9 +4332,16 @@ class LiveIntegrationEffects:
             except Exception:
                 if communication_completed:
                     supervision_error = IntegrationWorkflowFailure()
-                else:
+                elif failure is None:
                     failure = IntegrationWorkflowFailure()
-            _close_process_pipes(process)
+            finally:
+                try:
+                    _close_process_pipes(process)
+                except Exception:
+                    if communication_completed:
+                        supervision_error = IntegrationWorkflowFailure()
+                    elif failure is None:
+                        failure = IntegrationWorkflowFailure()
         if failure is not None:
             raise failure
         return ObservedProcessResult(
@@ -3207,28 +4464,68 @@ class LiveIntegrationEffects:
         if operation == "delete-disposable-item" and not self.capability.cleanup_approved:
             raise LiveCapabilityRequired
         self.invocation_counter += 1
+        recorded_device = self.mounted_device
+        safety_only = (
+            operation == "detach"
+            and getattr(self, "disposition_active", False)
+            and isinstance(recorded_device, str)
+            and recorded_device.startswith("/dev/disk")
+        )
         try:
             observed = self._run(
                 [str(self.helper)],
                 input_text=json.dumps(request, separators=(",", ":")) + "\n",
                 timeout=HELPER_OUTER_TIMEOUT_SECONDS,
                 accepted_returncodes=(0, 64, 70),
+                safety_only=safety_only,
             )
+        except (SecurityAgentDetected, ObservationUnavailable):
+            if operation == "create":
+                self._capture_image_identity()
+            raise
         except Exception:
             if operation == "create":
                 self._capture_image_identity()
-            if operation in {"create", "mount"}:
+            if operation == "mount":
                 self.preserve_image_and_item = True
             raise
         completed = observed.completed
+        for observation_error in (
+            observed.observation_error,
+            observed.supervision_error,
+        ):
+            if isinstance(
+                observation_error,
+                (SecurityAgentDetected, ObservationUnavailable),
+            ):
+                self._latch_terminal_observation(observation_error)
+        if operation == "create":
+            self._capture_image_identity()
         if completed.stderr or completed.stdout.count("\n") != 1:
+            if operation == "mount":
+                self.preserve_image_and_item = True
+            terminal_observation = getattr(
+                self, "terminal_observation_error", None
+            )
+            if (
+                isinstance(
+                    terminal_observation,
+                    (SecurityAgentDetected, ObservationUnavailable),
+                )
+                and not getattr(self, "disposition_active", False)
+            ):
+                raise terminal_observation
             raise IntegrationWorkflowFailure
         try:
             response = json.loads(completed.stdout)
         except (TypeError, ValueError):
+            if operation == "mount":
+                self.preserve_image_and_item = True
             raise IntegrationWorkflowFailure from None
         serialized = json.dumps(response, separators=(",", ":"))
         if str(self.image_path) in serialized or str(self.mount_path) in serialized:
+            if operation == "mount":
+                self.preserve_image_and_item = True
             raise IntegrationWorkflowFailure
         if (
             set(response)
@@ -3244,18 +4541,20 @@ class LiveIntegrationEffects:
             or response.get("operation") != operation
             or not isinstance(response.get("code"), str)
         ):
+            if operation == "mount":
+                self.preserve_image_and_item = True
             raise IntegrationWorkflowFailure
-        if operation == "create" and isinstance(response.get("encryption_uuid"), str):
-            self._capture_image_identity()
-            self.encryption_uuid = response["encryption_uuid"]
+        if operation == "create":
+            if isinstance(response.get("encryption_uuid"), str):
+                self.encryption_uuid = response["encryption_uuid"]
         elif operation == "mount" and isinstance(response.get("device"), str):
             self.mounted_device = response["device"]
         elif operation == "detach" and response.get("code") == "OK":
+            if safety_only and response.get("device") != recorded_device:
+                raise IntegrationWorkflowFailure
             self.mounted_device = None
-        if observed.observation_error is not None:
-            self._latch_terminal_observation(observed.observation_error)
         if completed.returncode != 0 or response.get("code") != "OK":
-            if response.get("code") == "MOUNT_CLEANUP_UNCLEAR" or operation in {"create", "mount"}:
+            if response.get("code") == "MOUNT_CLEANUP_UNCLEAR":
                 self.preserve_image_and_item = True
             if (
                 observed.observation_error is not None
@@ -3341,6 +4640,12 @@ class LiveIntegrationEffects:
         if not self.capability.cleanup_approved:
             raise LiveCapabilityRequired
         self._require_reconciled_unmounted()
+        if isinstance(
+            getattr(self, "terminal_observation_error", None),
+            (SecurityAgentDetected, ObservationUnavailable),
+        ):
+            self.quarantine_exact_image(mapping_reconciled=True)
+            return
         if not self.image_quarantined:
             self.quarantine_exact_image()
         if not shutil.rmtree.avoids_symlink_attacks:
@@ -3350,9 +4655,13 @@ class LiveIntegrationEffects:
         if self._image_entry_present():
             raise IntegrationWorkflowFailure
 
-    def quarantine_exact_image(self):
+    def quarantine_exact_image(self, *, mapping_reconciled=False):
         self._require_capability()
-        self._require_reconciled_unmounted()
+        if mapping_reconciled:
+            if self.preserve_image_and_item or self.mounted_device is not None:
+                raise IntegrationWorkflowFailure
+        else:
+            self._require_reconciled_unmounted()
         self._require_exact_image()
         try:
             os.stat(
@@ -3408,7 +4717,9 @@ class LiveIntegrationEffects:
         try:
             if self.preserve_image_and_item:
                 raise IntegrationWorkflowFailure
-            if self.mounted_device is not None and encryption_uuid:
+            if self.mounted_device is not None and not encryption_uuid:
+                raise IntegrationWorkflowFailure
+            if self.mounted_device is not None:
                 mounted_device = self.mounted_device
                 response, _ = self.invoke_helper(
                     "detach", self.request("detach", encryption_uuid)
@@ -3421,8 +4732,11 @@ class LiveIntegrationEffects:
                 )
             if not self._image_entry_present():
                 return
-            if getattr(self, "terminal_observation_error", None) is not None:
-                self.quarantine_exact_image()
+            if isinstance(
+                getattr(self, "terminal_observation_error", None),
+                (SecurityAgentDetected, ObservationUnavailable),
+            ):
+                self.quarantine_exact_image(mapping_reconciled=True)
                 return
             if not cleanup_approved:
                 self.quarantine_exact_image()
@@ -3430,9 +4744,13 @@ class LiveIntegrationEffects:
             if not encryption_uuid:
                 self.quarantine_exact_image()
                 raise IntegrationWorkflowFailure
-            inspected, _ = self.invoke_helper(
-                "inspect-item", self.request("inspect-item", encryption_uuid)
-            )
+            try:
+                inspected, _ = self.invoke_helper(
+                    "inspect-item", self.request("inspect-item", encryption_uuid)
+                )
+            except (SecurityAgentDetected, ObservationUnavailable):
+                self.quarantine_exact_image(mapping_reconciled=True)
+                return
             _require_response(
                 inspected,
                 "inspect-item",
@@ -3440,22 +4758,32 @@ class LiveIntegrationEffects:
                 item_count=1,
             )
             if getattr(self, "terminal_observation_error", None) is not None:
-                self.quarantine_exact_image()
+                self.quarantine_exact_image(mapping_reconciled=True)
                 return
-            deleted, _ = self.invoke_helper(
-                "delete-disposable-item",
-                self.request(
+            try:
+                deleted, _ = self.invoke_helper(
                     "delete-disposable-item",
-                    encryption_uuid,
-                    cleanup_approved=True,
-                ),
-            )
+                    self.request(
+                        "delete-disposable-item",
+                        encryption_uuid,
+                        cleanup_approved=True,
+                    ),
+                )
+            except (SecurityAgentDetected, ObservationUnavailable):
+                self.quarantine_exact_image(mapping_reconciled=True)
+                return
             _require_response(
                 deleted,
                 "delete-disposable-item",
                 uuid_value=encryption_uuid,
                 item_count=0,
             )
+            if isinstance(
+                getattr(self, "terminal_observation_error", None),
+                (SecurityAgentDetected, ObservationUnavailable),
+            ):
+                self.quarantine_exact_image(mapping_reconciled=True)
+                return
             self.delete_exact_image()
         finally:
             self.disposition_active = previous_disposition_state

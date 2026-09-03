@@ -373,10 +373,12 @@ struct ProcessInvocationFailure: Error {
 
 final class SpawnDiagnostics {
     var stdinWriteLengths = [Int]()
+    var spawnedPID: pid_t?
 }
 
 private let productionRequestDeadlineSeconds: Double = 40.0
 private let productionMountCompensationReserveSeconds: Double = 12.0
+private let productionMountDetachPhaseSeconds: Double = 8.0
 private let productionTermGraceSeconds: Double = 2.0
 private let productionReapGraceSeconds: Double = 2.0
 private let productionGroupGraceSeconds: Double = 2.0
@@ -413,13 +415,32 @@ private func setNonBlocking(_ descriptor: Int32) throws {
 private func appendAvailable(
     descriptor: Int32,
     destination: inout Data,
-    eof: inout Bool
+    eof: inout Bool,
+    workDeadline: Double,
+    hardDeadline: Double,
+    outputLimit: Int
 ) throws {
     var buffer = [UInt8](repeating: 0, count: 4096)
     while true {
+        guard monotonicSeconds() < workDeadline,
+              monotonicSeconds() < hardDeadline else {
+            throw ProcessInvocationFailure(
+                reason: .timeout,
+                stdout: Data(), stderr: Data(),
+                directChildReaped: false, processGroupGone: false
+            )
+        }
         let count = Darwin.read(descriptor, &buffer, buffer.count)
+        guard monotonicSeconds() < workDeadline,
+              monotonicSeconds() < hardDeadline else {
+            throw ProcessInvocationFailure(
+                reason: .timeout,
+                stdout: Data(), stderr: Data(),
+                directChildReaped: false, processGroupGone: false
+            )
+        }
         if count > 0 {
-            guard destination.count + count <= childOutputLimit else {
+            guard destination.count + count <= outputLimit else {
                 throw ProcessInvocationFailure(
                     reason: .outputLimit,
                     stdout: Data(), stderr: Data(),
@@ -427,6 +448,14 @@ private func appendAvailable(
                 )
             }
             destination.append(buffer, count: count)
+            guard monotonicSeconds() < workDeadline,
+                  monotonicSeconds() < hardDeadline else {
+                throw ProcessInvocationFailure(
+                    reason: .timeout,
+                    stdout: Data(), stderr: Data(),
+                    directChildReaped: false, processGroupGone: false
+                )
+            }
             continue
         }
         if count == 0 { eof = true; return }
@@ -537,7 +566,8 @@ private func spawnChild(
     argv: [String],
     secret: SecretBuffer?,
     deadline: Double,
-    diagnostics: SpawnDiagnostics? = nil
+    diagnostics: SpawnDiagnostics? = nil,
+    outputLimit: Int = childOutputLimit
 ) throws -> Data {
     guard argv.count >= 2, argv[0] == executable else { throw HelperFailure.invalidRequest }
     let workDeadline = deadline - childTerminationBudgetSeconds
@@ -609,6 +639,7 @@ private func spawnChild(
         }
     }
     guard spawnStatus == 0 else { throw HelperFailure.hdiutilFailure }
+    diagnostics?.spawnedPID = pid
     closeDescriptor(&inputPipe[0]); closeDescriptor(&outputPipe[1]); closeDescriptor(&errorPipe[1])
     do {
         try setNonBlocking(inputPipe[1])
@@ -654,8 +685,16 @@ private func spawnChild(
         if pollResult < 0 && errno != EINTR { failureReason = .supervision; break }
 
         do {
-            try appendAvailable(descriptor: outputPipe[0], destination: &stdout, eof: &stdoutEOF)
-            try appendAvailable(descriptor: errorPipe[0], destination: &stderr, eof: &stderrEOF)
+            try appendAvailable(
+                descriptor: outputPipe[0], destination: &stdout, eof: &stdoutEOF,
+                workDeadline: workDeadline, hardDeadline: deadline,
+                outputLimit: outputLimit
+            )
+            try appendAvailable(
+                descriptor: errorPipe[0], destination: &stderr, eof: &stderrEOF,
+                workDeadline: workDeadline, hardDeadline: deadline,
+                outputLimit: outputLimit
+            )
         } catch let failure as ProcessInvocationFailure {
             failureReason = failure.reason
             break
@@ -989,6 +1028,10 @@ func perform(
     let normalDeadline = request.operation == .mount
         ? finalDeadline - productionMountCompensationReserveSeconds
         : finalDeadline
+    let mountDetachDeadline = min(
+        finalDeadline,
+        normalDeadline + productionMountDetachPhaseSeconds
+    )
     let selector: (String) -> KeychainSelector = { account in
         KeychainSelector(account: account, transactionTag: transactionTag(request))
     }
@@ -1132,7 +1175,7 @@ func perform(
             do {
                 _ = try hdiutil.run(
                     argv: [hdiutilPath, "detach", receipt], secret: nil,
-                    deadline: finalDeadline
+                    deadline: mountDetachDeadline
                 )
                 let cleanupInfo = try hdiutil.run(
                     argv: [hdiutilPath, "info", "-plist"], secret: nil,
@@ -1416,7 +1459,11 @@ final class FakeHdiutilRunner: HdiutilRunning {
                 throw HelperFailure.hdiutilFailure
             }
             if scenario == "compensation-window-exhausted" {
-                clock.advance(max(0, workDeadline - clock.now()))
+                clock.advance(max(
+                    0,
+                    productionMountCompensationReserveSeconds
+                        - childTerminationBudgetSeconds
+                ))
             }
             attached = false
             return Data()
@@ -1656,6 +1703,64 @@ private func runSpawnProbe() -> Int32 {
     return 0
 }
 
+private func runDeadlineDrainProbe() -> Int32 {
+    let hardBudgetSeconds = 0.50
+    let schedulerToleranceSeconds = 0.15
+    let outputLimit = 256 * 1_024 * 1_024
+    let secret = SecretBuffer(copying: [UInt8](repeating: 65, count: 43))
+    let diagnostics = SpawnDiagnostics()
+    let startedAt = monotonicSeconds()
+    var code = "UNEXPECTED_SUCCESS"
+    var capturedOutputCount = 0
+    var directChildReaped = false
+    var processGroupGone = false
+    do {
+        _ = try spawnChild(
+            executable: CommandLine.arguments[0],
+            argv: [
+                CommandLine.arguments[0],
+                "--process-child",
+                "continuous-output",
+            ],
+            secret: secret,
+            deadline: startedAt + hardBudgetSeconds,
+            diagnostics: diagnostics,
+            outputLimit: outputLimit
+        )
+    } catch let failure as ProcessInvocationFailure {
+        code = failure.reason.rawValue
+        capturedOutputCount = failure.stdout.count + failure.stderr.count
+        directChildReaped = failure.directChildReaped
+        processGroupGone = failure.processGroupGone
+    } catch {
+        code = ProcessFailureReason.supervision.rawValue
+    }
+    secret.zeroize()
+    let elapsedSeconds = monotonicSeconds() - startedAt
+    let childPID = diagnostics.spawnedPID ?? -1
+    writeJSONObject([
+        "code": code,
+        "hard_budget_seconds": hardBudgetSeconds,
+        "scheduler_tolerance_seconds": schedulerToleranceSeconds,
+        "elapsed_seconds": elapsedSeconds,
+        "direct_child_reaped": directChildReaped,
+        "process_group_gone": processGroupGone,
+        "captured_output_count": capturedOutputCount,
+        "output_limit": outputLimit,
+        "secret_buffer_zeroed": secret.isZeroed,
+        "child_pid": Int(childPID),
+    ])
+    guard code == ProcessFailureReason.timeout.rawValue,
+          directChildReaped,
+          processGroupGone,
+          capturedOutputCount <= outputLimit,
+          secret.isZeroed,
+          childPID > 1,
+          elapsedSeconds <= hardBudgetSeconds + schedulerToleranceSeconds
+    else { return 70 }
+    return 0
+}
+
 private func runProcessChild(scenario: String) -> Int32 {
     switch scenario {
     case "sleep":
@@ -1699,6 +1804,17 @@ private func runProcessChild(scenario: String) -> Int32 {
         signal(SIGTERM, SIG_DFL)
         _ = Darwin.kill(getpid(), SIGTERM)
         return 70
+    case "continuous-output":
+        signal(SIGTERM, SIG_IGN)
+        let bytes = [UInt8](repeating: 67, count: 4096)
+        while true {
+            let written = bytes.withUnsafeBytes {
+                Darwin.write(STDOUT_FILENO, $0.baseAddress!, $0.count)
+            }
+            if written > 0 { continue }
+            if written < 0 && errno == EINTR { continue }
+            return 0
+        }
     default:
         return 64
     }
@@ -1904,6 +2020,9 @@ private func runMain() -> Int32 {
     #if CORTEX_STORAGE_HELPER_TESTING
     if arguments.count == 1, arguments[0] == "--spawn-probe" {
         return runSpawnProbe()
+    }
+    if arguments.count == 1, arguments[0] == "--deadline-drain-probe" {
+        return runDeadlineDrainProbe()
     }
     if arguments.count == 1, arguments[0] == "--process-policy" {
         return runProcessPolicy()
