@@ -1,6 +1,6 @@
 # Cortex Bridge Local Alias Action Architecture Addendum
 
-**Status:** Approach A approved by the owner; written addendum pending owner review
+**Status:** Approved by the owner
 **Date:** 2026-09-03
 **Target:** v0.5.4 candidate
 **Normative scope:** This addendum resolves the local-folder authority conflict
