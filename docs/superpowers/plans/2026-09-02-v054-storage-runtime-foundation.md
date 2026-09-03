@@ -38,6 +38,8 @@
 - `scripts/cortex.sh extension-path --json` returns only an installed local extension path whose existence and manifest hash are verified; it never points to the external repository checkout that stop will detach.
 - No unrestricted process execution, arbitrary source/destination import, `sudo`, ownership-setting change, external network expansion, browser-profile copy, production publication, merge, tag, push, or unrelated refactor belongs to this plan.
 - `PYTHON` in every command is the equipped Cortex interpreter returned by the runtime-home preflight; every command runs independently from the repository root and a zero-test selection or required skip is `FAIL`.
+- The authoritative implementation order is Tasks `1, 2, 3, 4, 6, 5, 7, 8, 9, 10, 11`, then the single atomic `12+13` block, then Task `14`. Task numbers preserve interface references; they are not permission to run Task 5 before its journal dependency or to split the mount/start handshake across commits.
+- Tasks 12 and 13 are one reviewable unit. Write both tasks' tests before production code, run the union as RED, implement the blocked lease primitives before wiring runtime mount/start, retain the `StorageBinding` until the exact ACK, run the complete union as GREEN, and create only the combined commit specified at the end of Task 13. The individual Task 12 commit boundary is deliberately suppressed; no test or acceptance criterion is removed.
 
 ---
 
@@ -45,7 +47,7 @@
 
 | File | Responsibility in this plan |
 | --- | --- |
-| `console/storage_result.py` | Strict redacted result/check schema shared by every operator subcommand. |
+| `console/storage_result.py` | Strict redacted result/check schema plus the canonical `StorageStatus` shared by transition, contract and operator code. |
 | `console/storage_lock.py` | Descriptor-verified `storage-state.lock`, read-only existing-marker acquisition, bounded shared/exclusive locking, and install-before-storage ordering. |
 | `native/macos/storage_mount_probe.swift` | `fstatfs(2)` facts for one inherited directory FD without reopening a path. |
 | `native/macos/disk_image_keychain.swift` | Secret generation, `hdiutil` stdin pipe, Cortex-owned Keychain add/read/delete, mount and normal detach. |
@@ -74,7 +76,7 @@
 
 **Interfaces:**
 - Consumes: `console.lifecycle_lock.open_lifecycle_lock(path: Path) -> int` for canonical private marker creation.
-- Produces: `CheckResult`, `OperationResult`, `StorageLock`, `open_storage_lock(home: Path, mode: Literal["shared", "exclusive"], *, timeout_seconds: float = 5.0) -> StorageLock`, read-only `open_existing_storage_lock(home: Path, mode: Literal["shared", "exclusive"], *, timeout_seconds: float = 5.0) -> StorageLock`, and `ordered_storage_locks(home: Path, *, install_mode: Literal["shared", "exclusive"] | None, storage_mode: Literal["shared", "exclusive"], timeout_seconds: float = 5.0) -> ContextManager[tuple[int | None, StorageLock]]`.
+- Produces: `CheckResult`, `OperationResult`, canonical `StorageStatus`, `StorageLock`, `open_storage_lock(home: Path, mode: Literal["shared", "exclusive"], *, timeout_seconds: float = 5.0) -> StorageLock`, read-only `open_existing_storage_lock(home: Path, mode: Literal["shared", "exclusive"], *, timeout_seconds: float = 5.0) -> StorageLock`, and `ordered_storage_locks(home: Path, *, install_mode: Literal["shared", "exclusive"] | None, storage_mode: Literal["shared", "exclusive"], timeout_seconds: float = 5.0) -> ContextManager[tuple[int | None, StorageLock]]`.
 
 - [ ] **Step 1: Write failing schema and lock tests**
 
@@ -124,6 +126,16 @@ class CheckResult:
     id: str
     status: Verdict
     evidence: str
+
+@dataclass(frozen=True)
+class StorageStatus:
+    verdict: Verdict
+    code: str
+    transaction_id: str | None
+    storage_state: str
+    mounted: bool
+    runtime_allowed: bool
+    recovery: Literal["UNCLEAR"] = "UNCLEAR"
 
 @dataclass(frozen=True)
 class OperationResult:
@@ -438,6 +450,8 @@ Compile into private staging with `xcrun swiftc`, append `-framework Security` o
 
 Copy `chrome-extension` descriptor-relatively to `CORTEX_HOME/app/chrome-extension`, reject symlinks/special files/device changes, fsync every file/directory, and add its ordered relative SHA-256 manifest to `owned.json`. `extension-path --json` verifies the copy against that record before returning exactly four keys: `schema_version=1`, `status="verified"`, `path=str(CORTEX_HOME / "app" / "chrome-extension")`, and `manifest_sha256` as 64 lowercase hex characters. This command is the deliberate exception that returns its required local path; storage operator results remain redacted. Replace `transport/browser_chrome_extension.py` runtime compilation with `attest_helper("macos-ax-send", manifest)` and pre-spawn FD/hash/signature revalidation; migrate the old single-helper manifest/path transactionally rather than silently adopting it.
 
+Treat legacy `owned.json["chrome_extension_path"]` as untrusted historical metadata: never open, traverse, copy from, attest, or return that path. The only migration source is the reviewed `chrome-extension` tree in the current implementation checkout, copied descriptor-relatively into private installer staging. Keep the old installed manifest byte-identical until every staged extension file and directory is fsynced, its ordered relative manifest is verified, and the staging parent is fsynced; then atomically publish the local copy and the new owned-manifest record. A crash must leave either the exact old state or one complete verified new state, never a mixed record/tree. A successful migration removes `chrome_extension_path`, is idempotent on reinstall, and `extension-path --json` must fail closed if any legacy field survives. Add tests for hostile/symlinked legacy values, crash at every publication boundary, rollback, idempotent retry, and absence of the legacy field after success.
+
 - [ ] **Step 4: Implement Doctor/rebuild/uninstall fail-closed behavior and run GREEN**
 
 Doctor returns one required check per storage helper and one local-extension check. If a production bootstrap/journal or exact service/item reconciliation query proves a vault Keychain item exists, install/update refuses rebuilding either storage helper with `STORAGE_HELPER_REKEY_REQUIRED`; an unreadable/interaction-required item query also fails closed rather than assuming absence. Uninstall removes neither storage helper, its manifest records, nor the local extension, and reports them in `preserved`. It never calls the helper's delete operation.
@@ -468,7 +482,7 @@ git commit -m "feat(storage): attest helpers and local extension"
 - Modify: `console/cortex_paths.py`
 
 **Interfaces:**
-- Consumes: attested `storage-mount-probe` and `disk-image-keychain`, `StorageLock`, `/usr/sbin/diskutil`, and `/usr/bin/hdiutil` through injected strict runners, plus an injected mounted-storage verifier callback owned by the caller.
+- Consumes: attested `storage-mount-probe` and `disk-image-keychain`, `StorageLock`, Task 6 `TransitionJournal`, `load_transition`, `advance_transition`, and exact journal publication, `/usr/sbin/diskutil`, and `/usr/bin/hdiutil` through injected strict runners, plus an injected mounted-storage verifier callback owned by the caller.
 - Produces: `StoragePaths`, `HostBinding`, `LegacySnapshot`, `StorageLifecycle.preflight()`, `.keychain_spike()`, `.create_vault()`, `.initialize_layout()`, `.mount_or_adopt()`, `.detach()`, and `.status()`.
 
 - [ ] **Step 1: Write failing no-effect lifecycle tests**
@@ -568,7 +582,7 @@ Open and traverse relative names from `host_fd`; reject symlinks and special fil
 
 - [ ] **Step 4: Implement spike/create/layout/mount/detach state machines and run GREEN**
 
-`keychain_spike` generates a unique transaction and disposable basename, invokes helper create, normal detach, two fresh-process mounts with full UUID/APFS/mount checks and detach after each. The gated live harness records the baseline SecurityAgent process/window set and fails if any new prompt/process/window is observed. Without cleanup authorization it quarantines by exact host-FD-relative rename and leaves the item intact; with authorization it requests exact disposable cleanup.
+`keychain_spike` begins or resumes the one exact Task 6 transition, generates a unique disposable transaction and basename, invokes helper create, normal detach, two fresh-process mounts with full UUID/APFS/mount checks and detach after each, then atomically publishes `phase="spike_passed"` with the canonical non-secret receipt SHA-256. The gated live harness records the baseline SecurityAgent process/window set and fails if any new prompt/process/window is observed. Without cleanup authorization it quarantines by exact host-FD-relative rename and leaves the item intact; with authorization it requests exact disposable cleanup. A missing, replaced, mismatched or non-`spike_passed` receipt blocks production creation.
 
 `create_vault` requires a journaled passed spike, records `image_create_started` before helper invocation, reconciles a missing receipt only by transaction tag plus UUID/service, and never deletes. Reconciliation adopts exactly one item only after the helper mounts that exact image twice; zero matches quarantines the unrecoverable image before a new transaction, and multiple/mismatched matches stop for manual review. After create, require encryption metadata, attach with `-owners on`, exact same-FD guard, `diskutil verifyVolume` success without repair, normal detach/no mapping/empty mount, repeat that attach/verify/detach once, then a third attach establishes the live cutover mount. A failed new bundle may only be quarantined by host-FD-relative rename after host UUID/path/basename, `Info.plist` hash, and ordered bundle manifest revalidation; it is never deleted. `mount_or_adopt` is a self-contained lifecycle primitive: after its own exact image-to-device and same-FD checks, it calls the constructor-injected `mount_verifier()` and adopts only `verdict == "PASS"`. It does not import or construct `StorageContract`. `detach` accepts only the exact mapping and leaves the mount directory empty.
 
@@ -594,8 +608,8 @@ git commit -m "feat(storage): add FD-first lifecycle primitives"
 - Create: `tests/test_storage_transition.py`
 
 **Interfaces:**
-- Consumes: exclusive `StorageLock`, private `CORTEX_HOME` descriptor, and verified stopped-process callback.
-- Produces: `StorageProjection`, `TransitionJournal`, `SnapshotManifest`, `begin_transition(home: Path, target: StorageProjection) -> TransitionJournal`, `advance_transition(...)`, `commit_transition(...)`, `load_transition(...)`, `runtime_transition_status(home: Path) -> StorageStatus`, and `rollback_transition(home: Path, *, process_status: ProcessStatus) -> OperationResult`.
+- Consumes: Task 1 canonical `StorageStatus`, exclusive `StorageLock`, private `CORTEX_HOME` descriptor, and verified stopped-process callback.
+- Produces: `StorageProjection`, `TransitionJournal`, `SnapshotManifest`, `begin_transition(home: Path, target: StorageProjection, *, target_image_basename: Literal["CORTEX_BRIDGE_2026_09.sparsebundle"]) -> TransitionJournal`, `advance_transition(...)`, `commit_transition(...)`, `load_transition(...)`, `runtime_transition_status(home: Path) -> StorageStatus`, and `rollback_transition(home: Path, *, process_status: ProcessStatus) -> OperationResult`.
 
 - [ ] **Step 1: Write failing snapshot/journal crash tests**
 
@@ -611,7 +625,7 @@ for boundary in PUBLICATION_BOUNDARIES:
         self.assertEqual(harness.current_states(), harness.original_states())
 ```
 
-Also test journal schema/type validation, phase-number monotonicity, journal/path substitution, mismatched manifest hash, multiple historical quarantines, target hash mismatch, settings changes outside the storage projection, and rejection of rollback when process state is not exactly `stopped`.
+Also test journal schema/type validation, phase-number monotonicity, journal/path substitution, mismatched manifest hash, multiple historical quarantines, target hash mismatch, settings changes outside the storage projection, spike-receipt substitution, target-image-basename substitution, illegal phase/field combinations, and rejection of rollback when process state is not exactly `stopped`. Inject crashes immediately before and after `spike_create_started`, helper create/Keychain return, `spike_keychain_bound`, each of the two mount-verification and normal-detach cycles, disposable deletion or quarantine publication, `spike_disposition_recorded`, `spike_passed`, production `image_create_started`, and production `keychain_bound`; every resume must use the exact durable spike/production transaction, basename and optional encryption UUID and must neither create a second item nor guess a quarantine.
 
 - [ ] **Step 2: Run focused tests and confirm RED**
 
@@ -635,7 +649,10 @@ class StorageProjection:
     browser_transport: Literal["chrome_extension"]
 
 TransitionPhase = Literal[
-    "in_progress", "image_create_started", "keychain_bound",
+    "in_progress", "spike_create_started", "spike_keychain_bound",
+    "spike_mount_one_verified", "spike_mount_two_verified",
+    "spike_disposition_recorded", "spike_passed",
+    "image_create_started", "keychain_bound",
     "bootstrap_published", "marker_published", "settings_published",
     "committed", "rolling_back", "rolled_back",
 ]
@@ -667,10 +684,19 @@ class TransitionJournal:
     target_bootstrap_sha256: str
     target_marker_sha256: str
     target_storage_projection_sha256: str
+    target_image_basename: str
+    spike_transaction_id: str | None
+    spike_image_basename: str | None
+    spike_encryption_uuid: str | None
+    spike_disposition: Literal["deleted", "quarantined"] | None
+    spike_receipt_sha256: str | None
+    target_encryption_uuid: str | None
     reconciliation: Literal["not_started", "image_create_started", "keychain_bound"]
 ```
 
-Snapshot through verified descriptors into one unique `private-quarantine/` child named `f"storage-cutover-{transaction_id}"`. Fsync every file, manifest, snapshot directory, quarantine directory, then exclusively publish and fsync `storage-transition.json` in `in_progress` before any control-file change. Resume only the exact relative snapshot whose digest matches the journal. Do not archive/remove a blocking journal before `rolled_back` is durably written.
+Snapshot through verified descriptors into one unique `private-quarantine/` child named `f"storage-cutover-{transaction_id}"`. Fsync every file, manifest, snapshot directory, quarantine directory, then exclusively publish and fsync `storage-transition.json` in `in_progress` before any control-file change. `begin_transition` receives `target_image_basename` explicitly and accepts only the literal `CORTEX_BRIDGE_2026_09.sparsebundle`; Task 6 never imports or anticipates Task 5 `StoragePaths`.
+
+Before the disposable helper's first effect, `advance_transition` durably publishes `spike_create_started` with a fresh `spike_transaction_id` and one generated `spike_image_basename`; neither may change on resume. The helper's create/Keychain receipt must be durably captured as `spike_keychain_bound` with its exact `spike_encryption_uuid` before the first mount. Each verified fresh-process mount plus normal detach advances exactly once through `spike_mount_one_verified` and `spike_mount_two_verified`. Exact approved deletion or descriptor-bound quarantine advances to `spike_disposition_recorded` with `spike_disposition`; only then may `spike_passed` add the canonical non-secret receipt SHA-256. `spike_passed` preserves all spike identifiers and has no production encryption UUID. Production `image_create_started` retains the spike proof and pins the already journaled target basename before the production helper call. Production `keychain_bound` additionally requires the helper-returned production encryption UUID. Every other phase/field combination is invalid. Resume only the exact relative snapshot whose digest matches the journal and only when every applicable spike/production identifier matches the durable prior phase. Do not archive/remove a blocking journal before `rolled_back` is durably written.
 
 - [ ] **Step 4: Implement deterministic forward publication and rollback; run GREEN**
 
@@ -736,8 +762,9 @@ Expected: FAIL because the current guard reopens paths, does not prove ownership
 - [ ] **Step 3: Implement the exact public contract**
 
 ```python
-# executor/workspace_handle.py; console.storage_contract re-exports MountFacts.
-Verdict = Literal["PASS", "FAIL", "UNCLEAR"]
+# executor/workspace_handle.py; console.storage_contract re-exports MountFacts
+# and imports/re-exports the canonical StorageStatus from console.storage_result.
+from console.storage_result import StorageStatus, Verdict
 
 @dataclass(frozen=True)
 class MountFacts:
@@ -747,16 +774,6 @@ class MountFacts:
     filesystem_type: str
     mount_from: str
     mount_on: str
-
-@dataclass(frozen=True)
-class StorageStatus:
-    verdict: Verdict
-    code: str
-    transaction_id: str | None
-    storage_state: str
-    mounted: bool
-    runtime_allowed: bool
-    recovery: Literal["UNCLEAR"] = "UNCLEAR"
 
 @dataclass
 class StorageBinding:
@@ -1222,6 +1239,8 @@ git commit -m "feat(storage): add journaled operator CLI"
 
 ### Task 12: One-click mount/start and stop/detach lifecycle
 
+**Atomic-block rule:** This task and Task 13 are executed by one implementation owner without an intermediate commit. Write Task 12 Step 1 and Task 13 Step 1 first, then run the union of both RED command sets. Implement Task 13's blocked child/lease primitives, then this task's mount/start/stop integration, then Task 13's lifespan and cleanup gates. Do not run the Task 12 GREEN gate or create a Task 12 commit until the complete combined behavior is implemented.
+
 **Files:**
 - Modify: `scripts/cortex.sh`
 - Modify: `scripts/start-local.sh`
@@ -1234,7 +1253,7 @@ git commit -m "feat(storage): add journaled operator CLI"
 
 **Interfaces:**
 - Consumes: `StorageLifecycle.mount_or_adopt()`, `StorageLifecycle.detach()`, shared/exclusive storage locks, owned-process status, and the existing `/api/transport/stop-everything` quiescence endpoint.
-- Produces: `cortex.sh start` as the sole mount owner, `cortex.sh stop` as the sole detach owner, `STORAGE_ATTACHED_BLOCKED`, and a `start-local.sh` delegate that cannot execute `server.py` directly.
+- Produces: `RuntimeMount`, `runtime_mount(home: Path) -> RuntimeMount`, `cortex.sh start` as the sole mount owner, `cortex.sh stop` as the sole detach owner, `STORAGE_ATTACHED_BLOCKED`, and a `start-local.sh` delegate that cannot execute `server.py` directly.
 
 - [ ] **Step 1: Write failing lifecycle owner tests**
 
@@ -1276,6 +1295,14 @@ Expected: FAIL because current start only checks an already mounted path, stop d
 Add internal, non-operator entrypoints in `console/storage_lifecycle.py`:
 
 ```python
+@dataclass
+class RuntimeMount:
+    result: OperationResult
+    binding: StorageBinding | None
+    def close(self) -> None: ...
+    def __enter__(self) -> Self: ...
+    def __exit__(self, exc_type, exc, tb) -> None: ...
+
 def operation_from_storage_status(operation: str,
                                   status: StorageStatus) -> OperationResult:
     """Preserve verdict/code/transaction and emit one redacted contract check."""
@@ -1295,14 +1322,16 @@ def operation_from_storage_status(operation: str,
         ),),
     )
 
-def runtime_mount(home: Path) -> OperationResult:
-    """Adopt or mount under ordered locks, then require StorageContract.open()."""
+def runtime_mount(home: Path) -> RuntimeMount:
+    """Adopt or mount under ordered locks and retain the verified binding."""
 
 def runtime_detach(home: Path, *, process_status: ProcessStatus) -> OperationResult:
     """Require verified stopped state, normal detach, no mapping and empty mount."""
 ```
 
-`runtime_mount` constructs `contract = StorageContract(home)`, then constructs `StorageLifecycle(..., mount_verifier=lambda: operation_from_storage_status("mount-or-adopt", contract.probe()))`; the adapter copies only verdict, code, and transaction ID plus one stable redacted check, never a path or the status-only fields. It calls `mount_or_adopt()` and, only after that returns `PASS`, calls `contract.open()`. Thus Task 5 stays independently GREEN with a fake callback, while this task supplies the real post-mount authority without changing the lifecycle primitive. `cortex.sh start` invokes `runtime_mount` only when storage is required; it does not parse or reconstruct mount logic. Keep the storage binding alive until server startup lease acknowledgment in Task 13, then allow the server lifespan to own/reopen its binding. Any failure exits before log rotation or child creation. `start-local.sh` retains runtime-home/dependency validation, then `exec bash "$ROOT/scripts/cortex.sh" start`.
+`runtime_mount` constructs `contract = StorageContract(home)`, then constructs `StorageLifecycle(..., mount_verifier=lambda: operation_from_storage_status("mount-or-adopt", contract.probe()))`; the adapter copies only verdict, code, and transaction ID plus one stable redacted check, never a path or the status-only fields. It calls `mount_or_adopt()` and, only after that returns `PASS`, calls `contract.open()`. A non-PASS result returns `RuntimeMount(result=<failure>, binding=None)`; a PASS result is valid only with the retained `StorageBinding`. `RuntimeMount.close()` closes that binding idempotently, and every exception/failure path closes it. Thus Task 5 stays independently GREEN with a fake callback, while this task supplies the real post-mount authority without changing the lifecycle primitive.
+
+`cortex.sh start` invokes the one Task 13 Python `launch_managed_runtime(home)`, never a separate mount subprocess whose exit would discard the FDs. That coordinator calls `runtime_mount` only when storage is required, retains the returned object in one `with`/`finally` scope through child spawn, durable lease/ownership publication and `parent_release_and_wait_ack`, and closes the parent binding only after the exact ACK or after verified failure cleanup. The server lifespan then owns its independently reopened binding. Tests pause inside the ACK callback and require every retained host/mount/root FD is valid there, then closed after success, timeout, EOF, malformed/missing ACK, child exit and storage-identity change. Any failure exits before log rotation or a second child creation. `start-local.sh` retains runtime-home/dependency validation, then `exec bash "$ROOT/scripts/cortex.sh" start`.
 
 - [ ] **Step 4: Implement ordered shutdown, Doctor/selftest integration and run GREEN**
 
@@ -1319,14 +1348,14 @@ Run:
 
 Expected: PASS, including two mount/detach cycles, the blocked-detach status, and delegated launcher.
 
-- [ ] **Step 5: Commit the one-click lifecycle**
+- [ ] **Step 5: Preserve the uncommitted atomic block and continue to Task 13**
 
 ```bash
-git add scripts/cortex.sh scripts/start-local.sh console/storage_lifecycle.py console/installer.py \
-  tests/test_storage_guard_integration.py tests/test_selftest.py \
-  tests/test_start_local.py tests/test_installer.py
-git commit -m "feat(storage): own runtime mount and detach"
+git diff --check
+git status --short
 ```
+
+Expected: only files owned by Tasks 12 and 13 are modified. Do not stage or commit yet; proceed directly to Task 13 and keep the same implementation owner.
 
 ### Task 13: Blocked server, one-shot startup lease and lifespan enforcement
 
@@ -1341,8 +1370,8 @@ git commit -m "feat(storage): own runtime mount and detach"
 - Modify: `tests/test_start_local.py`
 
 **Interfaces:**
-- Consumes: optional committed storage transaction ID, private pids-directory FD, `socket.socketpair`, stable PID/PGID/parent/start identity, and `StorageContract.open()` when storage is required.
-- Produces: `ManagedProcessIdentity`, `StartupLease`, `ManagedStartContext`, `publish_startup_lease(...)`, `child_consume_startup_lease(...)`, `parent_release_and_wait_ack(...)`, `require_managed_start_context(...)`, and read-only `managed_runtime_is_ready(...)` consumed by Task 14.
+- Consumes: Task 12 `RuntimeMount`, optional committed storage transaction ID, private pids-directory FD, `socket.socketpair`, stable PID/PGID/parent/start identity, and `StorageContract.open()` when storage is required.
+- Produces: `ManagedProcessIdentity`, `StartupLease`, `ManagedStartContext`, `ManagedStartReceipt`, `launch_managed_runtime(home: Path, *, timeout_seconds: float = 5.0) -> ManagedStartReceipt`, `publish_startup_lease(...)`, `child_consume_startup_lease(...)`, `parent_release_and_wait_ack(...)`, `require_managed_start_context(...)`, and read-only `managed_runtime_is_ready(...)` consumed by Task 14.
 
 - [ ] **Step 1: Write failing handshake/lease tests**
 
@@ -1412,6 +1441,16 @@ class ManagedStartContext:
     storage_transaction_id: str | None
     receipt_sha256: str
 
+@dataclass(frozen=True)
+class ManagedStartReceipt:
+    lease_id: str
+    child_pid: int
+    storage_transaction_id: str | None
+    acknowledged: Literal[True]
+
+def launch_managed_runtime(home: Path, *,
+                           timeout_seconds: float = 5.0) -> ManagedStartReceipt: ...
+
 def publish_startup_lease(*, pids_fd: int, identity: ManagedProcessIdentity,
                           storage_transaction_id: str | None,
                           ttl_seconds: float = 5.0) -> StartupLease: ...
@@ -1429,7 +1468,7 @@ def managed_runtime_is_ready(*, home: Path,
                              expected_storage_transaction_id: str | None) -> bool: ...
 ```
 
-Create one private `SOCK_STREAM` socketpair for every non-fixture product start. Spawn the child with only its control FD inherited and `close_fds=True`; the child blocks on a length-bounded JSON frame before calling `uvicorn.run`. Parent captures stable PID/PGID/child+parent start identities, atomically publishes/fsyncs lease and owned process record, then sends only lease ID plus nonce. Child opens the lease relative to the already verified pids FD, validates exact process/parent/transaction/expiry, exclusively renames it to a consumed receipt, fsyncs receipt and directory, stores the in-process context, and ACKs the receipt hash. Required storage binds a non-null committed transaction; a no-marker managed product runtime binds `None`. The lease/receipt is `0600` and never printed. `managed_runtime_is_ready` is a read-only check of the already consumed in-process context, receipt identity, current PID/parent/start identity and exact optional transaction; it never creates or consumes a lease.
+Create one private `SOCK_STREAM` socketpair for every non-fixture product start. `launch_managed_runtime` is the sole Python owner of the optional Task 12 `RuntimeMount`, the socketpair, child process and parent handshake. It uses only the installed/equipped fixed server entrypoint and exposes no arbitrary argv or executable parameter. Spawn the child with only its control FD inherited and `close_fds=True`; the child blocks on a length-bounded JSON frame before calling `uvicorn.run`. Parent captures stable PID/PGID/child+parent start identities, atomically publishes/fsyncs lease and owned process record, then sends only lease ID plus nonce. Child opens the lease relative to the already verified pids FD, validates it against process/parent identity and the retained binding's exact transaction ID, exclusively renames it to a consumed receipt, fsyncs receipt and directory, stores the in-process context, and ACKs the receipt hash. `launch_managed_runtime` calls `parent_release_and_wait_ack` while the `RuntimeMount` binding is still open and returns only `ManagedStartReceipt(acknowledged=True)`; it closes the parent binding immediately afterward in `finally`. Required storage binds a non-null committed transaction; a no-marker managed product runtime binds `None` and still uses the same blocked handshake. The lease/receipt is `0600` and never printed. `managed_runtime_is_ready` is a read-only check of the already consumed in-process context, receipt identity, current PID/parent/start identity and exact optional transaction; it never creates or consumes a lease.
 
 - [ ] **Step 4: Enforce parent cleanup and independent lifespan gate; run GREEN**
 
@@ -1446,13 +1485,29 @@ Run:
 
 Expected: PASS; every failure leaves no listener/owned child, replay is rejected, and both direct server entrypoints fail closed under required storage.
 
-- [ ] **Step 5: Commit managed startup**
+- [ ] **Step 5: Run the complete atomic GREEN gate and commit managed mount/startup**
+
+Run every command below independently after both tasks are implemented:
+
+```bash
+"$PYTHON" tests/test_startup_lease.py
+"$PYTHON" tests/test_process_ownership.py
+"$PYTHON" tests/test_storage_guard_integration.py
+"$PYTHON" tests/test_start_local.py
+"$PYTHON" tests/test_selftest.py
+"$PYTHON" -m unittest \
+  tests.test_installer.InstallerTest.test_doctor_json_is_stable_without_optional_services -v
+```
+
+Expected: every command passes, the server never listens before the exact lease ACK, the storage binding remains live until that ACK, every failure leaves no owned child/listener, stop detaches normally only after quiescence, and two full mount/start/stop/detach cycles pass.
 
 ```bash
 git add console/startup_lease.py console/process_ownership.py console/server.py \
-  scripts/cortex.sh tests/test_startup_lease.py tests/test_process_ownership.py \
-  tests/test_storage_guard_integration.py tests/test_start_local.py
-git commit -m "feat(storage): require managed startup lease"
+  console/storage_lifecycle.py console/installer.py scripts/cortex.sh scripts/start-local.sh \
+  tests/test_startup_lease.py tests/test_process_ownership.py \
+  tests/test_storage_guard_integration.py tests/test_start_local.py \
+  tests/test_selftest.py tests/test_installer.py
+git commit -m "feat(storage): own managed mount and startup lifecycle"
 ```
 
 ### Task 14: Read-only managed-runtime readiness boundary for local-alias consumers
@@ -1726,7 +1781,7 @@ git status --short
 git log --oneline --decorate -14
 ```
 
-Expected: no working-tree secret finding; only files named in this plan are changed; each implementation task has one reviewable atomic commit; no merge, tag, push, production vault, production Keychain item, or real storage publication occurred.
+Expected: no working-tree secret finding; only files named in this plan are changed; each implementation unit has one reviewable atomic commit, with Tasks 12+13 represented by their one required combined commit; no merge, tag, push, production vault, production Keychain item, or real storage publication occurred.
 
 Do not create an additional completion commit when the tree is already clean. If Step 2-4 required a narrowly scoped correction, amend only the task commit that owns those files after rerunning its RED/GREEN command and this final gate.
 

@@ -10,6 +10,8 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-02-storage-cutover-and-qa-design.md` at SHA-256 `2034280b1b4943c2b602eba888b58742e2d77b428bdc63dc5f93a4b59c72cb5f`; `docs/superpowers/specs/2026-08-31-hybrid-intent-router-design.md` at SHA-256 `472ae88687f6df00be1aac7bb33af536b0456fdc7fd04b7bb5f95e637e4b38f5`; and the precedence-setting `docs/superpowers/specs/2026-09-03-local-alias-action-addendum.md` at SHA-256 `38dff2d114ddf3a8f2262f3ac2b37dcbec9fd33951934c5d5c03a9a0c4acc08b`.
 
+**Review-status provenance:** The storage spec's header retains its creation-time `written specification pending review` text. For this program, approval attaches only to the exact SHA-256 above through the reviewed planning-handoff commit; any byte change resets that approval. This documentary approval never authorizes a live Keychain, disk, runtime, browser or ChatGPT effect.
+
 ## Global Constraints
 
 - Execute phases in order. No downstream writer starts before the preceding phase has a committed implementation, passing focused/full gates, and a zero-P0/P1/P2 review.
@@ -37,7 +39,7 @@
 
 | Phase | Plan | SHA-256 |
 | --- | --- | --- |
-| S | `docs/superpowers/plans/2026-09-02-v054-storage-runtime-foundation.md` | `1667950a2f12602013be672f2ccaced9402b11dd6f73fb1bda765b2bbdded994` |
+| S | `docs/superpowers/plans/2026-09-02-v054-storage-runtime-foundation.md` | `97b20fec13e7030dbb06bf39aa1d2ffdeb353ca33527e4155d3e9defd3994275` |
 | E | `docs/superpowers/plans/2026-09-02-v054-durable-effects-and-executor.md` | `7974f73e672077956d5e03a6416711791524ab520a8549b729ec4a2feb7c102c` |
 | U | `docs/superpowers/plans/2026-09-02-v054-runtime-ui-and-browser-reliability.md` | `25d04484e4dcf337728ce96f0af642d3894be71dea0ef9a616f2552cd9121245` |
 | I | `docs/superpowers/plans/2026-09-02-v054-hybrid-intent-router.md` | `73987192c4d5dbe3d0fcabf3637bd46f60b0ef50f15c8184b93452b1e7e66fc8` |
@@ -96,7 +98,7 @@ The staged-name output must contain those six paths exactly and no source, runti
 
 ```bash
 PLANNING_COMMIT="$(git rev-parse HEAD)"
-git branch --show-current
+git rev-parse --abbrev-ref HEAD
 git status --short
 shasum -a 256 docs/superpowers/specs/2026-09-02-storage-cutover-and-qa-design.md
 shasum -a 256 docs/superpowers/specs/2026-08-31-hybrid-intent-router-design.md
