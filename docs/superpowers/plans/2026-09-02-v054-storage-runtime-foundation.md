@@ -953,6 +953,8 @@ git commit -m "feat(executor): add persistent workspace handle"
 
 - [ ] **Step 1: Write failing projection/clamp tests**
 
+Make the in-process Chat Settings server fixture hermetic before starting Uvicorn: save `console.server.RUNTIME_PATHS`, replace it with a `CortexPaths` instance rooted in that test class's existing private temporary directory, and restore it even when class setup fails. Seed the process-default runtime fixture with a required-storage marker whose target is absent and prove the test server still consults only its explicit temporary runtime. This is test isolation, not a production storage bypass; subprocess tests of the real default/required path remain unchanged.
+
 Load required-storage settings containing `playwright`, `webbridge`, an alternate default workspace, an alternate profile root, a symlinked profile root, and a post-cutover mutation. Patch all three driver constructors and require zero constructor calls on every rejected case. Prove language/theme may change when the three-field projection remains byte-identical.
 
 ```python
@@ -1368,6 +1370,9 @@ Expected: only files owned by Tasks 12 and 13 are modified. Do not stage or comm
 - Modify: `tests/test_process_ownership.py`
 - Modify: `tests/test_storage_guard_integration.py`
 - Modify: `tests/test_start_local.py`
+- Modify: `tests/test_missions_api.py`
+- Modify: `tests/test_store_lifecycle.py`
+- Modify: `tests/test_executor_runtime_truth.py`
 
 **Interfaces:**
 - Consumes: Task 12 `RuntimeMount`, optional committed storage transaction ID, private pids-directory FD, `socket.socketpair`, stable PID/PGID/parent/start identity, and `StorageContract.open()` when storage is required.
@@ -1401,6 +1406,8 @@ with self.assertRaisesRegex(StartupLeaseError, "STARTUP_LEASE_REPLAYED"):
 
 Integration tests must assert the port is never listening before ACK, `cortex.sh start` creates the blocked handshake for both required-storage and no-marker product runtime, direct `python server.py` is permitted only with `CORTEX_ALLOW_DEVELOPMENT_FIXTURES=1` and no required marker, and direct `python -m uvicorn server:app` with healthy mounted required storage but no consumed lease exits without serving a request. The explicit development fixture has no managed context and therefore cannot later satisfy local-alias readiness.
 
+Every in-process Uvicorn/lifespan fixture in `tests/test_missions_api.py`, `tests/test_store_lifecycle.py`, and `tests/test_executor_runtime_truth.py` must save the imported server's `RUNTIME_PATHS`, bind it to that test's owner-only temporary runtime before entering lifespan, select the explicit development-fixture or injected managed-start context required by the case, and restore both paths and environment on setup failure and teardown. Add a regression that seeds a broken process-default required-storage projection and proves these unit fixtures never consult it. Keep the real subprocess tests for default/required `CORTEX_HOME`, direct entrypoints and missing lease unchanged; no product code may ignore a genuine required marker. Task 9 applies the same rule to `tests/test_chat_settings_api.py` before this atomic block.
+
 - [ ] **Step 2: Run focused tests and confirm RED**
 
 Run:
@@ -1410,6 +1417,9 @@ Run:
 "$PYTHON" tests/test_process_ownership.py
 "$PYTHON" tests/test_storage_guard_integration.py
 "$PYTHON" tests/test_start_local.py
+"$PYTHON" tests/test_missions_api.py
+"$PYTHON" tests/test_store_lifecycle.py
+"$PYTHON" tests/test_executor_runtime_truth.py
 ```
 
 Expected: FAIL because startup currently spawns an immediately runnable server and no one-shot lease exists.
@@ -1495,6 +1505,9 @@ Run every command below independently after both tasks are implemented:
 "$PYTHON" tests/test_storage_guard_integration.py
 "$PYTHON" tests/test_start_local.py
 "$PYTHON" tests/test_selftest.py
+"$PYTHON" tests/test_missions_api.py
+"$PYTHON" tests/test_store_lifecycle.py
+"$PYTHON" tests/test_executor_runtime_truth.py
 "$PYTHON" -m unittest \
   tests.test_installer.InstallerTest.test_doctor_json_is_stable_without_optional_services -v
 ```
@@ -1506,7 +1519,8 @@ git add console/startup_lease.py console/process_ownership.py console/server.py 
   console/storage_lifecycle.py console/installer.py scripts/cortex.sh scripts/start-local.sh \
   tests/test_startup_lease.py tests/test_process_ownership.py \
   tests/test_storage_guard_integration.py tests/test_start_local.py \
-  tests/test_selftest.py tests/test_installer.py
+  tests/test_selftest.py tests/test_installer.py tests/test_missions_api.py \
+  tests/test_store_lifecycle.py tests/test_executor_runtime_truth.py
 git commit -m "feat(storage): own managed mount and startup lifecycle"
 ```
 
@@ -1725,6 +1739,9 @@ Run each command from the repository root:
 "$PYTHON" tests/test_chat_settings_api.py
 "$PYTHON" tests/test_workspace_handle.py
 "$PYTHON" tests/test_workspace_path_fuzzing.py
+"$PYTHON" tests/test_missions_api.py
+"$PYTHON" tests/test_store_lifecycle.py
+"$PYTHON" tests/test_executor_runtime_truth.py
 ```
 
 Expected: every command exits `0`, selects at least one test, and performs no real Keychain or disk-image operation. The disposable integration command from Task 3 remains unexecuted unless separately authorized at action time.

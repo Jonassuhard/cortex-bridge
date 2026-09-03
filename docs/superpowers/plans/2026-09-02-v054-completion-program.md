@@ -39,7 +39,7 @@
 
 | Phase | Plan | SHA-256 |
 | --- | --- | --- |
-| S | `docs/superpowers/plans/2026-09-02-v054-storage-runtime-foundation.md` | `97b20fec13e7030dbb06bf39aa1d2ffdeb353ca33527e4155d3e9defd3994275` |
+| S | `docs/superpowers/plans/2026-09-02-v054-storage-runtime-foundation.md` | `94a49fcae36c2fdd662ac88e73468836ab908dcfaf53f003a5537d9f24285859` |
 | E | `docs/superpowers/plans/2026-09-02-v054-durable-effects-and-executor.md` | `7974f73e672077956d5e03a6416711791524ab520a8549b729ec4a2feb7c102c` |
 | U | `docs/superpowers/plans/2026-09-02-v054-runtime-ui-and-browser-reliability.md` | `25d04484e4dcf337728ce96f0af642d3894be71dea0ef9a616f2552cd9121245` |
 | I | `docs/superpowers/plans/2026-09-02-v054-hybrid-intent-router.md` | `73987192c4d5dbe3d0fcabf3637bd46f60b0ef50f15c8184b93452b1e7e66fc8` |
