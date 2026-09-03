@@ -42,23 +42,54 @@ private let childEnvironment = [
 ]
 
 final class SecretBuffer {
-    var bytes: [UInt8]
+    private let allocation: UnsafeMutableRawPointer
+    let count: Int
     let sourceRandomByteCount: Int?
+    private var erased = false
 
-    init(_ bytes: [UInt8], sourceRandomByteCount: Int? = nil) {
-        self.bytes = bytes
+    init(count: Int, sourceRandomByteCount: Int? = nil) {
+        precondition(count > 0)
+        self.count = count
         self.sourceRandomByteCount = sourceRandomByteCount
+        allocation = UnsafeMutableRawPointer.allocate(byteCount: count, alignment: 16)
+        allocation.initializeMemory(as: UInt8.self, repeating: 0, count: count)
+    }
+
+    convenience init(copying bytes: [UInt8], sourceRandomByteCount: Int? = nil) {
+        self.init(count: bytes.count, sourceRandomByteCount: sourceRandomByteCount)
+        bytes.withUnsafeBytes { source in
+            if let base = source.baseAddress {
+                allocation.copyMemory(from: base, byteCount: bytes.count)
+            }
+        }
+    }
+
+    func withUnsafeBytes<R>(_ body: (UnsafeRawBufferPointer) throws -> R) rethrows -> R {
+        try body(UnsafeRawBufferPointer(start: allocation, count: count))
+    }
+
+    func withUnsafeMutableBytes<R>(
+        _ body: (UnsafeMutableRawBufferPointer) throws -> R
+    ) rethrows -> R {
+        erased = false
+        return try body(UnsafeMutableRawBufferPointer(start: allocation, count: count))
     }
 
     func zeroize() {
-        bytes.withUnsafeMutableBytes { rawBuffer in
-            guard let base = rawBuffer.baseAddress else { return }
-            memset_s(base, rawBuffer.count, 0, rawBuffer.count)
+        guard !erased else { return }
+        memset_s(allocation, count, 0, count)
+        erased = true
+    }
+
+    var isZeroed: Bool {
+        erased && withUnsafeBytes { bytes in
+            bytes.allSatisfy { $0 == 0 }
         }
     }
 
     deinit {
         zeroize()
+        allocation.deallocate()
     }
 }
 
@@ -74,6 +105,7 @@ enum HelperFailure: Error {
     case keychainInteractionForbidden
     case keychainFailure
     case invalidMountMapping
+    case mountCleanupUnclear
 
     var code: String {
         switch self {
@@ -88,6 +120,7 @@ enum HelperFailure: Error {
         case .keychainInteractionForbidden: return "KEYCHAIN_INTERACTION_FORBIDDEN"
         case .keychainFailure: return "KEYCHAIN_FAILED"
         case .invalidMountMapping: return "MOUNT_MAPPING_INVALID"
+        case .mountCleanupUnclear: return "MOUNT_CLEANUP_UNCLEAR"
         }
     }
 
@@ -125,26 +158,22 @@ protocol KeychainStoring {
     func countForAccount(_ account: String) throws -> Int
     func count(selector: KeychainSelector, action: String) throws -> Int
     func add(_ item: KeychainItem) throws
-    func read(selector: KeychainSelector) throws -> [SecretBuffer]
+    func read(selector: KeychainSelector) throws -> SecretBuffer
     func delete(selector: KeychainSelector) throws
 }
 
 struct SystemRandomSource: RandomSource {
     func bytes(count: Int) throws -> SecretBuffer {
-        var bytes = [UInt8](repeating: 0, count: count)
+        let bytes = SecretBuffer(count: count, sourceRandomByteCount: count)
         let status = bytes.withUnsafeMutableBytes { rawBuffer -> Int32 in
             guard let base = rawBuffer.baseAddress else { return errSecParam }
             return SecRandomCopyBytes(kSecRandomDefault, count, base)
         }
         guard status == errSecSuccess else {
-            bytes.withUnsafeMutableBytes { rawBuffer in
-                if let base = rawBuffer.baseAddress {
-                    memset_s(base, rawBuffer.count, 0, rawBuffer.count)
-                }
-            }
+            bytes.zeroize()
             throw HelperFailure.randomFailure
         }
-        return SecretBuffer(bytes, sourceRandomByteCount: count)
+        return bytes
     }
 }
 
@@ -160,13 +189,13 @@ private func throwForSecurityStatus(_ status: OSStatus) throws {
 }
 
 protocol SecurityCalling {
-    func copyMatching(_ query: [String: Any]) -> (OSStatus, Any?)
+    func copyMatching(_ query: [String: Any], purpose: String) -> (OSStatus, Any?)
     func add(_ query: [String: Any]) -> OSStatus
     func delete(_ query: [String: Any]) -> OSStatus
 }
 
 struct SystemSecurityAdapter: SecurityCalling {
-    func copyMatching(_ query: [String: Any]) -> (OSStatus, Any?) {
+    func copyMatching(_ query: [String: Any], purpose: String) -> (OSStatus, Any?) {
         var result: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         return (status, result)
@@ -224,7 +253,7 @@ final class SystemKeychainStore: KeychainStoring {
         var query = baseQuery(account: account)
         query[kSecMatchLimit as String] = kSecMatchLimitAll
         query[kSecReturnAttributes as String] = true
-        let (status, result) = security.copyMatching(query)
+        let (status, result) = security.copyMatching(query, purpose: "collision-check")
         return try resultCount(
             status: status,
             result: result
@@ -235,7 +264,7 @@ final class SystemKeychainStore: KeychainStoring {
         var query = strictQuery(selector: selector)
         query[kSecMatchLimit as String] = kSecMatchLimitAll
         query[kSecReturnAttributes as String] = true
-        let (status, result) = security.copyMatching(query)
+        let (status, result) = security.copyMatching(query, purpose: action)
         return try resultCount(
             status: status,
             result: result
@@ -243,12 +272,19 @@ final class SystemKeychainStore: KeychainStoring {
     }
 
     func add(_ item: KeychainItem) throws {
+        let staging = NSMutableData(length: item.secret.count)!
+        item.secret.withUnsafeBytes { source in
+            staging.mutableBytes.copyMemory(from: source.baseAddress!, byteCount: source.count)
+        }
+        defer {
+            memset_s(staging.mutableBytes, staging.length, 0, staging.length)
+        }
         var query = baseQuery(account: item.account)
         query[kSecAttrLabel as String] = item.label
         query[kSecAttrDescription as String] = keychainDescription
         query[kSecAttrGeneric as String] = item.transactionTag
         query[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
-        query[kSecValueData as String] = Data(item.secret.bytes)
+        query[kSecValueData as String] = staging
         let status = security.add(query)
         if status == errSecDuplicateItem { throw HelperFailure.keychainCollision }
         guard status == errSecSuccess else {
@@ -257,30 +293,31 @@ final class SystemKeychainStore: KeychainStoring {
         }
     }
 
-    func read(selector: KeychainSelector) throws -> [SecretBuffer] {
-        var query = strictQuery(selector: selector)
-        query[kSecMatchLimit as String] = kSecMatchLimitAll
-        query[kSecReturnData as String] = true
-        let (status, result) = security.copyMatching(query)
-        if status == errSecItemNotFound { return [] }
-        guard status == errSecSuccess else {
-            try throwForSecurityStatus(status)
-            return []
+    func read(selector: KeychainSelector) throws -> SecretBuffer {
+        let count = try self.count(selector: selector, action: "read-count")
+        guard count == 1 else {
+            throw count == 0 ? HelperFailure.keychainNotFound : HelperFailure.keychainAmbiguous
         }
 
-        let values: [Data]
-        if let array = result as? [Data] {
-            values = array
-        } else if let data = result as? Data {
-            values = [data]
-        } else {
+        var query = strictQuery(selector: selector)
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        query[kSecReturnData as String] = true
+        let (status, result) = security.copyMatching(query, purpose: "read-one")
+        guard status == errSecSuccess else {
+            try throwForSecurityStatus(status)
             throw HelperFailure.keychainFailure
         }
-        return values.map { data in
-            let secret = SecretBuffer([UInt8](data))
-            trackSecret?(secret)
-            return secret
+        guard let data = result as? Data, !data.isEmpty else {
+            throw HelperFailure.keychainFailure
         }
+        let secret = SecretBuffer(count: data.count)
+        secret.withUnsafeMutableBytes { destination in
+            data.withUnsafeBytes { source in
+                destination.copyMemory(from: source)
+            }
+        }
+        trackSecret?(secret)
+        return secret
     }
 
     func delete(selector: KeychainSelector) throws {
@@ -307,138 +344,322 @@ private func withCStringArray<R>(
     }
 }
 
+enum ProcessFailureReason: String {
+    case timeout = "PROCESS_TIMEOUT"
+    case outputLimit = "PROCESS_OUTPUT_LIMIT"
+    case stdinFailure = "PROCESS_STDIN_FAILED"
+    case nonzero = "PROCESS_EXIT_NONZERO"
+    case signaled = "PROCESS_SIGNALED"
+    case supervision = "PROCESS_SUPERVISION_FAILED"
+}
+
+struct ProcessInvocationFailure: Error {
+    let reason: ProcessFailureReason
+    let stdout: Data
+    let stderr: Data
+    let directChildReaped: Bool
+    let processGroupGone: Bool
+}
+
+final class SpawnDiagnostics {
+    var stdinWriteLengths = [Int]()
+}
+
+#if CORTEX_STORAGE_HELPER_TESTING
+private let childTimeoutSeconds: Double = 0.30
+private let childGraceSeconds: Double = 0.15
+private let childOutputLimit = 4_096
+#else
+private let childTimeoutSeconds: Double = 60.0
+private let childGraceSeconds: Double = 2.0
+private let childOutputLimit = 1_048_576
+#endif
+
+private func monotonicSeconds() -> Double {
+    var time = timespec()
+    clock_gettime(CLOCK_MONOTONIC, &time)
+    return Double(time.tv_sec) + Double(time.tv_nsec) / 1_000_000_000
+}
+
+private func setNonBlocking(_ descriptor: Int32) throws {
+    let flags = Darwin.fcntl(descriptor, F_GETFL)
+    guard flags >= 0, Darwin.fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) == 0 else {
+        throw HelperFailure.hdiutilFailure
+    }
+}
+
+private func appendAvailable(
+    descriptor: Int32,
+    destination: inout Data,
+    eof: inout Bool
+) throws {
+    var buffer = [UInt8](repeating: 0, count: 4096)
+    while true {
+        let count = Darwin.read(descriptor, &buffer, buffer.count)
+        if count > 0 {
+            guard destination.count + count <= childOutputLimit else {
+                throw ProcessInvocationFailure(
+                    reason: .outputLimit,
+                    stdout: Data(), stderr: Data(),
+                    directChildReaped: false, processGroupGone: false
+                )
+            }
+            destination.append(buffer, count: count)
+            continue
+        }
+        if count == 0 { eof = true; return }
+        if errno == EINTR { continue }
+        if errno == EAGAIN || errno == EWOULDBLOCK { return }
+        throw HelperFailure.hdiutilFailure
+    }
+}
+
+private func terminateAndReap(pid: pid_t, status: inout Int32) -> (Bool, Bool) {
+    _ = Darwin.kill(-pid, SIGTERM)
+    let graceDeadline = monotonicSeconds() + childGraceSeconds
+    var reaped = false
+    while monotonicSeconds() < graceDeadline {
+        let result = waitpid(pid, &status, WNOHANG)
+        if result == pid { reaped = true; break }
+        usleep(10_000)
+    }
+    _ = Darwin.kill(-pid, SIGKILL)
+    if !reaped {
+        while true {
+            let result = waitpid(pid, &status, 0)
+            if result == pid { reaped = true; break }
+            if result < 0 && errno == EINTR { continue }
+            break
+        }
+    }
+    let groupDeadline = monotonicSeconds() + childGraceSeconds
+    var groupGone = false
+    while monotonicSeconds() < groupDeadline {
+        if Darwin.kill(-pid, 0) == -1 && errno == ESRCH {
+            groupGone = true
+            break
+        }
+        usleep(10_000)
+    }
+    return (reaped, groupGone)
+}
+
+private func ensureProcessGroupGone(_ pid: pid_t) -> Bool {
+    if Darwin.kill(-pid, 0) == -1 && errno == ESRCH { return true }
+    _ = Darwin.kill(-pid, SIGTERM)
+    var deadline = monotonicSeconds() + childGraceSeconds
+    while monotonicSeconds() < deadline {
+        if Darwin.kill(-pid, 0) == -1 && errno == ESRCH { return true }
+        usleep(10_000)
+    }
+    _ = Darwin.kill(-pid, SIGKILL)
+    deadline = monotonicSeconds() + childGraceSeconds
+    while monotonicSeconds() < deadline {
+        if Darwin.kill(-pid, 0) == -1 && errno == ESRCH { return true }
+        usleep(10_000)
+    }
+    return false
+}
+
+private func waitStatusExited(_ status: Int32) -> Bool {
+    (status & 0x7F) == 0
+}
+
+private func waitStatusSignaled(_ status: Int32) -> Bool {
+    let termination = status & 0x7F
+    return termination != 0 && termination != 0x7F
+}
+
+private func waitStatusExitCode(_ status: Int32) -> Int32 {
+    (status >> 8) & 0xFF
+}
+
 private func spawnChild(
     executable: String,
     argv: [String],
-    secret: SecretBuffer?
+    secret: SecretBuffer?,
+    diagnostics: SpawnDiagnostics? = nil
 ) throws -> Data {
-        guard argv.count >= 2, argv[0] == executable else {
-            throw HelperFailure.invalidRequest
-        }
-        var inputPipe = [Int32](repeating: -1, count: 2)
-        var outputPipe = [Int32](repeating: -1, count: 2)
-        guard Darwin.pipe(&inputPipe) == 0 else { throw HelperFailure.hdiutilFailure }
-        guard Darwin.pipe(&outputPipe) == 0 else {
-            Darwin.close(inputPipe[0])
-            Darwin.close(inputPipe[1])
+    guard argv.count >= 2, argv[0] == executable else { throw HelperFailure.invalidRequest }
+    var inputPipe = [Int32](repeating: -1, count: 2)
+    var outputPipe = [Int32](repeating: -1, count: 2)
+    var errorPipe = [Int32](repeating: -1, count: 2)
+    guard Darwin.pipe(&inputPipe) == 0 else { throw HelperFailure.hdiutilFailure }
+    guard Darwin.pipe(&outputPipe) == 0 else {
+        Darwin.close(inputPipe[0]); Darwin.close(inputPipe[1])
+        throw HelperFailure.hdiutilFailure
+    }
+    guard Darwin.pipe(&errorPipe) == 0 else {
+        Darwin.close(inputPipe[0]); Darwin.close(inputPipe[1])
+        Darwin.close(outputPipe[0]); Darwin.close(outputPipe[1])
+        throw HelperFailure.hdiutilFailure
+    }
+
+    func closeDescriptor(_ descriptor: inout Int32) {
+        if descriptor >= 0 { Darwin.close(descriptor); descriptor = -1 }
+    }
+    defer {
+        closeDescriptor(&inputPipe[0]); closeDescriptor(&inputPipe[1])
+        closeDescriptor(&outputPipe[0]); closeDescriptor(&outputPipe[1])
+        closeDescriptor(&errorPipe[0]); closeDescriptor(&errorPipe[1])
+    }
+
+    var actions: posix_spawn_file_actions_t?
+    guard posix_spawn_file_actions_init(&actions) == 0 else { throw HelperFailure.hdiutilFailure }
+    defer { posix_spawn_file_actions_destroy(&actions) }
+    guard posix_spawn_file_actions_adddup2(&actions, inputPipe[0], STDIN_FILENO) == 0,
+          posix_spawn_file_actions_adddup2(&actions, outputPipe[1], STDOUT_FILENO) == 0,
+          posix_spawn_file_actions_adddup2(&actions, errorPipe[1], STDERR_FILENO) == 0
+    else { throw HelperFailure.hdiutilFailure }
+    for descriptor in [inputPipe[0], inputPipe[1], outputPipe[0], outputPipe[1], errorPipe[0], errorPipe[1]] {
+        guard posix_spawn_file_actions_addclose(&actions, descriptor) == 0 else {
             throw HelperFailure.hdiutilFailure
         }
+    }
 
-        func closeDescriptor(_ descriptor: inout Int32) {
-            if descriptor >= 0 {
-                Darwin.close(descriptor)
-                descriptor = -1
+    var attributes: posix_spawnattr_t?
+    guard posix_spawnattr_init(&attributes) == 0 else { throw HelperFailure.hdiutilFailure }
+    defer { posix_spawnattr_destroy(&attributes) }
+    let flags = Int16(POSIX_SPAWN_CLOEXEC_DEFAULT | POSIX_SPAWN_SETPGROUP)
+    guard posix_spawnattr_setflags(&attributes, flags) == 0,
+          posix_spawnattr_setpgroup(&attributes, 0) == 0
+    else { throw HelperFailure.hdiutilFailure }
+
+    var pid = pid_t()
+    let spawnStatus: Int32 = withCStringArray(argv) { argvPointer in
+        withCStringArray(childEnvironment) { environmentPointer in
+            executable.withCString { executablePointer in
+                posix_spawn(
+                    &pid, executablePointer, &actions, &attributes,
+                    argvPointer, environmentPointer
+                )
             }
         }
-        defer {
-            closeDescriptor(&inputPipe[0])
-            closeDescriptor(&inputPipe[1])
-            closeDescriptor(&outputPipe[0])
-            closeDescriptor(&outputPipe[1])
-        }
-
-        var actions: posix_spawn_file_actions_t?
-        guard posix_spawn_file_actions_init(&actions) == 0 else {
-            throw HelperFailure.hdiutilFailure
-        }
-        defer { posix_spawn_file_actions_destroy(&actions) }
-        guard posix_spawn_file_actions_adddup2(&actions, inputPipe[0], STDIN_FILENO) == 0,
-              posix_spawn_file_actions_adddup2(&actions, outputPipe[1], STDOUT_FILENO) == 0,
-              posix_spawn_file_actions_adddup2(&actions, outputPipe[1], STDERR_FILENO) == 0,
-              posix_spawn_file_actions_addclose(&actions, inputPipe[1]) == 0,
-              posix_spawn_file_actions_addclose(&actions, outputPipe[0]) == 0,
-              posix_spawn_file_actions_addclose(&actions, inputPipe[0]) == 0,
-              posix_spawn_file_actions_addclose(&actions, outputPipe[1]) == 0
-        else {
-            throw HelperFailure.hdiutilFailure
-        }
-
-        var attributes: posix_spawnattr_t?
-        guard posix_spawnattr_init(&attributes) == 0 else {
-            throw HelperFailure.hdiutilFailure
-        }
-        defer { posix_spawnattr_destroy(&attributes) }
-        let flags = Int16(POSIX_SPAWN_CLOEXEC_DEFAULT)
-        guard posix_spawnattr_setflags(&attributes, flags) == 0 else {
-            throw HelperFailure.hdiutilFailure
-        }
-
-        var pid = pid_t()
-        let spawnStatus: Int32 = withCStringArray(argv) { argvPointer in
-            withCStringArray(childEnvironment) { environmentPointer in
-                executable.withCString { executablePointer in
-                    posix_spawn(
-                        &pid,
-                        executablePointer,
-                        &actions,
-                        &attributes,
-                        argvPointer,
-                        environmentPointer
-                    )
-                }
-            }
-        }
-        guard spawnStatus == 0 else { throw HelperFailure.hdiutilFailure }
-
-        closeDescriptor(&inputPipe[0])
-        closeDescriptor(&outputPipe[1])
-
-        if let secret {
-            var wireBytes = secret.bytes
-            wireBytes.append(0)
-            defer {
-                wireBytes.withUnsafeMutableBytes { rawBuffer in
-                    if let base = rawBuffer.baseAddress {
-                        memset_s(base, rawBuffer.count, 0, rawBuffer.count)
-                    }
-                }
-            }
-            var written = 0
-            while written < wireBytes.count {
-                let result = wireBytes.withUnsafeBytes { rawBuffer -> Int in
-                    guard let base = rawBuffer.baseAddress else { return -1 }
-                    return Darwin.write(
-                        inputPipe[1],
-                        base.advanced(by: written),
-                        rawBuffer.count - written
-                    )
-                }
-                if result < 0 && errno == EINTR { continue }
-                guard result > 0 else {
-                    closeDescriptor(&inputPipe[1])
-                    _ = waitpid(pid, nil, 0)
-                    throw HelperFailure.hdiutilFailure
-                }
-                written += result
-            }
-        }
-        closeDescriptor(&inputPipe[1])
-
-        var output = Data()
-        var buffer = [UInt8](repeating: 0, count: 4096)
-        while true {
-            let count = Darwin.read(outputPipe[0], &buffer, buffer.count)
-            if count < 0 && errno == EINTR { continue }
-            guard count >= 0 else {
-                _ = waitpid(pid, nil, 0)
-                throw HelperFailure.hdiutilFailure
-            }
-            if count == 0 { break }
-            output.append(buffer, count: count)
-        }
-        closeDescriptor(&outputPipe[0])
-
+    }
+    guard spawnStatus == 0 else { throw HelperFailure.hdiutilFailure }
+    closeDescriptor(&inputPipe[0]); closeDescriptor(&outputPipe[1]); closeDescriptor(&errorPipe[1])
+    do {
+        try setNonBlocking(inputPipe[1])
+        try setNonBlocking(outputPipe[0])
+        try setNonBlocking(errorPipe[0])
+    } catch {
         var status: Int32 = 0
-        let waitResult = waitpid(pid, &status, 0)
-        let terminatedNormally = (status & 0x7F) == 0
-        let childExitCode = (status >> 8) & 0xFF
-        guard waitResult == pid,
-              terminatedNormally,
-              childExitCode == 0
-        else {
-            throw HelperFailure.hdiutilFailure
+        let (reaped, groupGone) = terminateAndReap(pid: pid, status: &status)
+        throw ProcessInvocationFailure(
+            reason: .supervision, stdout: Data(), stderr: Data(),
+            directChildReaped: reaped, processGroupGone: groupGone
+        )
+    }
+
+    var stdout = Data()
+    var stderr = Data()
+    var stdoutEOF = false
+    var stderrEOF = false
+    var secretOffset = 0
+    var nulWritten = secret == nil
+    if secret == nil { closeDescriptor(&inputPipe[1]) }
+    var childStatus: Int32 = 0
+    var childReaped = false
+    let deadline = monotonicSeconds() + childTimeoutSeconds
+    var failureReason: ProcessFailureReason?
+
+    while !childReaped || !stdoutEOF || !stderrEOF {
+        if monotonicSeconds() >= deadline { failureReason = .timeout; break }
+        var pollDescriptors = [
+            pollfd(fd: inputPipe[1], events: inputPipe[1] >= 0 ? Int16(POLLOUT) : 0, revents: 0),
+            pollfd(fd: outputPipe[0], events: Int16(POLLIN), revents: 0),
+            pollfd(fd: errorPipe[0], events: Int16(POLLIN), revents: 0),
+        ]
+        let pollResult = Darwin.poll(&pollDescriptors, nfds_t(pollDescriptors.count), 20)
+        if pollResult < 0 && errno != EINTR { failureReason = .supervision; break }
+
+        do {
+            try appendAvailable(descriptor: outputPipe[0], destination: &stdout, eof: &stdoutEOF)
+            try appendAvailable(descriptor: errorPipe[0], destination: &stderr, eof: &stderrEOF)
+        } catch let failure as ProcessInvocationFailure {
+            failureReason = failure.reason
+            break
+        } catch {
+            failureReason = .supervision
+            break
         }
-        return output
+
+        if inputPipe[1] >= 0, pollDescriptors[0].revents & Int16(POLLOUT) != 0 {
+            if let secret, secretOffset < secret.count {
+                let result = secret.withUnsafeBytes { bytes in
+                    Darwin.write(
+                        inputPipe[1], bytes.baseAddress!.advanced(by: secretOffset),
+                        bytes.count - secretOffset
+                    )
+                }
+                if result > 0 { secretOffset += result; diagnostics?.stdinWriteLengths.append(result) }
+                else if result < 0 && errno != EAGAIN && errno != EINTR { failureReason = .stdinFailure }
+            } else if !nulWritten {
+                var nul: UInt8 = 0
+                let result = Darwin.write(inputPipe[1], &nul, 1)
+                if result == 1 { nulWritten = true; diagnostics?.stdinWriteLengths.append(1) }
+                else if result < 0 && errno != EAGAIN && errno != EINTR { failureReason = .stdinFailure }
+            }
+            if secretOffset == (secret?.count ?? 0), nulWritten {
+                closeDescriptor(&inputPipe[1])
+            }
+        }
+        if inputPipe[1] >= 0,
+           pollDescriptors[0].revents & Int16(POLLERR | POLLHUP) != 0,
+           secretOffset < (secret?.count ?? 0) || !nulWritten {
+            failureReason = .stdinFailure
+        }
+        if failureReason != nil { break }
+        let waitResult = waitpid(pid, &childStatus, WNOHANG)
+        if waitResult == pid { childReaped = true }
+        else if waitResult < 0 && errno != EINTR { failureReason = .supervision; break }
+    }
+
+    if let reason = failureReason {
+        closeDescriptor(&inputPipe[1])
+        let (reaped, groupGone) = terminateAndReap(pid: pid, status: &childStatus)
+        throw ProcessInvocationFailure(
+            reason: reason,
+            stdout: stdout,
+            stderr: stderr,
+            directChildReaped: reaped,
+            processGroupGone: groupGone
+        )
+    }
+    guard childReaped else {
+        let (reaped, groupGone) = terminateAndReap(pid: pid, status: &childStatus)
+        throw ProcessInvocationFailure(
+            reason: .supervision, stdout: stdout, stderr: stderr,
+            directChildReaped: reaped, processGroupGone: groupGone
+        )
+    }
+    let groupGone = ensureProcessGroupGone(pid)
+    guard groupGone else {
+        throw ProcessInvocationFailure(
+            reason: .supervision, stdout: stdout, stderr: stderr,
+            directChildReaped: true, processGroupGone: false
+        )
+    }
+    if waitStatusSignaled(childStatus) {
+        throw ProcessInvocationFailure(
+            reason: .signaled, stdout: stdout, stderr: stderr,
+            directChildReaped: true, processGroupGone: true
+        )
+    }
+    guard waitStatusExited(childStatus) else {
+        throw ProcessInvocationFailure(
+            reason: .supervision, stdout: stdout, stderr: stderr,
+            directChildReaped: true, processGroupGone: true
+        )
+    }
+    let exitCode = waitStatusExitCode(childStatus)
+    guard exitCode == 0 else {
+        throw ProcessInvocationFailure(
+            reason: .nonzero, stdout: stdout, stderr: stderr,
+            directChildReaped: true, processGroupGone: true
+        )
+    }
+    return stdout
 }
 
 final class PosixHdiutilRunner: HdiutilRunning {
@@ -453,34 +674,31 @@ private let base64URLAlphabet = Array(
 )
 
 func encodeBase64URL(_ random: SecretBuffer) throws -> SecretBuffer {
-    guard random.bytes.count == 32 else { throw HelperFailure.randomFailure }
-    var encoded = [UInt8]()
-    encoded.reserveCapacity(43)
-    var index = 0
-    while index + 3 <= random.bytes.count {
-        let value = UInt32(random.bytes[index]) << 16
-            | UInt32(random.bytes[index + 1]) << 8
-            | UInt32(random.bytes[index + 2])
-        encoded.append(base64URLAlphabet[Int((value >> 18) & 0x3F)])
-        encoded.append(base64URLAlphabet[Int((value >> 12) & 0x3F)])
-        encoded.append(base64URLAlphabet[Int((value >> 6) & 0x3F)])
-        encoded.append(base64URLAlphabet[Int(value & 0x3F)])
-        index += 3
+    guard random.count == 32 else { throw HelperFailure.randomFailure }
+    let encoded = SecretBuffer(count: 43, sourceRandomByteCount: random.count)
+    random.withUnsafeBytes { source in
+        encoded.withUnsafeMutableBytes { destination in
+            var sourceIndex = 0
+            var destinationIndex = 0
+            while sourceIndex + 3 <= source.count {
+                let value = UInt32(source[sourceIndex]) << 16
+                    | UInt32(source[sourceIndex + 1]) << 8
+                    | UInt32(source[sourceIndex + 2])
+                destination[destinationIndex] = base64URLAlphabet[Int((value >> 18) & 0x3F)]
+                destination[destinationIndex + 1] = base64URLAlphabet[Int((value >> 12) & 0x3F)]
+                destination[destinationIndex + 2] = base64URLAlphabet[Int((value >> 6) & 0x3F)]
+                destination[destinationIndex + 3] = base64URLAlphabet[Int(value & 0x3F)]
+                sourceIndex += 3
+                destinationIndex += 4
+            }
+            let value = UInt32(source[sourceIndex]) << 16
+                | UInt32(source[sourceIndex + 1]) << 8
+            destination[destinationIndex] = base64URLAlphabet[Int((value >> 18) & 0x3F)]
+            destination[destinationIndex + 1] = base64URLAlphabet[Int((value >> 12) & 0x3F)]
+            destination[destinationIndex + 2] = base64URLAlphabet[Int((value >> 6) & 0x3F)]
+        }
     }
-    let remaining = random.bytes.count - index
-    if remaining == 2 {
-        let value = UInt32(random.bytes[index]) << 16
-            | UInt32(random.bytes[index + 1]) << 8
-        encoded.append(base64URLAlphabet[Int((value >> 18) & 0x3F)])
-        encoded.append(base64URLAlphabet[Int((value >> 12) & 0x3F)])
-        encoded.append(base64URLAlphabet[Int((value >> 6) & 0x3F)])
-    } else if remaining == 1 {
-        let value = UInt32(random.bytes[index]) << 16
-        encoded.append(base64URLAlphabet[Int((value >> 18) & 0x3F)])
-        encoded.append(base64URLAlphabet[Int((value >> 12) & 0x3F)])
-    }
-    guard encoded.count == 43 else { throw HelperFailure.randomFailure }
-    return SecretBuffer(encoded, sourceRandomByteCount: random.bytes.count)
+    return encoded
 }
 
 private func normalizedKey(_ key: String) -> String {
@@ -593,22 +811,65 @@ private func mappingDevices(
     return devices
 }
 
+private func imageEntryCount(from data: Data, imagePath: String) throws -> Int {
+    let plist = try PropertyListSerialization.propertyList(from: data, options: [], format: nil)
+    guard let dictionary = plist as? [String: Any],
+          let images = dictionary["images"] as? [[String: Any]]
+    else { throw HelperFailure.invalidMountMapping }
+    return images.filter { image in
+        let candidate = image["image_path"] as? String ?? image["image-path"] as? String
+        return candidate == imagePath
+    }.count
+}
+
+private func attachReceiptDevices(from data: Data, mountPath: String) -> [String] {
+    guard let output = String(data: data, encoding: .utf8) else { return [] }
+    return output.split(separator: "\n").compactMap { line in
+        let fields = line.split(separator: "\t", omittingEmptySubsequences: false)
+        guard fields.count >= 3,
+              String(fields.last!) == mountPath,
+              fields[0].hasPrefix("/dev/disk")
+        else { return nil }
+        return String(fields[0])
+    }
+}
+
+private func containsControl(_ value: String) -> Bool {
+    value.unicodeScalars.contains { CharacterSet.controlCharacters.contains($0) }
+}
+
+private func isLexicallySafeAbsolutePath(_ value: String) -> Bool {
+    guard value.hasPrefix("/"), !containsControl(value), !value.utf8.contains(0) else {
+        return false
+    }
+    let components = value.split(separator: "/", omittingEmptySubsequences: false)
+    guard components.count > 1, components[0].isEmpty else { return false }
+    return components.dropFirst().allSatisfy { !$0.isEmpty && $0 != "." && $0 != ".." }
+}
+
 private func validatedRequest(_ request: HelperRequest) throws {
     guard request.schema_version == 1,
-          request.image_path.hasPrefix("/"),
-          !request.image_path.utf8.contains(0)
+          isLexicallySafeAbsolutePath(request.image_path),
+          let mountPath = request.mount_path,
+          isLexicallySafeAbsolutePath(mountPath),
+          let volumeName = request.volume_name,
+          let size = request.size,
+          !containsControl(volumeName),
+          !containsControl(size)
     else {
         throw HelperFailure.invalidRequest
     }
     _ = try imageBasename(request.image_path)
+    let isSpike = size == "64m" && volumeName == "CORTEX_BRIDGE_SPIKE"
+    let isProduction = size == "256g" && volumeName == "CORTEX_BRIDGE_2026_09"
+    guard (isSpike && request.disposable) || (isProduction && !request.disposable) else {
+        throw HelperFailure.invalidRequest
+    }
     switch request.operation {
     case .create:
-        guard let volumeName = request.volume_name,
-              let size = request.size,
-              !volumeName.isEmpty,
-              !size.isEmpty,
-              request.expected_encryption_uuid == nil
-        else { throw HelperFailure.invalidRequest }
+        guard request.expected_encryption_uuid == nil else {
+            throw HelperFailure.invalidRequest
+        }
     case .mount, .detach:
         _ = try requiredExpectedUUID(request)
         _ = try requiredMountPath(request)
@@ -673,35 +934,108 @@ func perform(
     case .mount:
         let expected = try requiredExpectedUUID(request)
         let mountPath = try requiredMountPath(request)
-        let matches = try keychain.read(selector: selector(expected))
-        guard matches.count == 1, let secret = matches.first else {
-            matches.forEach { $0.zeroize() }
-            throw matches.isEmpty ? HelperFailure.keychainNotFound : HelperFailure.keychainAmbiguous
-        }
+        let secret = try keychain.read(selector: selector(expected))
         defer { secret.zeroize() }
-        _ = try hdiutil.run(
-            argv: [
-                hdiutilPath, "attach", "-stdinpass", "-owners", "on",
-                "-nobrowse", "-mountpoint", mountPath, request.image_path,
-            ],
-            secret: secret
+        let baselineInfo = try hdiutil.run(
+            argv: [hdiutilPath, "info", "-plist"], secret: nil
         )
-        let encryptionData = try hdiutil.run(
-            argv: [hdiutilPath, "isencrypted", "-plist", request.image_path],
-            secret: nil
+        let baselineDevices = try mappingDevices(
+            from: baselineInfo, imagePath: request.image_path, mountPath: mountPath
         )
-        _ = try parseEncryptionFacts(encryptionData, expectedUUID: expected)
-        let info = try hdiutil.run(argv: [hdiutilPath, "info", "-plist"], secret: nil)
-        let devices = try mappingDevices(
-            from: info, imagePath: request.image_path, mountPath: mountPath
-        )
-        guard devices.count == 1 else { throw HelperFailure.invalidMountMapping }
+        guard baselineDevices.isEmpty,
+              try imageEntryCount(from: baselineInfo, imagePath: request.image_path) == 0
+        else { throw HelperFailure.invalidMountMapping }
+
+        var receipt: String?
+        var originalFailure: Error?
+        do {
+            let attachOutput = try hdiutil.run(
+                argv: [
+                    hdiutilPath, "attach", "-stdinpass", "-owners", "on",
+                    "-nobrowse", "-mountpoint", mountPath, request.image_path,
+                ],
+                secret: secret
+            )
+            let outputReceipts = attachReceiptDevices(from: attachOutput, mountPath: mountPath)
+            let postInfo = try hdiutil.run(
+                argv: [hdiutilPath, "info", "-plist"], secret: nil
+            )
+            let postDevices = try mappingDevices(
+                from: postInfo, imagePath: request.image_path, mountPath: mountPath
+            )
+            guard postDevices.count <= 1 else { throw HelperFailure.mountCleanupUnclear }
+            if postDevices.count == 1 {
+                guard outputReceipts.isEmpty || outputReceipts == postDevices else {
+                    throw HelperFailure.mountCleanupUnclear
+                }
+                receipt = postDevices[0]
+            } else if outputReceipts.count == 1 {
+                receipt = outputReceipts[0]
+                throw HelperFailure.invalidMountMapping
+            } else {
+                throw HelperFailure.mountCleanupUnclear
+            }
+
+            let encryptionData = try hdiutil.run(
+                argv: [hdiutilPath, "isencrypted", "-plist", request.image_path],
+                secret: nil
+            )
+            _ = try parseEncryptionFacts(encryptionData, expectedUUID: expected)
+            let finalInfo = try hdiutil.run(
+                argv: [hdiutilPath, "info", "-plist"], secret: nil
+            )
+            let finalDevices = try mappingDevices(
+                from: finalInfo, imagePath: request.image_path, mountPath: mountPath
+            )
+            guard finalDevices == [receipt!],
+                  try imageEntryCount(from: finalInfo, imagePath: request.image_path) == 1
+            else { throw HelperFailure.invalidMountMapping }
+        } catch let failure as ProcessInvocationFailure {
+            let outputReceipts = attachReceiptDevices(from: failure.stdout, mountPath: mountPath)
+            if let currentInfo = try? hdiutil.run(
+                argv: [hdiutilPath, "info", "-plist"], secret: nil
+            ), let currentDevices = try? mappingDevices(
+                from: currentInfo, imagePath: request.image_path, mountPath: mountPath
+            ), currentDevices.count == 1 {
+                if outputReceipts.isEmpty || currentDevices == outputReceipts {
+                    receipt = currentDevices[0]
+                }
+            }
+            originalFailure = HelperFailure.hdiutilFailure
+        } catch {
+            originalFailure = error
+        }
+
+        if let originalFailure {
+            guard let receipt else { throw HelperFailure.mountCleanupUnclear }
+            do {
+                _ = try hdiutil.run(
+                    argv: [hdiutilPath, "detach", receipt], secret: nil
+                )
+                let cleanupInfo = try hdiutil.run(
+                    argv: [hdiutilPath, "info", "-plist"], secret: nil
+                )
+                let remaining = try mappingDevices(
+                    from: cleanupInfo, imagePath: request.image_path, mountPath: mountPath
+                )
+                guard remaining.isEmpty,
+                      try imageEntryCount(
+                        from: cleanupInfo, imagePath: request.image_path
+                      ) == 0
+                else { throw HelperFailure.mountCleanupUnclear }
+            } catch {
+                throw HelperFailure.mountCleanupUnclear
+            }
+            if let helperFailure = originalFailure as? HelperFailure { throw helperFailure }
+            throw HelperFailure.hdiutilFailure
+        }
+        guard let receipt else { throw HelperFailure.mountCleanupUnclear }
         return HelperResponse(
             schema_version: 1,
             operation: request.operation.rawValue,
             code: "OK",
             encryption_uuid: expected,
-            device: devices[0],
+            device: receipt,
             item_count: 1
         )
 
@@ -717,11 +1051,23 @@ func perform(
         let devices = try mappingDevices(
             from: info, imagePath: request.image_path, mountPath: mountPath
         )
-        guard devices.count == 1 else { throw HelperFailure.invalidMountMapping }
-        _ = try hdiutil.run(
-            argv: [hdiutilPath, "detach", devices[0]],
-            secret: nil
-        )
+        guard devices.count == 1,
+              try imageEntryCount(from: info, imagePath: request.image_path) == 1
+        else { throw HelperFailure.invalidMountMapping }
+        do {
+            _ = try hdiutil.run(
+                argv: [hdiutilPath, "detach", devices[0]],
+                secret: nil
+            )
+            let detachedInfo = try hdiutil.run(
+                argv: [hdiutilPath, "info", "-plist"], secret: nil
+            )
+            guard try imageEntryCount(
+                from: detachedInfo, imagePath: request.image_path
+            ) == 0 else { throw HelperFailure.mountCleanupUnclear }
+        } catch {
+            throw HelperFailure.mountCleanupUnclear
+        }
         return HelperResponse(
             schema_version: 1,
             operation: request.operation.rawValue,
@@ -804,7 +1150,7 @@ final class BufferTracker {
     }
 
     var allZeroed: Bool {
-        buffers.allSatisfy { $0.bytes.allSatisfy { $0 == 0 } }
+        buffers.allSatisfy { $0.isZeroed }
     }
 }
 
@@ -816,7 +1162,11 @@ final class FakeRandomSource: RandomSource {
     }
 
     func bytes(count: Int) throws -> SecretBuffer {
-        tracker.track(SecretBuffer(Array(0..<UInt8(count)), sourceRandomByteCount: count))
+        let buffer = SecretBuffer(count: count, sourceRandomByteCount: count)
+        buffer.withUnsafeMutableBytes { bytes in
+            for index in 0..<count { bytes[index] = UInt8(index) }
+        }
+        return tracker.track(buffer)
     }
 }
 
@@ -824,10 +1174,13 @@ final class FakeHdiutilRunner: HdiutilRunning {
     let scenario: String
     let tracker: BufferTracker
     var calls = [[String: Any]]()
+    var attached: Bool
+    var infoCalls = 0
 
-    init(scenario: String, tracker: BufferTracker) {
+    init(scenario: String, tracker: BufferTracker, operation: Operation) {
         self.scenario = scenario
         self.tracker = tracker
+        attached = operation == .detach
     }
 
     private func plist(_ object: Any) throws -> Data {
@@ -847,21 +1200,46 @@ final class FakeHdiutilRunner: HdiutilRunning {
             _ = tracker.track(secret)
             let allowed = Set(base64URLAlphabet)
             call["source_random_byte_count"] = secret.sourceRandomByteCount ?? NSNull()
-            call["secret_payload_count"] = secret.bytes.count
-            call["secret_payload_is_base64url"] = secret.bytes.allSatisfy { allowed.contains($0) }
-            call["secret_payload_contains_nul"] = secret.bytes.contains(0)
-            call["secret_wire_count"] = secret.bytes.count + 1
+            call["secret_payload_count"] = secret.count
+            secret.withUnsafeBytes { bytes in
+                call["secret_payload_is_base64url"] = bytes.allSatisfy { allowed.contains($0) }
+                call["secret_payload_contains_nul"] = bytes.contains(0)
+            }
+            call["secret_wire_count"] = secret.count + 1
             call["terminal_nul_count"] = 1
         }
         calls.append(call)
 
         guard argv.count >= 2 else { throw HelperFailure.hdiutilFailure }
         let command = argv[1]
-        if scenario == "hdiutil-error", command == "attach" {
-            throw HelperFailure.hdiutilFailure
+        if command == "attach" {
+            if scenario == "hdiutil-error" { throw HelperFailure.hdiutilFailure }
+            attached = true
+            let receipt = Data("/dev/disk99\tApple_APFS\t/private/tmp/CORTEX_TEST_MOUNT\n".utf8)
+            if scenario == "attach-timeout-with-receipt" {
+                throw ProcessInvocationFailure(
+                    reason: .timeout, stdout: receipt, stderr: Data(),
+                    directChildReaped: true, processGroupGone: true
+                )
+            }
+            if scenario == "attach-timeout-no-receipt" {
+                throw ProcessInvocationFailure(
+                    reason: .timeout, stdout: Data(), stderr: Data(),
+                    directChildReaped: true, processGroupGone: true
+                )
+            }
+            return receipt
+        }
+        if command == "detach" {
+            if scenario == "compensation-detach-failure" {
+                throw HelperFailure.hdiutilFailure
+            }
+            attached = false
+            return Data()
         }
         if command == "isencrypted" {
-            if scenario == "bad-encryption" {
+            if scenario == "bad-encryption" || scenario == "post-encryption-failure"
+                || scenario == "compensation-detach-failure" {
                 return try plist([
                     "encrypted": true,
                     "passphrase_count": 2,
@@ -877,14 +1255,25 @@ final class FakeHdiutilRunner: HdiutilRunning {
             ])
         }
         if command == "info" {
+            infoCalls += 1
+            if scenario == "postcheck-timeout", attached, infoCalls == 2 {
+                throw ProcessInvocationFailure(
+                    reason: .timeout, stdout: Data(), stderr: Data(),
+                    directChildReaped: true, processGroupGone: true
+                )
+            }
+            if !attached {
+                return try plist(["images": []])
+            }
             let entity: [String: Any] = [
                 "mount_point": "/private/tmp/CORTEX_TEST_MOUNT",
                 "dev_entry": "/dev/disk99",
             ]
             let entities: [[String: Any]]
-            if scenario == "mapping-zero" {
+            if scenario == "mapping-zero" || scenario == "post-mapping-failure"
+                || scenario == "attach-timeout-no-receipt" {
                 entities = []
-            } else if scenario == "mapping-multiple" {
+            } else if scenario == "mapping-multiple" || scenario == "post-mapping-ambiguous" {
                 entities = [entity, entity]
             } else {
                 entities = [entity]
@@ -903,6 +1292,8 @@ final class FakeHdiutilRunner: HdiutilRunning {
 final class FakeSecurityAdapter: SecurityCalling {
     let scenario: String
     var calls = [[String: Any]]()
+    var stagingBuffers = [NSMutableData]()
+    var secretMaterializations = 0
 
     init(scenario: String) {
         self.scenario = scenario
@@ -946,34 +1337,54 @@ final class FakeSecurityAdapter: SecurityCalling {
         if let secret = query[kSecValueData as String] as? Data {
             result["secret_length"] = secret.count
         }
+        if boolValue(query, key: kSecReturnData) {
+            result["return_data"] = true
+        }
+        if stringValue(query, key: kSecMatchLimit) == (kSecMatchLimitOne as String) {
+            result["match_limit"] = "one"
+        }
         return result
     }
 
-    func copyMatching(_ query: [String: Any]) -> (OSStatus, Any?) {
+    func copyMatching(_ query: [String: Any], purpose: String) -> (OSStatus, Any?) {
         let isRead = boolValue(query, key: kSecReturnData)
-        let isStrict = query[kSecAttrGeneric as String] != nil
-        let action = isRead ? "read" : (isStrict ? "inspect" : "collision-check")
-        calls.append(normalizedQuery(query, action: action))
+        calls.append(normalizedQuery(query, action: purpose))
         if scenario == "interaction" { return (errSecInteractionNotAllowed, nil) }
         if scenario == "zero-match" { return (errSecItemNotFound, nil) }
         let count = scenario == "multiple-match" ? 2 : 1
-        if action == "collision-check", scenario != "collision" {
+        if purpose == "collision-check", scenario != "collision" {
             return (errSecItemNotFound, nil)
         }
         if isRead {
-            return (errSecSuccess, (0..<count).map { _ in Data(repeating: 65, count: 43) })
+            secretMaterializations += 1
+            return (errSecSuccess, Data(repeating: 65, count: 43))
         }
         return (errSecSuccess, (0..<count).map { _ in ["matched": true] })
     }
 
     func add(_ query: [String: Any]) -> OSStatus {
         calls.append(normalizedQuery(query, action: "add"))
-        return scenario == "interaction" ? errSecInteractionNotAllowed : errSecSuccess
+        if let staging = query[kSecValueData as String] as? NSMutableData {
+            stagingBuffers.append(staging)
+        }
+        if scenario == "add-collision" { return errSecDuplicateItem }
+        if scenario == "add-interaction" { return errSecInteractionNotAllowed }
+        return errSecSuccess
     }
 
     func delete(_ query: [String: Any]) -> OSStatus {
         calls.append(normalizedQuery(query, action: "delete"))
         return scenario == "interaction" ? errSecInteractionNotAllowed : errSecSuccess
+    }
+
+    var allStagingZeroed: Bool {
+        stagingBuffers.allSatisfy { staging in
+            let bytes = UnsafeRawBufferPointer(
+                start: staging.bytes,
+                count: staging.length
+            )
+            return bytes.allSatisfy { $0 == 0 }
+        }
     }
 }
 
@@ -1009,7 +1420,8 @@ private func runSpawnProbe() -> Int32 {
     defer { Darwin.close(foreignDescriptor) }
     guard Darwin.fcntl(foreignDescriptor, F_SETFD, 0) == 0 else { return 70 }
 
-    let secret = SecretBuffer([UInt8](repeating: 65, count: 43))
+    let secret = SecretBuffer(copying: [UInt8](repeating: 65, count: 43))
+    let diagnostics = SpawnDiagnostics()
     let childOutput: Data
     do {
         childOutput = try spawnChild(
@@ -1019,7 +1431,8 @@ private func runSpawnProbe() -> Int32 {
                 "--fd-child",
                 String(foreignDescriptor),
             ],
-            secret: secret
+            secret: secret,
+            diagnostics: diagnostics
         )
     } catch {
         secret.zeroize()
@@ -1029,14 +1442,98 @@ private func runSpawnProbe() -> Int32 {
 
     guard var observation = try? JSONSerialization.jsonObject(with: childOutput) as? [String: Any]
     else { return 70 }
-    observation["parent_buffer_zeroed"] = secret.bytes.allSatisfy { $0 == 0 }
+    observation["parent_buffer_zeroed"] = secret.isZeroed
+    observation["stdin_write_lengths"] = diagnostics.stdinWriteLengths
+    observation["combined_wire_buffer_created"] = false
     writeJSONObject(observation)
+    return 0
+}
+
+private func runProcessChild(scenario: String) -> Int32 {
+    switch scenario {
+    case "sleep":
+        usleep(1_000_000)
+        return 0
+    case "ignore-term-grandchild":
+        signal(SIGTERM, SIG_IGN)
+        var child = pid_t()
+        let arguments = [CommandLine.arguments[0], "--process-child", "grandchild-ignore"]
+        _ = withCStringArray(arguments) { argvPointer in
+            withCStringArray(childEnvironment) { environmentPointer in
+                CommandLine.arguments[0].withCString { executablePointer in
+                    posix_spawn(
+                        &child, executablePointer, nil, nil,
+                        argvPointer, environmentPointer
+                    )
+                }
+            }
+        }
+        usleep(2_000_000)
+        return 0
+    case "grandchild-ignore":
+        signal(SIGTERM, SIG_IGN)
+        usleep(2_000_000)
+        return 0
+    case "stdout-cap":
+        let bytes = [UInt8](repeating: 65, count: childOutputLimit + 1024)
+        _ = bytes.withUnsafeBytes { Darwin.write(STDOUT_FILENO, $0.baseAddress!, $0.count) }
+        return 0
+    case "stderr-cap":
+        let bytes = [UInt8](repeating: 66, count: childOutputLimit + 1024)
+        _ = bytes.withUnsafeBytes { Darwin.write(STDERR_FILENO, $0.baseAddress!, $0.count) }
+        return 0
+    case "epipe":
+        Darwin.close(STDIN_FILENO)
+        usleep(100_000)
+        return 0
+    case "nonzero":
+        return 7
+    case "signal":
+        signal(SIGTERM, SIG_DFL)
+        _ = Darwin.kill(getpid(), SIGTERM)
+        return 70
+    default:
+        return 64
+    }
+}
+
+private func runProcessScenario(_ scenario: String) -> Int32 {
+    let secret = scenario == "epipe"
+        ? SecretBuffer(copying: [UInt8](repeating: 65, count: 131_072))
+        : nil
+    defer { secret?.zeroize() }
+    do {
+        _ = try spawnChild(
+            executable: CommandLine.arguments[0],
+            argv: [CommandLine.arguments[0], "--process-child", scenario],
+            secret: secret
+        )
+        writeJSONObject([
+            "code": "UNEXPECTED_SUCCESS",
+            "direct_child_reaped": true,
+            "process_group_gone": true,
+        ])
+    } catch let failure as ProcessInvocationFailure {
+        writeJSONObject([
+            "code": failure.reason.rawValue,
+            "direct_child_reaped": failure.directChildReaped,
+            "process_group_gone": failure.processGroupGone,
+        ])
+    } catch {
+        writeJSONObject([
+            "code": ProcessFailureReason.supervision.rawValue,
+            "direct_child_reaped": false,
+            "process_group_gone": false,
+        ])
+    }
     return 0
 }
 
 private func runTestHarness(request: HelperRequest, scenario: String) -> Int32 {
     let tracker = BufferTracker()
-    let fakeHdiutil = FakeHdiutilRunner(scenario: scenario, tracker: tracker)
+    let fakeHdiutil = FakeHdiutilRunner(
+        scenario: scenario, tracker: tracker, operation: request.operation
+    )
     let fakeSecurity = FakeSecurityAdapter(scenario: scenario)
     let fakeKeychain = SystemKeychainStore(
         security: fakeSecurity,
@@ -1062,6 +1559,16 @@ private func runTestHarness(request: HelperRequest, scenario: String) -> Int32 {
             item_count: nil
         )
         exitCode = failure.exitCode
+    } catch is ProcessInvocationFailure {
+        response = HelperResponse(
+            schema_version: 1,
+            operation: request.operation.rawValue,
+            code: HelperFailure.hdiutilFailure.code,
+            encryption_uuid: nil,
+            device: nil,
+            item_count: nil
+        )
+        exitCode = 70
     } catch {
         response = HelperResponse(
             schema_version: 1,
@@ -1078,6 +1585,8 @@ private func runTestHarness(request: HelperRequest, scenario: String) -> Int32 {
         "hdiutil_calls": fakeHdiutil.calls,
         "keychain_calls": fakeSecurity.calls,
         "all_buffers_zeroed": tracker.allZeroed,
+        "all_keychain_staging_zeroed": fakeSecurity.allStagingZeroed,
+        "secret_materializations": fakeSecurity.secretMaterializations,
         "security_agent_observations": 0,
     ])
     return exitCode
@@ -1091,6 +1600,12 @@ private func runMain() -> Int32 {
     #if CORTEX_STORAGE_HELPER_TESTING
     if arguments.count == 1, arguments[0] == "--spawn-probe" {
         return runSpawnProbe()
+    }
+    if arguments.count == 2, arguments[0] == "--process-scenario" {
+        return runProcessScenario(arguments[1])
+    }
+    if arguments.count == 2, arguments[0] == "--process-child" {
+        return runProcessChild(scenario: arguments[1])
     }
     if arguments.count == 2, arguments[0] == "--fd-child" {
         return runFileDescriptorChild(foreignDescriptorText: arguments[1])
@@ -1108,8 +1623,17 @@ private func runMain() -> Int32 {
     #endif
 
     let input = FileHandle.standardInput.readDataToEndOfFile()
+    let exactRequestKeys: Set<String> = [
+        "schema_version", "operation", "image_path", "mount_path", "volume_name",
+        "size", "transaction_id", "expected_encryption_uuid", "disposable",
+        "cleanup_approved",
+    ]
     guard !input.isEmpty,
-          let request = try? JSONDecoder().decode(HelperRequest.self, from: input)
+          let rawObject = try? JSONSerialization.jsonObject(with: input),
+          let rawDictionary = rawObject as? [String: Any],
+          Set(rawDictionary.keys) == exactRequestKeys,
+          let request = try? JSONDecoder().decode(HelperRequest.self, from: input),
+          (try? validatedRequest(request)) != nil
     else {
         return 64
     }
@@ -1139,6 +1663,16 @@ private func runMain() -> Int32 {
             item_count: nil
         )))
         return failure.exitCode
+    } catch is ProcessInvocationFailure {
+        writeJSONObject(responseObject(HelperResponse(
+            schema_version: 1,
+            operation: request.operation.rawValue,
+            code: HelperFailure.hdiutilFailure.code,
+            encryption_uuid: nil,
+            device: nil,
+            item_count: nil
+        )))
+        return 70
     } catch {
         writeJSONObject(responseObject(HelperResponse(
             schema_version: 1,

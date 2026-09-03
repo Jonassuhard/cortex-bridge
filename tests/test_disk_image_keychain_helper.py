@@ -7,17 +7,22 @@ present; the focused suite below never supplies the authorization environment.
 """
 
 import json
+import inspect
 import os
 import plistlib
+import ctypes
 from pathlib import Path
 import shutil
+import signal
 import stat
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 import uuid
 from dataclasses import dataclass
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -29,6 +34,28 @@ COMMAND_TIMEOUT_SECONDS = 60
 
 class EffectGateRejected(Exception):
     pass
+
+
+class LiveCapabilityRequired(Exception):
+    pass
+
+
+class ObservationUnavailable(Exception):
+    pass
+
+
+_LIVE_CAPABILITY_SEAL = object()
+
+
+@dataclass(frozen=True)
+class LiveCapability:
+    _seal: object
+    cleanup_approved: bool
+
+
+def _require_live_capability(capability):
+    if not isinstance(capability, LiveCapability) or capability._seal is not _LIVE_CAPABILITY_SEAL:
+        raise LiveCapabilityRequired
 
 
 @dataclass(frozen=True)
@@ -123,6 +150,14 @@ def _consume_execution_mode():
     return selection
 
 
+def _main_execution_state():
+    selection = _consume_execution_mode()
+    capability = None
+    if selection.mode == "live":
+        capability = LiveCapability(_LIVE_CAPABILITY_SEAL, selection.cleanup_approved)
+    return selection, capability
+
+
 def _require_response(response, operation, *, uuid_value=None, device=None, item_count=None):
     if set(response) != {
         "schema_version",
@@ -146,7 +181,14 @@ def _require_response(response, operation, *, uuid_value=None, device=None, item
 
 
 def run_live_integration_workflow(*, effects, observer, cleanup_approved):
-    baseline_processes, baseline_windows = observer.snapshot()
+    try:
+        baseline_processes, baseline_windows = observer.snapshot()
+    except Exception:
+        return IntegrationOutcome("UNCLEAR", "securityagent_observer_unavailable")
+    if baseline_processes or baseline_windows:
+        return IntegrationOutcome("UNCLEAR", "securityagent_baseline_nonempty")
+    if hasattr(effects, "bind_observer"):
+        effects.bind_observer(observer, (baseline_processes, baseline_windows))
     encryption_uuid = None
 
     def reject_new_securityagent():
@@ -247,11 +289,10 @@ def run_live_integration_workflow(*, effects, observer, cleanup_approved):
         return dispose(IntegrationOutcome("FAIL", "integration_failed"))
 
 
-EXECUTION_MODE = (
-    _consume_execution_mode()
-    if __name__ == "__main__"
-    else ExecutionMode("fake", False)
-)
+if __name__ == "__main__":
+    EXECUTION_MODE, LIVE_CAPABILITY = _main_execution_state()
+else:
+    EXECUTION_MODE, LIVE_CAPABILITY = ExecutionMode("fake", False), None
 
 
 class DiskImageKeychainHelperTests(unittest.TestCase):
@@ -427,6 +468,8 @@ class DiskImageKeychainHelperTests(unittest.TestCase):
                 "secret_length": 43,
             },
         )
+        self.assertTrue(observation["all_keychain_staging_zeroed"])
+        self.assertTrue(observation["all_buffers_zeroed"])
 
     def test_create_rejects_uuid_service_collision_without_updating_item(self):
         completed, observation = self.run_helper(
@@ -436,6 +479,20 @@ class DiskImageKeychainHelperTests(unittest.TestCase):
         self.assertEqual(observation["response"]["code"], "KEYCHAIN_ITEM_COLLISION")
         self.assertFalse(any(call["action"] == "add" for call in observation["keychain_calls"]))
         self.assertTrue(observation["all_buffers_zeroed"])
+
+    def test_add_collision_and_interaction_zeroize_staging_and_secret(self):
+        for scenario, code in (
+            ("add-collision", "KEYCHAIN_ITEM_COLLISION"),
+            ("add-interaction", "KEYCHAIN_INTERACTION_FORBIDDEN"),
+        ):
+            with self.subTest(scenario=scenario):
+                completed, observation = self.run_helper(
+                    "create", scenario=scenario, expected_encryption_uuid=None
+                )
+                self.assertEqual(completed.returncode, 70)
+                self.assertEqual(observation["response"]["code"], code)
+                self.assertTrue(observation["all_buffers_zeroed"])
+                self.assertTrue(observation["all_keychain_staging_zeroed"])
 
     def test_create_rejects_unverified_encryption_metadata_before_keychain_add(self):
         completed, observation = self.run_helper(
@@ -468,13 +525,15 @@ class DiskImageKeychainHelperTests(unittest.TestCase):
         )
         self.assertEqual(attach_call["secret_wire_count"], 44)
         self.assertEqual(attach_call["terminal_nul_count"], 1)
-        read_call = next(
-            call for call in observation["keychain_calls"] if call["action"] == "read"
+        self.assertEqual(
+            [call["action"] for call in observation["keychain_calls"]],
+            ["read-count", "read-one"],
         )
+        read_call = observation["keychain_calls"][1]
         self.assertEqual(
             read_call,
             {
-                "action": "read",
+                "action": "read-one",
                 "class": "generic-password",
                 "account": "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE",
                 "service": "com.cortexbridge.encrypted-storage",
@@ -482,6 +541,8 @@ class DiskImageKeychainHelperTests(unittest.TestCase):
                 "data_protection_keychain": True,
                 "synchronizable": False,
                 "authentication_ui": "fail",
+                "match_limit": "one",
+                "return_data": True,
             },
         )
         self.assertEqual(observation["response"]["device"], "/dev/disk99")
@@ -497,6 +558,11 @@ class DiskImageKeychainHelperTests(unittest.TestCase):
                 self.assertEqual(completed.returncode, 70)
                 self.assertEqual(observation["response"]["code"], code)
                 self.assertEqual(observation["hdiutil_calls"], [])
+                self.assertEqual(
+                    [call["action"] for call in observation["keychain_calls"]],
+                    ["read-count"],
+                )
+                self.assertEqual(observation["secret_materializations"], 0)
 
     def test_interaction_forbidden_is_terminal_with_zero_hdiutil_calls(self):
         completed, observation = self.run_helper("mount", scenario="interaction")
@@ -510,8 +576,92 @@ class DiskImageKeychainHelperTests(unittest.TestCase):
     def test_mount_hdiutil_error_still_zeroes_every_secret_buffer(self):
         completed, observation = self.run_helper("mount", scenario="hdiutil-error")
         self.assertEqual(completed.returncode, 70)
-        self.assertEqual(observation["response"]["code"], "HDIUTIL_FAILED")
+        self.assertEqual(observation["response"]["code"], "MOUNT_CLEANUP_UNCLEAR")
         self.assertTrue(observation["all_buffers_zeroed"])
+
+    def test_pipe_writes_secret_and_nul_separately_without_combined_buffer(self):
+        completed = subprocess.run(
+            [str(self.binary), "--spawn-probe"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=COMMAND_TIMEOUT_SECONDS,
+            env={"PATH": os.environ.get("PATH", "/usr/bin:/bin")},
+        )
+        self.assertEqual(completed.returncode, 0)
+        observation = json.loads(completed.stdout)
+        self.assertEqual(observation["stdin_write_lengths"], [43, 1])
+        self.assertFalse(observation["combined_wire_buffer_created"])
+
+    def test_bounded_process_runner_handles_timeout_caps_epipe_exit_and_signal(self):
+        expected = {
+            "sleep": "PROCESS_TIMEOUT",
+            "ignore-term-grandchild": "PROCESS_TIMEOUT",
+            "stdout-cap": "PROCESS_OUTPUT_LIMIT",
+            "stderr-cap": "PROCESS_OUTPUT_LIMIT",
+            "epipe": "PROCESS_STDIN_FAILED",
+            "nonzero": "PROCESS_EXIT_NONZERO",
+            "signal": "PROCESS_SIGNALED",
+        }
+        for scenario, code in expected.items():
+            with self.subTest(scenario=scenario):
+                completed = subprocess.run(
+                    [str(self.binary), "--process-scenario", scenario],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=COMMAND_TIMEOUT_SECONDS,
+                    env={"PATH": os.environ.get("PATH", "/usr/bin:/bin")},
+                )
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                observation = json.loads(completed.stdout)
+                self.assertEqual(observation["code"], code)
+                self.assertTrue(observation["direct_child_reaped"])
+                self.assertTrue(observation["process_group_gone"])
+
+    def test_mount_captures_baseline_and_compensates_each_safe_partial_attach(self):
+        for scenario in (
+            "post-encryption-failure",
+            "post-mapping-failure",
+            "postcheck-timeout",
+            "attach-timeout-with-receipt",
+        ):
+            with self.subTest(scenario=scenario):
+                completed, observation = self.run_helper("mount", scenario=scenario)
+                self.assertEqual(completed.returncode, 70)
+                commands = [call["argv"][1] for call in observation["hdiutil_calls"]]
+                self.assertEqual(commands[0], "info")
+                detach = [
+                    call for call in observation["hdiutil_calls"]
+                    if call["argv"][1] == "detach"
+                ]
+                self.assertEqual(len(detach), 1)
+                self.assertEqual(
+                    detach[0]["argv"],
+                    ["/usr/bin/hdiutil", "detach", "/dev/disk99"],
+                )
+                self.assertNotIn("-force", detach[0]["argv"])
+
+    def test_mount_cleanup_unclear_never_detaches_blindly(self):
+        for scenario in (
+            "attach-timeout-no-receipt",
+            "post-mapping-ambiguous",
+            "compensation-detach-failure",
+        ):
+            with self.subTest(scenario=scenario):
+                completed, observation = self.run_helper("mount", scenario=scenario)
+                self.assertEqual(completed.returncode, 70)
+                self.assertEqual(
+                    observation["response"]["code"], "MOUNT_CLEANUP_UNCLEAR"
+                )
+                detach = [
+                    call for call in observation["hdiutil_calls"]
+                    if call["argv"][1] == "detach"
+                ]
+                if scenario != "compensation-detach-failure":
+                    self.assertEqual(detach, [])
+                else:
+                    self.assertEqual(len(detach), 1)
 
     def test_inspect_requires_exactly_one_strict_match(self):
         completed, observation = self.run_helper("inspect-item")
@@ -530,20 +680,28 @@ class DiskImageKeychainHelperTests(unittest.TestCase):
                 self.assertEqual(failed_observation["response"]["code"], code)
 
     def test_delete_requires_both_disposable_and_cleanup_approval_before_query(self):
-        for overrides in (
-            {"disposable": False},
-            {"cleanup_approved": False},
-        ):
-            with self.subTest(overrides=overrides):
-                completed, observation = self.run_helper(
-                    "delete-disposable-item", **overrides
-                )
-                self.assertEqual(completed.returncode, 64)
-                self.assertEqual(
-                    observation["response"]["code"], "CLEANUP_NOT_AUTHORIZED"
-                )
-                self.assertEqual(observation["keychain_calls"], [])
-                self.assertEqual(observation["hdiutil_calls"], [])
+        invalid_plan = self.request("delete-disposable-item", disposable=False)
+        completed = subprocess.run(
+            [str(self.binary), "--test-scenario", "success"],
+            input=json.dumps(invalid_plan) + "\n",
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=COMMAND_TIMEOUT_SECONDS,
+            env={"PATH": os.environ.get("PATH", "/usr/bin:/bin")},
+        )
+        self.assertEqual(completed.returncode, 64)
+        self.assertEqual(completed.stdout, "")
+
+        completed, observation = self.run_helper(
+            "delete-disposable-item", cleanup_approved=False
+        )
+        self.assertEqual(completed.returncode, 64)
+        self.assertEqual(
+            observation["response"]["code"], "CLEANUP_NOT_AUTHORIZED"
+        )
+        self.assertEqual(observation["keychain_calls"], [])
+        self.assertEqual(observation["hdiutil_calls"], [])
 
     def test_delete_matches_once_then_deletes_with_the_same_strict_query(self):
         completed, observation = self.run_helper("delete-disposable-item")
@@ -581,7 +739,9 @@ class DiskImageKeychainHelperTests(unittest.TestCase):
     def test_detach_resolves_one_verified_mapping_and_never_forces(self):
         completed, observation = self.run_helper("detach")
         self.assertEqual(completed.returncode, 0)
-        detach_call = observation["hdiutil_calls"][-1]
+        detach_call = next(
+            call for call in observation["hdiutil_calls"] if call["argv"][1] == "detach"
+        )
         self.assertEqual(
             detach_call["argv"],
             ["/usr/bin/hdiutil", "detach", "/dev/disk99"],
@@ -635,6 +795,78 @@ class DiskImageKeychainHelperTests(unittest.TestCase):
                     env={"PATH": os.environ.get("PATH", "/usr/bin:/bin")},
                 )
                 self.assertEqual(completed.returncode, 64)
+
+    def test_rejects_nonexact_json_shape_controls_unsafe_paths_and_unapproved_plan(self):
+        valid = self.request("create", expected_encryption_uuid=None)
+        invalid_payloads = []
+        extra = dict(valid, passphrase="forbidden")
+        invalid_payloads.append(extra)
+        missing = dict(valid)
+        missing.pop("size")
+        invalid_payloads.append(missing)
+        for field in ("image_path", "mount_path", "volume_name", "size"):
+            controlled = dict(valid)
+            controlled[field] = f"safe\nunsafe"
+            invalid_payloads.append(controlled)
+        invalid_payloads.extend(
+            [
+                dict(valid, image_path="relative.sparsebundle"),
+                dict(valid, mount_path="/private/tmp/../escape"),
+                dict(valid, size="65m"),
+                dict(valid, volume_name="UNAPPROVED"),
+                self.request("mount", disposable=False),
+                self.request(
+                    "mount",
+                    size="256g",
+                    volume_name="CORTEX_BRIDGE_2026_09",
+                    disposable=True,
+                ),
+            ]
+        )
+        for payload in invalid_payloads:
+            with self.subTest(payload_keys=sorted(payload)):
+                completed = subprocess.run(
+                    [str(self.binary), "--test-scenario", "success"],
+                    input=json.dumps(payload) + "\n",
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=COMMAND_TIMEOUT_SECONDS,
+                    env={"PATH": os.environ.get("PATH", "/usr/bin:/bin")},
+                )
+                self.assertEqual(completed.returncode, 64)
+                self.assertEqual(completed.stdout, "")
+
+        for codepoint in (*range(0x20), *range(0x7F, 0xA0)):
+            control = chr(codepoint)
+            controlled = dict(valid)
+            for field in ("image_path", "mount_path", "volume_name", "size"):
+                controlled[field] = f"safe{control}unsafe"
+            with self.subTest(control=codepoint):
+                completed = subprocess.run(
+                    [str(self.binary), "--test-scenario", "success"],
+                    input=json.dumps(controlled) + "\n",
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=COMMAND_TIMEOUT_SECONDS,
+                    env={"PATH": os.environ.get("PATH", "/usr/bin:/bin")},
+                )
+                self.assertEqual(completed.returncode, 64)
+                self.assertEqual(completed.stdout, "")
+
+        truncated = json.dumps(valid)[:-1]
+        completed = subprocess.run(
+            [str(self.binary), "--test-scenario", "success"],
+            input=truncated,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=COMMAND_TIMEOUT_SECONDS,
+            env={"PATH": os.environ.get("PATH", "/usr/bin:/bin")},
+        )
+        self.assertEqual(completed.returncode, 64)
+        self.assertEqual(completed.stdout, "")
 
     def test_integration_runner_exits_64_when_either_effect_gate_is_missing(self):
         clean_environment = os.environ.copy()
@@ -728,6 +960,173 @@ class FakeSecurityAgentObserver:
 
 
 class DiskImageKeychainIntegrationOrchestrationTests(unittest.TestCase):
+    def test_imported_live_suite_without_capability_has_zero_effects(self):
+        self.assertIn("LiveCapabilityRequired", globals(), "missing live capability gate")
+        counters = {"observer": 0, "effects": 0}
+
+        def observer_init(instance):
+            counters["observer"] += 1
+
+        def effects_init(instance, *args, **kwargs):
+            counters["effects"] += 1
+
+        suite = build_selected_suite(unittest.TestLoader(), ExecutionMode("live", False))
+        result = unittest.TestResult()
+        with mock.patch.object(LiveSecurityAgentObserver, "__init__", observer_init), mock.patch.object(
+            LiveIntegrationEffects, "__init__", effects_init
+        ):
+            suite.run(result)
+        self.assertEqual(result.testsRun, 1)
+        self.assertEqual(counters, {"observer": 0, "effects": 0})
+        with mock.patch("tempfile.mkdtemp") as make_root:
+            with self.assertRaises(LiveCapabilityRequired):
+                LiveIntegrationEffects(None)
+            make_root.assert_not_called()
+
+        uninitialized = object.__new__(LiveIntegrationEffects)
+        uninitialized.capability = None
+        guarded_calls = (
+            lambda: uninitialized.compile_production_helper(),
+            lambda: uninitialized._observe_bound(),
+            lambda: uninitialized.invoke_helper("mount", {}),
+            lambda: uninitialized.verify_mounted("uuid", "/dev/disk99"),
+            lambda: uninitialized.verify_detached("/dev/disk99"),
+            lambda: uninitialized.delete_exact_image(),
+            lambda: uninitialized.quarantine_exact_image(),
+            lambda: uninitialized.dispose_after_failure(
+                encryption_uuid=None, cleanup_approved=False
+            ),
+        )
+        for guarded_call in guarded_calls:
+            with self.assertRaises(LiveCapabilityRequired):
+                guarded_call()
+
+    def test_fd_identity_substitution_and_concurrent_quarantine_target_fail_closed(self):
+        effects = object.__new__(LiveIntegrationEffects)
+        effects.root_fd = 9
+        effects.image_fd = 10
+        effects.image_name = "image.sparsebundle"
+        effects.image_identity = (1, 2)
+        descriptor_facts = mock.Mock(st_dev=1, st_ino=2, st_mode=stat.S_IFDIR)
+        substituted_facts = mock.Mock(st_dev=1, st_ino=3, st_mode=stat.S_IFDIR)
+        effects.capability = None
+        with mock.patch(
+            f"{__name__}._require_live_capability", return_value=None
+        ), mock.patch("os.fstat", return_value=descriptor_facts), mock.patch(
+            "os.stat", return_value=substituted_facts
+        ):
+            with self.assertRaises(IntegrationWorkflowFailure):
+                effects._require_exact_image()
+
+        effects.quarantine_path = Path("/private/tmp/image.sparsebundle.quarantine")
+        effects._require_reconciled_unmounted = mock.Mock()
+        effects._require_exact_image = mock.Mock()
+        with mock.patch(
+            f"{__name__}._require_live_capability", return_value=None
+        ), mock.patch("os.stat", return_value=substituted_facts), mock.patch(
+            "ctypes.CDLL"
+        ) as load_libc:
+            with self.assertRaises(IntegrationWorkflowFailure):
+                effects.quarantine_exact_image()
+            load_libc.assert_not_called()
+        effects.root_fd = -1
+        effects.image_fd = -1
+
+    def test_observer_parser_fails_closed_when_windows_are_unavailable(self):
+        self.assertIn(
+            "parse_securityagent_snapshot", globals(), "missing observer fail-closed parser"
+        )
+        with self.assertRaises(ObservationUnavailable):
+            parse_securityagent_snapshot(
+                {
+                    "processes": [],
+                    "processes_available": True,
+                    "windows": [],
+                    "windows_available": False,
+                }
+            )
+        with self.assertRaises(ObservationUnavailable):
+            parse_securityagent_snapshot(
+                {"processes": [], "windows": [], "windows_available": True}
+            )
+        processes, windows = parse_securityagent_snapshot(
+            {
+                "processes": [],
+                "processes_available": True,
+                "windows": [],
+                "windows_available": True,
+            }
+        )
+        self.assertEqual((processes, windows), (frozenset(), frozenset()))
+
+    def test_observer_enumerates_all_system_processes_without_spawning_ps(self):
+        observer_source = inspect.getsource(LiveSecurityAgentObserver)
+        self.assertIn("proc_listallpids", observer_source)
+        self.assertNotIn('"/bin/ps"', observer_source)
+
+    def test_nonempty_securityagent_baseline_is_unclear_before_any_effect(self):
+        effects = FakeLiveEffects()
+        outcome = run_live_integration_workflow(
+            effects=effects,
+            observer=FakeSecurityAgentObserver(
+                [(frozenset({"process:baseline"}), frozenset())]
+            ),
+            cleanup_approved=False,
+        )
+        self.assertEqual(
+            (outcome.status, outcome.code),
+            ("UNCLEAR", "securityagent_baseline_nonempty"),
+        )
+        self.assertEqual(effects.calls, [])
+
+    def test_unknown_failure_disposition_preserves_item_and_image_as_unclear(self):
+        class SubstitutedEffects(FakeLiveEffects):
+            def quarantine_exact_image(self):
+                self.calls.append("quarantine-rejected-substitution")
+                raise IntegrationWorkflowFailure
+
+        effects = SubstitutedEffects()
+        observer = FakeSecurityAgentObserver(
+            [
+                (frozenset(), frozenset()),
+                (frozenset(), frozenset()),
+                (frozenset({"process:99"}), frozenset()),
+            ]
+        )
+        outcome = run_live_integration_workflow(
+            effects=effects,
+            observer=observer,
+            cleanup_approved=False,
+        )
+        self.assertEqual((outcome.status, outcome.code), ("UNCLEAR", "disposition_failed"))
+        self.assertTrue(effects.item_present)
+        self.assertNotIn("delete-disposable-item", effects.calls)
+        self.assertNotIn("delete-image", effects.calls)
+
+    def test_lost_helper_after_mount_effect_never_quarantines_or_deletes(self):
+        class LostHelperEffects(FakeLiveEffects):
+            def invoke_helper(self, operation, request):
+                if operation == "mount":
+                    self.calls.append("mount-helper-lost")
+                    raise IntegrationWorkflowFailure
+                return super().invoke_helper(operation, request)
+
+            def dispose_after_failure(self, *, encryption_uuid, cleanup_approved):
+                self.calls.append("preserve-unknown-mapping")
+                raise IntegrationWorkflowFailure
+
+        effects = LostHelperEffects()
+        outcome = run_live_integration_workflow(
+            effects=effects,
+            observer=FakeSecurityAgentObserver(),
+            cleanup_approved=True,
+        )
+        self.assertEqual((outcome.status, outcome.code), ("UNCLEAR", "disposition_failed"))
+        self.assertIn("preserve-unknown-mapping", effects.calls)
+        self.assertNotIn("quarantine-image", effects.calls)
+        self.assertNotIn("delete-disposable-item", effects.calls)
+        self.assertNotIn("delete-image", effects.calls)
+
     def test_pure_live_plan_is_unique_private_and_fixed_to_disposable_contract(self):
         self.assertIn("build_live_plan", globals(), "missing pure live plan builder")
         private_root = Path("/private/tmp/cortex-owned-test-root")
@@ -937,32 +1336,79 @@ class DiskImageKeychainIntegrationOrchestrationTests(unittest.TestCase):
         )
 
 
+def parse_securityagent_snapshot(decoded):
+    if (
+        not isinstance(decoded, dict)
+        or decoded.get("processes_available") is not True
+        or decoded.get("windows_available") is not True
+    ):
+        raise ObservationUnavailable
+    processes = decoded.get("processes")
+    windows = decoded.get("windows")
+    if not isinstance(processes, list) or not isinstance(windows, list):
+        raise ObservationUnavailable
+    if not all(isinstance(value, str) for value in processes + windows):
+        raise ObservationUnavailable
+    return frozenset(processes), frozenset(windows)
+
+
 class LiveSecurityAgentObserver:
     """Snapshots SecurityAgent processes/windows without Accessibility APIs."""
 
-    def __init__(self):
+    def __init__(self, capability):
+        _require_live_capability(capability)
+        self.capability = capability
         self.temporary_directory = tempfile.TemporaryDirectory()
         root = Path(self.temporary_directory.name)
         source = root / "security_agent_snapshot.swift"
         self.binary = root / "security-agent-snapshot"
         source.write_text(
-            """
-import AppKit
+            r"""
 import CoreGraphics
+import Darwin
 import Foundation
 
-let applications = NSWorkspace.shared.runningApplications
-let matchingApplications = applications.filter { application in
-    application.localizedName == "SecurityAgent" ||
-        application.bundleIdentifier == "com.apple.SecurityAgent"
+let initialProcessCount = Int(proc_listallpids(nil, 0))
+var processIdentifiers = [pid_t](
+    repeating: 0,
+    count: max(initialProcessCount, 1) + 64
+)
+let listedProcessCount = processIdentifiers.withUnsafeMutableBytes { storage -> Int32 in
+    proc_listallpids(storage.baseAddress, Int32(storage.count))
 }
-let processIDs = Set(matchingApplications.map { $0.processIdentifier })
-let processes = matchingApplications.map { application in
-    "process:\(application.processIdentifier):\(application.bundleIdentifier ?? "")"
-}.sorted()
+var processIDs = Set<pid_t>()
+var processes = [String]()
+var processMetadataComplete = true
+if listedProcessCount > 0 {
+    for processID in processIdentifiers.prefix(Int(listedProcessCount)) where processID > 0 {
+        var nameStorage = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+        var pathStorage = [CChar](repeating: 0, count: Int(MAXPATHLEN) * 4)
+        let nameLength = proc_name(processID, &nameStorage, UInt32(nameStorage.count))
+        let pathLength = proc_pidpath(processID, &pathStorage, UInt32(pathStorage.count))
+        guard nameLength > 0 || pathLength > 0 else {
+            processMetadataComplete = false
+            continue
+        }
+        let name = nameLength > 0 ? String(cString: nameStorage) : ""
+        let path = pathLength > 0 ? String(cString: pathStorage) : ""
+        let executable = path.split(separator: "/").last.map(String.init) ?? ""
+        if name == "SecurityAgent" || executable == "SecurityAgent" {
+            processIDs.insert(processID)
+            processes.append("process:\(processID):SecurityAgent")
+        }
+    }
+}
+processes.sort()
+let processesAvailable = initialProcessCount > 0 && listedProcessCount > 0 &&
+    Int(listedProcessCount) < processIdentifiers.count && processMetadataComplete
 
-let allWindows = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID)
-    as? [[String: Any]] ?? []
+let rawWindows = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID)
+let allWindows = rawWindows as? [[String: Any]] ?? []
+let windowsAvailable = rawWindows != nil && allWindows.allSatisfy { window in
+    window[kCGWindowOwnerName as String] != nil &&
+        window[kCGWindowOwnerPID as String] != nil &&
+        window[kCGWindowNumber as String] != nil
+}
 let windows = allWindows.compactMap { window -> String? in
     let ownerName = window[kCGWindowOwnerName as String] as? String ?? ""
     let ownerPID = window[kCGWindowOwnerPID as String] as? pid_t ?? -1
@@ -973,7 +1419,12 @@ let windows = allWindows.compactMap { window -> String? in
     return "window:\(ownerPID):\(number)"
 }.sorted()
 
-let output: [String: Any] = ["processes": processes, "windows": windows]
+let output: [String: Any] = [
+    "processes": processes,
+    "processes_available": processesAvailable,
+    "windows": windows,
+    "windows_available": windowsAvailable,
+]
 var data = try JSONSerialization.data(withJSONObject: output, options: [.sortedKeys])
 data.append(0x0A)
 FileHandle.standardOutput.write(data)
@@ -987,8 +1438,6 @@ FileHandle.standardOutput.write(data)
                 "swiftc",
                 str(source),
                 "-framework",
-                "AppKit",
-                "-framework",
                 "CoreGraphics",
                 "-o",
                 str(self.binary),
@@ -996,36 +1445,57 @@ FileHandle.standardOutput.write(data)
             timeout=COMMAND_TIMEOUT_SECONDS,
         )
 
-    @staticmethod
-    def _run(argv, *, timeout):
+    def _run(self, argv, *, timeout):
+        _require_live_capability(self.capability)
         try:
-            completed = subprocess.run(
+            process = subprocess.Popen(
                 argv,
-                capture_output=True,
-                check=False,
-                timeout=timeout,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 env={
                     "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
                     "LANG": "C",
                     "LC_ALL": "C",
                 },
+                start_new_session=True,
             )
-        except (OSError, subprocess.TimeoutExpired) as error:
+        except OSError:
             raise IntegrationWorkflowFailure from None
-        if completed.returncode != 0:
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+                process.wait(timeout=1)
+            except (ProcessLookupError, subprocess.TimeoutExpired):
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                process.wait(timeout=1)
+            raise IntegrationWorkflowFailure from None
+        if process.returncode != 0 or len(stdout) > 1_048_576 or len(stderr) > 1_048_576:
             raise IntegrationWorkflowFailure
-        return completed.stdout
+        try:
+            os.killpg(process.pid, 0)
+        except ProcessLookupError:
+            return stdout
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+            time.sleep(0.1)
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        raise IntegrationWorkflowFailure
 
     def snapshot(self):
+        _require_live_capability(self.capability)
         payload = self._run([str(self.binary)], timeout=10)
         try:
-            decoded = json.loads(payload)
-            return (
-                frozenset(decoded["processes"]),
-                frozenset(decoded["windows"]),
-            )
+            return parse_securityagent_snapshot(json.loads(payload))
         except (KeyError, TypeError, ValueError):
-            raise IntegrationWorkflowFailure from None
+            raise ObservationUnavailable from None
 
 
 def _recursive_plist_value(value, accepted_keys):
@@ -1075,12 +1545,20 @@ def parse_hdiutil_mappings(payload, *, image_path, mount_path):
 class LiveIntegrationEffects:
     """Effectful adapter reachable only through the exact action-time gates."""
 
-    def __init__(self):
+    def __init__(self, capability):
+        _require_live_capability(capability)
+        self.capability = capability
+        self.observer = None
+        self.observer_baseline = None
         self.private_root = Path(tempfile.mkdtemp(prefix="cortex-keychain-integration-"))
         os.chmod(self.private_root, 0o700)
         root_facts = os.stat(self.private_root, follow_symlinks=False)
         if root_facts.st_uid != os.getuid() or stat.S_IMODE(root_facts.st_mode) != 0o700:
             raise IntegrationWorkflowFailure
+        self.root_fd = os.open(
+            self.private_root,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+        )
         self.plan = build_live_plan(
             self.private_root,
             unique=uuid.uuid4().hex,
@@ -1094,9 +1572,31 @@ class LiveIntegrationEffects:
         self.transaction_id = self.plan.transaction_id
         self.helper = self.private_root / "disk-image-keychain"
         self.image_identity = None
+        self.image_fd = None
+        self.image_name = self.image_path.name
+        self.image_quarantined = False
+        self.preserve_image_and_item = False
         self.encryption_uuid = None
         self.mounted_device = None
         self.invocation_counter = 0
+
+    def __del__(self):
+        for descriptor_name in ("image_fd", "root_fd"):
+            descriptor = getattr(self, descriptor_name, None)
+            if isinstance(descriptor, int) and descriptor >= 0:
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
+                setattr(self, descriptor_name, -1)
+
+    def _require_capability(self):
+        _require_live_capability(self.capability)
+
+    def bind_observer(self, observer, baseline):
+        self._require_capability()
+        self.observer = observer
+        self.observer_baseline = baseline
 
     @staticmethod
     def _environment():
@@ -1106,24 +1606,120 @@ class LiveIntegrationEffects:
             "LC_ALL": "C",
         }
 
-    def _run(self, argv, *, input_text=None, timeout=COMMAND_TIMEOUT_SECONDS):
+    def _observe_bound(self):
+        self._require_capability()
+        if self.observer is None or self.observer_baseline is None:
+            return
+        processes, windows = self.observer.snapshot()
+        baseline_processes, baseline_windows = self.observer_baseline
+        if processes - baseline_processes or windows - baseline_windows:
+            raise SecurityAgentDetected
+
+    def _kill_process_group(self, process):
+        self._require_capability()
         try:
-            completed = subprocess.run(
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        try:
+            process.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            try:
+                process.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                raise IntegrationWorkflowFailure from None
+        deadline = time.monotonic() + 1
+        while time.monotonic() < deadline:
+            try:
+                os.killpg(process.pid, 0)
+            except ProcessLookupError:
+                return
+            time.sleep(0.01)
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            return
+        deadline = time.monotonic() + 1
+        while time.monotonic() < deadline:
+            try:
+                os.killpg(process.pid, 0)
+            except ProcessLookupError:
+                return
+            time.sleep(0.01)
+        raise IntegrationWorkflowFailure
+
+    def _run(
+        self,
+        argv,
+        *,
+        input_text=None,
+        timeout=COMMAND_TIMEOUT_SECONDS,
+        accepted_returncodes=(0,),
+    ):
+        self._require_capability()
+        try:
+            process = subprocess.Popen(
                 argv,
-                input=input_text,
-                capture_output=True,
+                stdin=subprocess.PIPE if input_text is not None else subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
-                check=False,
-                timeout=timeout,
                 env=self._environment(),
+                start_new_session=True,
             )
-        except (OSError, subprocess.TimeoutExpired):
+        except OSError:
             raise IntegrationWorkflowFailure from None
-        if completed.returncode != 0:
+        deadline = time.monotonic() + timeout
+        first_communication = True
+        stdout = stderr = ""
+        try:
+            while True:
+                self._observe_bound()
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise subprocess.TimeoutExpired(argv, timeout)
+                try:
+                    stdout, stderr = process.communicate(
+                        input=input_text if first_communication else None,
+                        timeout=min(0.10, remaining),
+                    )
+                    break
+                except subprocess.TimeoutExpired as timeout_error:
+                    first_communication = False
+                    partial_stdout = timeout_error.output or ""
+                    partial_stderr = timeout_error.stderr or ""
+                    if isinstance(partial_stdout, bytes):
+                        partial_stdout = partial_stdout.decode("utf-8", "replace")
+                    if isinstance(partial_stderr, bytes):
+                        partial_stderr = partial_stderr.decode("utf-8", "replace")
+                    if len(partial_stdout) > 1_048_576 or len(partial_stderr) > 1_048_576:
+                        raise IntegrationWorkflowFailure
+            self._observe_bound()
+        except (SecurityAgentDetected, ObservationUnavailable):
+            self._kill_process_group(process)
+            raise
+        except Exception:
+            self._kill_process_group(process)
+            raise IntegrationWorkflowFailure from None
+        if len(stdout) > 1_048_576 or len(stderr) > 1_048_576:
             raise IntegrationWorkflowFailure
-        return completed
+        try:
+            os.killpg(process.pid, 0)
+        except ProcessLookupError:
+            pass
+        else:
+            self._kill_process_group(process)
+            raise IntegrationWorkflowFailure
+        if process.returncode not in accepted_returncodes:
+            raise IntegrationWorkflowFailure
+        return subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
 
     def compile_production_helper(self):
+        self._require_capability()
         self._run(
             [
                 "/usr/bin/xcrun",
@@ -1138,6 +1734,7 @@ class LiveIntegrationEffects:
         os.chmod(self.helper, 0o700)
 
     def create_request(self):
+        self._require_capability()
         return {
             "schema_version": 1,
             "operation": "create",
@@ -1152,6 +1749,9 @@ class LiveIntegrationEffects:
         }
 
     def request(self, operation, encryption_uuid, cleanup_approved=False):
+        self._require_capability()
+        if cleanup_approved and not self.capability.cleanup_approved:
+            raise LiveCapabilityRequired
         return {
             "schema_version": 1,
             "operation": operation,
@@ -1166,33 +1766,78 @@ class LiveIntegrationEffects:
         }
 
     def _capture_image_identity(self):
+        self._require_capability()
         try:
-            facts = os.lstat(self.image_path)
+            descriptor = os.open(
+                self.image_name,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                dir_fd=self.root_fd,
+            )
         except FileNotFoundError:
             return
+        facts = os.fstat(descriptor)
         if stat.S_ISLNK(facts.st_mode) or not stat.S_ISDIR(facts.st_mode):
+            os.close(descriptor)
             raise IntegrationWorkflowFailure
+        if self.image_fd is not None and self.image_fd >= 0:
+            os.close(self.image_fd)
+        self.image_fd = descriptor
         self.image_identity = (facts.st_dev, facts.st_ino)
 
     def _require_exact_image(self):
-        if self.image_path.parent != self.private_root or self.image_identity is None:
+        self._require_capability()
+        if self.image_identity is None or self.image_fd is None or self.image_fd < 0:
             raise IntegrationWorkflowFailure
-        facts = os.lstat(self.image_path)
-        if stat.S_ISLNK(facts.st_mode) or not stat.S_ISDIR(facts.st_mode):
+        descriptor_facts = os.fstat(self.image_fd)
+        entry_facts = os.stat(
+            self.image_name,
+            dir_fd=self.root_fd,
+            follow_symlinks=False,
+        )
+        if stat.S_ISLNK(entry_facts.st_mode) or not stat.S_ISDIR(entry_facts.st_mode):
             raise IntegrationWorkflowFailure
-        if (facts.st_dev, facts.st_ino) != self.image_identity:
+        identity = (descriptor_facts.st_dev, descriptor_facts.st_ino)
+        entry_identity = (entry_facts.st_dev, entry_facts.st_ino)
+        if identity != self.image_identity or entry_identity != self.image_identity:
+            raise IntegrationWorkflowFailure
+
+    def _image_entry_present(self):
+        self._require_capability()
+        try:
+            os.stat(self.image_name, dir_fd=self.root_fd, follow_symlinks=False)
+            return True
+        except FileNotFoundError:
+            return False
+
+    def _require_reconciled_unmounted(self):
+        self._require_capability()
+        if self.preserve_image_and_item or self.mounted_device is not None:
+            raise IntegrationWorkflowFailure
+        info = self._plist_command(["/usr/bin/hdiutil", "info", "-plist"])
+        image_count, devices = parse_hdiutil_mappings(
+            info,
+            image_path=str(self.image_path),
+            mount_path=str(self.mount_path),
+        )
+        if image_count != 0 or devices:
             raise IntegrationWorkflowFailure
 
     def invoke_helper(self, operation, request):
+        self._require_capability()
+        if operation == "delete-disposable-item" and not self.capability.cleanup_approved:
+            raise LiveCapabilityRequired
         self.invocation_counter += 1
         try:
             completed = self._run(
                 [str(self.helper)],
                 input_text=json.dumps(request, separators=(",", ":")) + "\n",
+                accepted_returncodes=(0, 64, 70),
             )
-        except IntegrationWorkflowFailure:
+        except Exception:
             if operation == "create":
                 self._capture_image_identity()
+            if operation in {"create", "mount"}:
+                self.preserve_image_and_item = True
             raise
         if completed.stderr or completed.stdout.count("\n") != 1:
             raise IntegrationWorkflowFailure
@@ -1202,6 +1847,10 @@ class LiveIntegrationEffects:
             raise IntegrationWorkflowFailure from None
         serialized = json.dumps(response, separators=(",", ":"))
         if str(self.image_path) in serialized or str(self.mount_path) in serialized:
+            raise IntegrationWorkflowFailure
+        if completed.returncode != 0 or response.get("code") != "OK":
+            if response.get("code") == "MOUNT_CLEANUP_UNCLEAR" or operation in {"create", "mount"}:
+                self.preserve_image_and_item = True
             raise IntegrationWorkflowFailure
         if operation == "create":
             self._capture_image_identity()
@@ -1213,6 +1862,7 @@ class LiveIntegrationEffects:
         return response, f"fresh-helper-{self.invocation_counter}"
 
     def _plist_command(self, argv):
+        self._require_capability()
         completed = self._run(argv)
         try:
             return plistlib.loads(completed.stdout.encode("utf-8"))
@@ -1220,6 +1870,7 @@ class LiveIntegrationEffects:
             raise IntegrationWorkflowFailure from None
 
     def _verify_encryption_uuid(self, expected_uuid):
+        self._require_capability()
         encrypted = self._plist_command(
             ["/usr/bin/hdiutil", "isencrypted", "-plist", str(self.image_path)]
         )
@@ -1231,6 +1882,7 @@ class LiveIntegrationEffects:
             raise IntegrationWorkflowFailure
 
     def verify_mounted(self, expected_uuid, expected_device):
+        self._require_capability()
         self._verify_encryption_uuid(expected_uuid)
         disk = self._plist_command(
             ["/usr/sbin/diskutil", "info", "-plist", expected_device]
@@ -1252,6 +1904,7 @@ class LiveIntegrationEffects:
             raise IntegrationWorkflowFailure
 
     def verify_detached(self, expected_device):
+        self._require_capability()
         info = self._plist_command(["/usr/bin/hdiutil", "info", "-plist"])
         image_count, devices = parse_hdiutil_mappings(
             info,
@@ -1264,22 +1917,74 @@ class LiveIntegrationEffects:
             raise IntegrationWorkflowFailure
 
     def delete_exact_image(self):
-        if self.mounted_device is not None:
+        self._require_capability()
+        if not self.capability.cleanup_approved:
+            raise LiveCapabilityRequired
+        self._require_reconciled_unmounted()
+        if not self.image_quarantined:
+            self.quarantine_exact_image()
+        if not shutil.rmtree.avoids_symlink_attacks:
             raise IntegrationWorkflowFailure
         self._require_exact_image()
-        shutil.rmtree(self.image_path)
-        if self.image_path.exists():
+        shutil.rmtree(self.image_name, dir_fd=self.root_fd)
+        if self._image_entry_present():
             raise IntegrationWorkflowFailure
 
     def quarantine_exact_image(self):
-        if self.mounted_device is not None:
-            raise IntegrationWorkflowFailure
+        self._require_capability()
+        self._require_reconciled_unmounted()
         self._require_exact_image()
-        if self.quarantine_path.exists():
+        try:
+            os.stat(
+                self.quarantine_path.name,
+                dir_fd=self.root_fd,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError:
+            pass
+        else:
             raise IntegrationWorkflowFailure
-        os.rename(self.image_path, self.quarantine_path)
+        libc = ctypes.CDLL(None, use_errno=True)
+        rename_exclusive = libc.renameatx_np
+        rename_exclusive.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        ]
+        rename_exclusive.restype = ctypes.c_int
+        result = rename_exclusive(
+            self.root_fd,
+            os.fsencode(self.image_name),
+            self.root_fd,
+            os.fsencode(self.quarantine_path.name),
+            0x00000004,
+        )
+        if result != 0:
+            raise IntegrationWorkflowFailure
+        moved = os.stat(
+            self.quarantine_path.name,
+            dir_fd=self.root_fd,
+            follow_symlinks=False,
+        )
+        if (moved.st_dev, moved.st_ino) != self.image_identity:
+            raise IntegrationWorkflowFailure
+        try:
+            os.stat(self.image_name, dir_fd=self.root_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            pass
+        else:
+            raise IntegrationWorkflowFailure
+        self.image_name = self.quarantine_path.name
+        self.image_quarantined = True
 
     def dispose_after_failure(self, *, encryption_uuid, cleanup_approved):
+        self._require_capability()
+        if cleanup_approved and not self.capability.cleanup_approved:
+            raise LiveCapabilityRequired
+        if self.preserve_image_and_item:
+            raise IntegrationWorkflowFailure
         if self.mounted_device is not None and encryption_uuid:
             mounted_device = self.mounted_device
             response, _ = self.invoke_helper(
@@ -1291,7 +1996,7 @@ class LiveIntegrationEffects:
                 uuid_value=encryption_uuid,
                 device=mounted_device,
             )
-        if not self.image_path.exists():
+        if not self._image_entry_present():
             return
         if not cleanup_approved:
             self.quarantine_exact_image()
@@ -1328,12 +2033,17 @@ class LiveIntegrationEffects:
 class DiskImageKeychainLiveIntegrationTests(unittest.TestCase):
     def test_disposable_keychain_image_lifecycle(self):
         try:
-            observer = LiveSecurityAgentObserver()
-            effects = LiveIntegrationEffects()
+            _require_live_capability(LIVE_CAPABILITY)
+        except LiveCapabilityRequired:
+            self.fail("FAIL live_capability_required")
+            return
+        try:
+            observer = LiveSecurityAgentObserver(LIVE_CAPABILITY)
+            effects = LiveIntegrationEffects(LIVE_CAPABILITY)
             outcome = run_live_integration_workflow(
                 effects=effects,
                 observer=observer,
-                cleanup_approved=EXECUTION_MODE.cleanup_approved,
+                cleanup_approved=LIVE_CAPABILITY.cleanup_approved,
             )
         except Exception:
             self.fail("FAIL integration_harness_unavailable")
