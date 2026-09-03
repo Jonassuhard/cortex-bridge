@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "planning_commit": "d704775eeb479005b2628719ec2ce31835f78077",
-  "master_plan_sha256": "feb289f0f435bda8d9dee3109228465b8a863fa0ceb43399b147e098a80554a2",
+  "planning_commit": "4c8d30fae42ecbc80b8f9719e6b929035613f253",
+  "master_plan_sha256": "51cf9265ae299e7892063dec00bca500f460dbe733a8daf6712d26b5037fc259",
   "spec_sha256": {
     "2026-08-31-hybrid-intent-router-design.md": "472ae88687f6df00be1aac7bb33af536b0456fdc7fd04b7bb5f95e637e4b38f5",
     "2026-09-02-storage-cutover-and-qa-design.md": "2034280b1b4943c2b602eba888b58742e2d77b428bdc63dc5f93a4b59c72cb5f",
@@ -11,7 +11,7 @@
     "E": "7974f73e672077956d5e03a6416711791524ab520a8549b729ec4a2feb7c102c",
     "I": "73987192c4d5dbe3d0fcabf3637bd46f60b0ef50f15c8184b93452b1e7e66fc8",
     "L": "b8dda2316401eaee1b6408aa6cc68136b783524d6b99e5b30f64db7c30e83277",
-    "S": "97b20fec13e7030dbb06bf39aa1d2ffdeb353ca33527e4155d3e9defd3994275",
+    "S": "94a49fcae36c2fdd662ac88e73468836ab908dcfaf53f003a5537d9f24285859",
     "U": "25d04484e4dcf337728ce96f0af642d3894be71dea0ef9a616f2552cd9121245"
   },
   "phases": {
