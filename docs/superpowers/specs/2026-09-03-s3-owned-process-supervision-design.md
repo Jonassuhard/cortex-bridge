@@ -1,11 +1,11 @@
 # Cortex Bridge S3 Owned-Process Supervision Design
 
-**Status:** Revision 5 review candidate; implementation remains frozen until
+**Status:** Revision 6 review candidate; implementation remains frozen until
 these exact spec and plan bytes receive three fresh blind read-only reviews
 with `P0=0`, `P1=0`, `P2=0` and `PASS`
 **Date:** 2026-09-04
 **Reviewed baseline:** `db5a40f822c115b3f06b93a8d0c4ef04a74cd026`
-**Revision-5 parent:** `09d97f63f9614d3ccafc5ae2f4891b0fdc009589`
+**Revision-6 parent:** `daa9702401b4f308fce310c854bd00520da9f2e6`
 **Target:** v0.5.4 candidate
 **Supersedes:** the S3 supervision and live-harness design in the current Phase
 S plan; unrelated storage requirements remain in force
@@ -13,18 +13,22 @@ S plan; unrelated storage requirements remain in force
 ## Decision
 
 S3 replaces boolean cleanup, caller-constructed live operands and raw process
-identifiers with four closed mechanisms:
+identifiers with five closed mechanisms:
 
 1. one private `NativeObligation` per direct child, moving monotonically from
    suspended ownership through exact reap, group absence, descriptor closure
    and settlement-frame publication;
-2. private registry anchors including `SuspendedCleanupAnchor`, which retains
-   positive-PID cleanup authority until exact `waitpid == pid` instead of
-   consuming the only authority before cleanup is complete;
-3. Python object-identity registries with one private `ArtifactCursor`, one
+2. private registry anchors including `ValidatedSuspendedAnchor` and
+   `SuspendedCleanupAnchor`, so validation does not claim a child is running
+   and every non-confirmed resume retains positive-PID cleanup authority until
+   exact `waitpid == pid`;
+3. one persistent bounded SecurityAgent observer, supervised by the same
+   Python owned-process adapter from its first baseline through its final
+   STOP/snapshot/EOF/exact-reap sequence;
+4. Python object-identity registries with one private `ArtifactCursor`, one
    serialized effect executor and one 26-second detach-plus-absence helper for
    each sealed mounted disposition;
-4. a total one-byte control DFA with closed frame/response/exit/EOF/reap
+5. a total one-byte control DFA with closed frame/response/exit/EOF/reap
    tuples, independent exhaustive models, typed executable mutants and one
    report-GO-exec guardian/witness fixture.
 
@@ -124,8 +128,8 @@ bootstrap. The fixture exposes no watchdog, PID or PGID receipt.
 | File | S3 responsibility |
 | --- | --- |
 | `native/macos/disk_image_keychain.swift` | Public helper, strict request/control parsers, private final Darwin supervisor and registries, command provenance, erasure, testing-only scripted adapters and fixture routes. |
-| `tests/disk_image_keychain_harness.py` | Private authority registries, sealed preparation/live session, serialized executor, receipt algebra, exact process adapter, control client and independent process/effect reducers. |
-| `tests/test_disk_image_keychain_helper.py` | Independent reference machines, exhaustive and long traces, branch matrices, route/source gates, guardian/witness launchers, dynamic inventory and separately selected live class. |
+| `tests/disk_image_keychain_harness.py` | Private authority registries, sealed preparation/live session, persistent observer and sealed-bootstrap source bytes/hashes/protocol, serialized event-loop executor, receipt algebra, exact process adapter, control client and independent process/effect reducers. |
+| `tests/test_disk_image_keychain_helper.py` | Independent reference machines, exhaustive and long traces, branch/cutoff/arbitration matrices, route/source/closure-hash gates, guardian/witness launchers, dynamic inventory and separately selected live class. |
 
 Only those three files may change between `IMPLEMENTATION_BASE` and
 `S3_FINAL`. This spec and its plan are committed before that range.
@@ -154,6 +158,11 @@ private final class RegistryIdentity {
 }
 
 private struct SuspendedChildAnchor {
+    private let registryIdentity: RegistryIdentity
+    private let generation: UInt64
+}
+
+private struct ValidatedSuspendedAnchor {
     private let registryIdentity: RegistryIdentity
     private let generation: UInt64
 }
@@ -190,6 +199,7 @@ private enum SignalAnchor {
 
 private enum NativeObligationState {
     case suspended
+    case validatedSuspended
     case suspendedCleanup
     case running
     case exitedUnreaped
@@ -248,6 +258,12 @@ the issuing registry lock and before any syscall. Copying a token preserves the
 same strong private identity, never creates a second record, and therefore
 loses to the first atomic consumption.
 
+Every generation increment uses checked arithmetic. If any Swift issuance
+counter is `UInt64.max`, that registry permanently closes issuance, latches an
+unresolved cause and never wraps or reuses a generation. Any Python issuance
+counter exposed as a bounded integer follows the same close-on-overflow rule.
+Neither language may recover PASS after issuance exhaustion.
+
 One serial `LifecycleExecutor` is outermost for every control read, admission,
 spawn and obligation transition. Whenever more than one registry must be
 mutated, the only lock order is lifecycle executor, control registry, then
@@ -280,18 +296,38 @@ POSIX_SPAWN_START_SUSPENDED
 descriptors as one `NativeObligation(state: .suspended)` and returns only
 `SuspendedChildAnchor`.
 
-Within one lifecycle turn exactly one atomic transition may consume that
-anchor:
+Within one lifecycle turn exactly one atomic transition consumes that anchor.
+`validateSuspendedIdentity` obtains two complete `proc_bsdinfo` records with
+`getsid(pid)` between them. Both must match stored PID, birth seconds, birth
+microseconds, effective UID and `processGroupID == pid`; the session must be
+the PID. Exact validation consumes `SuspendedChildAnchor`, advances the same
+obligation to `.validatedSuspended` and mints `ValidatedSuspendedAnchor`; it
+does not claim the child is running. Any incomplete, changed, unavailable or
+expired validation also consumes the old suspended anchor and directly
+advances to `.suspendedCleanup` with `SuspendedCleanupAnchor`. The failed
+validation anchor cannot be retried.
 
-- `validateSuspendedIdentity` obtains two complete `proc_bsdinfo` records with
-  `getsid(pid)` between them. Both must match stored PID, birth seconds, birth
-  microseconds, effective UID and `processGroupID == pid`; the session must be
-  the PID. Success advances the same obligation to `.running` and mints a
-  `RunningSessionAnchor`.
-- `beginSuspendedCleanup` consumes the suspended anchor into a
-  `SuspendedCleanupAnchor` and advances the same obligation to
-  `.suspendedCleanup`. `abortAndReapSuspendedDirectChild` accepts only that
-  cleanup anchor.
+Control is polled immediately after exact validation and again immediately
+before SIGCONT. A queued cancel at either boundary atomically converts the
+validated anchor to `SuspendedCleanupAnchor` without sending SIGCONT.
+`resumeSuspended` accepts only `ValidatedSuspendedAnchor`. Confirmed `.resumed`
+alone consumes it, advances the obligation to `.running` and mints
+`RunningSessionAnchor`. Every other `ResumeResult`, including a result where
+SIGCONT delivery may have occurred but cannot be confirmed, atomically
+advances to `.suspendedCleanup` and mints only `SuspendedCleanupAnchor`. That
+name describes retained cleanup authority rather than guaranteed physical
+suspension. The branch may issue only positive-PID TERM/KILL and exact waitpid;
+it emits no input, group signal, success or cancellation success.
+
+A cancel that linearizes only after `.resumed` has been confirmed consumes the
+`RunningSessionAnchor` through the ordinary active-child cancellation path; it
+cannot retroactively claim that SIGCONT was withheld. A cancel observed before
+confirmation always takes the suspended-cleanup path above.
+
+`beginSuspendedCleanup` handles a cancel before validation by consuming the
+original suspended anchor into `SuspendedCleanupAnchor` and advancing the same
+obligation to `.suspendedCleanup`. `abortAndReapSuspendedDirectChild` accepts
+only that cleanup anchor.
 
 Every suspended-cleanup result other than exact `waitpid == pid` leaves the
 obligation and cleanup anchor record active. While the same immutable deadline
@@ -301,12 +337,13 @@ advances the obligation to `.reapedAwaitingGroup`; it does not erase the record.
 An unresolved attempt emits terminal `0x14` after the active `0x11` and can
 never produce normal success or cancellation success.
 
-Validation and cleanup racing on the same suspended anchor cannot both win.
-Invalid or incomplete identity takes only the cleanup branch. A queued cancel
-read immediately after insertion converts directly to suspended cleanup before
-SIGCONT or child input. The helper publishes `0x11` for the extant obligation,
-then either completes its `0x12,0x13` settlement or publishes `0x14`. A
-stale/cross-registry anchor performs no syscall.
+Validation, cancellation and cleanup racing on one suspended or validated
+anchor cannot both win. The helper publishes `0x11` for the extant obligation,
+then either completes its `0x12,0x13` settlement or publishes `0x14`. Matrices
+cover cancel before and after validation, before and after the SIGCONT attempt,
+all `IdentityResult` and `ResumeResult` members, and the exact obligation/
+no-active-child state at every boundary. A stale/cross-registry/consumed anchor
+performs no syscall.
 
 ### Non-suspended fixture bootstrap
 
@@ -337,7 +374,7 @@ private protocol ProcessKernel {
         deadline: MonotonicInstant
     ) -> IdentityResult
     func resumeSuspended(
-        _ anchor: RunningSessionAnchor,
+        _ anchor: ValidatedSuspendedAnchor,
         deadline: MonotonicInstant
     ) -> ResumeResult
     func observeExitWithoutReaping(
@@ -387,8 +424,8 @@ The result enums are closed. Scripted tests cover every member:
 | Result | Closed members | Sole advancing members |
 | --- | --- | --- |
 | `SpawnResult` | `spawned(SuspendedChildAnchor)`, `refused`, `deadlineExpired`, `failed` | `spawned` |
-| `IdentityResult` | `exact(RunningSessionAnchor)`, `incomplete`, `changed`, `unavailable`, `deadlineExpired` | `exact` |
-| `ResumeResult` | `resumed`, `childGone`, `identityChanged`, `deadlineExpired`, `interruptedAtDeadline`, `failed` | `resumed` |
+| `IdentityResult` | `exact(ValidatedSuspendedAnchor)`, `incomplete(SuspendedCleanupAnchor)`, `changed(SuspendedCleanupAnchor)`, `unavailable(SuspendedCleanupAnchor)`, `deadlineExpired(SuspendedCleanupAnchor)` | `exact` advances only to `validatedSuspended`; every other member advances only to `suspendedCleanup` |
+| `ResumeResult` | `resumed(RunningSessionAnchor)`, `childGone(SuspendedCleanupAnchor)`, `identityChanged(SuspendedCleanupAnchor)`, `deadlineExpired(SuspendedCleanupAnchor)`, `interruptedAtDeadline(SuspendedCleanupAnchor)`, `failed(SuspendedCleanupAnchor)` | `resumed` alone advances to `running`; every other member advances only to `suspendedCleanup` |
 | `ExitObservation` | `running`, `exactExited(ExitStatus, ExitedUnreapedSessionAnchor)`, `wrongPID`, `wrongSignal`, `wrongCode`, `interrupted`, `deadlineExpired`, `failed` | `running`, `exactExited` |
 | `SignalResult` | `delivered`, `alreadyAbsent`, `identityChanged`, `notWaitable`, `permissionDenied`, `deadlineExpired`, `interruptedAtDeadline`, `failed` | `delivered`; `alreadyAbsent` only for exact exited authority |
 | `ReapResult` | `exactlyReaped(ReapedGroupObservationToken)`, `stillRunning`, `noChild`, `wrongPID`, `deadlineExpired`, `interruptedAtDeadline`, `failed` | `exactlyReaped` |
@@ -402,19 +439,23 @@ The obligation lifecycle is monotone and the registry record is never replaced
 by an untracked gap:
 
 ~~~text
-suspended -------------------------------> suspendedCleanup
-    |                                              |
-    v                                              v
-running -> exitedUnreaped -> reapedAwaitingGroup <- exact waitpid
+suspended -> validatedSuspended -> running -> exitedUnreaped
+    |                |                          |
+    |                v                          v
+    +-------> suspendedCleanup -------> reapedAwaitingGroup <- exact waitpid
     -> groupAbsentAwaitingCloses -> settledPendingFrame
     -> successful matching 0x12 publication -> obligation removed
 
+exact validation only -> validatedSuspended; it never implies running
+only confirmed SIGCONT resume -> running
+failed validation or every non-resumed result -> suspendedCleanup
 any non-exact suspended cleanup result -> remain suspendedCleanup
 any unresolved later observation -> obligation remains active and 0x14 terminal
 ~~~
 
-A running anchor is revalidated immediately before SIGCONT, TERM and KILL.
-An exited anchor is observed before TERM, KILL and exact reap by
+A validated-suspended anchor is revalidated immediately before SIGCONT. A
+running anchor is revalidated immediately before TERM and KILL. An exited
+anchor is observed before TERM, KILL and exact reap by
 zero-initialized `waitid(P_PID, pid, WEXITED | WNOHANG | WNOWAIT)`. It must
 return the exact PID, `SIGCHLD`, and `CLD_EXITED`, `CLD_KILLED` or
 `CLD_DUMPED`. Only exact `waitpid == pid` reaps and consumes the anchor;
@@ -438,9 +479,10 @@ independently at 1 MiB. The drain loop never reaps.
 
 Cancellation linearizes only when the lifecycle executor reads `0x01`. It
 polls control before spawn; after a successful spawn it inserts the suspended
-obligation before `0x11`, polls control immediately after insertion, and polls
-again before SIGCONT and before each child-input write. A queued cancel at the
-post-insertion poll becomes suspended cleanup. No second lock or reader may
+obligation before `0x11`; it polls immediately after insertion, immediately
+after exact validation, immediately before SIGCONT and before each child-input
+write. A queued cancel at any pre-resume poll consumes the current suspended or
+validated-suspended anchor into suspended cleanup. No second lock or reader may
 consume control bytes.
 
 Every failure latches unresolved permanently. Every owned descriptor is still
@@ -509,18 +551,39 @@ write.
 
 ### Deadline validation before request read
 
-Python forms the live deadlines after sealed preparation and a successful
-bounded baseline:
+After sealed preparation has started the persistent observer and obtained its
+empty preparation baselines, Python forms the immutable live schedule:
 
 ~~~python
-live_started_ns = time.clock_gettime_ns(time.CLOCK_MONOTONIC)
+live_started_ns = shared_clock_ns()
 outer_hard_ns = checked_add_u64(live_started_ns, 115_000_000_000)
-pre_observation_hard_ns = checked_add_u64(live_started_ns, 1_000_000_000)
-swift_epoch_ns = time.clock_gettime_ns(time.CLOCK_MONOTONIC)
+first_snapshot_cutoff_ns = checked_add_u64(live_started_ns, 1_000_000_000)
+helper_total_cutoff_ns = checked_add_u64(live_started_ns, 71_000_000_000)
+post_reap_snapshot_cutoff_ns = checked_add_u64(live_started_ns, 72_000_000_000)
+continuation_cutoff_ns = checked_add_u64(live_started_ns, 98_000_000_000)
+publication_cutoff_ns = checked_add_u64(live_started_ns, 100_000_000_000)
+verdict_cutoff_ns = checked_add_u64(live_started_ns, 106_000_000_000)
+
+first_live_snapshot = observer.require_snapshot(
+    scan_started_at_or_after_ns=live_started_ns,
+    delivered_by_ns=first_snapshot_cutoff_ns,
+)
+# No helper is started unless the snapshot is accepted.
+swift_epoch_ns = shared_clock_ns()
 swift_hard_ns = checked_add_u64(swift_epoch_ns, 70_000_000_000)
-outer_swift_limit_ns = checked_sub_u64(outer_hard_ns, 44_000_000_000)
-assert swift_hard_ns <= outer_swift_limit_ns
+assert swift_hard_ns <= helper_total_cutoff_ns
 ~~~
+
+A missing, detected, malformed, late or unavailable first live snapshot
+atomically consumes the current no-effect transition into a terminal no-effect
+receipt and starts no helper. The original helper's complete six-value tuple,
+stdout/stderr/control EOFs and exact direct-helper reap are all required by
+absolute `helper_total_cutoff_ns`. Only after that reap may the executor accept
+the first strictly later observer frame whose
+`scan_started_ns >= helper_reaped_ns`; it must be delivered by absolute
+`post_reap_snapshot_cutoff_ns`. Equality at either cutoff is accepted only when
+the complete required transition has already settled; one nanosecond later is
+terminal and permits no continuation.
 
 `shared_clock_ns()` is the sole Python producer for any timestamp transmitted
 to or compared with Swift and is exactly
@@ -528,8 +591,9 @@ to or compared with Swift and is exactly
 `clock_gettime(CLOCK_MONOTONIC)`. A harmless cross-language oracle brackets a
 Swift sample `s` with Python samples `p0` and `p1`; it requires
 `p0 <= s <= p1` and `p1 - p0 <= 50_000_000` nanoseconds for each of 20 fresh
-samples. Any unavailable sample or wider bracket is `UNCLEAR`, never a relaxed
-tolerance. Python's convenience monotonic-nanosecond API and
+samples. This is a fail-closed acceptance SLA for the observed sample, not a
+promise that the OS schedules work within 50 ms. Any unavailable sample or
+wider bracket is `UNCLEAR`, never a relaxed tolerance. Python's convenience monotonic-nanosecond API and
 `CLOCK_UPTIME_RAW` are structurally forbidden for shared deadlines. One atomic
 source-copy mutant substitutes the convenience API for the exact Python call;
 the unchanged cross-language oracle must then fail naturally while the
@@ -567,19 +631,24 @@ The absolute phase boundaries from `swift_epoch_ns` are:
 Equality is admitted only when the complete phase budget still fits; one
 nanosecond later refuses. No phase borrows from another. These boundaries apply
 only to original live helper work; they do not authorize a terminal
-continuation. The outer 115 seconds reserve 1 second initial observation,
-70 seconds for original Swift work, 1 second final observation, 26 seconds for
-one receipt-bound detach-plus-absence continuation, 2 seconds descriptor
-quarantine/ledger publication, 6 seconds exact helper cleanup, 5 seconds
-scheduler/process margin and 4 seconds unallocated margin.
+continuation. The executable outer schedule is fixed to `live_started`: the
+first accepted live snapshot by +1; original Swift hard and the helper's total
+tuple/EOF/exact-reap by +71; a strictly post-reap accepted observer snapshot by
++72; the sole 26-second continuation complete by +98; quarantine and ledger
+publication by +100; and the irrevocable verdict cutoff at +106. The +106..+115
+tail permits only idempotent endpoint close, positive-PID TERM/KILL and exact
+waitpid cleanup. Any work first settling after +106 locks `UNCLEAR`; later
+cleanup cannot restore PASS. Early completion never moves an absolute cutoff
+forward or creates another reserve.
 
 ### One post-terminal detach-plus-absence continuation
 
 The original live Swift helper never receives more than its original
 70-second hard deadline and never borrows the outer continuation reserve.
 After its valid final frame, six-key response, control EOF and exact helper
-reap, the sealed Python object-identity registry may consume one mounted cursor
-state and start exactly one fresh direct Swift helper invocation. No Swift
+reap, and only after the strictly later accepted observer watermark delivered
+by absolute +72, the sealed Python object-identity registry may consume one
+mounted cursor state and start exactly one fresh direct Swift helper invocation. No Swift
 receipt, token, PID or registry identity crosses the process boundary.
 
 The invocation uses the unchanged strict ten-key request with public
@@ -595,8 +664,8 @@ mismatch yields unresolved preservation evidence.
 
 The single invocation samples `now` only through Python `shared_clock_ns()` and
 has one checked absolute `continuation_hard_ns = now + 26_000_000_000`,
-admitted only when that value fits inside immutable
-`outer_hard_ns`. Its origin is recovered by checked subtraction of exactly
+admitted only when that value is at or before immutable absolute
+`continuation_cutoff_ns` (+98). Its origin is recovered by checked subtraction of exactly
 26 seconds after the detach request is parsed. The fixed, non-resettable
 schedule is:
 
@@ -610,7 +679,11 @@ No stage may reset the origin, borrow from a later helper or extend the outer
 envelope. There is no second helper and no inter-helper token. The closed
 result is either `DetachedAndAbsentReceipt` with complete tuple/current-device
 consistency/empty mount-directory evidence, or
-`UnresolvedContinuationReceipt` retaining the full cursor ledger. Insufficient
+`UnresolvedContinuationReceipt` retaining the full cursor ledger. External
+Python verification of the registered mount directory is part of this result:
+it must be the same no-follow directory and contain exactly zero entries after
+detach. Nonempty, error, symlink or identity mismatch yields only
+`UnresolvedContinuationReceipt`, never quarantine or deletion. Insufficient
 fit, ambiguous current mapping, device mismatch, abnormal tuple or incomplete
 absence starts no later helper and resolves only to the latter. Normal cycle
 detach uses the same self-contained detach/current-mapping/absence semantics;
@@ -645,9 +718,24 @@ Frames are exactly one byte:
 
 States are exactly `START`, `IDLE_ACCEPTED`, `ACTIVE`, `TERMINAL` and
 `NORMAL_EXIT`. `NORMAL_EXIT` retains one private, immutable
-`NormalExitKind`: `strictRejected`, `acceptedNoChild` or
-`protocolAbnormal`. The state is therefore total without conflating an
-accepted harmless completion with a malformed exchange. The transition
+`NormalExitKind`:
+
+~~~swift
+private enum NormalExitKind {
+    case strictRejected
+    case acceptedSuccess(Operation, CompleteTraceProof)
+    case acceptedOperationalError(Operation, StableCode, SettledPrefixProof)
+    case protocolAbnormal(Operation, SettledPrefixProof, ExactStdoutState)
+}
+~~~
+
+`CompleteTraceProof` binds every declared child command and its last state
+transition through the final response. `SettledPrefixProof` binds the exact
+valid prefix and its last transition; it never claims the remaining suffix.
+Both proofs are registry-minted from complete per-child settlement tuples.
+Settled-child count is derived from the typed proof and is never authority by
+itself. The state is therefore total without conflating accepted zero-child
+success, accepted operational error and protocol failure. The transition
 function is total:
 
 | State/input | Transition and output |
@@ -657,16 +745,17 @@ function is total:
 | `START` + reject/unknown/duplicate/EOF | `NORMAL_EXIT(strictRejected)`, exit 64, no frame and no effect. |
 | `START` + EAGAIN/EINTR | Stay while time remains; expiry goes `NORMAL_EXIT(strictRejected)`, exit 64, no frame. |
 | `IDLE_ACCEPTED` + admitted child | `ACTIVE`, emit one `0x11`. |
-| `IDLE_ACCEPTED` + accepted no-child completion | Write one six-key response, then `NORMAL_EXIT(acceptedNoChild)`, exit 0; `0x10` is the last valid frame. |
-| `IDLE_ACCEPTED` + operational error with no active child | Write one six-key stable error response, then normal exit 64 or 70 from the closed error map; keep the settled prefix. |
+| `IDLE_ACCEPTED` + accepted zero-child success | Mint the operation's exact empty `CompleteTraceProof`, write its six-key `OK`, then `NORMAL_EXIT(acceptedSuccess(operation, proof))`, exit 0; `0x10` is the last valid frame. |
+| `IDLE_ACCEPTED` + complete final child prefix | Mint `CompleteTraceProof` only after the last declared transition and response, then `NORMAL_EXIT(acceptedSuccess(operation, proof))`, exit 0. |
+| `IDLE_ACCEPTED` + operational error after a valid prefix | Mint the exact `SettledPrefixProof`, write one six-key stable error response, then `NORMAL_EXIT(acceptedOperationalError(operation, code, proof))`, exit 64 or 70 from the closed error map. |
 | `IDLE_ACCEPTED` + cancel after zero or any settled pairs | `TERMINAL`, emit one `0x13`. |
-| `IDLE_ACCEPTED` + unknown/duplicate/EOF/out-of-order | `NORMAL_EXIT(protocolAbnormal)`, exit 65, no additional frame. |
-| `IDLE_ACCEPTED` + EAGAIN/EINTR | Stay while time remains; expiry is `NORMAL_EXIT(protocolAbnormal)`, exit 65. |
+| `IDLE_ACCEPTED` + unknown/duplicate/EOF/out-of-order | Preserve the exact accepted operation/prefix/stdout state in `NORMAL_EXIT(protocolAbnormal(operation, prefixProof, stdoutState))`, exit 65, no additional frame. |
+| `IDLE_ACCEPTED` + EAGAIN/EINTR | Stay while time remains; expiry preserves the exact accepted operation/prefix/stdout state in `NORMAL_EXIT(protocolAbnormal(operation, prefixProof, stdoutState))`, exit 65. |
 | `ACTIVE` + native settlement | `IDLE_ACCEPTED`, emit matching `0x12`; keep control open if the command trace has another child. |
 | `ACTIVE` + cancel then native settlement | Emit matching `0x12`, return through `IDLE_ACCEPTED`, then immediately enter `TERMINAL` and emit one `0x13`. |
 | `ACTIVE` + cancel then unresolved finalization | `TERMINAL`, emit one `0x14`. |
 | `ACTIVE` + unresolved without cancel | `TERMINAL`, emit one `0x14`; write `SUPERVISION_UNRESOLVED` only in the closed stdout-usable variant. |
-| `ACTIVE` + unknown/duplicate/EOF/out-of-order | Finalize; native failure emits `0x14`, otherwise `NORMAL_EXIT(protocolAbnormal)` with exit 65 and no cancellation frame. |
+| `ACTIVE` + unknown/duplicate/EOF/out-of-order | Finalize; native failure emits `0x14`, otherwise preserve operation/prefix/stdout state in `NORMAL_EXIT(protocolAbnormal(operation, prefixProof, stdoutState))` with exit 65 and no cancellation frame. |
 | `ACTIVE` + EAGAIN/EINTR | Stay while time remains; deadline finalizes to `0x14` if native settlement is unresolved. |
 | `TERMINAL` + any byte/readiness/replay | No effect, frame or state change; close only. |
 | `NORMAL_EXIT` + any byte/readiness/replay | Preserve `NormalExitKind`; no effect, frame or state change. |
@@ -675,7 +764,8 @@ Each active child has exactly one `0x11` and either one `0x12` settlement or a
 sole terminal `0x14`. Cancellation after a narrow active-child settlement emits
 that required `0x12` and then one `0x13`. An intermediate `0x12` never closes
 control; only the final normal or terminal transition does. Tests cover cancel
-after every settled pair, accepted no-child inspect/delete, not-spawned work,
+after every settled pair, accepted zero-child inspect/delete, accepted success
+with children, accepted operational errors, not-spawned work,
 unresolved work without cancel, helper exit in every state, EOF, EAGAIN,
 unknown, duplicate and out-of-order bytes, and replay after both terminal
 states.
@@ -691,12 +781,12 @@ exact `k`:
 | `inspect-item` | no child | 0 |
 | `delete-disposable-item` | no child | 0 |
 
-An operational-error trace is the exact settled prefix of one row. A settled
-nonzero child is included in `k`; failure before a child is admitted adds no
-pair. Mount compensation, when a settled attach created a mapping before a
-later validation error, appends only the closed
-`detachCurrentDevice,postDetachAbsenceInfo` suffix. No other command ordering
-is accepted.
+An operational-error trace is the exact typed settled prefix of one row. Each
+prefix names its last state transition; a settled nonzero child is derived from
+the proof, while failure before a child is admitted adds no pair. Mount
+compensation, when a settled attach created a mapping before a later validation
+error, appends only the closed `detachCurrentDevice,postDetachAbsenceInfo`
+suffix. No other command ordering is accepted.
 
 The complete helper exchange algebra is:
 
@@ -711,6 +801,34 @@ The complete helper exchange algebra is:
 | unresolved active child, stdout unusable | valid prefix ending `0x11,0x14` | none | 74 | bounded close attempts, control EOF, exact helper reap |
 | accepted protocol abnormality, stdout usable | valid prefix only | one exact six-key `PROTOCOL_ERROR` | 65 | bounded stderr/stdout closure, control EOF, exact helper reap |
 | accepted protocol abnormality, stdout unusable | valid prefix only | none | 65 | bounded close attempts, control EOF, exact helper reap |
+
+Every response-producing non-OK row has exactly these six values:
+
+~~~text
+schema_version = 1
+operation = <accepted operation>
+code = <closed stable code>
+encryption_uuid = null
+device = null
+item_count = null
+~~~
+
+Partial UUID/device/count values never become evidence or authority. An
+`INVALID_REQUEST` or any other pre-accept exit-64 row produces no response.
+Successful rows preserve the exact operation-specific values:
+
+| Operation | `encryption_uuid` | `device` | `item_count` |
+| --- | --- | --- | ---: |
+| `create` | exact created UUID | null | 1 |
+| `mount` | exact created UUID | exact mounted device | 1 |
+| `detach` | exact created UUID | exact detached current device | null |
+| `inspect-item` | exact created UUID | null | 1 |
+| `delete-disposable-item` | exact created UUID | null | 0 |
+
+The stable operational-error map fixes each accepted code to exit 64 or 70;
+control outcomes remain exactly 65, 74 or 75 as declared. Every post-accept
+response has empty stderr. Python compares all six response values, complete
+frame sequence, stdout/stderr EOF, control EOF and exact waitpid.
 
 Ordering is constrained independently on stdout and control; no cross-FD read
 order is inferred. Python considers a tuple complete only when the exact frame
@@ -808,8 +926,9 @@ class CommandReceipt:
 ~~~
 
 The same shape is mandatory for `ObserverBinaryReceipt`, `ObserverBaseline`,
-`HelperBinaryReceipt`, `SecurityAgentSnapshot`, `TerminalCause`,
-`TerminalEventReceipt`, `ArtifactCursor`, `CreateCommandReceipt`,
+`ObserverStoppedReceipt`, `NoObserverSpawnProof`, `HelperBinaryReceipt`, `SecurityAgentSnapshot`,
+`PreparationTerminalReceipt`, `TerminalCause`, `TerminalEventReceipt`,
+`ArtifactCursor`, `CreateCommandReceipt`,
 `MountCommandReceipt`, `MountVerificationReceipt`,
 `DetachedAndAbsentReceipt`, `CleanupGrant`, `KeychainDeletePermit`,
 `KeychainAbsentReceipt`, `ImageDeletePermit`, `ImageAbsentReceipt`,
@@ -826,7 +945,11 @@ under the registry lock before any effect.
 
 ### One-shot preparation and fixed artifacts
 
-The parser can mint one `PreparationCapability`. Its registry record fixes:
+The parser atomically mints one `PreparationCapability` and one registry record
+for `ArtifactCursor(noArtifact)`. They are not copies of one another, but the
+cursor has exactly one transition slot: it is consumed by either successful
+`mint_live` or one `PreparationTerminalReceipt`, never both. The preparation
+registry record fixes:
 
 - the reviewed Swift source path and expected source SHA-256;
 - a private temporary helper target beneath the ignored SDD directory;
@@ -844,21 +967,106 @@ order is exact:
 2. run that observer and capture one complete empty process/window baseline;
 3. while that same observer remains active, compile the fixed reviewed helper;
 4. capture a fresh complete empty baseline after helper compilation;
-5. only then consume preparation authority, mint live authority/context/cursor
-   and start the 115-second clock.
+5. only then consume preparation authority and the existing no-artifact cursor,
+   mint live authority/context plus the live successor cursor and start the
+   115-second clock.
 
-Detection or observer unavailability during helper compilation registry-mints
-a preparation `TerminalCause`, cancels and exact-reaps the compiler under the
-preparation deadline, and proceeds to disposition without a
-`LiveExecutionCapability`. R16 therefore observes a real closed preparation
-outcome instead of asking an observer that was not yet prepared to report an
-earlier event.
+Detection, observer unavailability or compiler failure during preparation
+atomically consumes the no-artifact cursor and mints
+`PreparationTerminalReceipt(noArtifact, cause)`. The compiler is cancelled and
+exact-reaped under the preparation deadline. The sole
+`finalize_preparation_terminal(receipt)` transition mints
+`DispositionReceipt(noArtifact, cause)`, after the observer's required final
+shutdown sequence, and `close` consumes it once. No `LiveExecutionCapability`,
+live context or live effect authority is minted on this path. R16 therefore
+observes a real closed preparation outcome instead of asking an observer that
+was not yet prepared to report an earlier event. Failed preparation and
+successful live issuance race on the same registry record, so a duplicated
+no-artifact cursor cannot authorize both paths.
+
+If failure occurs before an observer process is spawned, the adapter instead
+mints a private no-observer-spawn proof after exact compiler cleanup and
+independent descriptor closes; no fictitious STOP/reap is claimed. Once an
+observer PID has been registered, the full STOP/final-snapshot/EOF/exact-reap
+sequence is mandatory.
 
 Reviewed helper and observer source bytes, their expected SHA-256 values and
 their fixed private targets live in `tests/disk_image_keychain_harness.py`.
 Tests import these values; they do not duplicate or recompute a second source
 constant. No caller-controlled path, target, request field, command or argv
 enters preparation or live issuance.
+
+### Persistent observer session and protocol
+
+One private `ObserverSession`, owned entirely by
+`PythonOwnedProcessAdapter`, persists from its first preparation baseline
+through helper compilation, every live/continuation/disposition effect, and
+the final pre-receipt shutdown. `LiveSecurityAgentObserver` delegates all
+process ownership to that adapter and never calls `Popen.poll`, `Popen.wait` or
+`Popen.communicate`.
+
+The observer executable is compiled only from the exact
+`REVIEWED_SECURITY_AGENT_OBSERVER_SOURCE` bytes stored in
+`tests/disk_image_keychain_harness.py`; the same file stores their literal
+expected SHA-256 and all protocol constants. Compilation occurs in a private
+temporary directory after the harness hashes the exact bytes. This creates no
+fourth tracked implementation file. Its only spawn shape is:
+
+~~~python
+subprocess.Popen(
+    [absolute_reviewed_observer_binary],
+    stdin=subprocess.PIPE,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    close_fds=True,
+    pass_fds=(),
+    env={
+        "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+        "LANG": "C",
+        "LC_ALL": "C",
+    },
+    start_new_session=True,
+)
+~~~
+
+Control and report frames use the one reviewed framing constant: unsigned
+four-byte big-endian payload length followed by canonical UTF-8 JSON, with a
+65,536-byte total-frame cap. Every report contains fixed header
+`CORTEX_S3_OBSERVER_V1`, closed type `READY`, `SNAPSHOT` or `STOPPED`, a
+contiguous checked `UInt64` sequence, and shared-clock
+`scan_started_ns`/`scan_finished_ns`. `READY` carries the first complete empty
+baseline. `SNAPSHOT` carries only bounded arrays of the pre-reviewed
+SecurityAgent process/window comparison tokens. Tokens contain no titles,
+paths, environment, command lines or user text. `STOPPED` follows the final
+snapshot and contains no unbounded payload. Duplicate, skipped, out-of-order,
+oversize, malformed or unknown frames, stderr data, unexpected EOF, sequence
+overflow or silence through the applicable snapshot cutoff atomically latches
+`observerUnavailable`.
+
+Sampling is scheduled from absolute `CLOCK_MONOTONIC` ticks with a maximum
+accepted 50 ms interval. Sequence numbers must be contiguous; every frame must
+land inside its declared acceptance window; and every Swift scan executes in a
+fresh autorelease pool. A late tick or delivery is terminal even if a later
+frame looks empty. This is a fail-closed acceptance SLA, not an OS scheduling
+guarantee, and cannot prove absence of a SecurityAgent event shorter than the
+sampling interval.
+
+The serial lifecycle executor multiplexes observer stdout/stderr, helper or
+compiler channels and cancellation/control readiness without a long blocking
+call. Observer/control events in one readiness batch are reduced before any
+helper-completion event. Observer frames remain bounded in memory and are
+never persisted.
+
+Intentional shutdown sends exactly the single framed `STOP` protocol constant,
+flushes and closes observer stdin, then requires a final accepted `SNAPSHOT`,
+one `STOPPED`, exact stdout/stderr EOF, bounded reader join, exit 0 and exact
+raw `waitpid` of the observer leader. The adapter uses bounded process-group
+TERM/KILL fallback and exact final reap on timeout. EOF before intentional
+shutdown, bad close/reap, surviving group or any shutdown mismatch latches
+observer-unavailable and `UNCLEAR`. The cause accumulator remains open through
+the final snapshot, STOPPED, both EOFs and exact reap. SecurityAgent detection
+in that final snapshot changes the verdict to `FAIL`; no
+`DispositionReceipt`—including a nominal PASS receipt—may be minted earlier.
 
 The `ArtifactContext` registry record contains the generated transaction UUID,
 image leaf `CORTEX_BRIDGE_SPIKE_<32 lowercase hex>.sparsebundle`, mount path
@@ -876,30 +1084,68 @@ supplies, recomputes or string-resolves any quarantine identity fact.
 One session-owned serial lifecycle executor is the sole submitter and consumer
 of every observation, process lifecycle operation and effect. It has one FIFO
 queue and one worker identity; no competing observer/control reader or second
-effect lock exists. One executor turn covers:
+effect lock exists. Before every syscall, `Popen` or first request write, it
+atomically consumes the predecessor transition slot into one registry-owned
+record:
 
-1. terminal-latch and capability revalidation;
-2. absolute-deadline and phase-admission check;
-3. exact registry lookup of context and current `ArtifactCursor`;
-4. `Popen` creation;
-5. running-handle registration;
-6. authorization of the first stdin/control write.
+~~~text
+InFlightOperation(
+  predecessorAuthority = cursor | terminalReceipt | dispositionReceipt,
+  predecessorLedger,
+  operation,
+  generation,
+  predictedEffectClass,
+  phase = reserved | spawned | requestStarted,
+  helperAndControlHandles,
+  terminalTransferSlot,
+)
+~~~
 
-Deterministic interleavings place the terminal latch before and after each
-boundary and prove no spawn or first write crosses the latch. A synchronous
-Keychain call already in flight may finish, but the result is registered only
-as terminal evidence and cannot mint a receipt, authorize another effect or
-produce success. Registry locks are held only for in-memory lookup/transition,
-never across a blocking syscall; serialization comes from executor ownership,
-not nested blocking locks.
+The same requirement covers normal effects and every detach, quarantine,
+preservation, deletion, observer-stop or close effect in disposition; no
+disposition effect starts from an unregistered receipt. The predecessor shell
+is consumed when the reservation is made and cannot be replayed while work is
+in flight.
+
+The executor is a nonblocking event loop. Registry locks are held only for
+in-memory transitions, never across a syscall, wait or pipe drain. Helper,
+observer and cancellation/control readiness is multiplexed. When several
+events arrive in one readiness batch, accepted observer events and
+cancellation/control events are applied before raw helper completion.
+
+If an ordinary completion is observed first, the record becomes
+`CompletionPendingObservation`; completion alone cannot mint a cursor. It may
+advance only after the exact total helper tuple, every stream/control EOF,
+exact direct-helper reap and a strictly later accepted observer frame whose
+`scan_started_ns >= helper_reaped_ns`. If a terminal cause wins first, the
+same record becomes `TerminalPendingEffect`, consumes the cause through its
+terminal-transfer slot and permanently revokes ordinary success.
+
+Cancellation/native settlement resolves each `TerminalPendingEffect` to
+exactly one `TerminalEventReceipt`: the predecessor ledger when no effect is
+proved, the exact updated ledger when a complete effect result is observed, or
+a bounded non-authorizing uncertainty envelope over the possible ledgers when
+the result is partial, late or ambiguous. The envelope is not a selected
+concrete or "maximum" ledger and cannot authorize detach, quarantine, delete,
+PASS or any ordinary successor. A late synchronous Keychain result may enrich
+only diagnostic or exact-ledger facts of the pending terminal record; it cannot
+mint an ordinary cursor, permit, new effect or PASS.
+
+No terminal disposition begins until every registered in-flight operation is
+settled or has one closed uncertainty envelope. Deterministic interleavings
+cover the terminal latch before/after reservation, spawn, registration, first
+write, raw completion, each EOF/reap and the post-reap observer watermark.
+Every branch then reaches exactly one disposition outcome and, only after the
+observer's final shutdown sequence, one `DispositionReceipt`.
 
 The complete callable catalogue has no raw live path/device/operation operand:
 
 | Method | Exact producer/result |
 | --- | --- |
 | `PreparationSession.prepare_observer()` | Fixed compiled observer plus first complete empty `ObserverBaseline`. |
-| `PreparationSession.compile_helper()` | Fixed `HelperBinaryReceipt` plus refreshed complete empty observer baseline, or a preparation terminal event. |
-| `PreparationSession.mint_live()` | `LiveExecutionCapability`, `ArtifactContext`, `ArtifactCursor(noArtifact)` and optional registry-minted `CleanupGrant`; no operands. |
+| `PreparationSession.compile_helper()` | Fixed `HelperBinaryReceipt` plus refreshed complete empty observer baseline, or `PreparationTerminalReceipt` after consuming the no-artifact cursor. |
+| `PreparationSession.mint_live()` | Consumes the sole prepared no-artifact cursor and returns `LiveExecutionCapability`, `ArtifactContext`, its live no-artifact successor and optional registry-minted `CleanupGrant`; no operands. |
+| `PreparationSession.finalize_preparation_terminal(receipt)` | After registered compiler settlement and either final observer STOP/snapshot/EOF/reap or exact no-observer-spawn proof, returns `DispositionReceipt(noArtifact, cause)`; no live capability. |
 | `EffectSession.create_image(cursor)` | Closed settled successor `ArtifactCursor(created(cycle=0))` or unresolved ledger outcome. |
 | `EffectSession.mount_cycle(cursor)` | Closed settled successor `ArtifactCursor(mounted(i))` or unresolved ledger outcome. |
 | `EffectSession.verify_mount(cursor)` | Exact diskutil/mapping/APFS evidence and `ArtifactCursor(mountVerified(i))`, or unresolved ledger outcome. |
@@ -912,11 +1158,11 @@ The complete callable catalogue has no raw live path/device/operation operand:
 | `EffectSession.delete_image(cursor, permit)` | Exclusive tombstone rename plus fd-relative removal yields `ImageAbsentReceipt` and `ArtifactCursor(imageAbsent)`, otherwise `UnresolvedDeletionReceipt`. |
 | `EffectSession.quarantine_unapproved(cursor)` | Exclusive quarantine and `ArtifactCursor(imageQuarantined)` with `keychainStillPresent=true`, or unresolved. |
 | `EffectSession.observe_terminal_snapshot()` | Registry-minted `SecurityAgentSnapshot` from fixed observer evidence only. |
-| `EffectSession.latch_terminal(snapshot)` | Consumes the snapshot, registry-mints `TerminalCause`, consumes the current cursor transfer slot and mints `TerminalEventReceipt`. |
+| `EffectSession.latch_terminal(snapshot)` | Consumes the snapshot, registry-mints `TerminalCause` and converts the current cursor or in-flight record to one terminal-pending transfer. |
 | `EffectSession.detach_for_disposition(event)` | One 26-second detach-plus-absence continuation from current mounted lineage, returning `DetachedAndAbsentReceipt` or `UnresolvedContinuationReceipt`. |
 | `EffectSession.quarantine_for_disposition(predecessor)` | `QuarantineReceipt` or unresolved preservation from the current unmounted cursor ledger. |
 | `EffectSession.preserve_for_disposition(event)` | `PreservationReceipt` with the complete current ledger and no new effect. |
-| `EffectSession.finalize_disposition(outcome)` | Exactly one `DispositionReceipt` for normal PASS, cleanup-not-authorized, or any failure/terminal branch. |
+| `EffectSession.finalize_disposition(outcome)` | Registers final observer shutdown; only its final snapshot, STOPPED, EOFs and exact reap permit exactly one `DispositionReceipt` for normal PASS, cleanup-not-authorized, or any failure/terminal branch. |
 | `EffectSession.close(disposition)` | Final verdict; this is the only `close` signature. |
 
 There is no public `record_mount`, generic runner, mapping request, public argv,
@@ -955,8 +1201,9 @@ are not changed by S3.
 `EffectSession` states are:
 
 ~~~text
-PREPARING -> ACTIVE -> CLOSED
-                 \-> TERMINAL -> DISPOSING -> CLOSED
+PREPARING -> ACTIVE -> DISPOSING -> FINALIZING_OBSERVER -> CLOSED
+     |          \-> TERMINAL_PENDING -> DISPOSING --^
+     \-> PREPARATION_TERMINAL ---------------------^
 ~~~
 
 The registry owns exactly one current `ArtifactCursor`; no historical receipt
@@ -988,12 +1235,14 @@ cycle. After `unmounted(1)`, the registry advances through
 `created(cycle=2)` to `cyclesComplete`. Inspect is issuable exactly once and
 only from `cyclesComplete`.
 
-Only the current cursor record has one terminal-transfer slot. Every cursor
-advance consumes the predecessor slot, so cycle-0 evidence can never outrank a
-cycle-1 mount. The fixed observer bridge alone mints a
-`SecurityAgentSnapshot`. Under one executor turn, `latch_terminal` consumes
-that snapshot, registry-mints exactly one cause and consumes the current cursor
-transfer slot into `TerminalEventReceipt`. Cause priority is separate from
+Only the current cursor or its registered `InFlightOperation` has one
+terminal-transfer slot. Every cursor advance consumes the predecessor slot, so
+cycle-0 evidence can never outrank a cycle-1 mount. The fixed observer bridge
+alone mints a `SecurityAgentSnapshot`. Under one executor event,
+`latch_terminal` consumes that snapshot and registry-mints exactly one cause.
+An idle current cursor transfers directly; an effect already reserved becomes
+`TerminalPendingEffect` and produces `TerminalEventReceipt` only after its
+settled/exact/uncertain ledger resolution. Cause priority is separate from
 artifact state:
 
 ~~~text
@@ -1015,7 +1264,7 @@ alone mints one `ImageDeletePermit`. No image deletion can precede proven
 Keychain absence.
 
 Cleanup-not-approved after both cycles and inspect consumes the current cursor
-into one exact descriptor-relative quarantine attempt, records
+into a registered exact descriptor-relative quarantine attempt, records
 `keychainStillPresent=true`, and returns `UNCLEAR cleanup_not_authorized`.
 A terminal cause after Keychain deletion performs no later Keychain inspect,
 delete or re-query; it quarantines, deletes only if its already-issued image
@@ -1024,15 +1273,18 @@ consuming effect returns a closed settled or unresolved result. Rename success
 followed by revalidation or close failure retains both old/new leaf facts in an
 unresolved ledger; it is never retroactively reported as success.
 
-Receipt producers and controlled consumers are exact:
+Receipt producers and controlled consumers are exact. Every effect-consuming
+row first creates `InFlightOperation`; a receipt listed as predecessor is not
+free-standing syscall authority:
 
 | Registry-minted value | Exclusive producer | Sole effect-consuming rule |
 | --- | --- | --- |
 | `NoActiveChildProof` | lifecycle executor while the obligation table is empty | one `0x13` transition |
-| `ArtifactCursor` | preparation registry or one legal predecessor transition | its one named next transition or terminal transfer |
+| `ArtifactCursor` | preparation registry or one legal predecessor transition | reservation into its one named `InFlightOperation` or terminal transfer |
+| `PreparationTerminalReceipt` | preparation failure consuming the sole no-artifact cursor | one preparation-terminal finalization after compiler settlement and observer shutdown |
 | `SecurityAgentSnapshot` | fixed observer bridge | `latch_terminal` once |
-| `TerminalCause` | preparation/lifecycle/observer/effect registries only | sealed into one `TerminalEventReceipt` |
-| `TerminalEventReceipt` | terminal latch plus current cursor transfer | one disposition route |
+| `TerminalCause` | preparation/lifecycle/observer/effect registries only | sealed into one `PreparationTerminalReceipt` or `TerminalEventReceipt` |
+| `TerminalEventReceipt` | terminal latch plus idle cursor transfer, or settled `TerminalPendingEffect` | reservation into one disposition route |
 | `CleanupGrant` | cleanup-approved preparation record | one `KeychainDeletePermit` after `keychainInspected` |
 | `KeychainDeletePermit` | exact cursor plus grant | one exact delete and re-query |
 | `KeychainAbsentReceipt` | exact delete and zero-count re-query | one `ImageDeletePermit` |
@@ -1042,16 +1294,23 @@ Receipt producers and controlled consumers are exact:
 | `QuarantineReceipt` | exact exclusive rename, revalidation and independent closes | one disposition finalization |
 | `ImageAbsentReceipt` | exact tombstone removal, both absence checks and independent closes | one disposition finalization |
 | `UnresolvedContinuationReceipt` | any non-settled continuation result | one unresolved disposition finalization |
+| `UnresolvedEffectReceipt` | any ordinary or terminal-pending ambiguity | one bounded non-authorizing uncertainty envelope for disposition |
 | `UnresolvedDeletionReceipt` | any non-total rename/removal/revalidation/close result | one unresolved disposition finalization |
 | `PreservationReceipt` | a no-effect terminal route carrying the current ledger | one disposition finalization |
-| `DispositionReceipt` | registry reduction of exactly one normal or terminal outcome | `close` once |
+| `ObserverStoppedReceipt` | exact final snapshot, STOPPED, stdout/stderr EOF and observer waitpid | required input to disposition minting; no standalone effect |
+| `NoObserverSpawnProof` | preparation registry after proved zero observer spawn plus compiler/descriptor cleanup | substitutes only for observer shutdown on a pre-spawn preparation terminal path |
+| `DispositionReceipt` | registry reduction of exactly one normal or terminal outcome plus `ObserverStoppedReceipt`, or pre-spawn preparation terminal plus `NoObserverSpawnProof` | registered `close` once |
 
 Normal approved success, unapproved quarantine and every operational,
 protocol, deadline, observer or native-supervision failure each mint exactly
-one `DispositionReceipt`. It contains the terminal cause or normal-success
-marker, final cursor ledger, cleanup facts, tuple receipts and verdict. There is
-no alternate success return and no failure branch that bypasses it. `close`
-accepts only that receipt and consumes it once. After terminal, ordinary
+one `DispositionReceipt`, but only after every in-flight record has resolved
+and the final observer STOP/snapshot/EOF/exact-reap sequence has completed. It
+contains the terminal cause or normal-success marker, exact ledger or bounded
+non-authorizing uncertainty envelope, cleanup facts, tuple receipts and
+verdict. A shutdown failure is `UNCLEAR`; final-snapshot SecurityAgent is
+`FAIL`, and neither can coexist with PASS. There is no alternate success
+return and no failure branch that bypasses the receipt. `close` accepts only
+that receipt, registers its close operation and consumes it once. After terminal, ordinary
 compile/create/mount/detach, probes, inspect and Keychain cleanup are forbidden
 except the already-authorized total disposition route.
 
@@ -1263,8 +1522,36 @@ as a nonzero `UInt64`-range value and reports the identical integer. This key is
 absent from ordinary/default environments and is never accepted by production
 helper request parsing.
 
-`fresh_argv[0]` is the absolute `sys.executable`. The only parent spawn shape
-is exact:
+`FRESH_BOOTSTRAP_SOURCE` and literal `FRESH_BOOTSTRAP_SOURCE_SHA256` live in
+`tests/disk_image_keychain_harness.py`. The parent hashes those exact UTF-8
+bytes before every launch. The bootstrap is sealed: it performs no project
+import or path lookup before its report and GO transition. `fresh_argv` is
+exactly the absolute interpreter, isolation flags, source bytes and this
+strictly ordered decimal-FD suffix:
+
+~~~python
+fresh_argv = [
+    absolute_sys_executable,
+    "-I", "-S", "-u", "-c", FRESH_BOOTSTRAP_SOURCE,
+    str(report_w), str(go_r), str(guardian_r), str(witness_w),
+    str(control_child), str(exec_status_w),
+]
+fresh_env = {
+    "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+    "LANG": "C",
+    "LC_ALL": "C",
+    "CORTEX_S3_PARENT_HARD_DEADLINE_NS": str(parent_outer_hard),
+}
+~~~
+
+The six operands accept canonical ASCII unsigned decimals only, are pairwise
+distinct and greater than 2. A single bounded canonical configuration frame on
+the child's stdin supplies the already sealed nonce, helper path/vector/digest,
+source hash, binary hash and registered file facts; it is not argv or
+environment authority. `fresh_env` has exactly the four keys above: no
+inherited `HOME`, `PYTHONPATH`, `PYTHON*`, `DYLD*`, virtualenv or user-site
+variable. `-I -S` plus the fixed source block prevents site/custom startup and
+implicit project imports. The only parent spawn shape is exact:
 
 ~~~python
 subprocess.Popen(
@@ -1294,18 +1581,20 @@ then inventories or reports. At that point `exec_status_w` alone has
 `FD_CLOEXEC`. Before GO, the interpreter's bounded inventory must equal exactly
 `{0,1,2,report_w,go_r,guardian_r,witness_w,control_child,exec_status_w}`.
 Missing, extra, duplicate, stdio-aliased or wrong-CLOEXEC descriptors reject
+before GO. Wrong flag order, missing isolation, extra/inherited environment,
+changed bootstrap bytes/hash or any import before the report likewise rejects
 before GO.
 
-The interpreter imports only the fixed bootstrap, validates the inherited
-shared-clock deadline, nonce and descriptor inventory, and revalidates the
+The interpreter executes only the fixed bootstrap, validates the inherited
+shared-clock deadline, bounded configuration and descriptor inventory, and revalidates the
 private helper target and parent as owner-only mode `0700`, plus the target's
 registered device, inode, mode, UID and binary SHA-256. It writes one capped
 structured report containing its exact `getpid`, absolute helper path, argv0,
 complete fixed route vector and its digest, source SHA-256, binary SHA-256 and
-deadline. It then waits for one GO byte and has not started or loaded the
+deadline, plus `FRESH_BOOTSTRAP_SOURCE_SHA256`. It then waits for one GO byte and has not started or loaded the
 helper/fixture. The parent requires report PID equal to registered
-`Popen.pid`, exact nonce/deadline/path/argv/vector/digest/hashes and exact FD
-inventory. Only then does it write one GO byte.
+`Popen.pid`, exact nonce/deadline/path/argv/vector/digest/source/binary/
+bootstrap hashes and exact FD inventory. Only then does it write one GO byte.
 
 The interpreter closes report/GO endpoints and calls exactly
 `os.execve(helper_path, helper_argv, helper_env)`. Successful exec atomically
@@ -1329,14 +1618,32 @@ fixture. Dedicated matrices cover missing/extra/duplicate descriptors,
 wrong-CLOEXEC status, malformed exec-status records and both reserved exec
 failure exits.
 
-A distinct Python-AST oracle verifies the parent call rather than inferring it
-from runtime observations: absolute `fresh_argv[0] == sys.executable`, all
-three stdio pipes, `close_fds=True`, the exact six-entry `pass_fds` tuple and
+Endpoint ownership and closure are executable, not advisory:
+
+| Owner/transition | Required independent closes |
+| --- | --- |
+| Parent after successful `Popen` | Close child copies `report_w`, `go_r`, `guardian_r`, `witness_w`, `control_child`, `exec_status_w` immediately; write the sole bounded configuration frame, then flush and close the returned stdin writer. |
+| Parent on spawn failure | Attempt both ends of report, GO, guardian, witness, control and exec-status independently; one close failure never suppresses another. |
+| Bootstrap after its sole report | Close `report_w`; after its sole GO read close `go_r`; both close before `execve`; keep only `exec_status_w` CLOEXEC. |
+| Helper after exec | Own only stdio, `guardian_r`, `witness_w`, `control_child`. |
+| Helper after fixture spawn | Close its duplicate `guardian_r` and `witness_w`; the fixture owns only those two endpoints and never control. |
+| Parent at terminal/mode cutoff | Close GO/report ends as soon as terminal, close `guardian_w` at the exact mode cutoff, drain/cap stdout, stderr, control, exec-status and witness, then exact-waitpid the direct helper. |
+
+Every failure branch attempts every endpoint it still owns. One atomic retained
+duplicate mutant exists for each EOF class—report, GO, exec-status, witness and
+control—and no combined FD mutant may stand in for any of them.
+
+A distinct Python-AST/source oracle verifies the parent call rather than
+inferring it from runtime observations: exact bootstrap source/hash, absolute
+`fresh_argv[0] == sys.executable`, ordered `-I -S -u -c`, the strict six
+numeric operands, exact minimal environment, all three stdio pipes,
+`close_fds=True`, the exact six-entry `pass_fds` tuple and
 `start_new_session=True`. It separately proves the only handoff is absolute
 `os.execve`, `helper_argv[0] == helper_path` and the exact registered test route
-vector. Atomic mutants omit one passed FD, inherit one stdio stream, change
-only argv0, change only the exec path, or replace direct exec with a
-process/shell launch; each must fail this unchanged AST oracle.
+vector. Atomic mutants separately change one argv flag/order, environment key,
+bootstrap byte/hash or pre-report import; omit one passed FD; inherit one stdio
+stream; change only argv0 or exec path; or replace direct exec with a
+process/shell launch. Each must fail its unchanged oracle.
 
 Every cross-process timestamp uses the shared `CLOCK_MONOTONIC` domain:
 Python calls only `time.clock_gettime_ns(time.CLOCK_MONOTONIC)` and Swift calls
@@ -1435,21 +1742,24 @@ skips and neither includes the live class. Nested same-interpreter launches use
 Each implementation task defines `TASK_LOCAL_TEST_IDS` and
 `TASK_LOCAL_MUTANTS`. A missing new behavior is written first and must produce
 a natural assertion RED before its implementation. Behavior intentionally
-preserved from the baseline is instead listed in
-`BASELINE_CHARACTERIZATION_TEST_IDS`; it must be GREEN on
-`IMPLEMENTATION_BASE`, GREEN after its owner task and then fail its post-GREEN
-mutant. It is forbidden to manufacture a RED by changing preserved behavior or
-an oracle. The exact characterization `S3C4_01` exercises all eight valid unique
-permutations: both orders of the two required flags and all six orders when
-`--cleanup-approved` is also present. Its mutant is exactly
+preserved from the baseline has `red_policy=baseline_characterization`; it must
+be GREEN on `IMPLEMENTATION_BASE`, GREEN after its owner task and then fail its
+post-GREEN mutant. The exact characterization-policy set is `R45`,
+`S3T4_07` through `S3T4_11`, and `S3C4_01`. It is forbidden to manufacture a
+RED by changing preserved behavior or an oracle. `S3C4_01` exercises all eight
+valid unique permutations: both orders of the two required flags and all six
+orders when `--cleanup-approved` is also present. Its mutant is exactly
 `reject_permuted_effect_flags`.
 
 Acceptance mechanisms such as manifest sealing, package generation and final
-hash comparison use independently runnable synthetic self-tests. Their
-negative fixtures may be natural RED before the mechanism exists; they never
-claim that a correct final repository state itself was RED. After GREEN, every
-mapped normative, task-local and characterization mutant must fail only its
-exact mapped method.
+hash/path comparison use independently runnable synthetic self-tests before
+the Task 5 commit. Their negative fixtures may be RED before the mechanism
+exists; they never claim that a correct final repository state itself was RED.
+Real-target spec-hash, plan-hash and cumulative-path runs occur only after the
+Task 5 commit has frozen immutable `S3_FINAL=HEAD`. Each is then rerun against
+`S3_FINAL`, followed by its synthetic negative fixture and mapped mutant using
+code read from `S3_FINAL`, then restored to real-target GREEN without altering
+that commit. Final implementation reviews cannot start earlier.
 
 For a closed case key `K` and its mapped mutant `M`, the only acceptable mutant
 assertion label is `MUTANT_K_M` after substituting the literal key and mutant
@@ -1496,15 +1806,37 @@ MUTANT_MANIFEST: MappingProxyType[str, RuntimeMutant | SourceMutant]
 ~~~
 
 Its keys equal exactly the union of `R01` through `R45`, every task-local key
-and every characterization key. Its `test_id` and `mutant_name` projections
+and every characterization key: 45 normative, 123 task-local and one
+separately named characterization case, hence 169 records. Its `test_id` and `mutant_name` projections
 equal the corresponding test and mutant maps exactly. Each entry records one
 owner, mapped test, kind, target file, unique literal or
 compiler-AST anchor, one runtime branch or one replacement, transitive
-oracle-closure SHA-256, exact assertion label and one `red_policy`. The closure hash is over the
-sorted domain-separated tuples `(relative_path,start_byte,end_byte,bytes)` for
-the test method, every transitively called oracle helper, its constants and its
-scanner/compiler wrapper. It is frozen as a 64-lowercase-hex value when the
-owner task reaches GREEN and recomputed before and after every mutant run.
+oracle-closure SHA-256, exact assertion label and one `red_policy`.
+
+Oracle closure hashing uses one non-recursive canonical serialization. It
+starts with exact domain separator `CORTEX_S3_ORACLE_CLOSURE_V1\0`, then a
+canonical metadata record for case/test/oracle/kind/target/anchor/
+transformation, then the sorted source records
+`(relative_path,start_byte,end_byte,bytes)` for the test method, every
+transitively called oracle helper, runtime/source oracle constants and its
+scanner/compiler wrapper. Strings and byte ranges use unsigned big-endian
+length prefixes; integers are unsigned big-endian 64-bit; paths are normalized
+repository-relative UTF-8; map keys and records are bytewise sorted.
+
+Expected attestation-value fields—including every `oracle_sha256`, every value
+in the literal `ORACLE_CLOSURE_SHA256` map and every duplicate expected-closure
+field in a materialized manifest—are excluded from the closure payload and serialized at
+their structural location with the single fixed placeholder
+`<CORTEX_S3_EXPECTED_ATTESTATION_EXCLUDED>`. Field names, locations and all
+other structural metadata remain covered. The computed digest is compared
+outside that payload to the literal expected value. No oracle hashes bytes
+that recursively contain the digest it is expected to equal. A determinism
+oracle requires repeat serialization/digest equality; four atomic mutants
+change one covered byte, the domain separator, the excluded-field rule and the
+serializer to raw self-referential input respectively.
+
+The resulting digest is frozen as a 64-lowercase-hex value when the owner task
+reaches GREEN and recomputed before and after every mutant run.
 Duplicate cases, names, anchors, tests, labels or manifest values fail import.
 `red_policy` is exactly `natural`, `baseline_characterization` or
 `synthetic_gate`; characterization and final-hash/package gates may not claim a
@@ -1543,7 +1875,7 @@ one non-composite primary mutant.
 | R05 | Settled attach permits one exact current-device detach plus its bound absence query and no free device input. |
 | R06 | Held-pipe leader exit uses exited anchor; zombie `getsid == ESRCH` does not block exact wait/reap. |
 | R07 | PGID reuse after reap permits only one token-bound signal-zero observation. |
-| R08 | Short/changed birth, UID, PGID or SID permits no SIGCONT, input or group signal. |
+| R08 | Validation consumes the suspended anchor; only exact validation mints validated-suspended authority, and every failed validation or non-resumed result permits no input/group signal and retains only positive-PID cleanup. |
 | R09 | Full waitid matrix mints exited authority only for the exact terminal child. |
 | R10 | Reap ECHILD remains unresolved with no settlement proof. |
 | R11 | Insufficient command/finalization fit permits zero spawn. |
@@ -1551,15 +1883,15 @@ one non-composite primary mutant.
 | R13 | The one-helper absence/response stage stops at exact `origin + 26 s`; plus one nanosecond refuses. |
 | R14 | No normal, compensation or continuation stage can reset its original deadline. |
 | R15 | Terminal pre-observation blocks every ordinary sealed method before spawn. |
-| R16 | The observer is compiled and baselined before helper compilation; detection/unavailability during compile mints a preparation terminal cause and no live capability. |
+| R16 | The persistent observer is compiled and baselined before helper compilation; detection/unavailability/compile failure consumes the sole no-artifact cursor into a preparation terminal receipt, closes through disposition and mints no live capability. |
 | R17 | Caller operation, cleanup, path, device or argv cannot construct live work. |
 | R18 | A replayed mounted-cursor continuation slot performs zero second helper spawn. |
 | R19 | Each indexed mount cursor can issue only its one self-contained detach/absence transition. |
 | R20 | Detach and absence occur inside one 26-second helper; no second helper or cross-process Swift token exists. |
-| R21 | Every cursor state transfers once and every normal/failure branch mints exactly one `DispositionReceipt` then closes once. |
+| R21 | Every cursor/receipt effect is registered in flight; every normal/failure branch resolves its exact ledger or non-authorizing uncertainty envelope, completes observer STOP/final snapshot/EOF/reap, then mints exactly one `DispositionReceipt` and closes once. |
 | R22 | Ambiguous current mapping advances only to `unresolved(ledger)` with no detach, query replay or mutation. |
 | R23 | A terminal cause after Keychain deletion performs zero later Keychain effect and preserves the cursor ledger. |
-| R24 | SecurityAgent verdict has priority; otherwise observer unavailability has priority. |
+| R24 | SecurityAgent verdict has priority through the final STOP snapshot; otherwise observer unavailability, including STOP/EOF/reap failure, has priority and cannot coexist with PASS. |
 | R25 | Complete create and current indexed mount evidence is stored only in the advancing `ArtifactCursor` before terminal transfer. |
 | R26 | Related partial or foreign-UID bridge permanently blocks cleanup. |
 | R27 | Partial bridge to exact grandchild yields no signal or cleanup. |
@@ -1570,15 +1902,15 @@ one non-composite primary mutant.
 | R32 | Tracked UID, SID or group change expires authority before syscall. |
 | R33 | TERM-to-KILL exited-anchor matrix blocks KILL on changed waitability/identity. |
 | R34 | Once KILL is attempted, no later TERM/KILL is possible. |
-| R35 | Suspended cleanup retains one active `NativeObligation` and `SuspendedCleanupAnchor` through every non-exact reap result; validate-versus-cleanup remains atomic. |
-| R36 | Every helper outcome matches one exact frame/response/exit/EOF/reap tuple; every close branch still attempts all closes. |
+| R35 | Exact validation creates only `validatedSuspended`; cancel and every non-resumed result atomically transfer to retained suspended cleanup, which survives every non-exact reap; all validation/resume/cancel races are total. |
+| R36 | Every helper outcome carries a complete or settled-prefix trace proof and matches all six response values plus exact frame/exit/EOF/reap facts; count-only authority and skipped closes are rejected. |
 | R37 | Valid-looking output with unresolved native settlement cannot succeed or mint a permit. |
 | R38 | Shared `CLOCK_MONOTONIC` deadlines and clock jumps at every boundary permit no new action after the original hard deadline. |
 | R39 | Entropy/Master/Wire/Keychain staging are disjoint and erased at exact app-owned boundaries. |
 | R40 | Active fixture cancellation requires `0x01`, matching `0x12` before narrow `0x13`, witness EOF, control EOF and exact helper reap. |
 | R41 | Production/testing route plus pre-GO/post-exec descriptor matrices reject missing, extra, duplicate or wrong-CLOEXEC FDs before effect. |
 | R42 | Dynamic Python 3.11/3.14 inventories and ordered starts are identical with zero skip. |
-| R43 | Exact report-GO-exec probes keep the helper at `Popen.pid`, prove exec by CLOEXEC EOF, use bounded libproc absence, reserve 3-5 s cleanup, pass twenty fresh runs each and reject malformed/silent/delayed reports or exec failure. |
+| R43 | Exact sealed-bootstrap report-GO-exec probes use `-I -S -u -c`, minimal environment and complete FD-close ledger, keep the helper at `Popen.pid`, prove exec by CLOEXEC EOF, use bounded libproc absence, reserve 3-5 s cleanup, pass twenty fresh runs each and reject malformed/silent/delayed reports, retained EOF duplicates or exec failure. |
 | R44 | Every legacy route literal, handler and test is absent before the default suite. |
 | R45 | Every near-miss of each flag and the authorization key/value constructs zero live objects. |
 
@@ -1607,7 +1939,10 @@ outside the allowlist by construction. Negative self-tests inject one extra
 entry, one wrong hash and one forbidden review path; each must fail before a
 package exists. The three reviewers are fresh, read-only and mutually blind.
 
-Before `S3_FINAL`, exact repository state must be:
+Before the Task 5 commit, final spec-hash, plan-hash and changed-path mechanisms
+run only against synthetic positive/negative fixtures; no test may pretend a
+real `S3_FINAL` exists. After that commit, freeze `S3_FINAL=HEAD` and require
+exact repository state:
 
 ~~~text
 git status --short --untracked-files=all
@@ -1615,7 +1950,12 @@ git status --short --untracked-files=all
 ~~~
 
 The staged path list is empty. Spec, plan and primer-diff hashes are recomputed
-and recorded immediately before the tag/checkpoint. Local evidence additionally
+and recorded from the immutable commit. The three real-target mechanisms then
+run against `git show S3_FINAL:path` and the exact
+`IMPLEMENTATION_BASE..S3_FINAL` diff. Each mapped synthetic negative fixture
+and mutant runs afterward using code loaded from `S3_FINAL`; after restoration,
+the real-target mechanism must be GREEN again and `S3_FINAL` must remain the
+same commit. Local evidence additionally
 requires all normative, task-local and characterization tests/mutants,
 exhaustive/long models,
 all branch matrices, Python 3.11/3.14 full suites, one in-suite and twenty fresh
@@ -1635,15 +1975,17 @@ tests/test_disk_image_keychain_helper.py
 ~~~
 
 The same canonical manifest and three negative package self-tests apply. Before
-generation, independently recompute spec and plan SHA-256 from the
+generation and before any final review, independently recompute spec and plan SHA-256 from the
 `S3_FINAL` blobs and compare them for equality with the frozen reviewed hashes;
 recording without comparison fails. Independently compare the sorted
 `IMPLEMENTATION_BASE..S3_FINAL` changed-path list with exactly the three
 implementation paths declared in this design. Any mismatch, extra path or documentation drift freezes
 S3.
 
-After three fresh final implementation reviews pass, freeze `S3_FINAL` before
-any S4 documentation. A separate documentation-only S4 rebaseline may update
+Only after those post-commit receipts and status/hash/path comparisons pass may
+three fresh final implementation reviews start. `S3_FINAL` is already frozen
+before review and is not rewritten afterward. If all three pass, a separate
+documentation-only S4 rebaseline may update
 only:
 
 - `docs/superpowers/specs/2026-09-02-storage-cutover-and-qa-design.md`;
