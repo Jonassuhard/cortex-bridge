@@ -9,25 +9,26 @@
 > exact GREEN and mutant receipts, and receives read-only review before the
 > next task changes behavior.
 
-**Goal:** Replace forgeable process/effect authority with two exact
-running/exited anchors, an atomic suspended-child bootstrap, narrow native
-settlement, absolute deadline/control propagation, sealed Python registries and
-closed harmless tests.
+**Goal:** Replace forgeable process/effect authority with monotone native
+obligations, a retained suspended-cleanup anchor, one current-mapping
+detach-plus-absence continuation, an exact two-cycle artifact cursor and closed
+harmless evidence.
 
 **Architecture:** Production Swift starts only fixed `/usr/bin/hdiutil`
-children suspended in new sessions, atomically converts a private
-`SuspendedChildAnchor` to a `RunningSessionAnchor`, converts exact WNOWAIT exit
-to `ExitedUnreapedSessionAnchor`, and consumes it through exact `waitpid`.
-Python prepares fixed helper/observer artifacts before the live clock starts,
-mints every live root through object-identity registries, serializes effects
-through one executor, and accepts completion only after an exact frame, control
-EOF and helper reap. Independent reference machines validate complete
-process/effect traces. The only real fixture is non-suspended, self-expiring
-and descendant-free.
+children suspended in new sessions and retains one private `NativeObligation`
+through suspended cleanup, exact reap, group absence, descriptor closes and
+settlement-frame publication. Python first compiles and runs the fixed observer,
+then compiles the helper under observation, owns one `ArtifactCursor` through
+two full mount/detach cycles, and serializes every observation/effect. Mounted
+disposition may consume one Python-authorized 26-second helper that resolves the
+current mapping, detaches and proves absence in one process; no Swift capability
+crosses processes. R43 uses report-GO-exec so the reviewed helper keeps the
+direct `Popen.pid`, with exact FD inventories and in-process libproc cleanup.
 
 **Tech stack:** Swift 6; Darwin `posix_spawn`, `proc_pidinfo`, `waitid`,
-`waitpid` and `poll`; Security.framework; Python 3.11 and 3.14 standard library
-`unittest`, `ctypes`, `subprocess` and `selectors`; Git and Gitleaks.
+`waitpid`, `poll`, `clock_gettime` and libproc; Security.framework; Python 3.11
+and 3.14 standard library `unittest`, `ctypes`, `subprocess`, `selectors` and
+`time.clock_gettime_ns`; Git and Gitleaks.
 
 **Spec:** `docs/superpowers/specs/2026-09-03-s3-owned-process-supervision-design.md`
 
@@ -36,7 +37,7 @@ and descendant-free.
 - Work only in
   `/Users/asterion/Desktop/cortex-bridge/.worktrees/codex-v054-storage-consolidation`
   on branch `codex/v054-storage-consolidation`.
-- Implementation starts only after the exact revision-4 spec/plan bytes pass
+- Implementation starts only after the exact revision-5 spec/plan bytes pass
   three fresh blind read-only reviews with zero P0/P1/P2 and `PASS`.
 - Never edit, stage or commit the pre-existing `primer.md` change.
 - Between `IMPLEMENTATION_BASE` and `S3_FINAL`, change only:
@@ -56,11 +57,16 @@ and descendant-free.
   a durable receipt.
 - Every retry, read, write, poll, scan, wait, signal, close and subprocess uses
   remaining time from one immutable absolute monotonic deadline.
+- Every deadline transmitted to or compared with Swift is integer nanoseconds
+  in `CLOCK_MONOTONIC`: Python uses only
+  `time.clock_gettime_ns(time.CLOCK_MONOTONIC)` and Swift uses only
+  `clock_gettime(CLOCK_MONOTONIC)`. Python's convenience monotonic-nanosecond
+  API and `CLOCK_UPTIME_RAW` are forbidden for cross-process authority.
 - One writer owns a file at a time. Every task has a dedicated commit and fresh
   read-only spec/code review.
 - S4 implementation and S4 rebaseline documentation remain outside S3.
 
-## Revision-4 documentation completion gate
+## Revision-5 documentation completion gate
 
 This authoring gate executes no project code, test, build, helper, live effect,
 Keychain, DiskImages, `hdiutil`, mount, detach, quarantine, SecurityAgent,
@@ -89,15 +95,35 @@ awk '
   docs/superpowers/plans/2026-09-03-s3-owned-process-supervision.md
 git diff --binary -- primer.md | shasum -a 256
 git diff --cached --name-only
+git status --short --untracked-files=all
 ~~~
 
 The placeholder search must return no match, fences must be balanced, the
-primer hash must equal `DOC_PRIMER_DIFF_SHA256` and no path may be staged before
-the explicit candidate stage. A static map checker must then prove: R01-R45
-appear once each in both normative maps; every fully qualified test ID is
-unique; every task ownership range equals its test and mutant map keys; every
-primary mutant is one branch without `or`; and every task-local map entry has
-one method, mutant and `MUTANT_<KEY>_<MUTANT>` label contract.
+primer hash must equal `DOC_PRIMER_DIFF_SHA256`, no path may be staged, and
+status before the explicit candidate stage must contain only the two documents
+plus pre-existing `primer.md`.
+
+An import-free static document checker must then prove all of these facts from
+the Markdown bytes:
+
+- spec and plan contain the exact R01-R45 set with no orphan or duplicate;
+- normative, task-local and characterization test/mutant maps have unique keys
+  and unique fully qualified methods, and ownership ranges equal their keys;
+- the documented `MUTANT_MANIFEST` domain is the exact union of those maps and
+  every record has owner/test/name/kind/target/unique anchor/oracle-closure
+  hash/exact label/red policy;
+- R44 is `kind=source`; every structural declaration/signature/call-graph
+  mutant is source-kind; every other entry names one atomic runtime branch or
+  source replacement;
+- `PROCESS_EVENTS` has 15 unique entries and Cartesian count 813,616;
+  `EFFECT_EVENTS` has 22 unique entries and Cartesian count 5,399,043;
+- the cursor states, two cycles, 26-second schedule, helper tuple rows,
+  preparation order, R43 offsets, exact Popen/pass-FD inventories, libproc
+  outcomes and package allowlists each occur in both documents;
+- both documents instead contain exactly one 26-second continuation helper,
+  `RENAME_EXCL`, final-only control close, all eight valid effect-flag
+  permutations, current-mapping-only authority, same-PID report-GO-exec and a
+  capped in-process scan; every superseded R43 offset is absent.
 
 Stage and commit only the two candidate bytes:
 
@@ -113,7 +139,7 @@ test "$(git diff --cached --name-only)" = "$(printf '%s\\n' \
   docs/superpowers/plans/2026-09-03-s3-owned-process-supervision.md \
   docs/superpowers/specs/2026-09-03-s3-owned-process-supervision-design.md)"
 test "$(git diff --binary -- primer.md | shasum -a 256 | awk '{print $1}')" = "$DOC_PRIMER_DIFF_SHA256"
-git commit -m "docs(storage): complete S3 revision 4 review candidate"
+git commit -m "docs(storage): close S3 revision 5 review gaps"
 test "$(git status --short --untracked-files=all)" = " M primer.md"
 ~~~
 
@@ -123,10 +149,12 @@ Only after that exact docs-only commit may the blind documentation gate run.
 
 - [ ] Freeze the candidate commit and compute exact SHA-256 for the spec and
   plan from that commit.
-- [ ] Give each fresh reviewer only the exact candidate bytes/hashes, declared
-  requirements, reviewed baseline and necessary source context.
-- [ ] Exclude every prior findings file, consolidated findings document,
-  verdict, reviewer identity and reviewer conclusion from each package.
+- [ ] Generate from `git show DOC_CANDIDATE:path` using exactly the four-path
+  documentation allowlist in the spec; record canonical path/size/SHA-256.
+- [ ] Run negative package self-tests for one extra entry, one wrong hash and
+  one prior-review path; require generation to fail before output.
+- [ ] Give each fresh reviewer only that sealed package and declared
+  requirements. The ignored SDD review tree is unreachable to the generator.
 - [ ] Keep reviewers mutually blind and read-only.
 - [ ] Require each receipt to say `P0=0`, `P1=0`, `P2=0`, `Verdict=PASS`.
 - [ ] Store receipts only under the ignored directory
@@ -159,19 +187,29 @@ git status --short --untracked-files=all
 git diff --cached --name-only
 ~~~
 
-The primer hash must equal `PRIMER_DIFF_SHA256`. Before the first production
-change to each task boundary:
+The primer hash must equal `PRIMER_DIFF_SHA256`. Task 1 first creates an
+importable, non-functional harness skeleton defining every referenced symbol;
+missing behavior raises a closed assertion result, never `ImportError`, syntax
+error or collection failure.
 
-1. add that task's normative tests and `TASK_LOCAL_TEST_IDS` methods;
-2. add the exact map entries without changing an oracle;
-3. run each method alone under Python 3.11;
-4. require a natural assertion RED for the missing boundary;
-5. record test-source SHA, interpreter path/version, command, exit status,
-   exact failing assertion and expected cause.
+Before the first production change to a boundary, classify its manifest
+`red_policy` and apply exactly one protocol:
 
-If a new test passes before its boundary is implemented, stop: it is not a
-valid RED. Tighten only an incomplete oracle until the missing required
-behavior fails naturally. A mutant never substitutes for this natural RED.
+1. `natural`: add the mapped test/oracle, run it alone under Python 3.11 and
+   require an assertion RED caused by the missing behavior;
+2. `baseline_characterization`: run the mapped test on
+   `IMPLEMENTATION_BASE` and require GREEN, then require the same GREEN after
+   the owner task; never manufacture a RED;
+3. `synthetic_gate`: run an independently constructed invalid fixture and
+   require the new acceptance mechanism to reject it; do not claim a correct
+   final repository state was RED.
+
+For every policy record test-source SHA, transitive oracle-closure SHA,
+interpreter path/version, command, exit status and exact assertion/result.
+After GREEN, all three policies still require the post-GREEN mapped mutant to
+fail. If a `natural` test passes before implementation, stop and tighten only
+an incomplete oracle. If a characterization is not GREEN on the baseline,
+stop instead of reclassifying it.
 
 Use the same individual runner for normative and task-local IDs:
 
@@ -184,11 +222,13 @@ env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin LANG=C LC_ALL=C \
   "$PYTHON311" -m unittest "$TEST_ID" -v
 ~~~
 
-`ALL_TEST_IDS` is a read-only merge of `REGRESSION_TEST_IDS` and
-`TASK_LOCAL_TEST_IDS`; duplicate keys or values fail import.
+`ALL_TEST_IDS` is a read-only merge of `REGRESSION_TEST_IDS`,
+`TASK_LOCAL_TEST_IDS` and `BASELINE_CHARACTERIZATION_TEST_IDS`; duplicate keys
+or values fail import.
 
-`ALL_MUTANTS` is a read-only merge of `REGRESSION_MUTANTS` and
-`TASK_LOCAL_MUTANTS`; duplicate keys or values fail import. For every closed
+`ALL_MUTANTS` is a read-only merge of `REGRESSION_MUTANTS`,
+`TASK_LOCAL_MUTANTS` and `BASELINE_CHARACTERIZATION_MUTANTS`; duplicate keys or
+values fail import. For every closed
 case key `K` and its mapped mutant `M`, the only valid mutant-sensitivity label
 is `MUTANT_K_M` after literal substitution. For example, R01 may be accepted
 only with `MUTANT_R01_accept_unresolved_attach_output`. The test source must
@@ -211,16 +251,31 @@ env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin LANG=C LC_ALL=C \
   "$PYTHON311" -m unittest "$TEST_ID" -v
 ~~~
 
-Every mutant changes exactly one production/harness branch. Composite
-`A_or_B` mutants and test/oracle mutation are forbidden. The test-only mutant
-dispatcher rejects unknown names and changes only the named
-production/harness branch; reference machines and assertions never take a
-mutant-dependent path. For each run set
+`MUTANT_MANIFEST` is a typed read-only mapping whose keys equal exactly
+`ALL_MUTANTS`. Every record contains case, owner, exact test ID, mutant name,
+`kind`, target file, unique anchor, one runtime branch or source replacement,
+oracle ID, frozen transitive oracle-closure SHA-256, exact assertion label and
+`red_policy`. Its test/name projections must equal the maps, and all values
+that must be unique are unique.
+
+Every mutant changes exactly one production/harness branch or one isolated
+source anchor. Composite `A_or_B` mutants and test/oracle mutation are
+forbidden. Runtime mutants use only their named test-only branch. Source
+mutants create one owner-only regular copy with link count one under ignored
+SDD storage, require exactly one anchor, apply one typecheckable transformation,
+record original/derived/oracle hashes, run the unchanged oracle against that
+copy, and delete it with residual-count zero. Tests, oracle helpers, symlinks,
+hardlinks, changed oracle hashes and residual copies fail the receipt. R44 and
+all structural declaration/signature/call-graph mutants are source-kind. For
+Python copies require `py_compile` success; for Swift copies require the same
+unchanged `swiftc -typecheck` command/frameworks used by the source oracle. For
+each run set
 `ASSERTION_LABEL="MUTANT_${CASE_KEY}_${MUTANT}"`, require that exact label in
 the mapped method's failure, record it with the branch name, then restore the
-branch. After each task GREEN, run every normative and task-local mutant owned
-by that task one at a time, require its exact mapped method and label to fail,
-then rerun the complete task-owned set without mutants.
+branch. After each task GREEN, run every normative, task-local and
+characterization mutant owned by that task one at a time, require its exact
+mapped method and label to fail, then rerun the complete task-owned set without
+mutants.
 
 Before a task commit:
 
@@ -256,9 +311,19 @@ the three S3 implementation files.
 **Normative ownership:** process-model IDs 26 through 32 and legacy-removal ID
 44.
 
-**Task-local ownership:** `S3T1_01` through `S3T1_05`.
+**Task-local ownership:** `S3T1_01` through `S3T1_07`.
 
-- [ ] **Step 1: Write and individually observe task-local and normative RED**
+- [ ] **Step 1: Create an importable non-functional harness skeleton**
+
+Create `tests/disk_image_keychain_harness.py` before adding imports from it.
+Define exact names for both event alphabets, primitive result records, reducer
+entrypoints, typed mutant record shapes and the source-copy runner. Each
+unimplemented reducer returns a closed primitive `("boundary_missing",)` state
+so later tests fail by assertion. The skeleton must not compile, spawn, signal
+or inspect a process. Import it from the test module and prove import succeeds
+before recording any RED.
+
+- [ ] **Step 2: Write and individually observe task-local and normative RED**
 
 Add independent reference-machine tests before reducer or route changes. The
 RED set proves:
@@ -266,20 +331,19 @@ RED set proves:
 - transition indices are attached by the explorer, outside both reducers;
 - full indexed action sequence and full primitive final state are equal to the
   independent reference result;
-- positive signal/native-settlement/full-disposition counters are nonzero;
-- complete long disposition and replay traces exist;
+- positive signal/native-settlement/two-cycle/disposition counters are nonzero;
+- long traces cover both indexed cycles, total unresolved ledger and one close;
 - the legacy-route structural gate runs before any default-suite selection and
   is naturally RED while all six legacy literals, handlers, launchers and test
   names remain present.
 
-Run all owned normative and task-local methods individually. Record only
-assertion failures tied to these missing boundaries.
+Run R26-R32, R44 and S3T1_01-S3T1_07 individually. Record only assertion
+failures tied to these missing boundaries; import/syntax/timeout failures are
+invalid.
 
-- [ ] **Step 2: Create the harness and implement the process model without live process calls**
+- [ ] **Step 3: Implement the process model without live process calls**
 
-Create the new test-only `tests/disk_image_keychain_harness.py` module; it has
-no baseline implementation, reducer, registry or model API to preserve. Define
-this exact ordered alphabet there:
+Replace only the process skeleton with this exact ordered alphabet:
 
 ~~~python
 PROCESS_EVENTS = (
@@ -311,36 +375,39 @@ In the test module, implement a separately written reference machine over raw
 events and primitive local variables. It imports no reducer state, registry or
 permit type and computes both complete indexed action sequence and final state.
 Compare equality for every trace. Include long positive traces through signal,
-WNOWAIT exit, exact reap, original-group absence, pipes closed and native
-settlement, followed by replay attempts.
+WNOWAIT exit, exact reap, original-group absence, pipes closed and
+settlement-frame publication, followed by replay attempts. Add a suspended
+cleanup trace in which repeated non-exact wait results retain the active
+obligation before exact reap; make no liveness claim after destruction of the
+owning helper.
 
-- [ ] **Step 3: Implement the independent effect model**
+- [ ] **Step 4: Implement the independent cursor/effect model**
 
 Use exactly:
 
 ~~~python
 EFFECT_EVENTS = (
     "activate",
-    "ordinary",
-    "mount_receipt",
-    "mapping_receipt",
-    "preterminal_unmounted",
-    "issue_detach",
+    "create",
+    "mount",
+    "verify_mount",
+    "detach_absence",
+    "advance_cycle",
+    "cycles_complete",
+    "inspect_one",
+    "issue_cleanup_grant",
+    "delete_keychain_zero",
+    "delete_image",
     "terminal",
     "begin_disposition",
-    "consume_detach",
-    "settled_detach",
-    "issue_absence",
-    "consume_absence",
-    "settle_absence",
+    "continuation_detach_absence",
     "issue_quarantine",
-    "consume_quarantine",
     "quarantine",
     "preserve_artifact",
-    "finalize_disposition",
+    "cleanup_not_authorized",
+    "terminal_after_keychain",
     "unresolved",
-    "inspect",
-    "delete",
+    "finalize_disposition",
     "close",
 )
 ~~~
@@ -348,22 +415,16 @@ EFFECT_EVENTS = (
 The effect reducer and registry are independent of the process model. Enumerate
 all prefixes through depth five and assert 5,399,043. The independent reference
 machine compares the full externally indexed action sequence and final
-primitive state. Long traces cover:
+primitive state. The exact 22-symbol alphabet keeps the exact 5,399,043 count.
+Long traces cover `noArtifact -> created(0)`, both
+mount/verify/detach-absence cycles, `created(2) -> cyclesComplete`, one inspect,
+Keychain-first approved deletion, cleanup-not-authorized quarantine, terminal
+from every current cursor state, unresolved old/new ledger facts, one
+`DispositionReceipt`, one close and every one-shot replay. Positive counters
+require complete two-cycle success, approved cleanup, quarantine, unresolved
+preservation and close.
 
-- activate, mount, terminal, begin disposition, detach issue/consume/settle,
-  absence issue/consume/settle, quarantine issue/consume/settle, finalization
-  and close;
-- mapping receipt, preterminal-unmounted proof, terminal transfer and
-  descriptor-relative quarantine;
-- terminal no-artifact, create-only, mapping-unknown and unresolved preservation
-  through final disposition and close;
-- replay of every derivative slot, terminal transfer, detach, absence,
-  quarantine and disposition receipt.
-
-Positive counters require ordinary success, a quarantined disposition, a
-preserved disposition and close.
-
-- [ ] **Step 4: Delete legacy routes exhaustively**
+- [ ] **Step 5: Delete legacy routes exhaustively**
 
 Remove these literals, Swift handlers/branches, Python launchers, test methods,
 comments naming handlers and any selector reference:
@@ -377,18 +438,23 @@ comments naming handlers and any selector reference:
 --process-child
 ~~~
 
-Do not add the guardian route yet. The pre-default structural test scans both
-source files and discovered unittest method names. It must run before any
-default test that can compile or spawn.
+Do not add the guardian route yet. Add one exact empty testing-route-table
+source anchor under `#if CORTEX_STORAGE_HELPER_TESTING`. R44's source mutant
+inserts at that anchor a real testing-only legacy handler/dispatch entry; the
+isolated Swift copy must typecheck and the unchanged pre-default absence oracle
+must fail. The gate scans source plus discovered unittest method names before
+any default test that can compile or spawn.
 
-- [ ] **Step 5: GREEN and mutate every owned boundary**
+- [ ] **Step 6: GREEN and mutate every owned boundary**
 
 Run each owned normative/task-local method individually, then the Task 1 set.
 Enable each mapped mutant alone and require only its mapped method to fail.
-The long-trace suite must catch replay and omitted-success mutants; exact count
-tests must catch alphabet or enumeration changes.
+The long-trace suite must catch replay, omitted cycle and missing disposition
+mutants; exact count tests catch alphabet or enumeration changes. R44 records
+original/derived/oracle hashes, exact typecheck and exact assertion label, then
+proves residual-copy count zero.
 
-- [ ] **Step 6: Commit Task 1**
+- [ ] **Step 7: Commit Task 1**
 
 ~~~bash
 git add native/macos/disk_image_keychain.swift \
@@ -412,7 +478,7 @@ read-only spec-compliance and code-quality reviews before Task 2.
 
 **Normative ownership:** IDs 06 through 10, 33 through 35 and 39.
 
-**Task-local ownership:** `S3T2_01` through `S3T2_08`.
+**Task-local ownership:** `S3T2_01` through `S3T2_12`.
 
 - [ ] **Step 1: Write and individually observe RED**
 
@@ -422,10 +488,17 @@ Before changing the supervisor, add scripted tests for:
 - forged/stale/replayed/cross-registry suspended/running/exited tokens;
 - strongly retained registry identity with allocator-reuse refusal;
 - atomic validate-versus-abort interleavings;
+- `SuspendedCleanupAnchor` retention and one monotone `NativeObligation`
+  through repeated non-exact cleanup results;
+- one serial lifecycle executor, exact lock order and cancel polls at every
+  spawn/insertion/resume/write boundary;
+- every `SpawnResult` member and zero-obligation behavior for non-spawned
+  members;
 - native proof excluding control;
 - complete control DFA including every invalid input/state;
 - distinguishable `strictRejected`, `acceptedNoChild` and
   `protocolAbnormal` normal exits;
+- exact frame/response/exit/EOF/reap tuples and final-only control closure;
 - pre-request maximum-deadline arithmetic;
 - Wire erasure before every outcome/frame and app-owned Keychain staging
   erasure.
@@ -434,32 +507,43 @@ Run every owned method alone and record natural RED.
 
 - [ ] **Step 2: Create final owners and registry-only anchors**
 
-Make `OwnedProcessSupervisor`, `AnchorRegistry`,
+Make `OwnedProcessSupervisor`, `LifecycleExecutor`, `AnchorRegistry`,
 `CommandIssuanceRegistry` and `ControlIssuanceRegistry` private final reference
 types. Give each registry an unexported strongly retained `RegistryIdentity`,
 lock and monotonic generation. Tokens hold that private identity reference plus
 generation, and every validation uses `===` against the issuing registry; no
-`ObjectIdentifier` value is used or accepted. A copied token retains the same
-identity but cannot duplicate its record; a stale identity cannot become valid
-after allocator reuse. Registry records contain PID, birth seconds/microseconds,
-effective UID, PGID, SID, command generation and consumption state.
+`ObjectIdentifier` value is used or accepted.
+
+The single serial lifecycle executor is outermost. Its only nested order is
+lifecycle, control registry, anchor/command registry; inverse acquisition is a
+source-gate failure. No subordinate lock remains held across a blocking syscall.
+It is the only control reader and the only lifecycle writer.
 
 Production `spawnSuspendedSession` uses only
 `POSIX_SPAWN_CLOEXEC_DEFAULT | POSIX_SPAWN_SETSID |
-POSIX_SPAWN_START_SUSPENDED`, stores raw PID privately, and returns
-`SuspendedChildAnchor`.
+POSIX_SPAWN_START_SUSPENDED`. `SpawnResult.spawned` inserts one private
+`NativeObligation(state: suspended)` containing positive PID, birth
+seconds/microseconds, effective UID, PGID, SID, descriptors and frame state,
+then returns `SuspendedChildAnchor`. `refused`, `deadlineExpired` and `failed`
+insert no obligation and expose no PID authority.
 
-Under one registry lock, `validateSuspendedIdentity` consumes the suspended
-anchor into `RunningSessionAnchor` only after the two complete proc records and
-intermediate `getsid` agree exactly. The competing
-`abortAndReapSuspendedDirectChild` consumes it before positive-PID abort and
-exact reap. Neither path can run after the other; abort never uses a negative
-target.
+Within one executor turn, `validateSuspendedIdentity` may advance the same
+obligation to running after the two complete proc records and intermediate
+`getsid` agree. The competing `beginSuspendedCleanup` consumes the suspended
+anchor into `SuspendedCleanupAnchor` and state `suspendedCleanup` before any
+positive-PID cleanup. Every cleanup result except exact `waitpid == pid`
+retains the same active record and permits only bounded retry under the same
+deadline. Exact reap advances to `reapedAwaitingGroup`; group absence, all
+descriptor closes and pending `0x12` publication remain required. No negative
+target, SIGCONT or child write exists on cleanup. This design makes no eventual
+reap claim after external destruction of the owning helper.
 
-The private control registry mints `NoActiveChildProof` only after its locked
-child table is empty for valid START/IDLE cancellation. Its strong registry
-identity and generation are consumed by exactly one `0x13` transition; copied,
-stale or cross-registry proofs emit no frame and authorize no effect.
+The obligation states are exactly `suspended`, `suspendedCleanup`, `running`,
+`exitedUnreaped`, `reapedAwaitingGroup`, `groupAbsentAwaitingCloses` and
+`settledPendingFrame`. `NoActiveChildProof` is unavailable until no obligation
+exists, including after reap while group/close/frame work remains. Its strong
+identity/generation are consumed by exactly one `0x13`; copied, stale or
+cross-registry proofs emit no frame and authorize no effect.
 
 - [ ] **Step 3: Implement running and exited anchors**
 
@@ -473,15 +557,19 @@ complete proc_bsdinfo
 
 Require unchanged PID, birth, effective UID, PGID and SID. Exact WNOWAIT exit
 zero-initializes `siginfo_t` and accepts only exact PID, SIGCHLD and
-CLD_EXITED/CLD_KILLED/CLD_DUMPED. Consume running authority and mint
-`ExitedUnreapedSessionAnchor`. Do not call `getsid` on that zombie.
+CLD_EXITED/CLD_KILLED/CLD_DUMPED. Consume running authority, advance the same
+obligation to `exitedUnreaped` and mint `ExitedUnreapedSessionAnchor`. Do not
+call `getsid` on that zombie.
 
 Observe exited authority before each remaining signal and exact reap with
 zero-initialized `waitid(WNOWAIT)`; that observation never reaps. Only exact
-`waitpid == pid` consumes it and mints one `ReapedGroupObservationToken`;
-consume that token before one signal-zero original-group observation. ECHILD,
-wrong PID/status, EINTR after deadline, EPERM, present group or any other error
-remains unresolved. Once KILL is attempted, issue no later TERM/KILL.
+`waitpid == pid` advances to `reapedAwaitingGroup` and mints one
+`ReapedGroupObservationToken`; consume that token before one signal-zero
+original-group observation and advance to `groupAbsentAwaitingCloses`. Complete
+independent closes advance to `settledPendingFrame`; only successful matching
+`0x12` publication removes the obligation. ECHILD, wrong PID/status, EINTR
+after deadline, EPERM, present group or any other error leaves the obligation
+active and unresolved. Once KILL is attempted, issue no later TERM/KILL.
 
 - [ ] **Step 4: Implement bounded request/deadline admission**
 
@@ -492,7 +580,8 @@ Accept only production argv:
 ~~~
 
 Validate the exact descriptor inventory, set CLOEXEC/nonblocking, then sample
-`now` once and prove before reading request bytes:
+`now` once with `clock_gettime(CLOCK_MONOTONIC)` and prove before reading
+request bytes:
 
 ~~~text
 now < hard
@@ -506,6 +595,11 @@ All arithmetic is checked. Add cases for 70 seconds plus one nanosecond,
 `UInt64.max`, addition/subtraction overflow, future epoch and valid
 phase-too-close input. Arithmetic failure performs zero request read/spawn/
 write. Too-close passes arithmetic but fails phase fit before spawn.
+
+The production parser knows no short test deadline flag. A two-second value
+cannot reach request acceptance or a child effect on this route. The separate
+testing-only two-second validator is added with the guardian route in Task 5
+and never calls this admission code.
 
 Replace unbounded request reads with a 65,536-byte `BoundedRequestReader`
 polling request/control under the same hard deadline and prioritizing control.
@@ -521,6 +615,14 @@ Cancel in ACTIVE emits the child's required `0x12` after narrow native
 settlement and then one `0x13`, or terminal `0x14` when unresolved. Native
 unresolved without cancel also emits `0x14`.
 
+Cancellation linearizes only when the serial lifecycle executor reads `0x01`.
+Poll before spawn; insert the suspended obligation before `0x11`; poll again
+immediately after insertion and before SIGCONT and each child-input write. A
+queued cancel converts directly to `SuspendedCleanupAnchor`, publishes `0x11`
+for the extant obligation and reaches only `0x12,0x13` after complete settlement
+or terminal `0x14` while unresolved. No subordinate lock is held across a
+blocking syscall and no other reader consumes control.
+
 Cover cancel after first/second pairs, no-child completion, not-spawned,
 unresolved without cancel, helper exit in each state, EOF, EAGAIN, unknown,
 duplicate/out-of-order bytes and all terminal replays. Recheck the cancel latch
@@ -530,7 +632,12 @@ Keep `NormalExitKind.strictRejected` (exit 64/no frame),
 `NormalExitKind.protocolAbnormal` (exit 65) separate through the Python
 verdict. The latter, absent/abnormal control EOF, wrong helper exit or a
 missing terminal frame is `UNCLEAR`; no accepted no-child verdict may share
-that path.
+that path. Implement the spec's exact exchange rows: pre-accept reject 64,
+pre-accept cancel 75, accepted success, accepted operational error 64/70,
+settled cancel 75, unresolved active child 74 with stdout-usable/unusable
+variants, and protocol abnormality 65. Each accepted row fixes frames, six-key
+response presence/value, exit, bounded stdout/stderr closure, control EOF and
+exact helper reap.
 
 - [ ] **Step 6: Narrow `NativeSettlementProof`**
 
@@ -547,10 +654,13 @@ erase request buffer and Wire
 mint NativeSettlementProof
 write matching 0x12 settlement frame
 if cancellation is latched, write the sole 0x13 terminal frame
-shutdown and close helper control endpoint
+if the operation is final, shutdown and close helper control endpoint
+otherwise keep control open for the next declared child
 ~~~
 
-A control close failure has no later frame. It is detected by Python as missing
+A successful `0x12` removes only its matching settled-pending-frame obligation;
+it never closes control by itself. Control closes only after final normal or
+terminal transition. A control close failure has no later frame. It is detected by Python as missing
 or abnormal EOF. Python classifies missing/abnormal control EOF, wrong helper
 exit or missing terminal frame as `UNCLEAR` even when another fact appears
 successful. Attempt every close independently even after another close fails.
@@ -570,10 +680,12 @@ Keychain, kernel and child from direct zeroization evidence.
 - [ ] **Step 8: GREEN, branch matrices and mutants**
 
 Run owned IDs/task-local tests individually. Run scripted Cartesian matrices
-for every `IdentityResult`, `ResumeResult`, `ExitObservation`, `SignalResult`,
-`ReapResult`, `GroupPresence`, `PollResult`, `IOResult`, `CloseResult` and
-`SuspendedAbortResult`; fail each descriptor position independently. Include
-the three `NormalExitKind` classes and their Python frame/EOF/reap verdicts.
+for every `SpawnResult`, `IdentityResult`, `ResumeResult`, `ExitObservation`,
+`SignalResult`, `ReapResult`, `GroupPresence`, `PollResult`, `IOResult`,
+`CloseResult` and `SuspendedAbortResult`; fail each descriptor position
+independently. Prove only `SpawnResult.spawned` inserts an obligation. Include
+the three `NormalExitKind` classes, every exact helper tuple, retained suspended
+cleanup, lifecycle order and final-only control close.
 
 Run every owned mutant alone after GREEN, restore it, and rerun the exact
 method.
@@ -639,11 +751,12 @@ values fail before spawn.
 Derive all windows from transmitted epoch once. Use hard stops 36, 38, 52, 54,
 66 and 70 seconds exactly as specified. Equality requires the complete
 command/finalization budget to fit; plus one nanosecond refuses. A normal
-failure never resets compensation/absence deadlines. These are the original
-live helper's pre-terminal windows only. Task 4 creates any post-terminal
-detach/absence continuation as a fresh sealed helper invocation with one
-immutable 14- or 12-second hard deadline that must fit inside the unchanged
-outer 115-second deadline; it never derives a replacement live epoch.
+failure never resets compensation/absence deadlines. These are original live
+helper windows only. Task 4 creates a mounted post-terminal continuation as
+exactly one fresh sealed helper invocation with one immutable 26-second hard
+deadline inside the unchanged outer 115 seconds. That helper performs current
+mapping bind, detach and absence itself; there is no second helper, replacement
+epoch or cross-process Swift capability.
 
 - [ ] **Step 5: GREEN and mutant sensitivity**
 
@@ -673,13 +786,17 @@ Record Task 3 evidence and obtain both fresh read-only reviews.
 
 **Normative ownership:** IDs 15 through 25, 36, 38 and 45.
 
-**Task-local ownership:** `S3T4_01` through `S3T4_14`.
+**Task-local ownership:** `S3T4_01` through `S3T4_24`.
+
+**Baseline-characterization ownership:** `S3C4_01`.
 
 - [ ] **Step 1: Write and individually observe RED**
 
 Before changing the harness, add task-local tests for:
 
 - one-shot preparation with no caller compile/observer paths;
+- observer write/hash/typecheck/compile and first empty baseline before helper
+  compile, then a second empty baseline before live issuance;
 - copied/cross-session/cross-registry receipts, terminal-snapshot consumption
   and atomic active-lineage transfer at the terminal latch;
 - executor linearization at every latch/spawn/register/first-write boundary;
@@ -688,15 +805,29 @@ Before changing the harness, add task-local tests for:
 - exact scripted Python-adapter parity with the independent Task-1 raw
   lineage oracles for every R26-R32 trace;
 - exact ten-key values and zero caller operands;
-- descriptor-relative quarantine;
+- exact current `ArtifactCursor`, two complete indexed cycles and total
+  settled/unresolved effect outcomes;
+- one Python-authorized current-mapping detach-plus-absence helper with the
+  fixed 26-second split and no cross-process Swift token;
+- Keychain inspect/delete/re-query before image deletion, plus total
+  cleanup-not-authorized quarantine and exactly one final disposition;
+- descriptor-relative
+  `renameatx_np(parent_fd, old_leaf, parent_fd, new_leaf, RENAME_EXCL)` and
+  collision refusal;
+- the complete helper frame/response/exit/EOF/reap tuple matrix;
 - separate prefix/suffix/wrong-case/old-alias rejection for each of
   `--integration`, `--allow-effects` and `--cleanup-approved`;
 - separate authorization-key alias and authorization-value normalization
   rejection;
 - a synchronous Keychain result returning after terminal;
 - executable typecheck of the exact reviewed observer source.
+- a 20-sample cross-language `CLOCK_MONOTONIC` bracket oracle with 50 ms
+  maximum width and wrong-clock rejection.
 
 Add the owned normative tests and run every method alone to natural RED.
+Run `S3C4_01` GREEN against `IMPLEMENTATION_BASE`: it accepts both orders of
+the required flags and all six orders when cleanup is present. It never claims
+a natural RED.
 
 - [ ] **Step 2: Implement registry-minted authority roots**
 
@@ -706,24 +837,28 @@ object` for:
 ~~~text
 PreparationCapability
 LiveExecutionCapability
+ObserverBinaryReceipt
 ObserverBaseline
+HelperBinaryReceipt
 SecurityAgentSnapshot
+TerminalCause
 TerminalEventReceipt
-DispositionStartReceipt
 ArtifactContext
-CommandReceipt
+ArtifactCursor
 CreateCommandReceipt
 MountCommandReceipt
-MappingCommandReceipt
-DetachCommandReceipt
-AbsenceCommandReceipt
+MountVerificationReceipt
+DetachedAndAbsentReceipt
 CleanupGrant
-PreTerminalUnmountedProof
-DetachedUnmountedProof
-DetachPermit
-AbsencePermit
+KeychainDeletePermit
+KeychainAbsentReceipt
+ImageDeletePermit
+ImageAbsentReceipt
 QuarantinePermit
 QuarantineReceipt
+UnresolvedEffectReceipt
+UnresolvedContinuationReceipt
+UnresolvedDeletionReceipt
 PreservationReceipt
 DispositionReceipt
 ~~~
@@ -743,35 +878,50 @@ The exact gate parses `--integration`, `--allow-effects`, optional
 private helper target, exact reviewed observer source/private target and cleanup
 approval.
 
+`REVIEWED_HELPER_SOURCE`, `REVIEWED_HELPER_SOURCE_SHA256`,
+`REVIEWED_SECURITY_AGENT_OBSERVER_SOURCE` and its SHA-256 live only in the
+harness. Tests import them. Task 5 will update the helper hash when it changes
+Swift and will modify all three implementation files in one task.
+
 Expose only:
 
 ~~~python
-PreparationSession.compile_helper()
 PreparationSession.prepare_observer()
+PreparationSession.compile_helper()
+PreparationSession.mint_live()
 ~~~
 
-Both take no operands. Use one checked 30-second absolute preparation deadline
-and the exact Python process adapter. Hash/typecheck the reviewed observer,
-collect complete process/window baseline, and mint an empty
-`ObserverBaseline`. Only then consume preparation authority and mint one
-`LiveExecutionCapability` plus one `ArtifactContext`.
+All take no operands. Use one checked 30-second absolute preparation deadline
+and the exact Python process adapter. Execute only this order: write/hash/
+typecheck/compile fixed observer; run it and capture one complete empty
+baseline; compile fixed helper while that observer remains active; capture a
+fresh complete empty baseline; only then mint live roots. Detection or observer
+unavailability during compile mints a registry-only preparation terminal cause,
+cancels/reaps the compiler and reaches disposition without a live capability.
 
-Create the 115-second live absolute deadline after those issuances. Registry
+`mint_live()` consumes preparation authority into one
+`LiveExecutionCapability`, one `ArtifactContext`, one
+`ArtifactCursor(noArtifact)` and, only when approved, one `CleanupGrant`. Create
+the 115-second live absolute deadline afterward with
+`time.clock_gettime_ns(time.CLOCK_MONOTONIC)`. Registry
 context fixes transaction, generated image/mount names, volume
 `CORTEX_BRIDGE_SPIKE`, size `64m`, filesystem APFS and disposable true. It
 captures the private parent directory's no-follow descriptor facts
 (device/inode/mode/UID) at issuance. Settled create captures the image leaf's
-same four facts through that parent descriptor; the sealed create/mount
-receipts, never a caller path or later string lookup, carry them to
-descriptor-relative quarantine.
+same four facts through that parent descriptor and advances the cursor to
+`created(cycle=0)`; the current cursor, never a later string lookup, carries
+them to disposition.
 
 - [ ] **Step 4: Serialize every observation and effect**
 
-One session executor lock spans terminal-latch check, deadline/phase check,
-registry lookup, `Popen`, handle registration and first-write authorization.
-Do not release between these points. Observation uses the same executor.
-Deterministic barriers schedule the terminal latch immediately before/after
-each point and prove no spawn or write crosses it.
+One FIFO serial lifecycle executor with one worker identity owns every
+observation and effect. One logical turn spans terminal-latch check,
+deadline/phase check, current-cursor lookup, `Popen`, handle registration and
+first-write authorization. Registry locks protect only in-memory transitions
+and are never held across a blocking syscall. No competing executor, observer
+reader or effect lock exists. Deterministic barriers schedule the terminal
+latch immediately before/after each point and prove no spawn or write crosses
+it.
 
 If a synchronous Keychain syscall is in flight at terminal, register only its
 late diagnostic result. It cannot mint any receipt, authorize a new effect or
@@ -779,69 +929,69 @@ change FAIL/UNCLEAR to success.
 
 The fixed observer bridge alone mints a terminal `SecurityAgentSnapshot` from
 complete SecurityAgent detection evidence or the closed
-`observer_unavailable` result. `latch_terminal(snapshot)` consumes it under
-that same lock, increments the epoch, revokes ordinary authority and atomically
-consumes eligible active mount or preterminal-unmounted roots into a sealed
-`TerminalEventReceipt` lineage. Old ACTIVE tokens are never grandfathered
-across the epoch. The receipt is then consumed by `begin_disposition` to mint
-one `DispositionStartReceipt` with exactly one lineage kind: no-artifact,
-create-only, mounted, preterminal-unmounted, mapping-unknown or unresolved.
+`observer_unavailable` result. `latch_terminal(snapshot)` consumes it in that
+same executor turn, registry-mints one closed `TerminalCause`, increments the
+epoch, revokes ordinary authority and consumes the current `ArtifactCursor`'s
+only terminal-transfer slot into `TerminalEventReceipt`. Historical receipts
+are never scanned and old cursor shells are never grandfathered. Cause priority
+is independent of cursor state: SecurityAgent, observer unavailable,
+deadline/unresolved, operational failure, then cleanup not authorized.
 
 - [ ] **Step 5: Implement only the sealed method catalogue**
 
 Implement exact no-free-operand signatures:
 
 ~~~python
-create_image(context: ArtifactContext) -> CreateCommandReceipt
-mount_image(
-    context: ArtifactContext,
-    create: CreateCommandReceipt,
-) -> MountCommandReceipt
-detach_normal(mount: MountCommandReceipt) -> DetachCommandReceipt
-inspect_item(create: CreateCommandReceipt) -> CommandReceipt
-delete_item(
-    create: CreateCommandReceipt,
+create_image(cursor: ArtifactCursor) -> CursorOutcome
+mount_cycle(cursor: ArtifactCursor) -> CursorOutcome
+verify_mount(cursor: ArtifactCursor) -> CursorOutcome
+detach_and_prove_absence_normal(cursor: ArtifactCursor) -> CursorOutcome
+advance_cycle(cursor: ArtifactCursor) -> ArtifactCursor
+inspect_item(cursor: ArtifactCursor) -> CursorOutcome
+keychain_delete_permit(
+    cursor: ArtifactCursor,
     grant: CleanupGrant,
-) -> CommandReceipt
-probe_encryption(create: CreateCommandReceipt) -> CommandReceipt
-probe_disk(mount: MountCommandReceipt) -> CommandReceipt
-probe_mapping(mount: MountCommandReceipt) -> MappingCommandReceipt
-prove_preterminal_unmounted(
-    mapping: MappingCommandReceipt,
-) -> PreTerminalUnmountedProof
+) -> KeychainDeletePermit
+delete_item(
+    cursor: ArtifactCursor,
+    permit: KeychainDeletePermit,
+) -> KeychainOutcome
+image_delete_permit(
+    cursor: ArtifactCursor,
+    absent: KeychainAbsentReceipt,
+) -> ImageDeletePermit
+delete_image(
+    cursor: ArtifactCursor,
+    permit: ImageDeletePermit,
+) -> ImageDeletionOutcome
+quarantine_unapproved(cursor: ArtifactCursor) -> QuarantineOutcome
 observe_terminal_snapshot() -> SecurityAgentSnapshot
 latch_terminal(snapshot: SecurityAgentSnapshot) -> TerminalEventReceipt
-begin_disposition(event: TerminalEventReceipt) -> DispositionStartReceipt
-detach_permit(start: DispositionStartReceipt) -> DetachPermit
-detach_for_disposition(permit: DetachPermit) -> DetachCommandReceipt
-absence_permit(detach: DetachCommandReceipt) -> AbsencePermit
-prove_absence_for_disposition(
-    permit: AbsencePermit,
-) -> AbsenceCommandReceipt
-detached_unmounted_proof(
-    absence: AbsenceCommandReceipt,
-) -> DetachedUnmountedProof
-preterminal_quarantine_permit(
-    start: DispositionStartReceipt,
-) -> QuarantinePermit
-quarantine_permit(proof: DetachedUnmountedProof) -> QuarantinePermit
+detach_for_disposition(event: TerminalEventReceipt) -> ContinuationOutcome
 quarantine_for_disposition(
-    permit: QuarantinePermit,
-) -> QuarantineReceipt
+    predecessor: TerminalEventReceipt | DetachedAndAbsentReceipt,
+) -> QuarantineOutcome
 preserve_for_disposition(
-    start: DispositionStartReceipt,
+    event: TerminalEventReceipt,
 ) -> PreservationReceipt
 finalize_disposition(
-    outcome: QuarantineReceipt | PreservationReceipt,
+    outcome: DispositionOutcome,
 ) -> DispositionReceipt
 close(disposition: DispositionReceipt) -> FinalVerdict
 ~~~
 
+`CursorOutcome`, `KeychainOutcome`, `ImageDeletionOutcome`,
+`QuarantineOutcome` and `ContinuationOutcome` are closed discriminated unions:
+each contains either its exact settled receipt/new cursor or one
+`UnresolvedEffectReceipt` carrying the complete cursor and old/new leaf ledger.
+`DispositionOutcome` is the closed union of normal success, unapproved
+quarantine, terminal quarantine, image absence, preservation and unresolved
+receipts.
+
 There is no public `record_mount`, generic runner, argv, raw path/device
 parameter, operation/cleanup request field, safety switch or alternate close.
-`mount_image` atomically returns the registry-issued
-`MountCommandReceipt` containing the exact complete command receipt, UUID,
-device, image, mount and transaction evidence.
+Each call claims the current cursor's one named transition before any effect;
+every predecessor is consumed and only a successor shell is returned.
 
 - [ ] **Step 6: Emit the exact ten-key value matrix**
 
@@ -872,73 +1022,87 @@ is not a request key. Tests compare full mapping equality, not selected fields.
 
 - [ ] **Step 7: Implement exact receipt producers and consumers**
 
-Use the spec's receipt-algebra table literally. Each producer stores complete
-predecessor identity and exact result. Each consumer atomically consumes the
-expected issuance before effect. `close` consumes only a
-`DispositionReceipt`. Generic `CommandReceipt` values are immutable
-same-session evidence only: no generic receipt may mint a permit, capability,
-command or disposition. The Swift control-only `NoActiveChildProof` is minted
-and consumed exclusively by Task 2; it is not a Python receipt and cannot
-cross this boundary.
+Use the spec's cursor/receipt table literally. The registry owns one current
+cursor and permits only this path:
 
-Implement named one-shot derivative slots rather than treating a receipt as
-having one ambiguous consumer: create owns distinct mount/probe/inspect/delete
-slots; mount owns distinct normal-detach/mapping/terminal-transfer slots.
-Read-only consultation validates the exact registry payload but can mint no
-effect. At the terminal latch, consume the eligible mount or preterminal proof
-slot and re-mint its private lineage inside `TerminalEventReceipt` under the
-same executor lock. No stale ACTIVE token is accepted after epoch increment.
+~~~text
+noArtifact -> created(0)
+-> mounted(0) -> mountVerified(0) -> unmounted(0) -> created(1)
+-> mounted(1) -> mountVerified(1) -> unmounted(1) -> created(2)
+-> cyclesComplete -> keychainInspected
+-> keychainAbsent -> imageQuarantined -> imageAbsent
+every state -> unresolved(ledger)
+~~~
 
-`begin_disposition` consumes that receipt and makes total disposition explicit:
-no-artifact, create-only, mapping-unknown and unresolved start records consume
-only `preserve_for_disposition`; mounted records consume only an exact detach
-permit, then exact absence and quarantine; preterminal-unmounted records
-consume only the transferred descriptor-relative quarantine route. Each route
-mints `DispositionReceipt` and then `close`. Unknown mapping performs no new
-query/inspect/delete/quarantine. After terminal, ordinary methods and cleanup
-grants are revoked.
+Each mount cycle requires a fresh helper exact tuple, exact UUID, diskutil
+device/mount/APFS proof, exact current hdiutil mapping, one self-contained
+detach/absence helper, returned-device consistency and empty mount directory.
+Inspect is callable once from `cyclesComplete` only. Advancing consumes the
+old cursor, so historical evidence cannot win a precedence scan.
 
-After valid predecessor frame, control EOF and exact helper reap, a mounted
-start may create one fresh Swift detach continuation only if a checked
-`now + 14 s` fits inside immutable `outer_hard_ns`; exact settled detach may
-then create one fresh absence continuation only if checked `now + 12 s` fits.
-Both inherit the same strict argv/deadline validation and sealed receipt
-context. Insufficient fit or any unresolved predecessor mints preservation with
-zero spawn; neither continuation may reset, extend or borrow a deadline.
+At terminal, consume only the current cursor's transfer slot into one event.
+Callers cannot construct `TerminalCause`; registries mint SecurityAgent,
+observer-unavailable, deadline/unresolved, operational-failure and
+cleanup-not-authorized causes with that fixed verdict priority independent of
+artifact state.
+
+A mounted terminal event may consume exactly one Python registry slot to start
+one fresh helper with the existing ten-key `operation=detach` request. Use
+`shared_clock_ns()` and admit only checked `now + 26_000_000_000 <=
+outer_hard_ns`. Inside that one helper: bind/Keychain/encryption/current info
+stops at +8 s and finalizes failures by +14 s; detach stops at +14 s and
+finalizes by +20 s; absence/response stops at +26 s. It returns one complete
+tuple and either `DetachedAndAbsentReceipt` or
+`UnresolvedContinuationReceipt`. It resolves current image/mount/UUID mapping;
+historical device equality is post-effect consistency only. No second helper,
+deadline reset or Swift capability crossing exists.
+
+After exact one-item inspect, approved preparation consumes `CleanupGrant`
+into `KeychainDeletePermit`; exact delete plus zero-count re-query yields
+`KeychainAbsentReceipt`, which alone issues `ImageDeletePermit`. Approved image
+deletion performs exclusive tombstone move, fd-relative removal, old/tombstone
+absence checks and independent closes. Unapproved cleanup exclusively
+quarantines and records `keychainStillPresent=true`. A terminal cause after
+Keychain deletion performs no later Keychain call. Every effect returns a
+closed settled/unresolved outcome retaining its ledger.
+
+Normal approved success, unapproved quarantine and every failure/terminal
+branch each mint exactly one `DispositionReceipt`; `close` consumes only that
+type once. There is no alternate return, boolean cleanup or exception-only
+branch.
 
 Write the receipt forgery matrix test-by-test, not as a pooled assertion:
 
 | Normative ID | Exact forged/copy/session/result oracle |
 | --- | --- |
-| R18 | forged, copied, stale and replayed `DetachPermit` cause zero second detach spawn |
-| R19 | copied/inter-session/inter-registry/wrong-epoch `MountCommandReceipt` cannot issue a second detach or terminal-transfer slot |
-| R20 | wrong command, result, device, lineage or replayed `DetachCommandReceipt` cannot issue absence |
-| R21 | forged/copy/replay `TerminalEventReceipt`, `DispositionStartReceipt`, quarantine/preservation output and final disposition all refuse; each legitimate terminal lineage reaches `close` once |
-| R25 | wrong create/mount command or result value cannot register nonzero evidence before terminal propagation |
+| R18 | forged, copied, stale and replayed mounted cursor slots cause zero second continuation spawn |
+| R19 | copied/inter-session/inter-registry/wrong-epoch indexed mount cursor cannot issue a second normal detach/absence or terminal transfer |
+| R20 | any attempted split helper, cross-process Swift token, wrong current mapping or replay refuses and preserves the ledger |
+| R21 | forged/copy/replay cursor/event/outcome/final disposition refuses; every legitimate normal or terminal branch reaches one close |
+| R25 | wrong create/mount command/result/index cannot advance current cursor before terminal transfer |
 
 - [ ] **Step 8: Implement descriptor-relative quarantine**
 
 Open the registered parent with
 `O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_DIRECTORY`, then the registered image
 leaf relative to it with `O_RDONLY | O_CLOEXEC | O_NOFOLLOW`. Verify device,
-inode, mode and UID with `fstat` and no-follow `fstatat`. Rename only with:
+inode, mode and UID with `fstat` and no-follow `fstatat`. Bind libc through
+typed `ctypes` and move only with:
 
 ~~~python
-os.rename(
-    old_leaf,
-    new_leaf,
-    src_dir_fd=parent_fd,
-    dst_dir_fd=parent_fd,
-)
+renameatx_np(parent_fd, old_leaf, parent_fd, new_leaf, RENAME_EXCL)
 ~~~
 
-Revalidate destination facts and source absence relative to `parent_fd`.
-Close image/parent FDs independently on every branch. Ban `Path.rename`,
-absolute rename and fallback. Mint `QuarantineReceipt` only after complete
-revalidation and closes. The parent/image device, inode, mode and UID compared
-here come only from the sealed `ArtifactContext` and settled create/mount
-receipt capture; a later stat result is verification evidence, never replacement
-provenance.
+`EEXIST` is unresolved preservation and overwrites nothing. Revalidate
+destination facts and source absence relative to `parent_fd`. Approved deletion
+then removes the private tombstone fd-relatively without following symlinks and
+proves old/tombstone absence; quarantine leaves its registered destination.
+Close image/parent FDs independently on every branch. Ban high-level rename,
+absolute rename and fallback. Mint `QuarantineReceipt` or `ImageAbsentReceipt`
+only after complete revalidation and closes; any rename-success/later-failure
+returns `UnresolvedDeletionReceipt` with old/new ledger facts. The parent/image
+identity comes only from current cursor provenance. `S3T4_06` is this exclusive
+move source oracle; a separate collision oracle proves no overwrite.
 
 - [ ] **Step 9: Implement full Python wait parity**
 
@@ -966,6 +1130,31 @@ EOF or normal process status can substitute for either other fact. Missing or
 abnormal control EOF, wrong helper exit or a missing terminal frame is
 `UNCLEAR` even if a child report looks successful.
 
+Encode the exact operation trace counts: create 2 (`create,isEncrypted`), mount
+5 (`baselineInfo,attach,validationInfo,isEncrypted,finalInfo`), detach 4
+(`isEncrypted,currentMappingInfo,detachCurrentDevice,postDetachAbsenceInfo`),
+inspect 0 and delete 0. An operational failure uses only the exact settled
+prefix; mount compensation may append only detach-current/absence.
+
+Test every closed tuple independently:
+
+- pre-accept reject: frames `[]`, no response, exit 64;
+- pre-accept cancel: `[0x13]`, no response, exit 75;
+- accepted success: `[0x10,(0x11,0x12)^k]`, one six-key `OK`, exit 0;
+- accepted operational error: same settled prefix, one six-key stable error,
+  mapped exit 64 or 70;
+- settled cancel: valid prefix, active `0x11,0x12`, then `0x13`, one six-key
+  `CANCELLED`, exit 75;
+- unresolved active child: prefix ending `0x11,0x14`, exit 74, with one six-key
+  `SUPERVISION_UNRESOLVED` only in the stdout-usable variant;
+- accepted protocol abnormality: valid prefix, exit 65, with one six-key
+  `PROTOCOL_ERROR` only in the stdout-usable variant.
+
+Every row also requires bounded stdout/stderr closure, control EOF and exact
+reap. Ordering is checked within each FD only. Any mismatch is `UNCLEAR` and
+mints no cursor authority. An intermediate `0x12` leaves control open; only the
+final normal or terminal transition closes it.
+
 For `S3T4_12`, feed the exact raw lineage inputs used by R26-R32 to the scripted
 `PythonOwnedProcessAdapter` and, separately, to the Task-1 reference machine.
 Compare the complete primitive action sequence, terminal reason and final
@@ -976,7 +1165,8 @@ registry, permit or expected-action helper from the implementation under test.
 
 For each of the three flags (`--integration`, `--allow-effects`,
 `--cleanup-approved`) generate prefix, suffix, wrong-case and every historical
-alias case separately, plus missing/duplicate/reordered/extra flag matrices.
+alias case separately, plus missing/duplicate/extra flag matrices. Exact unique
+flags are accepted in any order.
 For the authorization key and value generate prefix, suffix, wrong-case and
 each old alias separately. Every near miss exits 64 with empty streams and zero
 preparation/observer/live registry construction.
@@ -989,11 +1179,31 @@ alias-acceptance branch for `--integration`, `--allow-effects` and
 authorization key and value. The exact positive gate uses injected recording
 factories only and never executes the live class.
 
+`S3C4_01` enumerates exactly eight accepted vectors: both permutations of
+`--integration` and `--allow-effects`, plus all six permutations after adding
+`--cleanup-approved`. Run it GREEN before and after Task 4, then apply only
+`reject_permuted_effect_flags` and require
+`MUTANT_S3C4_01_reject_permuted_effect_flags`. It has
+`red_policy=baseline_characterization`.
+
+For the GREEN-before receipt, the unchanged characterization method asks the
+source-copy runner to materialize exactly
+`git show IMPLEMENTATION_BASE:tests/test_disk_image_keychain_helper.py` as one
+owner-only regular ignored file with its recorded blob SHA-256. It imports that
+baseline module under a private unique name, calls only its pure
+`select_execution_mode` with the eight vectors and an injected exact
+authorization mapping, unloads it, deletes the copy and proves residual count
+zero. It never invokes the module's main, a live runner or an effect factory.
+The GREEN-after and mutant receipts exercise the current pure gate through the
+same eight-vector oracle. The oracle bytes and baseline blob remain unchanged
+through all three receipts.
+
 - [ ] **Step 11: Typecheck the exact observer source executably**
 
 `REVIEWED_SECURITY_AGENT_OBSERVER_SOURCE` is the sole observer source constant,
 and `REVIEWED_SECURITY_AGENT_OBSERVER_SHA256` is computed from its exact UTF-8
-bytes in the test module. The gate creates a private ignored temporary file,
+bytes in the harness. Tests import both constants and the exclusive writer. The
+gate creates a private ignored temporary file,
 writes exactly those bytes with no interpolation, verifies the recorded hash,
 executes the exact command and requires exit zero:
 
@@ -1003,9 +1213,9 @@ umask 077
 OBSERVER_DIR=$(mktemp -d "$SDD/security-agent-observer.XXXXXX")
 OBSERVER_TMP="$OBSERVER_DIR/observer.swift"
 trap 'rm -f -- "$OBSERVER_TMP"; rmdir -- "$OBSERVER_DIR"' EXIT
-PYTHONPATH="$PWD" "$PYTHON311" -c 'import sys; from pathlib import Path; from tests.test_disk_image_keychain_helper import write_reviewed_observer_source_exclusive; write_reviewed_observer_source_exclusive(Path(sys.argv[1]))' "$OBSERVER_TMP"
+PYTHONPATH="$PWD" "$PYTHON311" -c 'import sys; from pathlib import Path; from tests.disk_image_keychain_harness import write_reviewed_observer_source_exclusive; write_reviewed_observer_source_exclusive(Path(sys.argv[1]))' "$OBSERVER_TMP"
 OBSERVER_SHA256=$(shasum -a 256 "$OBSERVER_TMP" | awk '{print $1}')
-EXPECTED_OBSERVER_SHA256=$(PYTHONPATH="$PWD" "$PYTHON311" -c 'from tests.test_disk_image_keychain_helper import REVIEWED_SECURITY_AGENT_OBSERVER_SHA256; print(REVIEWED_SECURITY_AGENT_OBSERVER_SHA256)')
+EXPECTED_OBSERVER_SHA256=$(PYTHONPATH="$PWD" "$PYTHON311" -c 'from tests.disk_image_keychain_harness import REVIEWED_SECURITY_AGENT_OBSERVER_SHA256; print(REVIEWED_SECURITY_AGENT_OBSERVER_SHA256)')
 test "$OBSERVER_SHA256" = "$EXPECTED_OBSERVER_SHA256"
 xcrun swiftc -typecheck -framework CoreGraphics "$OBSERVER_TMP"
 rm -f -- "$OBSERVER_TMP"
@@ -1014,15 +1224,35 @@ trap - EXIT
 ~~~
 
 The test records path class, source hash, exact argv, exit zero and successful
-safe deletion. It does not launch the observer.
+safe deletion. It does not launch the observer. Its structural mutant changes
+only an ignored observer-source copy, typechecks it and leaves the harness/test
+oracle closure unchanged.
 
-- [ ] **Step 12: GREEN and mutant sensitivity**
+- [ ] **Step 12: Prove the shared cross-process clock domain**
 
-Run every owned normative/task-local method separately. Run the complete Task
-4 set under Python 3.11. Apply every owned mutant individually after GREEN,
-require its exact mapped assertion, restore and rerun.
+Implement `shared_clock_ns()` as exactly
+`time.clock_gettime_ns(time.CLOCK_MONOTONIC)`. Compile a fixed harmless Swift
+clock reporter that calls `clock_gettime(CLOCK_MONOTONIC)`. For 20 fresh
+samples, take Python `p0`, obtain Swift `s`, then Python `p1`; require
+`p0 <= s <= p1` and `p1 - p0 <= 50_000_000`. Unavailable or wider samples are
+`UNCLEAR`, not a tolerance increase. Source/AST gates reject the Python
+convenience monotonic-nanosecond call and `CLOCK_UPTIME_RAW` in every
+transmitted/comparison path. The mapped mutant
+`use_python_monotonic_ns_for_shared_deadline` is instead an atomic source-copy
+mutant: it replaces only the exact `shared_clock_ns()` return expression in a
+private ignored harness copy. That copy must pass `py_compile`, then fail this
+unchanged natural-RED cross-language oracle; the checkout and oracle remain
+untouched. Process-local diagnostic clocks remain allowed only when their
+values never enter requests, reports, comparisons, deadlines or receipts.
 
-- [ ] **Step 13: Commit Task 4**
+- [ ] **Step 13: GREEN and mutant sensitivity**
+
+Run every owned normative/task-local method separately and `S3C4_01` in its
+GREEN-before/after protocol. Run the complete Task 4 set under Python 3.11.
+Apply every owned mutant individually after GREEN, require its exact mapped
+assertion, restore and rerun.
+
+- [ ] **Step 14: Commit Task 4**
 
 ~~~bash
 git add tests/disk_image_keychain_harness.py \
@@ -1040,26 +1270,39 @@ Record Task 4 evidence and obtain both fresh read-only reviews.
 **Files:**
 
 - Modify: `native/macos/disk_image_keychain.swift`
+- Modify: `tests/disk_image_keychain_harness.py`
 - Modify: `tests/test_disk_image_keychain_helper.py`
 
 **Normative ownership:** IDs 40 through 43.
 
-**Task-local ownership:** `S3T5_01` through `S3T5_07`.
+**Task-local ownership:** `S3T5_01` through `S3T5_43`.
 
 - [ ] **Step 1: Write and individually observe RED**
 
 Before adding a route, write tests proving:
 
 - fixture spawn lacks START_SUSPENDED and never receives SIGCONT;
-- fixture arms self-expiry before START and has no watchdog/PID receipt;
+- fixture arms self-expiry before START, has no watchdog/PID receipt and cannot
+  count self-expiry as normal success;
 - active cancellation requires matched `0x12` before narrow `0x13`;
 - frame alone without control EOF/helper reap is insufficient;
 - control FD does not leak into the fixture;
-- the parent deadline exists before Popen, child reports cannot extend it and
-  cleanup reserve begins before its hard deadline;
-- exact unreaped interpreter/helper cleanup is mandatory.
+- the shared-clock parent deadline and every endpoint exist before exact Popen;
+- report validation precedes one GO, successful exec retains exact Popen PID,
+  and no helper/fixture can exist without GO;
+- exact parent Popen keywords/pass-FDs, pre-GO/post-exec inventories and
+  CLOEXEC exec-status EOF/failure records;
+- testing-only two-second deadline admission is disjoint from production
+  70-second admission;
+- deadline/cancel guardian close, settlement and witness/reap timing;
+- cleanup reserve permits no spawn and uses complete bounded libproc absence;
+- compiler-AST fixture call graph, synchronized helper/observer hashes, typed
+  mutant manifest, sealed blind package and three independent final
+  spec/plan/path comparisons.
 
-Run the four normative and seven task-local methods individually to natural RED.
+Run R40-R43 and every natural-policy Task 5 method individually. Synthetic
+manifest/package/hash gates use invalid fixtures; no import/compile/timeout
+failure counts as RED.
 
 - [ ] **Step 2: Add only the closed testing routes**
 
@@ -1078,12 +1321,13 @@ each testing flag with exit 64, empty stdout/stderr and zero spawn.
 The probe route accepts exact ordered operands:
 
 ~~~text
+ABSOLUTE_HELPER_PATH
 --guardian-witness-probe MODE
 --guardian-fd DECIMAL_FD
 --witness-fd DECIMAL_FD
 --control-fd DECIMAL_FD
 --nonce LOWERCASE_HEX32
---swift-hard-deadline-ns DECIMAL_NS
+--test-supervisor-hard-deadline-ns DECIMAL_NS
 ~~~
 
 MODE is exactly `deadline` or `cancel`. Reject missing, duplicate, reordered,
@@ -1091,70 +1335,138 @@ wrong-case, prefix/suffix or extra operands before any spawn/write. The testing
 FD inventory adds only the named guardian/witness FDs to the production set.
 The fixture inherits guardian/witness only, never helper control.
 
+The short deadline flag and validator exist only under
+`#if CORTEX_STORAGE_HELPER_TESTING`, only for this route, and use
+`clock_gettime(CLOCK_MONOTONIC)`. They accept the exact parent-derived
+`start + 2.00 s` supervisor hard stop without traversing production's
+70-second parser. Production contains/reaches neither symbol and rejects the
+testing flag plus any two-second production phase fit before `0x10`, spawn or
+write. Map separate source mutants for accepting the short flag in production
+and routing the guardian through the production deadline flag.
+
 - [ ] **Step 3: Implement the immediate self-expiring fixture**
 
 Spawn the fixture into its own session with
 `POSIX_SPAWN_CLOEXEC_DEFAULT | POSIX_SPAWN_SETSID`; do not use
 `POSIX_SPAWN_START_SUSPENDED`. It immediately installs absolute self-expiry at
-start plus 0.90 seconds before writing `START:<nonce>`, creates no descendant,
+shared-clock start plus 2.50 seconds before writing `START:<nonce>`, creates no descendant,
 writes bounded paced data, observes guardian EOF, closes witness on exit and
 exposes no PID/PGID/watchdog receipt.
 
 After spawn, the testing adapter observes complete running identity and mints a
 `RunningSessionAnchor`. From that point it reuses the production
 running/exited/reap/original-group-absence/native-descriptor reducers. It never
-calls resume/SIGCONT. Structural reachability forbids spawn/fork/exec/system,
-Foundation Process/NSTask and dynamic loading from the child entry point.
+calls resume/SIGCONT.
 
-- [ ] **Step 4: Create the parent deadline before Popen**
+Use compiler AST output, not lexical search alone, to start at the exact
+fixture-child entrypoint, resolve every direct/transitive project-local call,
+reject unknown/dynamic edges and allow only the spec's explicit Darwin leaves.
+A source mutant inserts one reachable forbidden spawn/exec call into a private
+typecheckable Swift copy; the unchanged call-graph oracle must fail. A separate
+mutant counts self-expiry as success; the normal deadline oracle must fail
+because self-expiry is containment only.
 
-The outer Python R43 parent creates `parent_outer_hard_ns` before starting each
-fresh interpreter and passes its exact ASCII decimal value only in the
-test-only environment key `CORTEX_S3_PARENT_HARD_DEADLINE_NS`:
+The source oracle and every mutated copy run these exact commands against the
+same private target; both must exit zero before the AST graph is accepted:
+
+~~~bash
+xcrun swiftc -typecheck -D CORTEX_STORAGE_HELPER_TESTING "$SWIFT_TARGET" \
+  -framework Security -framework CoreFoundation -framework CoreGraphics
+xcrun swiftc -dump-ast -D CORTEX_STORAGE_HELPER_TESTING "$SWIFT_TARGET" \
+  -framework Security -framework CoreFoundation -framework CoreGraphics
+~~~
+
+The parser consumes compiler AST output from the second command, never source
+text as a substitute.
+
+- [ ] **Step 4: Implement exact report-GO-exec with one direct PID**
+
+Before `Popen`, create report, GO, guardian, witness, control and exec-status
+channels plus every deadline with `shared_clock_ns()`. Parent owns `report_r`,
+`go_w`, `guardian_w`, `witness_r`, `control_parent`, `exec_status_r` and one
+direct-child obligation, plus the returned parent stdin/stdout/stderr ends.
+Independently cap/drain report/stdout/stderr, require every final EOF and close
+every parent endpoint even after another close fails. Child endpoints are
+unique integers greater than 2.
+Put exact ASCII decimal `parent_outer_hard` only in
+`CORTEX_S3_PARENT_HARD_DEADLINE_NS`; child parsing and report equality are
+strict, and production request parsing never accepts that key.
+`fresh_argv[0]` is absolute `sys.executable`; call exactly:
 
 ~~~python
-parent_started_ns = time.monotonic_ns()
-parent_outer_hard_ns = checked_add_u64(parent_started_ns, 1_200_000_000)
-fresh_env["CORTEX_S3_PARENT_HARD_DEADLINE_NS"] = str(parent_outer_hard_ns)
-fresh = subprocess.Popen(fresh_argv, env=fresh_env, start_new_session=True)
+fresh = subprocess.Popen(
+    fresh_argv,
+    stdin=subprocess.PIPE,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    close_fds=True,
+    pass_fds=(
+        report_w,
+        go_r,
+        guardian_r,
+        witness_w,
+        control_child,
+        exec_status_w,
+    ),
+    env=fresh_env,
+    start_new_session=True,
+)
 ~~~
 
-The child validates the value before its first report and must report the
-identical `parent_outer_hard_ns`. The parent retains its own value, rejects a
-missing/malformed/different/later report and permits the child only to shorten
-its phase deadline. The same original parent deadline bounds interpreter
-import, first structured report, probe work, exact cleanup and one nonce scan;
-the production helper parser never accepts this test-only environment key.
+The parent creates `exec_status_w` close-on-exec, while `pass_fds` carries it
+through the first exec. The fixed interpreter bootstrap immediately reasserts
+`FD_CLOEXEC` on that writer, proves every other passed child endpoint has the
+flag clear, and only then reports. Thus only `exec_status_w` is CLOEXEC in the
+exact pre-GO inventory `{0,1,2,report_w,go_r,guardian_r,witness_w,control_child,
+exec_status_w}`. It revalidates owner-only `0700` helper parent/target plus
+registered device/inode/mode/UID and binary hash. Its one capped report binds
+exact PID, nonce, canonical deadline, absolute helper path, argv0, complete
+route vector/digest, source SHA and binary SHA. Parent requires PID equal to
+registered `Popen.pid` and every field exact before one GO byte. Without GO no
+helper or fixture exists.
 
-Use exact phase offsets:
+After GO the interpreter closes report/GO endpoints and calls exactly
+`os.execve(helper_path, helper_argv, helper_env)`, with
+`helper_argv[0] == helper_path` and the strict guardian route vector. Success
+closes the status writer atomically via CLOEXEC; parent requires exact EOF.
+`OSError` writes exactly `b"EXEC" + errno.to_bytes(4,"big")`, then exits 127
+for `ENOENT` or 126 otherwise. Parent accepts only EOF or that eight-byte record
+plus reserved exit and exact-waits the same PID. Post-exec helper inventory is
+exactly `{0,1,2,guardian_r,witness_w,control_child}`. Helper alone owns/reaps
+the fixture; parent never gets its PID.
 
-~~~text
-work_cutoff = start + 0.50 seconds
-supervisor_hard = start + 0.65 seconds
-fixture_self_expiry = start + 0.90 seconds
-cleanup_reserve_start = start + 1.00 seconds
-parent_outer_hard = start + 1.20 seconds
-~~~
-
-On silent/malformed/delayed START, far-future report or timeout, TERM/KILL/reap
-only the exact still-unreaped direct interpreter registered from that `Popen`
-under the same deadline; its nested helper cleanup remains separately exact and
-bounded by the unchanged parent deadline. Cover EINTR/ECHILD/wrong PID/status.
-At `cleanup_reserve_start`, start no new probe work, child spawn, report
-acceptance or nonce scan. Reserve the final 0.20 seconds only for exact
-close/TERM/KILL/reap and one bounded `/bin/ps -axo command=` scan; filter the
-nonce in memory and store no command line. Exhausting that reserve is a
-failure, never permission to extend `parent_outer_hard`.
+Add a distinct Python-AST oracle for the exact Popen keywords, six-entry
+pass-FD tuple, absolute interpreter, direct `os.execve`, identical helper
+path/argv0 and exact route. Separate mutants cover omitted pass FD, extra FD,
+duplicate/stdio-aliased FD, inherited stdio, wrong CLOEXEC, wrong argv0, wrong
+exec path, process/shell launch instead of exec, malformed exec-status record
+and wrong 126/127 mapping. macOS has no `fexecve`; document the residual helper
+hash-to-exec race against a hostile same-UID actor as outside the threat model.
 
 - [ ] **Step 5: Assert both probe contracts**
 
-Deadline mode requires matching START and witness EOF between 0.50 and 0.65
-seconds, followed by valid control EOF and exact helper reap. Cancellation mode
-requires `0x11`, one `0x01`, the active child's matching `0x12`, witness EOF,
-then narrow `0x13`, control EOF and exact helper reap before the parent
-deadline. `0x12` must precede `0x13`. ACK and EOF may be observed in either
-poll order, but neither is optional. The exact cleanup reserve must begin at
-1.00 seconds and finish by 1.20 seconds.
+Use one immutable shared-clock schedule:
+
+~~~text
+report_cutoff = start + 0.75 seconds
+work_cutoff = start + 1.50 seconds
+supervisor_hard = start + 2.00 seconds
+fixture_self_expiry = start + 2.50 seconds
+cleanup_reserve_start = start + 3.00 seconds
+parent_outer_hard = start + 5.00 seconds
+~~~
+
+Deadline mode closes `guardian_w` at +1.50 s. Cancel mode sends one `0x01`
+then closes `guardian_w`. Both require matching START, witness EOF, complete
+settlement tuple, control EOF and exact direct-helper reap before +2.00 s;
+cancel additionally requires `0x11,0x12,0x13` in that order. Per-FD ordering is
+exact, while witness/control readiness may be observed in either poll order.
+
+The +2.50 s self-expiry is only failure containment and never a PASS witness.
+If settlement misses +2.00 s, classify the probe unresolved; fixture self-expiry
+must still precede +3.00 s and final witness/libproc absence must complete by
++5.00 s. Map `hold_guardian_open_past_work_cutoff` and
+`count_fixture_self_expiry_as_success` to separate tests/mutants.
 
 Run the two probe test IDs, including R40, once in their normal class. The
 40-run flake method then launches deadline and cancellation in twenty fresh
@@ -1165,7 +1477,27 @@ The real oracle does not claim to see the fixture child's internal waitpid and
 does not test suspended production bootstrap. Scripted Task 2 matrices retain
 those claims.
 
-- [ ] **Step 6: Install dynamic cross-version inventory**
+- [ ] **Step 6: Implement the bounded in-process survivor scan**
+
+Cleanup reserve permits only endpoint closes, positive direct-PID TERM/KILL,
+exact waitpid, witness EOF and one in-process scan; no `Popen`, shell or command
+scanner is reachable. Check `parent_outer_hard` before and after every call.
+
+Treat `proc_listallpids(NULL, 0)` as a PID count. Select checked capacity no
+greater than 4,096 and pass exactly `capacity * sizeof(pid_t)` bytes to the
+second call. Negative return, full buffer, count growth or inconsistent
+count/byte framing is `incomplete`, never absent. Filter complete
+`proc_bsdinfo` records to current UID, then perform a size query and capped
+4,096-byte `sysctl(KERN_PROCARGS2)` read for each candidate. Require exact argc
+and NUL framing. `ESRCH`, `EPERM`, `ENOMEM`, any other errno, identity change,
+cap hit or parse ambiguity is `incomplete`/`error`; only complete absence
+passes. Compare nonce then erase bytes immediately; retain no command line.
+
+Use separate mapped mutants for count-as-bytes, full-buffer-as-absent, skipped
+procargs error, unbounded enumeration, retained command bytes and a
+process-spawning scanner.
+
+- [ ] **Step 7: Install dynamic cross-version inventory**
 
 `DEFAULT_TEST_CASES` lists every module-defined direct/indirect unittest class
 except exact identity `DiskImageKeychainLiveIntegrationTests`. Runtime
@@ -1194,7 +1526,54 @@ class and have byte-identical streams. The in-suite cross-version method uses a
 non-executing `default_test_ids()` subprocess; nested same-version launches use
 `sys.executable`.
 
-- [ ] **Step 7: Run final executable/source/security gates**
+- [ ] **Step 8: Synchronize reviewed sources and seal the typed mutant manifest**
+
+Task 5 owns all three implementation files. After its Swift edit, update the
+harness-owned `REVIEWED_HELPER_SOURCE_SHA256`, helper binary hash contract,
+fixed observer source/hash and fixture/route source manifest. Tests import
+those values; no duplicate hash/source constant remains.
+
+Freeze `MUTANT_MANIFEST` as a typed read-only mapping over the exact union of
+R01-R45, S3T1/S3T2/S3T3/S3T4/S3T5 keys and S3C4_01. Every entry includes case,
+owner, exact test, mutant name, kind, target file, unique anchor, one runtime
+branch or source replacement, oracle ID, transitive closure SHA-256, exact
+`MUTANT_<CASE>_<NAME>` label and red policy. Projections must equal the maps;
+all keys/tests/names/anchors/labels are unique.
+
+Runtime mutants use one named harness/production branch. Source mutants use an
+owner-only ignored regular copy, unique anchor, one typecheckable
+transformation, original/derived/oracle hashes, unchanged oracle, exact label
+and residual-copy count zero. R44, exclusive rename, observer source,
+same-PID exec, process-free scan, fixture call graph and synchronized helper
+hash are source-kind. Tampered target kind/file/anchor/replacement/oracle hash
+or label fails the independent manifest self-test.
+
+- [ ] **Step 9: Seal review packages and final comparison self-tests**
+
+Implement one package generator that accepts only an explicit frozen commit and
+the exact five-path final allowlist:
+
+~~~text
+docs/superpowers/specs/2026-09-03-s3-owned-process-supervision-design.md
+docs/superpowers/plans/2026-09-03-s3-owned-process-supervision.md
+native/macos/disk_image_keychain.swift
+tests/disk_image_keychain_harness.py
+tests/test_disk_image_keychain_helper.py
+~~~
+
+Read each blob only with `git show S3_FINAL:path`; write a canonical manifest
+of path, byte size and SHA-256; refuse missing/extra entries, symlinks,
+hardlinks and mismatches. The ignored SDD review tree is unreachable. Synthetic
+negative self-tests separately inject an extra entry, wrong hash and forbidden
+review path and require refusal before package output.
+
+Add three independently runnable synthetic-gate tests: compare the spec blob
+hash to frozen `SPEC_SHA256`; compare the plan blob hash to frozen
+`PLAN_SHA256`; compare the sorted `IMPLEMENTATION_BASE..S3_FINAL` changed paths
+to exactly the three implementation files. Recording values without equality
+comparison fails.
+
+- [ ] **Step 10: Run final executable/source/security gates**
 
 Run Python syntax/import checks under both interpreters. Run the exact observer
 typecheck recipe from Task 4 and record its source hash/exit zero/deletion.
@@ -1217,12 +1596,18 @@ numeric signal receipts = 0
 non-final Swift supervisor or issuance registries = 0
 public token initializers/registry identities = 0
 ObjectIdentifier token storage or registry construction outside private issuers = 0
+NativeObligation states differ from exact seven-state set = 0
+SuspendedCleanupAnchor erased before exact waitpid = 0
+NoActiveChildProof while any obligation/frame remains = 0
 process success booleans = 0
 safety_only/disposition_active/public record_mount = 0
 readDataToEndOfFile = 0
 generic caller mappings/argv/live paths/devices = 0
 unregistered capability/baseline/context/receipt/grant/proof factories = 0
-raw SecurityAgentSnapshot/MountReceipt/PreTerminalProof begin_disposition operands = 0
+historical receipt precedence scans = 0
+more than one ArtifactCursor current record = 0
+more than one post-terminal continuation helper = 0
+Swift token/receipt crossing a process boundary = 0
 terminal lineage close without DispositionReceipt = 0
 negative TERM/KILL sites outside typed signal adapters = 0
 negative signal-zero sites outside post-reap adapters = 0
@@ -1231,14 +1616,27 @@ production testing symbols = 0
 default live-class selections = 0
 hard-coded nested python3.11 relaunches = 0
 Popen poll/wait/communicate before private exact waitpid = 0
-Path.rename or absolute quarantine fallback = 0
+high-level/plain/absolute quarantine rename fallback = 0
+exclusive rename without RENAME_EXCL = 0
 control included in NativeSettlementProof = 0
+shared deadline producer other than Python CLOCK_MONOTONIC = 0
+Swift shared clock other than CLOCK_MONOTONIC = 0
+process-spawning survivor scanner = 0
+fixture reachable unknown/dynamic/forbidden call edge = 0
+intermediate 0x12 control close = 0
 ~~~
 
 The AST also proves production helper Popen uses `close_fds=True`, exact
 `pass_fds=(control_fd,)`, `start_new_session=True`; preparation/live methods
-have no caller paths; the executor lock covers latch through first write; and
-all waits/actions use an immutable absolute deadline.
+have no caller paths; one serial executor owns latch through first write; and
+all waits/actions use an immutable absolute deadline. A separate R43 AST gate
+proves absolute `sys.executable`, all three stdio pipes, exact six-entry
+pass-FD tuple, new session, direct absolute `os.execve`, helper argv0/path
+identity and exact testing route. Runtime FD gates prove pre-GO/post-exec
+inventories and CLOEXEC exec-status semantics. The testing short-deadline route
+and production 70-second route are disjoint. The compiler-AST fixture graph,
+typed manifest isomorphism, 15/22 alphabets, exact cursor/two-cycle chain and
+all package/hash self-tests also pass.
 
 Run:
 
@@ -1253,16 +1651,28 @@ git diff --binary -- primer.md | shasum -a 256
 Expected changed implementation paths are exactly the three declared files;
 primer hash equals `PRIMER_DIFF_SHA256`.
 
-- [ ] **Step 8: GREEN and mutate every Task 5 boundary**
+- [ ] **Step 11: GREEN and mutate every Task 5 boundary**
 
 Run each owned normative and task-local method individually, both probe methods
 once normally, then the fresh 40-run gate. Enable each mapped mutant alone
 after GREEN, require only its mapped method to fail, restore and rerun.
 
-- [ ] **Step 9: Commit Task 5**
+Because Task 5 changes all three implementation files, do not reuse earlier
+task receipts as final evidence. After its owned set is GREEN, iterate the
+complete 134-entry `MUTANT_MANIFEST` in key order. Recompute and match each
+frozen oracle-closure hash before and after the run, apply only that entry,
+require only its exact mapped method and assertion label to fail, restore the
+target, prove the source-copy residual count zero when applicable, and rerun
+the method GREEN. Then run the complete mapped/default suite without mutants
+under both equipped Python versions and require the identical zero-skip start
+streams again. Any stale owner receipt, changed closure or non-mapped failure
+freezes `S3_FINAL`.
+
+- [ ] **Step 12: Commit Task 5**
 
 ~~~bash
 git add native/macos/disk_image_keychain.swift \
+  tests/disk_image_keychain_harness.py \
   tests/test_disk_image_keychain_helper.py
 git diff --cached --name-only
 git commit -m "test(storage): add contained guardian witness"
@@ -1270,7 +1680,7 @@ git commit -m "test(storage): add contained guardian witness"
 
 Record Task 5 evidence and obtain both fresh read-only reviews.
 
-- [ ] **Step 10: Freeze exact S3 state**
+- [ ] **Step 13: Freeze exact S3 state**
 
 Immediately before `S3_FINAL`, require:
 
@@ -1283,19 +1693,29 @@ FINAL_PLAN_SHA256=$(shasum -a 256 docs/superpowers/plans/2026-09-03-s3-owned-pro
 FINAL_PRIMER_DIFF_SHA256=$(git diff --binary -- primer.md | shasum -a 256 | awk '{print $1}')
 test "$FINAL_PRIMER_DIFF_SHA256" = "$PRIMER_DIFF_SHA256"
 S3_FINAL=$(git rev-parse HEAD)
+FINAL_SPEC_SHA256=$(git show "$S3_FINAL:docs/superpowers/specs/2026-09-03-s3-owned-process-supervision-design.md" | shasum -a 256 | awk '{print $1}')
+FINAL_PLAN_SHA256=$(git show "$S3_FINAL:docs/superpowers/plans/2026-09-03-s3-owned-process-supervision.md" | shasum -a 256 | awk '{print $1}')
+test "$FINAL_SPEC_SHA256" = "$SPEC_SHA256"
+test "$FINAL_PLAN_SHA256" = "$PLAN_SHA256"
+EXPECTED_PATHS=$(printf '%s\n' \
+  native/macos/disk_image_keychain.swift \
+  tests/disk_image_keychain_harness.py \
+  tests/test_disk_image_keychain_helper.py | sort)
+ACTUAL_PATHS=$(git diff --name-only "$IMPLEMENTATION_BASE..$S3_FINAL" | sort)
+test "$ACTUAL_PATHS" = "$EXPECTED_PATHS"
 ~~~
 
-Record all four values before any later document edit.
+Record the comparisons, not merely the values. Then build the actual five-path
+review package from `git show S3_FINAL:path`, verify its path/size/SHA-256
+manifest and prove no extra entry exists before delivery.
 
-- [ ] **Step 11: Perform three fresh blind final reviews**
+- [ ] **Step 14: Perform three fresh blind final reviews**
 
-Each reviewer receives only exact spec/plan/implementation bytes and hashes,
-declared requirements, necessary source context, non-review execution receipts
-and the exact `IMPLEMENTATION_BASE..S3_FINAL` diff. Exclude previous findings,
-consolidated findings, review receipts, verdicts, reviewer identities and
-reviewer conclusions. The package manifest must assert those exclusions before
-delivery. Require independently `P0=0`, `P1=0`, `P2=0`, `Verdict=PASS`. Any
-finding freezes S3.
+Each reviewer receives only the exact sealed five-path package, declared
+requirements and separately hashed non-review execution receipts. The package
+generator cannot traverse prior findings/review material and has already
+refused extra/wrong-hash/forbidden-path fixtures. Require independently
+`P0=0`, `P1=0`, `P2=0`, `Verdict=PASS`. Any finding freezes S3.
 
 ## Post-S3 S4 documentation-only rebaseline
 
@@ -1330,20 +1750,20 @@ REGRESSION_TEST_IDS = {
     "R09": "tests.test_disk_image_keychain_helper.DiskImageKeychainSwiftSupervisorTests.test_waitid_matrix_issues_only_exact_exited_anchor",
     "R10": "tests.test_disk_image_keychain_helper.DiskImageKeychainSwiftSupervisorTests.test_reap_echild_cannot_issue_native_settlement",
     "R11": "tests.test_disk_image_keychain_helper.DiskImageKeychainSwiftDeadlineTests.test_insufficient_command_and_finalization_fit_spawns_nothing",
-    "R12": "tests.test_disk_image_keychain_helper.DiskImageKeychainSwiftDeadlineTests.test_detach_cutoff_equality_and_next_nanosecond",
-    "R13": "tests.test_disk_image_keychain_helper.DiskImageKeychainSwiftDeadlineTests.test_absence_cutoff_equality_and_next_nanosecond",
-    "R14": "tests.test_disk_image_keychain_helper.DiskImageKeychainSwiftDeadlineTests.test_normal_failure_cannot_reset_compensation_deadlines",
+    "R12": "tests.test_disk_image_keychain_helper.DiskImageKeychainSwiftDeadlineTests.test_single_helper_detach_cutoff_equality_and_next_nanosecond",
+    "R13": "tests.test_disk_image_keychain_helper.DiskImageKeychainSwiftDeadlineTests.test_single_helper_absence_stops_at_twenty_six_seconds",
+    "R14": "tests.test_disk_image_keychain_helper.DiskImageKeychainSwiftDeadlineTests.test_no_stage_can_reset_original_deadline",
     "R15": "tests.test_disk_image_keychain_helper.DiskImageKeychainAuthorityTests.test_terminal_preobservation_blocks_every_ordinary_method",
-    "R16": "tests.test_disk_image_keychain_helper.DiskImageKeychainAuthorityTests.test_terminal_during_compile_or_info_cancels_without_continuation",
+    "R16": "tests.test_disk_image_keychain_helper.DiskImageKeychainAuthorityTests.test_observer_precedes_compile_and_terminal_compile_mints_no_live_capability",
     "R17": "tests.test_disk_image_keychain_helper.DiskImageKeychainAuthorityTests.test_caller_operands_cannot_construct_live_work",
-    "R18": "tests.test_disk_image_keychain_helper.DiskImageKeychainReceiptTests.test_replayed_exact_detach_permit_spawns_nothing",
-    "R19": "tests.test_disk_image_keychain_helper.DiskImageKeychainReceiptTests.test_mount_receipt_issues_only_one_detach_permit",
-    "R20": "tests.test_disk_image_keychain_helper.DiskImageKeychainReceiptTests.test_absence_permit_requires_exact_settled_detach",
-    "R21": "tests.test_disk_image_keychain_helper.DiskImageKeychainReceiptTests.test_every_terminal_lineage_mints_exact_disposition_then_close",
-    "R22": "tests.test_disk_image_keychain_helper.DiskImageKeychainReceiptTests.test_unknown_mapping_preserves_without_followup_effect",
-    "R23": "tests.test_disk_image_keychain_helper.DiskImageKeychainReceiptTests.test_terminal_states_never_inspect_or_delete_keychain",
+    "R18": "tests.test_disk_image_keychain_helper.DiskImageKeychainReceiptTests.test_replayed_mounted_cursor_spawns_no_second_continuation",
+    "R19": "tests.test_disk_image_keychain_helper.DiskImageKeychainReceiptTests.test_each_indexed_mount_issues_one_detach_absence_transition",
+    "R20": "tests.test_disk_image_keychain_helper.DiskImageKeychainReceiptTests.test_detach_and_absence_use_one_current_mapping_helper",
+    "R21": "tests.test_disk_image_keychain_helper.DiskImageKeychainReceiptTests.test_every_normal_and_terminal_branch_mints_one_disposition_then_close",
+    "R22": "tests.test_disk_image_keychain_helper.DiskImageKeychainReceiptTests.test_ambiguous_current_mapping_preserves_without_followup_effect",
+    "R23": "tests.test_disk_image_keychain_helper.DiskImageKeychainReceiptTests.test_terminal_after_keychain_delete_performs_no_later_keychain_effect",
     "R24": "tests.test_disk_image_keychain_helper.DiskImageKeychainReceiptTests.test_securityagent_verdict_precedes_observer_and_cleanup_errors",
-    "R25": "tests.test_disk_image_keychain_helper.DiskImageKeychainReceiptTests.test_nonzero_create_mount_evidence_and_wrong_values_are_registered_before_terminal",
+    "R25": "tests.test_disk_image_keychain_helper.DiskImageKeychainReceiptTests.test_create_and_indexed_mount_evidence_advance_only_current_cursor",
     "R26": "tests.test_disk_image_keychain_helper.DiskImageKeychainProcessModelTests.test_related_partial_and_foreign_uid_bridge_latch_uncertainty",
     "R27": "tests.test_disk_image_keychain_helper.DiskImageKeychainProcessModelTests.test_partial_bridge_never_authorizes_grandchild_signal",
     "R28": "tests.test_disk_image_keychain_helper.DiskImageKeychainProcessModelTests.test_zero_record_live_reread_remains_partial",
@@ -1353,15 +1773,15 @@ REGRESSION_TEST_IDS = {
     "R32": "tests.test_disk_image_keychain_helper.DiskImageKeychainProcessModelTests.test_tracked_uid_sid_or_group_change_expires_authority",
     "R33": "tests.test_disk_image_keychain_helper.DiskImageKeychainSwiftSupervisorTests.test_term_to_kill_exited_anchor_revalidation_matrix",
     "R34": "tests.test_disk_image_keychain_helper.DiskImageKeychainSwiftSupervisorTests.test_kill_attempt_forbids_later_group_signal",
-    "R35": "tests.test_disk_image_keychain_helper.DiskImageKeychainSwiftSupervisorTests.test_suspended_anchor_strong_identity_and_validate_abort_race",
-    "R36": "tests.test_disk_image_keychain_helper.DiskImageKeychainProcessParityTests.test_observer_process_and_independent_close_failure_matrix",
+    "R35": "tests.test_disk_image_keychain_helper.DiskImageKeychainSwiftSupervisorTests.test_suspended_cleanup_obligation_survives_nonexact_reap_and_validate_race",
+    "R36": "tests.test_disk_image_keychain_helper.DiskImageKeychainProcessParityTests.test_total_helper_tuple_and_independent_close_failure_matrix",
     "R37": "tests.test_disk_image_keychain_helper.DiskImageKeychainSwiftProvenanceTests.test_valid_output_without_native_settlement_has_no_authority",
-    "R38": "tests.test_disk_image_keychain_helper.DiskImageKeychainProcessParityTests.test_clock_jump_matrix_stops_actions_at_original_deadline",
+    "R38": "tests.test_disk_image_keychain_helper.DiskImageKeychainProcessParityTests.test_shared_clock_and_jump_matrix_stop_at_original_deadline",
     "R39": "tests.test_disk_image_keychain_helper.DiskImageKeychainSecretTests.test_application_owned_secret_lifetime_and_erasure_matrix",
     "R40": "tests.test_disk_image_keychain_helper.DiskImageKeychainContainedProcessProbeTests.test_active_cancel_requires_0x12_then_0x13_eof_and_exact_helper_reap",
-    "R41": "tests.test_disk_image_keychain_helper.DiskImageKeychainContainedProcessProbeTests.test_production_testing_routes_and_descriptor_inventory",
+    "R41": "tests.test_disk_image_keychain_helper.DiskImageKeychainContainedProcessProbeTests.test_production_testing_routes_and_pre_post_exec_descriptor_inventories",
     "R42": "tests.test_disk_image_keychain_helper.DiskImageKeychainManifestTests.test_dynamic_python311_python314_inventory_and_order_match",
-    "R43": "tests.test_disk_image_keychain_helper.DiskImageKeychainContainedProcessProbeTests.test_parent_deadline_probes_pass_twenty_fresh_runs_each",
+    "R43": "tests.test_disk_image_keychain_helper.DiskImageKeychainContainedProcessProbeTests.test_report_go_exec_libproc_probes_pass_twenty_fresh_runs_each",
     "R44": "tests.test_disk_image_keychain_helper.DiskImageKeychainLegacyRemovalTests.test_legacy_routes_handlers_and_tests_are_absent_before_default_suite",
     "R45": "tests.test_disk_image_keychain_helper.DiskImageKeychainAuthorizationTests.test_each_flag_and_authorization_near_miss_constructs_zero_live_objects",
 }
@@ -1388,16 +1808,16 @@ REGRESSION_MUTANTS = {
     "R13": "admit_absence_one_nanosecond_late",
     "R14": "recompute_compensation_deadline",
     "R15": "mint_ordinary_after_terminal",
-    "R16": "continue_after_terminal_cancel",
+    "R16": "compile_helper_before_observer_baseline",
     "R17": "accept_caller_operation",
-    "R18": "accept_replayed_detach_permit",
-    "R19": "issue_second_detach_permit",
-    "R20": "issue_absence_before_settled_detach",
+    "R18": "accept_replayed_mounted_cursor",
+    "R19": "issue_second_cycle_detach_absence",
+    "R20": "split_detach_and_absence_helpers",
     "R21": "close_without_terminal_disposition_receipt",
-    "R22": "query_unknown_mapping",
-    "R23": "inspect_keychain_after_terminal",
+    "R22": "detach_ambiguous_current_mapping",
+    "R23": "requery_keychain_after_terminal_delete",
     "R24": "prefer_cleanup_error_verdict",
-    "R25": "discard_nonzero_mount_evidence",
+    "R25": "select_historical_mount_receipt",
     "R26": "ignore_related_partial",
     "R27": "bridge_partial_to_grandchild",
     "R28": "treat_live_reread_as_vanished",
@@ -1407,10 +1827,10 @@ REGRESSION_MUTANTS = {
     "R32": "signal_after_sid_change",
     "R33": "kill_without_exited_revalidation",
     "R34": "allow_term_after_kill",
-    "R35": "allow_validate_after_abort",
-    "R36": "stop_closing_after_first_failure",
+    "R35": "drop_suspended_cleanup_obligation_before_reap",
+    "R36": "accept_incomplete_helper_tuple",
     "R37": "mint_permit_without_native_proof",
-    "R38": "act_after_original_deadline",
+    "R38": "use_python_monotonic_ns_for_shared_deadline",
     "R39": "leave_wire_live_at_outcome",
     "R40": "omit_settlement_frame_before_cancel_ack",
     "R41": "accept_invalid_fixture_fd",
@@ -1432,6 +1852,8 @@ TASK_LOCAL_TEST_IDS = {
     "S3T1_03": "tests.test_disk_image_keychain_helper.DiskImageKeychainModelArchitectureTests.test_positive_signal_settlement_and_disposition_counters_are_nonzero",
     "S3T1_04": "tests.test_disk_image_keychain_helper.DiskImageKeychainModelArchitectureTests.test_long_traces_cover_complete_disposition_and_replays",
     "S3T1_05": "tests.test_disk_image_keychain_helper.DiskImageKeychainLegacyRemovalTests.test_legacy_gate_runs_before_default_selection",
+    "S3T1_06": "tests.test_disk_image_keychain_helper.DiskImageKeychainModelArchitectureTests.test_artifact_cursor_reference_requires_two_complete_cycles",
+    "S3T1_07": "tests.test_disk_image_keychain_helper.DiskImageKeychainModelArchitectureTests.test_unresolved_effect_ledger_still_mints_one_disposition_and_close",
     "S3T2_01": "tests.test_disk_image_keychain_helper.DiskImageKeychainSwiftStructureTests.test_anchor_tokens_reject_foreign_registry_identity",
     "S3T2_02": "tests.test_disk_image_keychain_helper.DiskImageKeychainSwiftStructureTests.test_supervisor_and_issuance_registries_are_private_final_classes",
     "S3T2_03": "tests.test_disk_image_keychain_helper.DiskImageKeychainControlTests.test_native_settlement_excludes_control_descriptor",
@@ -1440,14 +1862,18 @@ TASK_LOCAL_TEST_IDS = {
     "S3T2_06": "tests.test_disk_image_keychain_helper.DiskImageKeychainSecretTests.test_mutable_keychain_staging_is_erased",
     "S3T2_07": "tests.test_disk_image_keychain_helper.DiskImageKeychainSecretTests.test_wire_is_erased_before_settlement_frame",
     "S3T2_08": "tests.test_disk_image_keychain_helper.DiskImageKeychainControlTests.test_normal_exit_kind_keeps_no_child_and_protocol_failure_distinct",
+    "S3T2_09": "tests.test_disk_image_keychain_helper.DiskImageKeychainSwiftSupervisorTests.test_suspended_cleanup_anchor_retains_native_obligation_until_exact_reap",
+    "S3T2_10": "tests.test_disk_image_keychain_helper.DiskImageKeychainSwiftSupervisorTests.test_one_lifecycle_executor_linearizes_cancel_spawn_and_first_write",
+    "S3T2_11": "tests.test_disk_image_keychain_helper.DiskImageKeychainSwiftSupervisorTests.test_spawn_result_matrix_inserts_obligation_only_for_spawned",
+    "S3T2_12": "tests.test_disk_image_keychain_helper.DiskImageKeychainControlTests.test_control_closes_only_after_final_normal_or_terminal_transition",
     "S3T3_01": "tests.test_disk_image_keychain_helper.DiskImageKeychainSwiftProvenanceTests.test_command_permit_rejects_foreign_supervisor_registry",
     "S3T3_02": "tests.test_disk_image_keychain_helper.DiskImageKeychainSwiftProvenanceTests.test_absence_query_rejects_wrong_command_context",
     "S3T4_01": "tests.test_disk_image_keychain_helper.DiskImageKeychainPreparationTests.test_preparation_is_one_shot_and_accepts_no_caller_paths",
-    "S3T4_02": "tests.test_disk_image_keychain_helper.DiskImageKeychainReceiptTests.test_terminal_lineage_transfer_refuses_copied_active_receipts",
+    "S3T4_02": "tests.test_disk_image_keychain_helper.DiskImageKeychainReceiptTests.test_terminal_transfer_consumes_only_current_cursor",
     "S3T4_03": "tests.test_disk_image_keychain_helper.DiskImageKeychainExecutorTests.test_terminal_interleavings_cover_spawn_registration_and_first_write",
     "S3T4_04": "tests.test_disk_image_keychain_helper.DiskImageKeychainProcessParityTests.test_waitid_waitpid_and_popen_lifecycle_match_after_exact_reap",
     "S3T4_05": "tests.test_disk_image_keychain_helper.DiskImageKeychainRequestTests.test_all_ten_values_come_from_registered_context",
-    "S3T4_06": "tests.test_disk_image_keychain_helper.DiskImageKeychainQuarantineTests.test_quarantine_uses_only_descriptor_relative_rename",
+    "S3T4_06": "tests.test_disk_image_keychain_helper.DiskImageKeychainQuarantineTests.test_move_uses_descriptor_relative_renameatx_exclusive_only",
     "S3T4_07": "tests.test_disk_image_keychain_helper.DiskImageKeychainAuthorizationTests.test_integration_flag_aliases_are_rejected_without_normalization",
     "S3T4_08": "tests.test_disk_image_keychain_helper.DiskImageKeychainAuthorizationTests.test_allow_effects_flag_aliases_are_rejected_without_normalization",
     "S3T4_09": "tests.test_disk_image_keychain_helper.DiskImageKeychainAuthorizationTests.test_cleanup_approved_flag_aliases_are_rejected_without_normalization",
@@ -1456,13 +1882,59 @@ TASK_LOCAL_TEST_IDS = {
     "S3T4_12": "tests.test_disk_image_keychain_helper.DiskImageKeychainProcessParityTests.test_python_adapter_matches_task1_lineage_reference_for_r26_to_r32",
     "S3T4_13": "tests.test_disk_image_keychain_helper.DiskImageKeychainExecutorTests.test_post_latch_keychain_result_cannot_authorize_success",
     "S3T4_14": "tests.test_disk_image_keychain_helper.DiskImageKeychainObserverTests.test_exact_reviewed_observer_source_typechecks_and_is_deleted",
-    "S3T5_01": "tests.test_disk_image_keychain_helper.DiskImageKeychainContainedProcessProbeTests.test_fixture_is_running_immediately_and_self_expires",
+    "S3T4_15": "tests.test_disk_image_keychain_helper.DiskImageKeychainPreparationTests.test_observer_two_baselines_surround_helper_compile_before_live_issuance",
+    "S3T4_16": "tests.test_disk_image_keychain_helper.DiskImageKeychainReceiptTests.test_artifact_cursor_has_exact_states_and_current_transfer_slot",
+    "S3T4_17": "tests.test_disk_image_keychain_helper.DiskImageKeychainReceiptTests.test_two_indexed_mount_verify_detach_absence_cycles_complete",
+    "S3T4_18": "tests.test_disk_image_keychain_helper.DiskImageKeychainReceiptTests.test_every_consuming_effect_returns_settled_or_unresolved_ledger",
+    "S3T4_19": "tests.test_disk_image_keychain_helper.DiskImageKeychainReceiptTests.test_terminal_mounted_cursor_starts_exactly_one_continuation_helper",
+    "S3T4_20": "tests.test_disk_image_keychain_helper.DiskImageKeychainDeadlineTests.test_continuation_uses_exact_twenty_six_second_current_mapping_schedule",
+    "S3T4_21": "tests.test_disk_image_keychain_helper.DiskImageKeychainCleanupTests.test_keychain_absence_is_required_before_image_delete_permit",
+    "S3T4_22": "tests.test_disk_image_keychain_helper.DiskImageKeychainQuarantineTests.test_existing_exclusive_target_is_unresolved_and_never_overwritten",
+    "S3T4_23": "tests.test_disk_image_keychain_helper.DiskImageKeychainControlTests.test_every_helper_outcome_matches_complete_tuple",
+    "S3T4_24": "tests.test_disk_image_keychain_helper.DiskImageKeychainClockTests.test_twenty_shared_clock_samples_fit_fifty_millisecond_brackets",
+    "S3T5_01": "tests.test_disk_image_keychain_helper.DiskImageKeychainContainedProcessProbeTests.test_fixture_is_immediate_and_self_expiry_is_containment_only",
     "S3T5_02": "tests.test_disk_image_keychain_helper.DiskImageKeychainContainedProcessProbeTests.test_frame_without_control_eof_is_unclear",
     "S3T5_03": "tests.test_disk_image_keychain_helper.DiskImageKeychainContainedProcessProbeTests.test_fixture_does_not_inherit_helper_control_fd",
-    "S3T5_04": "tests.test_disk_image_keychain_helper.DiskImageKeychainContainedProcessProbeTests.test_parent_deadline_exists_before_fresh_interpreter_popen",
+    "S3T5_04": "tests.test_disk_image_keychain_helper.DiskImageKeychainContainedProcessProbeTests.test_shared_clock_parent_deadline_and_endpoints_exist_before_popen",
     "S3T5_05": "tests.test_disk_image_keychain_helper.DiskImageKeychainContainedProcessProbeTests.test_child_report_cannot_extend_parent_deadline",
     "S3T5_06": "tests.test_disk_image_keychain_helper.DiskImageKeychainContainedProcessProbeTests.test_parent_cleanup_reserve_precedes_hard_deadline",
     "S3T5_07": "tests.test_disk_image_keychain_helper.DiskImageKeychainContainedProcessProbeTests.test_parent_reaps_exact_unreaped_interpreter_on_every_failure",
+    "S3T5_08": "tests.test_disk_image_keychain_helper.DiskImageKeychainContainedProcessProbeTests.test_parent_validates_complete_report_before_one_go",
+    "S3T5_09": "tests.test_disk_image_keychain_helper.DiskImageKeychainContainedProcessProbeTests.test_interpreter_execs_helper_in_same_registered_pid",
+    "S3T5_10": "tests.test_disk_image_keychain_helper.DiskImageKeychainContainedProcessProbeTests.test_parent_popen_ast_has_exact_stdio_flags_and_pass_fds",
+    "S3T5_11": "tests.test_disk_image_keychain_helper.DiskImageKeychainContainedProcessProbeTests.test_pre_go_descriptor_inventory_is_exact",
+    "S3T5_12": "tests.test_disk_image_keychain_helper.DiskImageKeychainContainedProcessProbeTests.test_exec_status_cloexec_eof_or_fixed_failure_record_is_total",
+    "S3T5_13": "tests.test_disk_image_keychain_helper.DiskImageKeychainContainedProcessProbeTests.test_post_exec_helper_descriptor_inventory_is_exact",
+    "S3T5_14": "tests.test_disk_image_keychain_helper.DiskImageKeychainContainedProcessProbeTests.test_short_supervisor_deadline_is_testing_only_and_production_rejects_it",
+    "S3T5_15": "tests.test_disk_image_keychain_helper.DiskImageKeychainContainedProcessProbeTests.test_cleanup_reserve_reaches_no_child_spawn_path",
+    "S3T5_16": "tests.test_disk_image_keychain_helper.DiskImageKeychainLibprocTests.test_pid_count_and_fill_byte_capacity_are_not_conflated",
+    "S3T5_17": "tests.test_disk_image_keychain_helper.DiskImageKeychainLibprocTests.test_full_pid_buffer_is_incomplete_not_absent",
+    "S3T5_18": "tests.test_disk_image_keychain_helper.DiskImageKeychainLibprocTests.test_procargs_errno_identity_and_framing_are_never_absent",
+    "S3T5_19": "tests.test_disk_image_keychain_helper.DiskImageKeychainLibprocTests.test_survivor_scan_pid_and_procargs_caps_are_fixed",
+    "S3T5_20": "tests.test_disk_image_keychain_helper.DiskImageKeychainLibprocTests.test_survivor_scan_discards_every_command_buffer",
+    "S3T5_21": "tests.test_disk_image_keychain_helper.DiskImageKeychainLibprocTests.test_cleanup_scan_has_no_process_or_shell_launch_path",
+    "S3T5_22": "tests.test_disk_image_keychain_helper.DiskImageKeychainFixtureCallGraphTests.test_compiler_ast_resolves_closed_fixture_call_graph",
+    "S3T5_23": "tests.test_disk_image_keychain_helper.DiskImageKeychainFixtureCallGraphTests.test_reachable_forbidden_call_source_mutant_is_rejected",
+    "S3T5_24": "tests.test_disk_image_keychain_helper.DiskImageKeychainManifestTests.test_harness_helper_observer_and_fixture_hashes_match_reviewed_sources",
+    "S3T5_25": "tests.test_disk_image_keychain_helper.DiskImageKeychainManifestTests.test_typed_mutant_manifest_is_isomorphic_and_tamper_evident",
+    "S3T5_26": "tests.test_disk_image_keychain_helper.DiskImageKeychainManifestTests.test_source_mutants_preserve_oracle_hash_and_delete_private_copy",
+    "S3T5_27": "tests.test_disk_image_keychain_helper.DiskImageKeychainReviewPackageTests.test_exact_allowlist_hash_manifest_refuses_three_negative_fixtures",
+    "S3T5_28": "tests.test_disk_image_keychain_helper.DiskImageKeychainFinalComparisonTests.test_final_spec_blob_hash_equals_reviewed_hash",
+    "S3T5_29": "tests.test_disk_image_keychain_helper.DiskImageKeychainFinalComparisonTests.test_final_plan_blob_hash_equals_reviewed_hash",
+    "S3T5_30": "tests.test_disk_image_keychain_helper.DiskImageKeychainFinalComparisonTests.test_final_cumulative_paths_equal_exact_three_files",
+    "S3T5_31": "tests.test_disk_image_keychain_helper.DiskImageKeychainContainedProcessProbeTests.test_both_modes_close_guardian_by_work_cutoff",
+    "S3T5_32": "tests.test_disk_image_keychain_helper.DiskImageKeychainContainedProcessProbeTests.test_fixture_self_expiry_cannot_satisfy_normal_success",
+    "S3T5_33": "tests.test_disk_image_keychain_helper.DiskImageKeychainContainedProcessProbeTests.test_report_binds_route_digest_paths_and_source_binary_hashes",
+    "S3T5_34": "tests.test_disk_image_keychain_helper.DiskImageKeychainContainedProcessProbeTests.test_exec_failure_uses_fixed_errno_record_reserved_exit_and_exact_wait",
+    "S3T5_35": "tests.test_disk_image_keychain_helper.DiskImageKeychainContainedProcessProbeTests.test_missing_pass_fd_is_rejected_before_go",
+    "S3T5_36": "tests.test_disk_image_keychain_helper.DiskImageKeychainContainedProcessProbeTests.test_extra_pass_fd_is_rejected_before_go",
+    "S3T5_37": "tests.test_disk_image_keychain_helper.DiskImageKeychainContainedProcessProbeTests.test_duplicate_or_stdio_aliased_child_fd_is_rejected",
+    "S3T5_38": "tests.test_disk_image_keychain_helper.DiskImageKeychainContainedProcessProbeTests.test_exec_status_is_only_child_fd_with_cloexec",
+    "S3T5_39": "tests.test_disk_image_keychain_helper.DiskImageKeychainContainedProcessProbeTests.test_fresh_interpreter_stdio_are_exact_pipes",
+    "S3T5_40": "tests.test_disk_image_keychain_helper.DiskImageKeychainContainedProcessProbeTests.test_exec_argv0_equals_absolute_reviewed_helper",
+    "S3T5_41": "tests.test_disk_image_keychain_helper.DiskImageKeychainContainedProcessProbeTests.test_helper_handoff_is_direct_exec_not_new_process",
+    "S3T5_42": "tests.test_disk_image_keychain_helper.DiskImageKeychainContainedProcessProbeTests.test_guardian_route_never_uses_production_deadline_flag",
+    "S3T5_43": "tests.test_disk_image_keychain_helper.DiskImageKeychainContainedProcessProbeTests.test_exec_path_equals_absolute_reviewed_helper",
 }
 
 TASK_LOCAL_MUTANTS = {
@@ -1471,6 +1943,8 @@ TASK_LOCAL_MUTANTS = {
     "S3T1_03": "suppress_valid_signal_action",
     "S3T1_04": "reject_valid_absence_to_quarantine_transition",
     "S3T1_05": "select_default_before_legacy_gate",
+    "S3T1_06": "skip_second_artifact_cycle",
+    "S3T1_07": "drop_unresolved_ledger_before_close",
     "S3T2_01": "accept_foreign_anchor_registry",
     "S3T2_02": "expose_nonfinal_supervisor",
     "S3T2_03": "include_control_in_native_proof",
@@ -1479,14 +1953,18 @@ TASK_LOCAL_MUTANTS = {
     "S3T2_06": "retain_mutable_keychain_staging",
     "S3T2_07": "emit_settlement_before_wire_erasure",
     "S3T2_08": "conflate_normal_exit_kinds",
+    "S3T2_09": "consume_suspended_cleanup_on_first_attempt",
+    "S3T2_10": "add_competing_lifecycle_reader",
+    "S3T2_11": "treat_spawn_failure_as_active_obligation",
+    "S3T2_12": "close_control_after_intermediate_settlement",
     "S3T3_01": "accept_foreign_command_registry",
     "S3T3_02": "accept_wrong_absence_context",
     "S3T4_01": "accept_caller_compile_path",
-    "S3T4_02": "accept_copied_mount_receipt",
+    "S3T4_02": "accept_copied_historical_cursor",
     "S3T4_03": "release_executor_before_handle_registration",
     "S3T4_04": "call_popen_poll_before_waitpid",
     "S3T4_05": "accept_caller_request_path",
-    "S3T4_06": "use_absolute_quarantine_rename",
+    "S3T4_06": "use_nonexclusive_descriptor_move",
     "S3T4_07": "accept_integration_flag_alias",
     "S3T4_08": "accept_allow_effects_flag_alias",
     "S3T4_09": "accept_cleanup_approved_flag_alias",
@@ -1495,6 +1973,16 @@ TASK_LOCAL_MUTANTS = {
     "S3T4_12": "continue_python_adapter_after_lineage_uncertainty",
     "S3T4_13": "accept_post_latch_keychain_success",
     "S3T4_14": "accept_untyped_observer_source",
+    "S3T4_15": "skip_second_observer_baseline",
+    "S3T4_16": "scan_historical_receipts_for_cursor",
+    "S3T4_17": "skip_second_mount_cycle",
+    "S3T4_18": "drop_unresolved_effect_outcome",
+    "S3T4_19": "launch_second_continuation_helper",
+    "S3T4_20": "reset_continuation_stage_deadline",
+    "S3T4_21": "delete_image_before_keychain_absence",
+    "S3T4_22": "overwrite_existing_quarantine_target",
+    "S3T4_23": "accept_response_without_exact_tuple",
+    "S3T4_24": "accept_clock_sample_outside_bracket",
     "S3T5_01": "suspend_fixture_spawn",
     "S3T5_02": "accept_frame_without_control_eof",
     "S3T5_03": "inherit_control_into_fixture",
@@ -1502,40 +1990,209 @@ TASK_LOCAL_MUTANTS = {
     "S3T5_05": "allow_child_report_deadline_extension",
     "S3T5_06": "start_cleanup_at_parent_hard_deadline",
     "S3T5_07": "skip_exact_interpreter_reap",
+    "S3T5_08": "send_go_before_report_validation",
+    "S3T5_09": "accept_report_pid_different_from_popen_pid",
+    "S3T5_10": "use_relative_fresh_interpreter",
+    "S3T5_11": "skip_pre_go_descriptor_inventory",
+    "S3T5_12": "accept_malformed_exec_status",
+    "S3T5_13": "skip_post_exec_descriptor_inventory",
+    "S3T5_14": "accept_test_short_deadline_in_production",
+    "S3T5_15": "spawn_during_cleanup_reserve",
+    "S3T5_16": "pass_pid_count_as_byte_count",
+    "S3T5_17": "treat_full_pid_buffer_as_absent",
+    "S3T5_18": "skip_procargs_error",
+    "S3T5_19": "remove_survivor_scan_caps",
+    "S3T5_20": "retain_scanned_command_bytes",
+    "S3T5_21": "use_ps_subprocess_for_survivor_scan",
+    "S3T5_22": "insert_reachable_unknown_call",
+    "S3T5_23": "insert_reachable_spawn_call",
+    "S3T5_24": "desynchronize_reviewed_helper_hash",
+    "S3T5_25": "accept_manifest_wrong_target_kind",
+    "S3T5_26": "mutate_oracle_copy",
+    "S3T5_27": "allow_extra_review_package_entry",
+    "S3T5_28": "record_spec_hash_without_comparison",
+    "S3T5_29": "record_plan_hash_without_comparison",
+    "S3T5_30": "accept_extra_implementation_path",
+    "S3T5_31": "hold_guardian_open_past_work_cutoff",
+    "S3T5_32": "count_fixture_self_expiry_as_success",
+    "S3T5_33": "accept_report_without_route_digest",
+    "S3T5_34": "swap_exec_failure_reserved_exit",
+    "S3T5_35": "omit_one_pass_fd",
+    "S3T5_36": "pass_extra_fd",
+    "S3T5_37": "allow_duplicate_child_fd",
+    "S3T5_38": "set_cloexec_on_wrong_fd",
+    "S3T5_39": "inherit_fresh_interpreter_stdio",
+    "S3T5_40": "exec_with_wrong_argv0",
+    "S3T5_41": "start_helper_with_popen_instead_of_exec",
+    "S3T5_42": "route_guardian_through_production_deadline_flag",
+    "S3T5_43": "exec_with_wrong_helper_path",
+}
+
+BASELINE_CHARACTERIZATION_TEST_IDS = {
+    "S3C4_01": "tests.test_disk_image_keychain_helper.DiskImageKeychainAuthorizationTests.test_all_eight_valid_flag_permutations_are_preserved",
+}
+
+BASELINE_CHARACTERIZATION_MUTANTS = {
+    "S3C4_01": "reject_permuted_effect_flags",
 }
 ~~~
 
+The implementation constructs the typed `MUTANT_MANIFEST` over the exact union
+of those three test maps and three mutant maps. Ownership is exact:
+
+~~~python
+NORMATIVE_OWNER = {
+    **{f"R{i:02d}": 3 for i in (*range(1, 6), *range(11, 15), 37)},
+    **{f"R{i:02d}": 2 for i in (*range(6, 11), *range(33, 36), 39)},
+    **{f"R{i:02d}": 4 for i in (*range(15, 26), 36, 38, 45)},
+    **{f"R{i:02d}": 1 for i in (*range(26, 33), 44)},
+    **{f"R{i:02d}": 5 for i in range(40, 44)},
+}
+
+SOURCE_MUTANT_TARGETS = {
+    "R17": "tests/disk_image_keychain_harness.py",
+    "R38": "tests/disk_image_keychain_harness.py",
+    "R44": "native/macos/disk_image_keychain.swift",
+    "S3T2_02": "native/macos/disk_image_keychain.swift",
+    "S3T2_10": "native/macos/disk_image_keychain.swift",
+    "S3T4_01": "tests/disk_image_keychain_harness.py",
+    "S3T4_04": "tests/disk_image_keychain_harness.py",
+    "S3T4_05": "tests/disk_image_keychain_harness.py",
+    "S3T4_06": "tests/disk_image_keychain_harness.py",
+    "S3T4_14": "tests/disk_image_keychain_harness.py",
+    "S3T5_09": "tests/disk_image_keychain_harness.py",
+    "S3T5_10": "tests/disk_image_keychain_harness.py",
+    "S3T5_14": "native/macos/disk_image_keychain.swift",
+    "S3T5_15": "tests/disk_image_keychain_harness.py",
+    "S3T5_21": "tests/disk_image_keychain_harness.py",
+    "S3T5_22": "native/macos/disk_image_keychain.swift",
+    "S3T5_23": "native/macos/disk_image_keychain.swift",
+    "S3T5_24": "tests/disk_image_keychain_harness.py",
+    "S3T5_35": "tests/disk_image_keychain_harness.py",
+    "S3T5_36": "tests/disk_image_keychain_harness.py",
+    "S3T5_37": "tests/disk_image_keychain_harness.py",
+    "S3T5_38": "tests/disk_image_keychain_harness.py",
+    "S3T5_39": "tests/disk_image_keychain_harness.py",
+    "S3T5_40": "tests/disk_image_keychain_harness.py",
+    "S3T5_41": "tests/disk_image_keychain_harness.py",
+    "S3T5_42": "native/macos/disk_image_keychain.swift",
+    "S3T5_43": "tests/disk_image_keychain_harness.py",
+}
+
+SWIFT_RUNTIME_CASES = frozenset({
+    *(f"R{i:02d}" for i in (*range(1, 15), *range(33, 36), 37, 39, 40, 41)),
+    *(f"S3T2_{i:02d}" for i in range(1, 13)),
+    "S3T3_01", "S3T3_02", "S3T5_01", "S3T5_03",
+}) - SOURCE_MUTANT_TARGETS.keys()
+
+SYNTHETIC_GATE_CASES = frozenset({
+    "S3T5_25", "S3T5_26", "S3T5_27",
+    "S3T5_28", "S3T5_29", "S3T5_30",
+})
+~~~
+
+`owner_for(case)` returns `NORMATIVE_OWNER[case]` for R keys, the integer after
+`S3T` for task-local keys, and 4 for `S3C4_01`; every other shape rejects.
+
+Every other manifest entry is `kind=runtime`; its `target_file` is the Swift
+source exactly when its case is in `SWIFT_RUNTIME_CASES`, otherwise the
+harness. It is never the test/oracle module. Runtime
+branches use the unique literal
+`CORTEX_RUNTIME_MUTANT::<CASE>::<MUTANT_NAME>`. Source entries use
+`CORTEX_SOURCE_MUTANT::<CASE>::<MUTANT_NAME>` and the exact one-anchor
+replacement declared by their mapped boundary: R44 inserts the typecheckable
+legacy route-table handler/dispatch; private-final removes only `final`;
+the lifecycle-reader mutant inserts exactly one competing control-read call;
+the Popen-lifecycle mutant inserts exactly one `poll` before private waitpid;
+the shared-clock mutant replaces only `shared_clock_ns()`'s exact return call;
+no-free-operand signature mutants add exactly one caller parameter;
+exclusive move replaces `RENAME_EXCL` with zero; observer/hash mutants change
+only the copied source/hash constant; same-PID/Popen/FD entries replace only
+their one named call argument or handoff; cleanup scan inserts one forbidden
+process-launch call; call-graph entries insert one unknown or forbidden
+reachable leaf; short-deadline entries substitute only the one deadline flag or
+parser branch. No source replacement targets tests or oracle helpers.
+
+For every case, the materialized record contains:
+
+~~~python
+case, owner, test_id, mutant_name, kind, target_file, unique_anchor,
+runtime_branch_or_replacement, oracle_id, oracle_sha256, assertion_label,
+red_policy
+~~~
+
+`red_policy` is `baseline_characterization` only for `S3C4_01`,
+`synthetic_gate` only for `SYNTHETIC_GATE_CASES`, and `natural` otherwise.
+`oracle_sha256` is the frozen 64-lowercase-hex digest of the transitive oracle
+closure. The manifest checker proves exact domain/projection equality, allowed
+target kind/file, all unique anchors/names/tests/labels, one transformation,
+unchanged closure hash and exact `MUTANT_<CASE>_<MUTANT_NAME>`.
+
+The harness materializes, validates and only then exposes the mapping:
+
+~~~python
+ALL_TEST_IDS = MappingProxyType(
+    REGRESSION_TEST_IDS | TASK_LOCAL_TEST_IDS | BASELINE_CHARACTERIZATION_TEST_IDS
+)
+ALL_MUTANTS = MappingProxyType(
+    REGRESSION_MUTANTS | TASK_LOCAL_MUTANTS | BASELINE_CHARACTERIZATION_MUTANTS
+)
+assert ALL_TEST_IDS.keys() == ALL_MUTANTS.keys()
+assert ORACLE_CLOSURE_SHA256.keys() == ALL_MUTANTS.keys()
+
+MUTANT_MANIFEST = MappingProxyType({
+    case: build_checked_manifest_record(
+        case=case,
+        owner=owner_for(case),
+        test_id=ALL_TEST_IDS[case],
+        mutant_name=ALL_MUTANTS[case],
+        kind="source" if case in SOURCE_MUTANT_TARGETS else "runtime",
+        target_file=target_file_for(case),
+        unique_anchor=unique_anchor_for(case, ALL_MUTANTS[case]),
+        transformation=transformation_for(case, ALL_MUTANTS[case]),
+        oracle_id=ALL_TEST_IDS[case],
+        oracle_sha256=ORACLE_CLOSURE_SHA256[case],
+        assertion_label=f"MUTANT_{case}_{ALL_MUTANTS[case]}",
+        red_policy=red_policy_for(case),
+    )
+    for case in ALL_MUTANTS
+})
+~~~
+
+`ORACLE_CLOSURE_SHA256` is a literal 134-entry map frozen only after each
+owner's unchanged oracle reaches GREEN; computed-on-demand values are rejected
+because they would not detect oracle drift.
+
 ## Task ownership
 
-| Task | Normative IDs | Boundary |
-| --- | --- | --- |
-| 1 | 26-32, 44 | Independent models and exhaustive legacy-route removal before the default suite. |
-| 2 | 06-10, 33-35, 39 | Strong-identity Swift suspended/running/exited authority, DFA, native proof, deadline and app-owned erasure. |
-| 3 | 01-05, 11-14, 37 | Swift command provenance, compensation and immutable phase windows. |
-| 4 | 15-25, 36, 38, 45 | Python preparation/capability/receipt/process parity, total disposition, continuation, request, quarantine and authorization. |
-| 5 | 40-43 | Non-suspended fixture, route/FD boundary, inventory and parent-deadline probes with cleanup reserve. |
+| Task | Normative IDs | Task-local/characterization IDs | Boundary |
+| --- | --- | --- | --- |
+| 1 | 26-32, 44 | S3T1_01-S3T1_07 | Importable skeleton, independent models, exact cursor reference and source-mutant legacy removal. |
+| 2 | 06-10, 33-35, 39 | S3T2_01-S3T2_12 | Strong-identity obligation/cleanup anchors, serial lifecycle, total control/tuples, SpawnResult, deadline and erasure. |
+| 3 | 01-05, 11-14, 37 | S3T3_01-S3T3_02 | Swift command provenance, self-contained detach/absence and immutable phase windows. |
+| 4 | 15-25, 36, 38, 45 | S3T4_01-S3T4_24; S3C4_01 | Observer-first preparation, shared clock, current cursor/two cycles, total continuation/cleanup/disposition, request and authorization. |
+| 5 | 40-43 | S3T5_01-S3T5_43 | All three files: report-GO-exec fixture, exact FDs/status, short test deadline, libproc, call graph, hashes, typed manifest and final package/comparisons. |
 
 ## Execution-contract traceability
 
 | Contract | Specification contract | Implementing plan steps | Exact oracle(s) |
 | --- | --- | --- | --- |
-| Strong Swift registry identity and atomic suspended bootstrap | `Private final owner and issuance registries`; `Suspended production bootstrap` | Task 2 Steps 1-3 | R35; S3T2_01; S3T2_02 |
-| Non-suspended guardian/witness fixture | `Non-suspended fixture bootstrap`; `Guardian/witness contract` | Task 5 Steps 1-5 | R40; R43; S3T5_01 |
-| Native settlement excludes control and Python demands complete exchange | `Drain, settlement and control exclusion` | Task 2 Steps 1, 5-6; Task 4 Step 9; Task 5 Step 5 | R36; R37; R40; S3T2_03; S3T5_02 |
-| Total DFA and distinct harmless versus abnormal exits | `Total control DFA` | Task 2 Steps 1 and 5-8 | S3T2_04; S3T2_08; R40 |
-| Immutable live/continuation deadlines and reserved cleanup | `Deadline validation before request read`; `Post-terminal continuation deadlines` | Task 2 Step 4; Task 3 Step 4; Task 4 Step 7; Task 5 Steps 4-5 | R11-R14; R38; R43; S3T5_04-S3T5_06 |
-| Registry-minted preparation, observer, capability and no free operands | `Registry-minted roots only`; `One-shot preparation and fixed artifacts` | Task 4 Steps 1-5 | R15-R17; S3T4_01; S3T4_05 |
-| Serialized latch linearization and late Keychain result | `Serialized executor and no free operands` | Task 4 Steps 1 and 4 | R15; R16; S3T4_03; S3T4_13 |
-| Ten-key context derivation and quarantine provenance | `Exact ten-key request value matrix`; `Descriptor-relative quarantine` | Task 4 Steps 3, 6 and 8 | R17; R21; S3T4_05; S3T4_06 |
-| Terminal snapshot, atomic lineage transfer and total disposition | `Receipt algebra and terminal disposition` | Task 4 Steps 1, 4, 5 and 7 | R18-R25; S3T4_02 |
-| Controlled receipt forks, preservation and continuation refusal | `Receipt algebra and terminal disposition`; `Post-terminal continuation deadlines` | Task 4 Step 7 | R18-R25; R37; exact R18/R19/R20/R21/R25 matrix in Step 7 |
-| Python wait/reap parity and lineage-model parity | `Python process parity` | Task 4 Steps 1 and 9 | R06-R10; R26-R36; R38; S3T4_04; S3T4_12 |
-| Independent exhaustive model action equality and complete effect alphabet | `Independent model architecture` | Task 1 Steps 1-3 | R26-R32; S3T1_01-S3T1_04 |
-| Legacy removal and closed testing routes | `Closed routes and real fixture` | Task 1 Step 4; Task 5 Step 2 | R44; R41; S3T1_05; S3T5_03 |
-| Exact authorization matrix | `Registry-minted roots only` | Task 4 Steps 1 and 10 | R45; S3T4_07-S3T4_11 |
-| Exact observer-source extraction/typecheck/deletion | `One-shot preparation and fixed artifacts` | Task 4 Steps 1, 3 and 11 | S3T4_14; Task 4 Step 11 command and hash assertions |
+| Native obligation, retained suspended cleanup and honest owner-destruction boundary | `Private final owner`; `Suspended production bootstrap`; `Closed kernel contracts` | Task 2 Steps 1-3, 8 | R35; S3T2_01-S3T2_02; S3T2_09-S3T2_11 |
+| Serial lifecycle, total DFA, exact tuples and final-only control close | `Drain`; `Total control DFA` | Task 2 Steps 1, 5-6, 8; Task 4 Step 9 | R36-R37; R40; S3T2_03-S3T2_04; S3T2_08; S3T2_10; S3T2_12; S3T4_23 |
+| Shared cross-process clock and immutable deadlines | `Deadline validation`; `Guardian/witness contract` | Task 2 Step 4; Task 3 Step 4; Task 4 Steps 7, 12; Task 5 Steps 2, 4-6 | R11-R14; R38; R43; S3T4_20; S3T4_24; S3T5_04-S3T5_06; S3T5_14; S3T5_42 |
+| Observer-first preparation and no premature live root | `One-shot preparation and fixed artifacts` | Task 4 Steps 1, 3-4, 11 | R15-R17; S3T4_01; S3T4_05; S3T4_14-S3T4_15 |
+| Exact current cursor and two complete cycles | `Receipt algebra and terminal disposition`; `Independent effect model` | Task 1 Steps 2, 4; Task 4 Steps 1, 5, 7 | R18-R25; S3T1_06-S3T1_07; S3T4_02; S3T4_16-S3T4_18 |
+| One current-mapping detach-plus-absence continuation | `One post-terminal detach-plus-absence continuation` | Task 3 Step 4; Task 4 Steps 1, 5, 7 | R18-R20; R22; S3T4_19-S3T4_20 |
+| Keychain-first cleanup, exclusive image move and total disposition | `Receipt algebra`; `Descriptor-relative quarantine` | Task 4 Steps 1, 5, 7-8 | R21-R24; S3T4_06; S3T4_18; S3T4_21-S3T4_22 |
+| Python wait/reap parity and lineage-model parity | `Python process parity` | Task 4 Steps 1 and 9 | R06-R10; R26-R36; S3T4_04; S3T4_12 |
+| Exact flag near misses plus preserved permutations | `Registry-minted roots only`; `TDD evidence` | Task 4 Steps 1 and 10 | R45; S3T4_07-S3T4_11; S3C4_01 |
+| Report-GO-exec same PID, exact Popen/FD/status and short testing deadline | `Guardian/witness contract` | Task 5 Steps 1-5 | R40-R41; R43; S3T5_04-S3T5_14; S3T5_31-S3T5_43 |
+| Five-second cleanup, complete libproc scan and no process scanner | `Guardian/witness contract` | Task 5 Steps 5-6 | R43; S3T5_06-S3T5_07; S3T5_15-S3T5_21 |
+| Compiler-AST fixture call graph and synchronized sources | `Preparation`; `Guardian/witness`; `Mutation system` | Task 5 Steps 3, 8 | R44; S3T5_22-S3T5_24 |
+| Independent models and exhaustive legacy removal | `Independent model architecture`; `Closed routes` | Task 1 Steps 1-6 | R26-R32; R44; S3T1_01-S3T1_07 |
 | App-owned secret boundary | `Application-controlled secret lifetime` | Task 2 Steps 1 and 7 | R39; S3T2_06; S3T2_07 |
-| Mutant sensitivity, candidate bytes and blind package isolation | `Test inventory, TDD and release evidence`; `Review, checkpoint and S4 separation` | Revision-4 documentation completion gate; Blind documentation gate; Task 5 Steps 10-11 | `MUTANT_<KEY>_<MUTANT>` labels; static map checker; exact package manifest; `test "$ACTUAL_STATUS" = " M primer.md"` |
+| Typed mutant system and source-copy integrity | `Test inventory, TDD and release evidence` | Checkpoint protocol; Task 5 Step 8 | S3T5_25-S3T5_26; every exact mutant label |
+| Sealed package and compared final bytes/paths | `Review, checkpoint and S4 separation` | Revision-5 gate; blind gate; Task 5 Steps 9, 13-14 | S3T5_27-S3T5_30; five-path manifest; exact hash/path equality commands |
 
 ## Final self-review checklist
 
@@ -1544,61 +2201,86 @@ TASK_LOCAL_MUTANTS = {
 - [ ] Swift owner/registries are private final classes; tokens carry only
   strongly retained private registry identity/generation, and validation uses
   object identity rather than a reusable `ObjectIdentifier` value.
-- [ ] Suspended validation versus abort is atomic and at most one path issues
-  an action.
+- [ ] `NativeObligation` has the exact seven monotone states;
+  `SuspendedCleanupAnchor` and the active record survive every non-exact reap,
+  and `NoActiveChildProof` waits for group/close/frame settlement.
+- [ ] Suspended validation versus cleanup is atomic; cleanup permits only
+  bounded positive-PID retry and the docs make no eventual-reap claim after
+  destruction of the owner helper.
 - [ ] Native settlement excludes control; Python requires final frame, control
   EOF and exact helper reap; absent/abnormal EOF, wrong exit or missing frame
   is `UNCLEAR`.
-- [ ] Control DFA is total across five exact states, all input/exit cases and
-  distinct `strictRejected`, `acceptedNoChild` and `protocolAbnormal` exits.
+- [ ] Control DFA covers every exact frame/response/exit/EOF/reap row, all five
+  states and all normal/terminal exit kinds; an intermediate `0x12` never closes
+  control.
+- [ ] One serial lifecycle executor is the only control reader/lifecycle writer,
+  polls cancel before spawn/after insertion/before resume and writes, and holds
+  no subordinate lock over a blocking syscall.
+- [ ] `SpawnResult` and every other closed kernel/I/O enum member have explicit
+  advancing/non-advancing matrices.
 - [ ] Pre-request deadline checks cap remaining time at 70 seconds with checked
-  arithmetic and no replacement deadline.
-- [ ] Terminal detach/absence uses only sealed fresh continuation helpers with
-  fixed 14/12-second hard deadlines inside the immutable outer envelope.
+  arithmetic and no replacement deadline; testing +2 s admission uses only the
+  separate testing flag/validator.
+- [ ] All transmitted/comparable timestamps share `CLOCK_MONOTONIC` using the
+  exact Python and Swift calls; 20 bracket samples meet the fixed 50 ms bound.
+- [ ] Terminal detach/absence uses one Python-authorized current-mapping helper
+  with exact +8/+14/+20/+26 s stops, no historical-device authority, no second
+  helper and no cross-process Swift token.
 - [ ] Python every authority root is registry-minted with object identity and
   copy/cross-boundary/replay rejection.
-- [ ] A fixed observer snapshot is consumed into one terminal receipt, and the
-  latch atomically transfers active mount/preterminal lineage without accepting
-  an old-epoch token.
-- [ ] Preparation fixes helper/observer source and target, has its own finite
-  deadline, and precedes the 115-second live clock.
-- [ ] One executor lock covers latch check through handle registration and
-  first-write authorization.
+- [ ] Exactly one current `ArtifactCursor` follows the declared state sequence,
+  completes indexed cycles 0 and 1, inspects once and consumes only its current
+  terminal-transfer slot.
+- [ ] Observer source is written/hashed/typechecked/compiled, first empty
+  baseline is captured, helper compiles while observed, second empty baseline
+  is captured, then and only then live roots/115-second clock are minted.
 - [ ] No live method accepts caller path/device/operation/argv.
 - [ ] Exact ten-key values preserve current global fields and per-operation
   UUID/cleanup rules.
-- [ ] Mount returns its receipt directly; no public `record_mount`.
-- [ ] Receipt producer, consultation and named derivative-slot rules are
-  explicit; every terminal lineage reaches `DispositionReceipt` and
-  `close(DispositionReceipt)` exactly once through quarantine or preservation.
-- [ ] Quarantine is descriptor-relative, no-follow, revalidated and closes all
-  FDs independently using sealed parent/image device, inode, mode and UID
-  provenance.
+- [ ] Cleanup proves one Keychain item, consumes `CleanupGrant`, deletes and
+  re-queries zero before issuing image permission; terminal after Keychain
+  deletion performs no later Keychain effect.
+- [ ] Every effect returns a closed settled/unresolved ledger outcome; normal
+  success, unapproved quarantine and every failure each mint exactly one
+  `DispositionReceipt`, then `close(DispositionReceipt)` once.
+- [ ] Quarantine/deletion use descriptor-relative
+  `renameatx_np(parent_fd, old_leaf, parent_fd, new_leaf, RENAME_EXCL)`, never
+  overwrite collision, revalidate old/new
+  facts and close every FD independently.
 - [ ] Python and Swift waitid/waitpid branches have full parity and no early
   Popen terminal helper, replayed waitpid or post-reap Popen state authority.
 - [ ] Models compare complete externally indexed actions and final state to
-  independent machines; exhaustive counts and positive long traces are exact.
-- [ ] Each task observed natural RED, GREEN and post-GREEN single-branch mutant
-  failure with its exact `MUTANT_<KEY>_<MUTANT>` label for normative and
-  task-local maps.
-- [ ] Legacy removal is Task 1; authorization matrix is Task 4; route/FD probe
-  is Task 5.
-- [ ] Parent probe deadline is created before Popen and bounds import/report/
-  cleanup without child extension; its 0.20-second cleanup reserve begins
-  before the hard deadline.
+  independent machines; alphabets are exactly 15/22 and counts are
+  813,616/5,399,043 with positive two-cycle/disposition traces.
+- [ ] R43 creates all endpoints/deadlines before exact Popen, validates complete
+  report before GO, proves CLOEXEC exec-status, retains direct Popen PID and
+  enforces exact pre-GO/post-exec FD inventories.
+- [ ] R43 uses +0.75/+1.50/+2.00/+2.50/+3.00/+5.00 s; both modes close guardian,
+  normal PASS settles before +2.00, and self-expiry is never counted as PASS.
+- [ ] Cleanup reserve spawns nothing; libproc treats count/bytes/full-buffer/
+  growth/errors/framing conservatively, is capped, uses current UID and retains
+  no command line.
+- [ ] Compiler AST closes the fixture call graph and the forbidden reachable
+  call mutant typechecks then fails the unchanged oracle.
+- [ ] Natural, baseline-characterization and synthetic-gate policies are
+  separated; S3C4_01 is GREEN before/after for all eight flag permutations.
+- [ ] Typed `MUTANT_MANIFEST` is isomorphic to all maps and each case has unique
+  owner/test/name/kind/target/anchor/closure hash/label; R44 and every declared
+  structural mutant use a private typecheckable source copy and leave no residue.
 - [ ] Each of three flags and authorization key/value has prefix/suffix/case/
   old-alias coverage with distinct mutants.
-- [ ] Observer typecheck extracts exact reviewed bytes, hashes, runs
-  `swiftc -typecheck -framework CoreGraphics`, exits zero and safely deletes.
+- [ ] Task 5 owns all three implementation files and synchronizes harness-owned
+  helper/observer/fixture source hashes imported by tests.
 - [ ] App-owned entropy/Master/Wire/Keychain staging are zeroed; opaque external
   copies are not claimed.
 - [ ] Dynamic complete suites pass under Python 3.11 and 3.14 with byte-identical
   ordered starts, zero skip and no live class.
 - [ ] Immediately before `S3_FINAL`, exact status is only ` M primer.md`, staged
-  output is empty and spec/plan/primer hashes are freshly recorded.
-- [ ] Blind packages exclude prior findings, review receipts, verdicts,
-  reviewer identities and conclusions, as proven by the package manifest.
-- [ ] The revision-4 documentation completion gate ran no code/test/build/helper
+  output is empty, primer diff is unchanged, spec/plan hashes are compared to
+  frozen reviewed values and cumulative paths equal exactly three files.
+- [ ] Blind package generation uses only the exact `git show` allowlist, records
+  size/hash per entry and rejects extra/wrong-hash/forbidden-review fixtures.
+- [ ] The revision-5 documentation completion gate ran no code/test/build/helper
   or live effect, committed exactly the two docs and left `primer.md` unchanged
   and unstaged.
 - [ ] S4 rebaseline is a separate later documentation commit.
