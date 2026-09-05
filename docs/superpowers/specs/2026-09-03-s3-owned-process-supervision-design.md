@@ -1,11 +1,12 @@
 # Cortex Bridge S3 Owned-Process Supervision Design
 
-**Status:** Revision 7 review candidate; implementation remains frozen until
+**Status:** Revision 11 review candidate; implementation remains frozen until these exact specification and plan bytes receive three fresh, mutually blind, read-only reviews with `P0=0`, `P1=0`, `P2=0` and `PASS`
 these exact specification and plan bytes receive three fresh, mutually blind,
 read-only reviews with `P0=0`, `P1=0`, `P2=0` and `PASS`
 **Date:** 2026-09-05
-**Reviewed baseline:** `db5a40f822c115b3f06b93a8d0c4ef04a74cd026`
-**Revision-7 parent:** `7b3567637f2025c1b8c21338acad070d6561bcd9`
+**Reviewed baseline:** `8e0cbd6516415ee378a5ecb9f42a0c92c60e244c`
+**Revision-8 parent:** `8e0cbd6516415ee378a5ecb9f42a0c92c60e244c`
+**Revision-7 parent:** `8e0cbd6516415ee378a5ecb9f42a0c92c60e244c`
 **Target:** v0.5.4 candidate
 **Supersedes:** the S3 supervision and live-harness design in the current Phase
 S plan; unrelated storage requirements remain in force
@@ -278,7 +279,7 @@ Golden vectors are byte-identical in Swift and Python for a 4,096-byte READY,
 | full stream fragmentation | 16 x 65,440 + 1,536 = 17 chunks; 34 for two streams |
 | base maximal native command | 40 frames / 2,109,072 bytes |
 | secret plus cancel/ACK command | 43 frames / 2,109,412 bytes |
-| seven-command invocation | 287 frames / 238 chunks / 14,764,244 bytes |
+| seven-command invocation | 287 frames / 238 chunks / 14,764,324 bytes |
 | normal worker trace | 835 frames / 42,185,060 bytes |
 | separate cancel trace | 829 frames / 42,184,460 bytes |
 | admin frame maximum | 34 frames; approved-close witness 8,415 bytes |
@@ -775,9 +776,9 @@ The final sets are exact:
 | Task 4 `S3T4_01..S3T4_157` | 157 |
 | Task 5 `S3T5_01..S3T5_110` | 110 |
 | separate `S3C4_01` | 1 |
-| `ALL_TEST_IDS`, `ALL_MUTANTS`, `ORACLE_CLOSURE`, `MUTANT_MANIFEST` | 397 each |
+| `ALL_TEST_IDS`, `ALL_MUTANTS`, `ORACLE_CLOSURE`, `MUTANT_MANIFEST` | 510 each |
 
-Thus task-local IDs total 351 and global IDs total 397. Red policies are
+Thus task-local IDs total 464 and global IDs total 510. Red policies are
 exactly 364 `natural`, 26 `synthetic_gate` and seven
 `baseline_characterization`. The characterization set is exactly `R45`,
 `S3T4_07..S3T4_11` and `S3C4_01`. New activations are 120 runtime, 88 source
@@ -841,7 +842,7 @@ rejects 20,975,668.
 | R44 | Every obsolete route literal, handler and test is absent before default suite selection. |
 | R45 | Every authorization near miss constructs zero live objects; baseline characterization only. |
 
-Task-local ownership and all 397 exact method/mutant rows are frozen in the
+Task-local ownership and all 510 exact method/mutant rows are frozen in the
 implementation plan. Task 1 additionally owns the 2,034 native EFSM assertions;
 Task 2 owns broker/worker authority and publication; Task 3 owns invocation
 class/provenance; Task 4 owns environments, protocol, mounts, observer,
@@ -904,5 +905,30 @@ reviews begin.
   authorization; default tests cannot select it.
 - Models and harmless fixtures do not prove live Keychain, DiskImages,
   SecurityAgent or APFS behavior.
-- This Revision 7 candidate still requires three fresh blind documentation
+- This Revision 11 candidate still requires three fresh blind documentation
   reviews. It is not approved merely because its static gates pass.
+
+
+## Normative EFSM Transition Relation (`EFSM_RULES_V1`)
+
+```text
+EFSM_RULES_V1
+event              constructor.member (expanded for 4 SignalIntent)
+from_states        list of 14 states (bytewise-sorted, no wildcards)
+guard              closed predicate identifier
+next_state         exact target state
+actions            ordered vector of ActionTags
+registry_delta     closed registry delta identifier
+```
+
+The 14 control states, 145 members, 2,030 pairs, and 2,034 trace total are normatively bound. Unobservable exit events (workerExited, workerKilled, pythonExited, pythonKilled) are removed from broker domain and replaced with observable channel loss (eof, brokenPipe, partialFrame, protocolViolation, readFailure, writeFailure, deadlineExpired).
+
+
+## Normative CS3B Protocol Grammar (`CS3B_GRAMMAR_V1`)
+
+```text
+CS3B_GRAMMAR_V1
+- 30 frame types, 96-byte header, exact direction, generation 1..7, context digest, subject_ordinal 0..7.
+- Ancillary SCM_RIGHTS on byte offset 0 of TRANSFER_WORKER_FD only (16 bytes ancillary, 1 FD).
+- Closed JSON Schemas: BROKER_READY, WORKER_SPAWN_FAILED, COMMAND_JSON, BROKER_SETTLED_COMMAND_JSON, BROKER_UNRESOLVED_COMMAND_JSON, BROKER_ORPHAN_SETTLEMENT.
+```
