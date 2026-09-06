@@ -25,21 +25,21 @@
   "phases": {
     "S": {
       "base_commit": "d9f2398fc093991cb3558749009f2a4253096bec",
-      "implementation_commit": "463e136fcbde92e0ff7c8870e32f51015997e091",
+      "implementation_commit": "ac7f246b8aa1af3880db50ea3f6125a64333b6be",
       "focused_tests": {
         "status": "PASS",
-        "python_3_14": {"runs": 48, "failures": 0, "errors": 0},
-        "python_3_12": {"runs": 48, "failures": 0, "errors": 0},
+        "python_3_14": {"runs": 50, "failures": 0, "errors": 0},
+        "python_3_12": {"runs": 50, "failures": 0, "errors": 0},
         "link_checker": "PASS",
         "swift_compile": "PASS"
       },
       "full_gate": {
         "status": "FAIL",
-        "runs": 992,
+        "runs": 994,
         "failures": 6,
         "errors": 1,
-        "python_3_14": {"runs": 992, "failures": 6, "errors": 1},
-        "python_3_12": {"runs": 992, "failures": 6, "errors": 1},
+        "python_3_14": {"runs": 994, "failures": 6, "errors": 1},
+        "python_3_12": {"runs": 994, "failures": 6, "errors": 1},
         "evidence_artifact": "docs/verification/v0.5.4-s3-focused-gate-2026-09-06.md"
       },
       "review_id": null,
@@ -59,7 +59,7 @@
           "status": "IMPLEMENTED_WITH_FOCUSED_GATE",
           "design_sha256": "6fbdd97785391bb94a3314be8486d9c3915f2e1719bbb39f866727bd22daa7de",
           "plan_sha256": "be2141907c09c25e4d674c02af96b9f74f9d0d6fbc021ac819e8c5b9705ca227",
-          "implementation_commit": "463e136fcbde92e0ff7c8870e32f51015997e091",
+          "implementation_commit": "ac7f246b8aa1af3880db50ea3f6125a64333b6be",
           "review_id": "r17-s3-ask-codex-20260906T134929Z",
           "reviewed_design_sha256": "6fbdd97785391bb94a3314be8486d9c3915f2e1719bbb39f866727bd22daa7de",
           "reviewed_plan_sha256": "be2141907c09c25e4d674c02af96b9f74f9d0d6fbc021ac819e8c5b9705ca227",
@@ -91,7 +91,7 @@
           },
           "blockers": [
             "InstalledStorageRuntime now composes lifecycle, contract, broker, and descriptor-probe instances, but no published immutable generation has been exercised.",
-            "startup_lease.launch_managed_runtime remains explicitly unwired and fails closed; the installed wrapper only composes the runtime.",
+            "startup_lease.launch_managed_runtime remains explicitly unwired and fails closed; the installed wrapper only composes the runtime, while the hash-chained lifespan writer is now implemented and tested.",
             "Stable bootstrap, generation publication, native mount probe, and real macOS vault proof are not complete.",
             "The full test-all gate is not green on either Python 3.14 or Python 3.12: six descendant-group cleanup failures and one related supervision error remain."
           ]
