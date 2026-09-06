@@ -75,14 +75,30 @@ class StorageLockSet:
         yield self._storage_lock
 
     def assert_active(self, *, home: Path, required_install_mode: LockMode, required_storage_mode: LockMode) -> None:
-        if not self.active or Path(home) != self.home:
+        if not self.active or Path(home).resolve(strict=False) != self.home:
             raise StorageLockError("STORAGE_LOCK_INACTIVE")
+        if self.install_mode not in {"shared", "exclusive"} or self.storage_mode not in {"shared", "exclusive"}:
+            raise StorageLockError("STORAGE_LOCK_MODE")
+        if self.admission_mode != "exclusive":
+            raise StorageLockError("STORAGE_LOCK_MODE")
         if required_install_mode == "exclusive" and self.install_mode != "exclusive":
             raise StorageLockError("STORAGE_LOCK_MODE")
         if required_storage_mode == "exclusive" and self.storage_mode != "exclusive":
             raise StorageLockError("STORAGE_LOCK_MODE")
         if os.getuid() != self.home_uid:
             raise StorageLockError("STORAGE_LOCK_OWNER")
+        try:
+            home_details = os.stat(self.home, follow_symlinks=False)
+        except OSError as exc:
+            raise StorageLockError("STORAGE_LOCK_REPLACED") from exc
+        if (
+            home_details.st_ino != self.home_ino
+            or (home_details.st_dev & 0xFFFFFFFF) != self.home_dev_u32
+            or home_details.st_uid != self.home_uid
+            or stat.S_IMODE(home_details.st_mode) != self.home_mode
+            or not stat.S_ISDIR(home_details.st_mode)
+        ):
+            raise StorageLockError("STORAGE_LOCK_REPLACED")
         for fd, dev, ino, uid in (
             (self.install_fd, self.install_dev_u32, self.install_ino, self.install_uid),
             (self.storage_fd, self.storage_dev_u32, self.storage_ino, self.storage_uid),
@@ -92,7 +108,13 @@ class StorageLockSet:
                 current = os.fstat(fd)
             except OSError as exc:
                 raise StorageLockError("STORAGE_LOCK_REPLACED") from exc
-            if (current.st_dev & 0xFFFFFFFF, current.st_ino, current.st_uid) != (dev, ino, uid):
+            if (
+                (current.st_dev & 0xFFFFFFFF, current.st_ino, current.st_uid)
+                != (dev, ino, uid)
+                or not stat.S_ISREG(current.st_mode)
+                or stat.S_IMODE(current.st_mode) != self.marker_mode
+                or current.st_nlink != 1
+            ):
                 raise StorageLockError("STORAGE_LOCK_REPLACED")
 
     def close(self) -> None:

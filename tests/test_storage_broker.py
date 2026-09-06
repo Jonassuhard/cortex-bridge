@@ -13,6 +13,7 @@ from storage_broker import (
     ClosedReadyResult,
     DarwinU32,
     LedgerState,
+    MountedImageProof,
     StorageBrokerClient,
     StorageBrokerError,
     StorageLocalResponse,
@@ -102,6 +103,126 @@ class LedgerTests(unittest.TestCase):
             client._run_locked(self.lock, _request(), effect_budget_ns=10, cleanup_budget_ns=0)
         record = ledger.load_all_locked(self.lock)[0]
         self.assertEqual(record.state, LedgerState.CLOSED_FAILURE)
+
+    def test_injected_transport_closes_mutating_workflow_with_reconciliation(self):
+        ledger = StorageWorkflowLedger(self.home)
+        calls = []
+
+        def transport(request, record):
+            calls.append((request, record))
+            return {
+                "response_kind": "local",
+                "response": StorageLocalResponse(1, request.operation, "OK", None, None, 0),
+            }
+
+        client = StorageBrokerClient(
+            home=self.home, executable=self.executable, ledger=ledger, transport=transport
+        )
+        result = client._run_locked(
+            self.lock,
+            _StorageBrokerRequest(
+                1, "create", self.home / "image.sparsebundle", None,
+                "CORTEX_BRIDGE_SPIKE", "64m", uuid4(), None, True, True,
+            ),
+            effect_budget_ns=10,
+            cleanup_budget_ns=0,
+        )
+        self.assertEqual(result.state, LedgerState.CLOSED_SUCCESS)
+        self.assertTrue(result.reconciliation_required)
+        self.assertEqual(result.terminal_code, "OK")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][1].state, LedgerState.OPEN_RUNNING)
+        self.assertTrue(calls[0][1].command_sha256)
+
+    def test_injected_transport_keeps_read_only_inspect_non_reconciling(self):
+        ledger = StorageWorkflowLedger(self.home)
+
+        def transport(request, record):
+            return {
+                "response_kind": "local",
+                "response": StorageLocalResponse(1, request.operation, "OK", None, None, 1),
+            }
+
+        client = StorageBrokerClient(
+            home=self.home, executable=self.executable, ledger=ledger, transport=transport
+        )
+        result = client._run_locked(
+            self.lock,
+            _request("inspect-item"),
+            effect_budget_ns=10,
+            cleanup_budget_ns=0,
+        )
+        self.assertEqual(result.state, LedgerState.CLOSED_SUCCESS)
+        self.assertFalse(result.reconciliation_required)
+
+    def test_transport_result_must_match_open_workflow(self):
+        ledger = StorageWorkflowLedger(self.home)
+
+        def transport(request, record):
+            from storage_broker import _success_result
+            wrong = _success_result(record, {
+                "response_kind": "local",
+                "response": StorageLocalResponse(1, request.operation, "OK", None, None, 0),
+            })
+            return ClosedReadyResult(
+                uuid4(), wrong.generation, wrong.outcome, wrong.code, wrong.response,
+                wrong.command_sha256, wrong.result_sha256, wrong.closed_ready_sha256,
+                wrong.child_reaped, wrong.group_absent, wrong.native_cleanup_proven,
+                wrong.reconciliation_required,
+            )
+
+        client = StorageBrokerClient(
+            home=self.home, executable=self.executable, ledger=ledger, transport=transport
+        )
+        with self.assertRaisesRegex(StorageBrokerError, "PROTOCOL_ERROR"):
+            client._run_locked(self.lock, _request(), effect_budget_ns=10, cleanup_budget_ns=0)
+        record = ledger.load_all_locked(self.lock)[0]
+        self.assertEqual(record.state, LedgerState.OPEN_UNRESOLVED)
+
+    def test_mounted_image_probe_closes_read_only_workflow(self):
+        ledger = StorageWorkflowLedger(self.home)
+        image_path = self.home / "image.sparsebundle"
+        mount_path = self.home / "mnt"
+        volume_uuid = uuid4()
+        encryption_uuid = uuid4()
+        image_identity = (DarwinU32(7), 8)
+        mount_identity = (DarwinU32(9), 10, DarwinU32(11), DarwinU32(12))
+        seen_requests = []
+
+        def transport(request, record):
+            from storage_broker import request_sha256
+            seen_requests.append(request)
+            proof = MountedImageProof(
+                mount_path=mount_path,
+                image_dev_u32=image_identity[0], image_ino=image_identity[1],
+                mount_dev_u32=mount_identity[0], mount_ino=mount_identity[1],
+                mount_fsid0_u32=mount_identity[2], mount_fsid1_u32=mount_identity[3],
+                volume_name="CORTEX_BRIDGE_2026_09", volume_uuid=volume_uuid,
+                encryption_uuid=encryption_uuid, mapping_count=1,
+                filesystem_type="apfs", writable=True, encrypted=True,
+                request_sha256=request_sha256(request),
+            )
+            return {"response_kind": "mounted_image_proof", "response": proof}
+
+        client = StorageBrokerClient(
+            home=self.home, executable=self.executable, ledger=ledger, transport=transport
+        )
+        proof = client._probe_mounted_image_locked(
+            self.lock,
+            image_path=image_path,
+            mount_path=mount_path,
+            expected_volume_name="CORTEX_BRIDGE_2026_09",
+            expected_volume_uuid=volume_uuid,
+            expected_encryption_uuid=encryption_uuid,
+            image_identity=image_identity,
+            mount_identity=mount_identity,
+            expected_mapping_count=1,
+            effect_budget_ns=10,
+        )
+        self.assertEqual(proof.request_sha256, request_sha256(seen_requests[0]))
+        record = ledger.load_all_locked(self.lock)[0]
+        self.assertEqual(record.state, LedgerState.CLOSED_SUCCESS)
+        self.assertFalse(record.reconciliation_required)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,375 @@
+"""One-shot managed-runtime startup lease primitives.
+
+The lease is a local socketpair handshake.  It is intentionally independent of
+the web server so it can be tested without binding a port.  A lease is written
+to the caller-owned pids directory, consumed exactly once by the child, and
+acknowledged by the parent.  The module never treats a missing or replayed
+receipt as readiness.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import secrets
+import socket
+import stat
+import time
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Any, Literal, Mapping
+from uuid import UUID, uuid4
+
+from storage_broker import BootIdentity
+from storage_result import StorageStatus
+
+
+class StartupLeaseError(RuntimeError):
+    pass
+
+
+_SHA256 = set("0123456789abcdef")
+
+
+def _is_sha256(value: object) -> bool:
+    return isinstance(value, str) and len(value) == 64 and not (set(value) - _SHA256)
+
+
+@dataclass(frozen=True, slots=True)
+class ManagedProcessIdentity:
+    pid: int
+    pgid: int
+    start_time: str
+
+    def __post_init__(self) -> None:
+        if type(self.pid) is not int or self.pid <= 0:
+            raise ValueError("managed process pid is invalid")
+        if type(self.pgid) is not int or self.pgid <= 0:
+            raise ValueError("managed process pgid is invalid")
+        if type(self.start_time) is not str or not self.start_time or any(ord(ch) < 0x20 for ch in self.start_time):
+            raise ValueError("managed process start identity is invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class StartupLease:
+    schema_version: Literal[1]
+    lease_id: str
+    nonce: str
+    identity: ManagedProcessIdentity
+    launcher_pid: int
+    launcher_start_time: str
+    pids_dev_u32: int
+    pids_ino: int
+    pids_uid: int
+    pids_mode: Literal[448]
+    storage_transaction_id: str | None
+    boot: BootIdentity
+    generation_record_sha256: str
+    expires_at_monotonic_ns: int
+
+    def __post_init__(self) -> None:
+        if self.schema_version != 1:
+            raise ValueError("startup lease schema is invalid")
+        try:
+            UUID(self.lease_id)
+        except (ValueError, AttributeError) as exc:
+            raise ValueError("startup lease id is invalid") from exc
+        if type(self.nonce) is not str or len(self.nonce) != 32 or set(self.nonce) - _SHA256:
+            raise ValueError("startup lease nonce is invalid")
+        if type(self.launcher_pid) is not int or self.launcher_pid <= 0:
+            raise ValueError("startup launcher pid is invalid")
+        if type(self.launcher_start_time) is not str or not self.launcher_start_time:
+            raise ValueError("startup launcher identity is invalid")
+        if type(self.pids_dev_u32) is not int or not 0 <= self.pids_dev_u32 <= 0xFFFFFFFF:
+            raise ValueError("startup pids device is invalid")
+        if type(self.pids_ino) is not int or self.pids_ino <= 0:
+            raise ValueError("startup pids inode is invalid")
+        if type(self.pids_uid) is not int or self.pids_uid < 0:
+            raise ValueError("startup pids uid is invalid")
+        if self.pids_mode != 0o700:
+            raise ValueError("startup pids mode is invalid")
+        if self.storage_transaction_id is not None:
+            try:
+                UUID(self.storage_transaction_id)
+            except (ValueError, AttributeError) as exc:
+                raise ValueError("startup transaction id is invalid") from exc
+        if not _is_sha256(self.generation_record_sha256):
+            raise ValueError("startup generation digest is invalid")
+        if type(self.expires_at_monotonic_ns) is not int or self.expires_at_monotonic_ns <= 0:
+            raise ValueError("startup lease expiry is invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class ManagedStartContext:
+    lease_id: str
+    identity: ManagedProcessIdentity
+    storage_transaction_id: str | None
+    boot: BootIdentity
+    generation_record_sha256: str
+    receipt_sha256: str
+
+    def __post_init__(self) -> None:
+        try:
+            UUID(self.lease_id)
+        except (ValueError, AttributeError) as exc:
+            raise ValueError("managed start lease id is invalid") from exc
+        if not _is_sha256(self.generation_record_sha256) or not _is_sha256(self.receipt_sha256):
+            raise ValueError("managed start digest is invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class ManagedStartReceipt:
+    lease_id: str
+    child_pid: int
+    storage_transaction_id: str | None
+    acknowledged: Literal[True]
+
+    def __post_init__(self) -> None:
+        try:
+            UUID(self.lease_id)
+        except (ValueError, AttributeError) as exc:
+            raise ValueError("managed receipt lease id is invalid") from exc
+        if type(self.child_pid) is not int or self.child_pid <= 0 or self.acknowledged is not True:
+            raise ValueError("managed receipt is invalid")
+        if self.storage_transaction_id is not None:
+            try:
+                UUID(self.storage_transaction_id)
+            except (ValueError, AttributeError) as exc:
+                raise ValueError("managed receipt transaction id is invalid") from exc
+
+
+RuntimeLifespanState = Literal["STARTING", "READY", "CLOSED"]
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeLifespanRecord:
+    schema_version: Literal[1]
+    state: RuntimeLifespanState
+    lease_id: str
+    lease_receipt_sha256: str
+    identity: ManagedProcessIdentity
+    storage_transaction_id: str | None
+    boot: BootIdentity
+    generation_record_sha256: str
+    previous_record_sha256: str | None
+    record_sha256: str
+
+    def __post_init__(self) -> None:
+        if self.schema_version != 1 or self.state not in {"STARTING", "READY", "CLOSED"}:
+            raise ValueError("runtime lifespan record is invalid")
+        try:
+            UUID(self.lease_id)
+        except (ValueError, AttributeError) as exc:
+            raise ValueError("runtime lifespan lease id is invalid") from exc
+        if self.storage_transaction_id is not None:
+            try:
+                UUID(self.storage_transaction_id)
+            except (ValueError, AttributeError) as exc:
+                raise ValueError("runtime lifespan transaction id is invalid") from exc
+        for name, value in (
+            ("lease receipt", self.lease_receipt_sha256),
+            ("generation", self.generation_record_sha256),
+            ("record", self.record_sha256),
+        ):
+            if not _is_sha256(value):
+                raise ValueError(f"runtime lifespan {name} digest is invalid")
+        if self.previous_record_sha256 is not None and not _is_sha256(self.previous_record_sha256):
+            raise ValueError("runtime lifespan previous digest is invalid")
+
+
+def _json(value: Any) -> Any:
+    if isinstance(value, BootIdentity):
+        return {"seconds": value.seconds, "microseconds": value.microseconds}
+    if hasattr(value, "__dataclass_fields__"):
+        return {key: _json(item) for key, item in asdict(value).items()}
+    if isinstance(value, Mapping):
+        return {str(key): _json(item) for key, item in value.items()}
+    return value
+
+
+def _send_json(sock: socket.socket, value: Mapping[str, Any]) -> None:
+    payload = json.dumps(_json(value), separators=(",", ":"), sort_keys=True).encode("utf-8") + b"\n"
+    if len(payload) > 4096:
+        raise StartupLeaseError("STARTUP_LEASE_FRAME_TOO_LARGE")
+    sock.sendall(payload)
+
+
+def _recv_json(sock: socket.socket, timeout: float) -> dict[str, Any]:
+    sock.settimeout(timeout)
+    data = bytearray()
+    while len(data) <= 4096:
+        chunk = sock.recv(1024)
+        if not chunk:
+            raise StartupLeaseError("STARTUP_LEASE_EOF")
+        data.extend(chunk)
+        if b"\n" in chunk:
+            break
+    else:
+        raise StartupLeaseError("STARTUP_LEASE_FRAME_TOO_LARGE")
+    line = bytes(data).split(b"\n", 1)[0]
+    try:
+        pairs_seen: set[str] = set()
+        def pairs(items: list[tuple[str, Any]]) -> dict[str, Any]:
+            value: dict[str, Any] = {}
+            for key, item in items:
+                if key in pairs_seen:
+                    raise ValueError("duplicate object key")
+                pairs_seen.add(key)
+                value[key] = item
+            return value
+        value = json.loads(line.decode("utf-8"), object_pairs_hook=pairs)
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        raise StartupLeaseError("STARTUP_LEASE_MALFORMED") from exc
+    if not isinstance(value, dict):
+        raise StartupLeaseError("STARTUP_LEASE_MALFORMED")
+    return value
+
+
+def _lease_filename(lease_id: str, *, consumed: bool = False) -> str:
+    suffix = ".consumed" if consumed else ""
+    return f"startup-lease-{lease_id}{suffix}.json"
+
+
+def _receipt_sha(lease: StartupLease) -> str:
+    return hashlib.sha256(json.dumps(_json(lease), separators=(",", ":"), sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def publish_startup_lease(
+    *,
+    pids_fd: int,
+    identity: ManagedProcessIdentity,
+    storage_transaction_id: str | None,
+    boot: BootIdentity,
+    generation_record_sha256: str,
+    ttl_seconds: float = 5.0,
+) -> StartupLease:
+    if ttl_seconds <= 0 or ttl_seconds > 30:
+        raise StartupLeaseError("STARTUP_LEASE_TTL_INVALID")
+    details = os.fstat(pids_fd)
+    if not stat.S_ISDIR(details.st_mode) or details.st_nlink < 2 or details.st_uid != os.getuid() or stat.S_IMODE(details.st_mode) != 0o700:
+        raise StartupLeaseError("STARTUP_LEASE_PIDS_UNSAFE")
+    if not stat.S_ISDIR(details.st_mode) or details.st_uid != os.getuid() or stat.S_IMODE(details.st_mode) != 0o700:
+        raise StartupLeaseError("STARTUP_LEASE_PIDS_UNSAFE")
+    lease = StartupLease(
+        1, str(uuid4()), secrets.token_hex(16), identity, os.getpid(), str(time.monotonic_ns()),
+        details.st_dev & 0xFFFFFFFF, details.st_ino, details.st_uid, 0o700,
+        storage_transaction_id, boot, generation_record_sha256,
+        time.monotonic_ns() + int(ttl_seconds * 1_000_000_000),
+    )
+    filename = _lease_filename(lease.lease_id)
+    fd = os.open(filename, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=pids_fd)
+    try:
+        payload = json.dumps(_json(lease), separators=(",", ":"), sort_keys=True).encode("utf-8")
+        view = memoryview(payload)
+        while view:
+            written = os.write(fd, view)
+            if written <= 0:
+                raise OSError("short startup-lease write")
+            view = view[written:]
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    return lease
+
+
+def parent_release_and_wait_ack(control_fd: int, lease: StartupLease, *, timeout_seconds: float = 5.0) -> None:
+    sock = socket.socket(fileno=control_fd)
+    try:
+        _send_json(sock, {"type": "START", "lease_id": lease.lease_id, "nonce": lease.nonce})
+        ack = _recv_json(sock, timeout_seconds)
+        if ack.get("type") != "ACK" or ack.get("lease_id") != lease.lease_id or ack.get("receipt_sha256") != _receipt_sha(lease):
+            raise StartupLeaseError("STARTUP_LEASE_ACK_INVALID")
+    finally:
+        sock.detach()
+
+
+def child_consume_startup_lease(*, control_fd: int, pids_fd: int, expected_transaction_id: str | None) -> ManagedStartContext:
+    sock = socket.socket(fileno=control_fd)
+    try:
+        grant = _recv_json(sock, 5.0)
+        lease_id = grant.get("lease_id")
+        nonce = grant.get("nonce")
+        if grant.get("type") != "START" or not isinstance(lease_id, str) or not isinstance(nonce, str):
+            raise StartupLeaseError("STARTUP_LEASE_MALFORMED")
+        filename = _lease_filename(lease_id)
+        try:
+            fd = os.open(filename, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=pids_fd)
+            try:
+                data = os.read(fd, 64 * 1024)
+            finally:
+                os.close(fd)
+            raw = json.loads(data.decode("utf-8"))
+            os.unlink(filename, dir_fd=pids_fd)
+        except (FileNotFoundError, OSError) as exc:
+            raise StartupLeaseError("STARTUP_LEASE_REPLAYED") from exc
+        if set(raw) != set(StartupLease.__dataclass_fields__):
+            raise StartupLeaseError("STARTUP_LEASE_MALFORMED")
+        if raw.get("nonce") != nonce or raw.get("expires_at_monotonic_ns", 0) < time.monotonic_ns():
+            raise StartupLeaseError("STARTUP_LEASE_EXPIRED")
+        details = os.fstat(pids_fd)
+        if (details.st_dev & 0xFFFFFFFF, details.st_ino, details.st_uid) != (raw.get("pids_dev_u32"), raw.get("pids_ino"), raw.get("pids_uid")):
+            raise StartupLeaseError("STARTUP_LEASE_PIDS_CHANGED")
+        if raw.get("storage_transaction_id") != expected_transaction_id:
+            raise StartupLeaseError("STARTUP_LEASE_TRANSACTION_MISMATCH")
+        identity = ManagedProcessIdentity(**raw["identity"])
+        boot = BootIdentity(**raw["boot"])
+        lease = StartupLease(**{**raw, "identity": identity, "boot": boot})
+        receipt = _receipt_sha(lease)
+        context = ManagedStartContext(lease.lease_id, identity, lease.storage_transaction_id, boot, lease.generation_record_sha256, receipt)
+        _send_json(sock, {"type": "ACK", "lease_id": lease.lease_id, "receipt_sha256": receipt})
+        return context
+    finally:
+        sock.detach()
+
+
+def _require_managed_start_context(home: Path, storage_status: StorageStatus) -> ManagedStartContext:
+    if storage_status.runtime_allowed is not True:
+        raise StartupLeaseError("MANAGED_START_REQUIRED")
+    path = Path(home) / "runtime-lifespan.json"
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError) as exc:
+        raise StartupLeaseError("MANAGED_START_REQUIRED") from exc
+    if raw.get("state") != "READY":
+        raise StartupLeaseError("MANAGED_START_NOT_READY")
+    required = set(RuntimeLifespanRecord.__dataclass_fields__)
+    if set(raw) != required:
+        raise StartupLeaseError("MANAGED_START_RECORD_INVALID")
+    try:
+        record_data = dict(raw)
+        record_data["identity"] = ManagedProcessIdentity(**record_data["identity"])
+        record_data["boot"] = BootIdentity(**record_data["boot"])
+        record = RuntimeLifespanRecord(**record_data)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise StartupLeaseError("MANAGED_START_RECORD_INVALID") from exc
+    raw_for_hash = _json(record)
+    raw_for_hash.pop("record_sha256", None)
+    expected_record_sha = hashlib.sha256(json.dumps(raw_for_hash, separators=(",", ":"), sort_keys=True).encode("utf-8")).hexdigest()
+    if expected_record_sha != record.record_sha256:
+        raise StartupLeaseError("MANAGED_START_RECORD_INVALID")
+    return ManagedStartContext(
+        record.lease_id, record.identity, record.storage_transaction_id, record.boot,
+        record.generation_record_sha256, record.lease_receipt_sha256,
+    )
+
+
+def managed_runtime_is_ready_locked(lock_set: Any, *, home: Path, expected_storage_transaction_id: str | None) -> bool:
+    try:
+        lock_set.assert_active(home=Path(home), required_install_mode="shared", required_storage_mode="shared")
+        context = _require_managed_start_context(Path(home), StorageStatus("PASS", "RUNTIME_READY", expected_storage_transaction_id, "COMMITTED", True, True))
+        return context.storage_transaction_id == expected_storage_transaction_id
+    except Exception:
+        return False
+
+
+def launch_managed_runtime(home: Path, *, lock_set: Any, lifecycle: Any, contract: Any, timeout_seconds: float = 5.0) -> ManagedStartReceipt:
+    raise StartupLeaseError("STARTUP_RUNTIME_NOT_WIRED")
+
+
+__all__ = [
+    "ManagedProcessIdentity", "StartupLease", "ManagedStartContext", "ManagedStartReceipt",
+    "RuntimeLifespanRecord", "StartupLeaseError", "publish_startup_lease",
+    "parent_release_and_wait_ack", "child_consume_startup_lease", "_require_managed_start_context",
+    "managed_runtime_is_ready_locked", "launch_managed_runtime",
+]

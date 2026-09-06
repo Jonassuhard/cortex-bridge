@@ -139,7 +139,7 @@ def _json_value(value: Any) -> Any:
     if hasattr(value, "__dataclass_fields__"):
         return {k: _json_value(v) for k, v in asdict(value).items()}
     if isinstance(value, Mapping):
-        return {str(k): _json_value(v) for k, v in value.items()}
+        return {k: _json_value(v) for k, v in value.items()}
     if isinstance(value, (tuple, list)):
         return [_json_value(v) for v in value]
     return value
@@ -149,7 +149,7 @@ def canonical_json(value: Any) -> bytes:
     """Encode restricted canonical JSON used by reconciliation hashes."""
     value = _json_value(value)
 
-    def reject_float(obj: Any) -> Any:
+    def canonicalize(obj: Any) -> Any:
         if isinstance(obj, float):
             raise ValueError("floating point values are forbidden")
         if isinstance(obj, int) and (obj < 0 or obj > 2**64 - 1):
@@ -158,28 +158,30 @@ def canonical_json(value: Any) -> bytes:
             obj.encode("utf-8", "strict")
             if any(0xD800 <= ord(c) <= 0xDFFF for c in obj):
                 raise ValueError("lone surrogate")
+            return obj
         if isinstance(obj, Mapping):
-            seen: set[str] = set()
+            keys: list[str] = []
             for key in obj:
                 if not isinstance(key, str):
                     raise ValueError("object keys must be strings")
-                if key in seen:
+                if key in keys:
                     raise ValueError("duplicate key")
-                seen.add(key)
-                reject_float(key)
-            for item in obj.values():
-                reject_float(item)
+                canonicalize(key)
+                keys.append(key)
+            # RFC 8785-compatible member order for the S3 contract is the
+            # lexicographic order of the UTF-8 byte sequences, not Python's
+            # Unicode code-point order.
+            return {key: canonicalize(obj[key]) for key in sorted(keys, key=lambda item: item.encode("utf-8"))}
         elif isinstance(obj, (list, tuple)):
-            for item in obj:
-                reject_float(item)
+            return [canonicalize(item) for item in obj]
         return obj
 
-    reject_float(value)
+    value = canonicalize(value)
     return json.dumps(
         value,
         ensure_ascii=False,
         separators=(",", ":"),
-        sort_keys=True,
+        sort_keys=False,
         allow_nan=False,
     ).encode("utf-8")
 
@@ -238,7 +240,7 @@ class ReconciliationRecord:
 
     def verify(self) -> bool:
         return self.record_sha256 == digest(
-            "CORTEX-S3\x00RECONCILIATION-RECORD\x00V1\x00", self.without_digest()
+            "CORTEX-S3\x00RECONCILIATION\x00V1\x00", self.without_digest()
         )
 
 
@@ -347,7 +349,12 @@ class ReconciliationStore:
         try:
             os.fchmod(fd, 0o600)
             payload = canonical_json(_json_value(record))
-            os.write(fd, payload)
+            view = memoryview(payload)
+            while view:
+                written = os.write(fd, view)
+                if written <= 0:
+                    raise OSError("short reconciliation write")
+                view = view[written:]
             os.fsync(fd)
             os.close(fd)
             fd = -1
@@ -390,7 +397,7 @@ class ReconciliationStore:
             "postcondition_sha256": None,
             "previous_record_sha256": previous_record_sha256,
         }
-        data["record_sha256"] = digest("CORTEX-S3\x00RECONCILIATION-RECORD\x00V1\x00", data)
+        data["record_sha256"] = digest("CORTEX-S3\x00RECONCILIATION\x00V1\x00", data)
         record = _record_from_dict(data)
         self._write(record)
         return record
@@ -417,10 +424,10 @@ class ReconciliationStore:
             "state": ReconciliationState.RECONCILED,
             "postcondition": postcondition,
             "reconciliation_probe_sha256": current.reconciliation_probe_sha256,
-            "postcondition_sha256": digest("CORTEX-S3\x00POSTCONDITION\x00V1\x00", postcondition),
+            "postcondition_sha256": digest("CORTEX-S3\x00RECONCILIATION-POSTCONDITION\x00V1\x00", postcondition),
             "previous_record_sha256": current.record_sha256,
         }
-        data["record_sha256"] = digest("CORTEX-S3\x00RECONCILIATION-RECORD\x00V1\x00", data)
+        data["record_sha256"] = digest("CORTEX-S3\x00RECONCILIATION\x00V1\x00", data)
         record = _record_from_dict(data)
         self._write(record)
         return record

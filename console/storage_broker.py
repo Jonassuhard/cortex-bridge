@@ -476,10 +476,6 @@ def _assert_lock(lock_set: Any, home: Path, install_mode: str, storage_mode: str
         raise RuntimeError("storage lock set is required")
     method = getattr(lock_set, "assert_active", None)
     if method is None:
-        # Legacy tuple support is intentionally read-only and only exists for
-        # compatibility with the pre-S3 tests.  New callers must use the set.
-        if isinstance(lock_set, tuple) and len(lock_set) == 2:
-            return
         raise RuntimeError("invalid storage lock set")
     try:
         method(home=Path(home), required_install_mode=install_mode, required_storage_mode=storage_mode)
@@ -629,7 +625,12 @@ class StorageWorkflowLedger:
         data = b"".join(canonical_json(record) + b"\n" for record in records)
         fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         try:
-            os.write(fd, data)
+            view = memoryview(data)
+            while view:
+                written = os.write(fd, view)
+                if written <= 0:
+                    raise OSError("short ledger write")
+                view = view[written:]
             os.fsync(fd)
         finally:
             os.close(fd)
@@ -653,7 +654,8 @@ class StorageWorkflowLedger:
         boot: BootIdentity, recovery: _RecoveryAuthority, *,
         effect_budget_ns: int, cleanup_budget_ns: int,
     ) -> StorageWorkflowRecord:
-        _assert_lock(lock_set, self.home, "shared", "exclusive")
+        required_storage_mode = "shared" if isinstance(request, _BrokerProbeRequest) else "exclusive"
+        _assert_lock(lock_set, self.home, "shared", required_storage_mode)
         _validate_budgets(effect_budget_ns, cleanup_budget_ns)
         records = list(self.load_all_locked(lock_set))
         generation = max((r.generation for r in records), default=0) + 1
@@ -702,8 +704,10 @@ class StorageWorkflowLedger:
         broker_sid: int, broker_pgid: int, owner_connection_nonce: str,
         owner_peer_audit_sha256: str,
     ) -> StorageWorkflowRecord:
-        _assert_lock(lock_set, self.home, "shared", "exclusive")
+        _assert_lock(lock_set, self.home, "shared", "shared")
         record = _find_record(self.load_all_locked(lock_set), workflow_id, generation)
+        if record.operation != "probe-mounted-image":
+            _assert_lock(lock_set, self.home, "shared", "exclusive")
         if record.state != LedgerState.OPEN_PREPARED:
             raise StorageBrokerError("INVALID_STATE")
         command = command_sha256(
@@ -745,11 +749,24 @@ class StorageWorkflowLedger:
         return self._replace(lock_set, _record_from_dict(data))
 
     def close_from_ready_locked(self, lock_set: Any, result: ClosedReadyResult) -> StorageWorkflowRecord:
-        _assert_lock(lock_set, self.home, "shared", "exclusive")
+        _assert_lock(lock_set, self.home, "shared", "shared")
         result.verify_hashes()
         record = _find_record(self.load_all_locked(lock_set), result.workflow_id, result.generation)
+        if record.operation != "probe-mounted-image":
+            _assert_lock(lock_set, self.home, "shared", "exclusive")
         if record.state != LedgerState.OPEN_RUNNING:
             raise StorageBrokerError("INVALID_STATE")
+        if result.command_sha256 != record.command_sha256:
+            raise StorageBrokerError("PROTOCOL_ERROR")
+        expected_reconciliation = record.operation in {
+            "create", "mount", "detach", "delete-disposable-item"
+        }
+        if result.reconciliation_required != expected_reconciliation:
+            raise StorageBrokerError("PROTOCOL_ERROR")
+        if result.outcome == "success" and result.code != "OK":
+            raise StorageBrokerError("PROTOCOL_ERROR")
+        if result.outcome == "unresolved":
+            raise StorageBrokerError("PROTOCOL_ERROR")
         state = LedgerState.CLOSED_SUCCESS if result.outcome == "success" else LedgerState.CLOSED_FAILURE
         data = _as_json(record)
         data.update({
@@ -817,8 +834,18 @@ class StorageBrokerClient:
             else:
                 ready = _success_result(running, response)
             return self.ledger.close_from_ready_locked(lock_set, ready)
-        except StorageBrokerError:
+        except StorageBrokerError as exc:
+            if exc.code in {"PROTOCOL_ERROR", "BROKER_LOST"}:
+                self.ledger.mark_unresolved_locked(
+                    lock_set, running.workflow_id, running.generation,
+                    UnresolvedReason.PROTOCOL_ERROR if exc.code == "PROTOCOL_ERROR" else UnresolvedReason.BROKER_LOST,
+                )
             raise
+        except ValueError as exc:
+            self.ledger.mark_unresolved_locked(
+                lock_set, running.workflow_id, running.generation, UnresolvedReason.PROTOCOL_ERROR
+            )
+            raise StorageBrokerError("PROTOCOL_ERROR") from exc
         except Exception as exc:
             self.ledger.mark_unresolved_locked(lock_set, running.workflow_id, running.generation, UnresolvedReason.BROKER_LOST)
             raise StorageBrokerError("BROKER_LOST") from exc
@@ -833,14 +860,47 @@ class StorageBrokerClient:
         # The private probe is deliberately not routed through the public
         # operation constructor.  A test transport may return a proof arm.
         record = self._run_probe_record(lock_set, request, effect_budget_ns)
-        response = self.transport(request, record)
-        if isinstance(response, dict) and response.get("response_kind") == "mounted_image_proof":
-            proof = response["response"]
-        elif isinstance(response, MountedImageProof):
-            proof = response
-        else:
-            raise StorageBrokerError("PROTOCOL_ERROR")
-        return proof
+        running = self.ledger.mark_running_before_start_locked(
+            lock_set, record.workflow_id, record.generation, broker_pid=os.getpid(),
+            broker_sid=os.getsid(0), broker_pgid=os.getpgrp(),
+            owner_connection_nonce=secrets.token_hex(16),
+            owner_peer_audit_sha256=hashlib.sha256(
+                canonical_json({"pid": os.getpid(), "uid": os.getuid()})
+            ).hexdigest(),
+        )
+        try:
+            response = self.transport(request, running)
+            if isinstance(response, dict) and response.get("response_kind") == "mounted_image_proof":
+                proof = response.get("response")
+            elif isinstance(response, MountedImageProof):
+                proof = response
+            else:
+                raise StorageBrokerError("PROTOCOL_ERROR")
+            if not isinstance(proof, MountedImageProof):
+                raise StorageBrokerError("PROTOCOL_ERROR")
+            _validate_mounted_image_proof(request, proof)
+            ready = _success_result(
+                running,
+                {"response_kind": "mounted_image_proof", "response": proof},
+            )
+            self.ledger.close_from_ready_locked(lock_set, ready)
+            return proof
+        except StorageBrokerError as exc:
+            self.ledger.mark_unresolved_locked(
+                lock_set, running.workflow_id, running.generation,
+                UnresolvedReason.PROTOCOL_ERROR if exc.code == "PROTOCOL_ERROR" else UnresolvedReason.BROKER_LOST,
+            )
+            raise
+        except ValueError as exc:
+            self.ledger.mark_unresolved_locked(
+                lock_set, running.workflow_id, running.generation, UnresolvedReason.PROTOCOL_ERROR
+            )
+            raise StorageBrokerError("PROTOCOL_ERROR") from exc
+        except Exception as exc:
+            self.ledger.mark_unresolved_locked(
+                lock_set, running.workflow_id, running.generation, UnresolvedReason.BROKER_LOST
+            )
+            raise StorageBrokerError("BROKER_LOST") from exc
 
     def _run_probe_record(self, lock_set: Any, request: _BrokerProbeRequest, effect_budget_ns: int) -> StorageWorkflowRecord:
         _validate_budgets(effect_budget_ns, 0)
@@ -905,7 +965,12 @@ def _new_recovery_authority(home: Path) -> _RecoveryAuthority:
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_EXCL, 0o600)
     try:
-        os.write(fd, root)
+        view = memoryview(root)
+        while view:
+            written = os.write(fd, view)
+            if written <= 0:
+                raise OSError("short recovery-authority write")
+            view = view[written:]
         os.fsync(fd)
         details = os.fstat(fd)
     except Exception:
@@ -980,6 +1045,28 @@ def _success_result(record: StorageWorkflowRecord, response: BrokerTerminalRespo
     closed_payload["result_sha256"] = result_sha
     closed_sha = digest("CORTEX-S3\x00CLOSED-READY\x00V1\x00", closed_payload)
     return ClosedReadyResult(record.workflow_id, record.generation, "success", "OK", response, record.command_sha256 or "", result_sha, closed_sha, True, True, True, bool(payload["reconciliation_required"]))
+
+
+def _validate_mounted_image_proof(request: _BrokerProbeRequest, proof: MountedImageProof) -> None:
+    if proof.mount_path != request.mount_path:
+        raise StorageBrokerError("PROTOCOL_ERROR")
+    if (proof.image_dev_u32, proof.image_ino) != request.image_identity:
+        raise StorageBrokerError("PROTOCOL_ERROR")
+    if (
+        proof.mount_dev_u32,
+        proof.mount_ino,
+        proof.mount_fsid0_u32,
+        proof.mount_fsid1_u32,
+    ) != request.mount_identity:
+        raise StorageBrokerError("PROTOCOL_ERROR")
+    if proof.volume_name != request.expected_volume_name:
+        raise StorageBrokerError("PROTOCOL_ERROR")
+    if proof.volume_uuid != request.expected_volume_uuid or proof.encryption_uuid != request.expected_encryption_uuid:
+        raise StorageBrokerError("PROTOCOL_ERROR")
+    if proof.mapping_count != 1 or proof.filesystem_type != "apfs" or not proof.writable or not proof.encrypted:
+        raise StorageBrokerError("PROTOCOL_ERROR")
+    if proof.request_sha256 != request_sha256(request):
+        raise StorageBrokerError("PROTOCOL_ERROR")
 
 
 __all__ = [
