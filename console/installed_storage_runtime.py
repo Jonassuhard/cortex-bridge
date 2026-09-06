@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Self
+from uuid import UUID
 
 from native_helpers import attest_broker_executable, attest_mount_probe, load_native_helper_registry
 from storage_broker import (
@@ -19,6 +21,7 @@ from storage_broker import (
 )
 from storage_contract import StorageContract, probe_mount_fd
 from storage_lifecycle import StorageLifecycle, StoragePaths
+from storage_reconciliation import digest
 from storage_result import CheckResult, OperationResult
 
 
@@ -49,14 +52,41 @@ class InstalledStorageRuntime:
         generation_record_path = generation_dir / "generation-record.json"
         manifest_path = generation_dir / "owned-manifest.json"
         try:
-            generation = json.loads(generation_record_path.read_text(encoding="utf-8"))
-            load_native_helper_registry(manifest_path)
-        except (OSError, json.JSONDecodeError, InstalledRuntimeError) as exc:
+            if generation_record_path.is_symlink() or manifest_path.is_symlink():
+                raise InstalledRuntimeError("installed generation contains a symlink")
+            generation_bytes = generation_record_path.read_bytes()
+            manifest_bytes = manifest_path.read_bytes()
+            generation = json.loads(generation_bytes.decode("utf-8"))
+            manifest = load_native_helper_registry(manifest_path)
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, InstalledRuntimeError) as exc:
             raise InstalledRuntimeError("installed generation is missing or invalid") from exc
         if not isinstance(generation, dict) or generation.get("schema_version") != 1:
             raise InstalledRuntimeError("installed generation schema is invalid")
-        if str(generation.get("generation_id")) != str(bootstrap_handle.generation_id):
+        try:
+            generation_id = UUID(str(generation.get("generation_id")))
+        except (ValueError, AttributeError, TypeError) as exc:
+            raise InstalledRuntimeError("installed generation id is invalid") from exc
+        if generation_id != bootstrap_handle.generation_id:
             raise InstalledRuntimeError("installed generation selector mismatch")
+        manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
+        if manifest_sha256 != bootstrap_handle.owned_manifest_sha256:
+            raise InstalledRuntimeError("installed manifest digest mismatch")
+        if not isinstance(manifest, dict) or manifest.get("schema_version") != 1:
+            raise InstalledRuntimeError("installed manifest schema is invalid")
+        generation_manifest_sha256 = generation.get("owned_manifest_sha256")
+        if generation_manifest_sha256 != manifest_sha256:
+            raise InstalledRuntimeError("installed generation manifest binding mismatch")
+        generation_record_sha256 = generation.get("generation_record_sha256")
+        if generation_record_sha256 != bootstrap_handle.generation_record_sha256:
+            raise InstalledRuntimeError("installed generation digest mismatch")
+        generation_without_digest = dict(generation)
+        generation_without_digest.pop("generation_record_sha256", None)
+        expected_generation_sha256 = digest(
+            "CORTEX-S3\x00INSTALLED-GENERATION\x00V1\x00",
+            generation_without_digest,
+        )
+        if generation_record_sha256 != expected_generation_sha256:
+            raise InstalledRuntimeError("installed generation digest is invalid")
         broker_path = generation_dir / "app" / "bin" / "cortex-storage-broker"
         probe_path = generation_dir / "app" / "bin" / "storage-mount-probe"
         broker_executable = attest_broker_executable(broker_path)
