@@ -35,9 +35,11 @@
       },
       "full_gate": {
         "status": "FAIL",
-        "runs": 987,
+        "runs": 990,
         "failures": 6,
         "errors": 1,
+        "python_3_14": {"runs": 990, "failures": 6, "errors": 1},
+        "python_3_12": {"runs": 990, "failures": 6, "errors": 1},
         "evidence_artifact": "docs/verification/v0.5.4-s3-focused-gate-2026-09-06.md"
       },
       "review_id": null,
@@ -79,19 +81,19 @@
           "review_id": null,
           "review_verdict": null,
           "interface_signatures": {
-            "InstalledStorageRuntime.from_installed_home_locked": null,
+            "InstalledStorageRuntime.from_installed_home_locked": "implemented-fail-closed",
             "launch_managed_runtime": null,
-            "StorageContract.assert_runtime_ready_locked": null,
-            "StorageContract.open_locked": null,
+            "StorageContract.assert_runtime_ready_locked": "implemented-fail-closed",
+            "StorageContract.open_locked": "implemented-fail-closed",
             "StorageContract.open_workspace_locked": null,
-            "WorkspaceHandle.duplicate_workspace_fd": null,
-            "WorkspaceHandle.revalidate": null
+            "WorkspaceHandle.duplicate_workspace_fd": "existing-contract",
+            "WorkspaceHandle.revalidate": "existing-contract"
           },
           "blockers": [
-            "InstalledStorageRuntime does not yet wire lifecycle, contract, or descriptor probe instances.",
-            "launch_managed_runtime remains explicitly unwired and fails closed.",
+            "InstalledStorageRuntime now composes lifecycle, contract, broker, and descriptor-probe instances, but no published immutable generation has been exercised.",
+            "startup_lease.launch_managed_runtime remains explicitly unwired and fails closed; the installed wrapper only composes the runtime.",
             "Stable bootstrap, generation publication, native mount probe, and real macOS vault proof are not complete.",
-            "The full test-all gate is not green: six descendant-group cleanup failures and one related supervision error remain."
+            "The full test-all gate is not green on either Python 3.14 or Python 3.12: six descendant-group cleanup failures and one related supervision error remain."
           ]
         }
       },

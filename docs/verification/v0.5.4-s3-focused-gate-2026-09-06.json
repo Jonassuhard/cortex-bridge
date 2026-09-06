@@ -50,11 +50,25 @@
       "id": "full-hermetic-test-all",
       "command": "CORTEX_HOME=temporary-home CORTEX_RELEASE_ALLOW_DIRTY=1 bash scripts/test-all.sh",
       "status": "FAIL",
-      "runs": 987,
+      "runs": 990,
       "failures": 6,
       "errors": 1,
+      "python": "3.14",
       "blockers": [
         "Existing macOS process-supervision integration leaves descendant process groups observable after cleanup in six cases.",
+        "One related supervision error remains in the same harness."
+      ]
+    },
+    {
+      "id": "full-hermetic-test-all-python-3-12",
+      "command": "CORTEX_HOME=temporary-home CORTEX_RELEASE_ALLOW_DIRTY=1 PYTHON=python3.12 bash scripts/test-all.sh",
+      "status": "FAIL",
+      "runs": 990,
+      "failures": 6,
+      "errors": 1,
+      "python": "3.12",
+      "blockers": [
+        "The same descendant process groups remain observable after cleanup in the same six macOS supervision cases.",
         "One related supervision error remains in the same harness."
       ]
     }
