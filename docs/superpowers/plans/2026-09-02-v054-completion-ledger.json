@@ -141,7 +141,7 @@
         "generation_record_sha256": null,
         "selector_relative_path": "current-generation.json",
         "selector_sha256": null,
-        "status": null
+        "status": "COMPOSITION_IMPLEMENTED_NOT_PUBLISHED"
       },
       "stable_storage_bootstrap": {
         "relative_path": "bootstrap/cortex-launch",
@@ -173,7 +173,7 @@
           "READY",
           "CLOSED"
         ],
-        "status": null
+        "status": "HASH_CHAIN_WRITER_IMPLEMENTED_AND_FOCUSED_TESTED"
       }
     },
     "E": {
