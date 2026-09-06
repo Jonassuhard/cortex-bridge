@@ -1,7 +1,7 @@
 {
   "schema_version": 3,
   "planning_commit": null,
-  "documentation_state": "R17_UNCOMMITTED_AWAITING_REVIEW",
+  "documentation_state": "R17_COMMITTED_AWAITING_REVIEW",
   "hash_model": {
     "master_contains_own_hash": false,
     "master_contains_ledger_hash": false,
