@@ -498,6 +498,8 @@ def _require_managed_start_context(home: Path, storage_status: StorageStatus) ->
     try:
         record = _read_runtime_lifespan_record(Path(home))
     except StartupLeaseError as exc:
+        if str(exc) == "LIFESPAN_RECORD_INVALID":
+            raise StartupLeaseError("MANAGED_START_RECORD_INVALID") from exc
         raise StartupLeaseError("MANAGED_START_REQUIRED") from exc
     if record is None:
         raise StartupLeaseError("MANAGED_START_REQUIRED")
