@@ -24,13 +24,28 @@
   },
   "phases": {
     "S": {
-      "base_commit": null,
-      "implementation_commit": null,
-      "focused_tests": null,
-      "full_gate": null,
+      "base_commit": "d9f2398fc093991cb3558749009f2a4253096bec",
+      "implementation_commit": "90f66df65fe02d625401a4a15bca024b84c061dd",
+      "focused_tests": {
+        "status": "PASS",
+        "python_3_14": {"runs": 46, "failures": 0, "errors": 0},
+        "python_3_12": {"runs": 46, "failures": 0, "errors": 0},
+        "link_checker": "PASS",
+        "swift_compile": "PASS"
+      },
+      "full_gate": {
+        "status": "FAIL",
+        "runs": 987,
+        "failures": 6,
+        "errors": 1,
+        "evidence_artifact": "docs/verification/v0.5.4-s3-focused-gate-2026-09-06.md"
+      },
       "review_id": null,
       "review_verdict": null,
-      "blockers": null,
+      "blockers": [
+        "Native persistent broker is still a protocol shell; no real disk effect was executed.",
+        "Managed runtime startup and installed generation integration remain incomplete."
+      ],
       "subphases": {
         "S3_FAIL_frozen": {
           "status": "FAIL_frozen",
@@ -39,20 +54,23 @@
           "plan_sha256": "6ec2207fc760b556f0e43cd8eef3eb9d25d12557b69f7e47aa6545e2815435e6"
         },
         "S3_corrective": {
-          "status": "R17_PASS_RECORDED",
+          "status": "IMPLEMENTED_WITH_FOCUSED_GATE",
           "design_sha256": "6fbdd97785391bb94a3314be8486d9c3915f2e1719bbb39f866727bd22daa7de",
           "plan_sha256": "be2141907c09c25e4d674c02af96b9f74f9d0d6fbc021ac819e8c5b9705ca227",
-          "implementation_commit": null,
+          "implementation_commit": "90f66df65fe02d625401a4a15bca024b84c061dd",
           "review_id": "r17-s3-ask-codex-20260906T134929Z",
           "reviewed_design_sha256": "6fbdd97785391bb94a3314be8486d9c3915f2e1719bbb39f866727bd22daa7de",
           "reviewed_plan_sha256": "be2141907c09c25e4d674c02af96b9f74f9d0d6fbc021ac819e8c5b9705ca227",
           "review_verdict": "PASS",
           "review_artifact": "docs/verification/r17-s3-contract-review-2026-09-06.md",
           "review_artifact_sha256": "2c4a408c82dd72cc762781073e7f7e8b45568ebbf8e075704a85a024486c113a",
-          "blockers": []
+          "blockers": [
+            "Native persistent broker remains a protocol shell; no real hdiutil/diskutil effect was executed.",
+            "Full macOS suite still has descendant-group cleanup failures in the existing process-supervision harness."
+          ]
         },
         "S4": {
-          "status": "READY_FOR_IMPLEMENTATION",
+          "status": "PARTIAL_IMPLEMENTATION",
           "depends_on_review_id": "r17-s3-ask-codex-20260906T134929Z",
           "base_commit": "d9f2398fc093991cb3558749009f2a4253096bec",
           "terminal_commit": null,
@@ -69,7 +87,12 @@
             "WorkspaceHandle.duplicate_workspace_fd": null,
             "WorkspaceHandle.revalidate": null
           },
-          "blockers": []
+          "blockers": [
+            "InstalledStorageRuntime does not yet wire lifecycle, contract, or descriptor probe instances.",
+            "launch_managed_runtime remains explicitly unwired and fails closed.",
+            "Stable bootstrap, generation publication, native mount probe, and real macOS vault proof are not complete.",
+            "The full test-all gate is not green: six descendant-group cleanup failures and one related supervision error remain."
+          ]
         }
       },
       "native_helper_registry": {

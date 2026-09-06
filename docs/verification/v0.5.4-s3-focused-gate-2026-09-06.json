@@ -1,0 +1,71 @@
+{
+  "schemaVersion": 1,
+  "release": "0.5.4",
+  "verificationDate": "2026-09-06",
+  "sourceCommit": "90f66df65fe02d625401a4a15bca024b84c061dd",
+  "scope": "S3 storage contract and lifecycle primitives; hermetic local checks only",
+  "privacy": {
+    "personalDataRecorded": false,
+    "absolutePathsRecorded": false,
+    "secretsRecorded": false
+  },
+  "checks": [
+    {
+      "id": "focused-python-3-14",
+      "command": "PYTHONPATH=console python3.14 -m unittest -q storage broker/reconciliation/transition/contract/lifecycle/workspace/startup/native-helper/installed-runtime/lock suites",
+      "status": "PASS",
+      "runs": 46,
+      "failures": 0,
+      "errors": 0
+    },
+    {
+      "id": "focused-python-3-12",
+      "command": "PYTHONPATH=console python3.12 -m unittest -q storage broker/reconciliation/transition/contract/lifecycle/workspace/startup/native-helper/installed-runtime/lock suites",
+      "status": "PASS",
+      "runs": 46,
+      "failures": 0,
+      "errors": 0
+    },
+    {
+      "id": "documentation-links",
+      "command": "bash scripts/verify-links.sh",
+      "status": "PASS",
+      "checked": 124,
+      "externalChecked": 55,
+      "externalSkipped": 0
+    },
+    {
+      "id": "swift-storage-broker-compile",
+      "command": "xcrun swiftc native/macos/disk_image_keychain.swift -o temporary-check",
+      "status": "PASS",
+      "warnings": ["existing Keychain API deprecation warning"]
+    },
+    {
+      "id": "swift-storage-bootstrap-compile",
+      "command": "xcrun swiftc native/macos/storage_bootstrap.swift -o temporary-check",
+      "status": "PASS",
+      "warnings": []
+    },
+    {
+      "id": "full-hermetic-test-all",
+      "command": "CORTEX_HOME=temporary-home CORTEX_RELEASE_ALLOW_DIRTY=1 bash scripts/test-all.sh",
+      "status": "FAIL",
+      "runs": 987,
+      "failures": 6,
+      "errors": 1,
+      "blockers": [
+        "Existing macOS process-supervision integration leaves descendant process groups observable after cleanup in six cases.",
+        "One related supervision error remains in the same harness."
+      ]
+    }
+  ],
+  "unexecuted": [
+    "real APFS sparse-bundle creation and mount",
+    "real Keychain effect",
+    "real hdiutil/diskutil effect",
+    "installed generation publication and selector",
+    "managed server startup lease integration",
+    "signed-in ChatGPT or Chrome live effects"
+  ],
+  "verdict": "UNCLEAR"
+}
