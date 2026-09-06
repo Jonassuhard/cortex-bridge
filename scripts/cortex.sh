@@ -1800,7 +1800,12 @@ case "$COMMAND" in
 
   go)
     # Lancement complet en une commande : serveur + Chrome + console + guidage.
-    bash "$ROOT/scripts/cortex.sh" start || exit 1
+    if bash "$ROOT/scripts/cortex.sh" start; then
+      :
+    else
+      start_status=$?
+      exit "$start_status"
+    fi
     CONSOLE_URL="http://127.0.0.1:$PORT/"
 
     # Profil Chrome qui porte l'extension Cortex (défaut : dernier profil actif).

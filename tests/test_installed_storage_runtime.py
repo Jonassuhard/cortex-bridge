@@ -12,6 +12,7 @@ from unittest import mock
 
 from installed_storage_runtime import InstalledRuntimeError, InstalledStorageRuntime
 from storage_broker import AttestedBootstrapHandle
+from storage_reconciliation import digest
 
 
 class FakeLocks:
@@ -113,6 +114,101 @@ class InstalledRuntimeTests(unittest.TestCase):
                 with self.assertRaises(InstalledRuntimeError):
                     InstalledStorageRuntime.from_installed_home_locked(home, FakeLocks(home), handle)
             broker_probe.assert_not_called()
+
+    def test_factory_rejects_selector_digest_mismatch_before_attestation(self):
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td) / "home"
+            home.mkdir(mode=0o700)
+            generation_id = uuid4()
+            generation_dir = home / "installed-generations" / str(generation_id)
+            generation_dir.mkdir(mode=0o700, parents=True)
+
+            manifest_bytes = b'{"native_helpers":{},"schema_version":1}'
+            manifest_path = generation_dir / "owned-manifest.json"
+            manifest_path.write_bytes(manifest_bytes)
+            manifest_path.chmod(0o600)
+            generation_without_digest = {
+                "schema_version": 1,
+                "generation_id": str(generation_id),
+                "owned_manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+            }
+            record_digest = digest(
+                "CORTEX-S3\x00INSTALLED-GENERATION\x00V1\x00",
+                generation_without_digest,
+            )
+            generation_path = generation_dir / "generation-record.json"
+            generation_path.write_text(
+                json.dumps(
+                    {**generation_without_digest, "generation_record_sha256": record_digest},
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+            generation_path.chmod(0o600)
+
+            selector_path = home / "current-generation.json"
+            selector_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "generation_id": str(generation_id),
+                        "generation_record_sha256": record_digest,
+                    },
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+            selector_path.chmod(0o600)
+            install_path = home / ".install.lock"
+            install_path.write_bytes(b"lock")
+            install_path.chmod(0o600)
+            interpreter_path = generation_dir / "app-python"
+            interpreter_path.write_bytes(b"python")
+            interpreter_path.chmod(0o700)
+
+            fds = [
+                os.open(install_path, os.O_RDWR),
+                os.open(selector_path, os.O_RDONLY),
+                os.open(generation_dir, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)),
+                os.open(generation_path, os.O_RDONLY),
+                os.open(manifest_path, os.O_RDONLY),
+                os.open(interpreter_path, os.O_RDONLY),
+            ]
+            def close_fds():
+                for fd in fds:
+                    try:
+                        os.close(fd)
+                    except OSError:
+                        pass
+            self.addCleanup(close_fds)
+
+            def identity(fd):
+                details = os.fstat(fd)
+                return details.st_dev & 0xFFFFFFFF, details.st_ino, details.st_uid
+
+            install_dev, install_ino, install_uid = identity(fds[0])
+            handle = AttestedBootstrapHandle(
+                home=home,
+                install_lock_fd=fds[0], install_lock_dev_u32=install_dev,
+                install_lock_ino=install_ino, install_lock_uid=install_uid,
+                install_lock_mode=0o600, selector_fd=fds[1],
+                generation_dir_fd=fds[2], generation_record_fd=fds[3],
+                owned_manifest_fd=fds[4], interpreter_fd=fds[5],
+                generation_id=generation_id, selector_sha256="f" * 64,
+                generation_record_sha256=record_digest,
+                owned_manifest_sha256=hashlib.sha256(manifest_bytes).hexdigest(),
+            )
+            self.addCleanup(handle.close)
+
+            with mock.patch(
+                "installed_storage_runtime.attest_broker_executable",
+                side_effect=AssertionError("broker attestation must not run"),
+            ) as broker_attest:
+                with self.assertRaisesRegex(InstalledRuntimeError, "selector"):
+                    InstalledStorageRuntime.from_installed_home_locked(
+                        home, FakeLocks(home), handle
+                    )
+            broker_attest.assert_not_called()
 
 
 if __name__ == "__main__":

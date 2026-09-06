@@ -2659,6 +2659,35 @@ class InstallerTest(unittest.TestCase):
         self.assertEqual(extension["path"], str((ROOT / "chrome-extension").resolve()))
         self.assertIsInstance(payload["checks"], list)
 
+    def test_doctor_reports_missing_required_external_storage(self):
+        self.cortex_home.mkdir(parents=True)
+        (self.cortex_home / "storage-required").write_text("required\n", encoding="utf-8")
+        bootstrap = self.cortex_home / "storage-bootstrap.json"
+        bootstrap.write_text(
+            json.dumps(
+                {
+                    "encrypted_image_path": str(self.root / "archive.sparsebundle"),
+                    "mount_path": str(self.root / "missing-mount"),
+                    "schema_version": 1,
+                    "storage_root": str(self.root / "missing-mount" / "CORTEX_BRIDGE"),
+                    "volume_uuid": "FE08F69D-47E5-48D3-B7EF-30BCA7822926",
+                }
+            ),
+            encoding="utf-8",
+        )
+        bootstrap.chmod(0o600)
+
+        result = self.run_script("cortex.sh", "doctor", "--json")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        storage = next(check for check in payload["checks"] if check["id"] == "external_storage")
+        self.assertFalse(payload["ok"])
+        self.assertTrue(storage["required"])
+        self.assertEqual(storage["status"], "fail")
+        self.assertEqual(storage["detail"], "STORAGE_VOLUME_MISSING")
+        self.assertIn("monte", storage["hint"].lower())
+
     def test_doctor_uses_the_effective_port_in_its_json_guidance(self):
         result = self.run_script(
             "cortex.sh",

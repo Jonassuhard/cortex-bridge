@@ -30,8 +30,10 @@ class StorageTransitionTests(unittest.TestCase):
         for path in self.home.iterdir():
             path.chmod(0o600)
         self.target = StorageProjection(
-            default_workspace="/Volumes/Cortex/20_WORKSPACES",
-            browser_profile_root="/Volumes/Cortex/50_CACHE_REBUILDABLE/browser-profiles",
+            # Use a neutral absolute fixture path.  The public-privacy gate
+            # intentionally rejects personal-location paths even in tests.
+            default_workspace="/mnt/cortex/20_WORKSPACES",
+            browser_profile_root="/mnt/cortex/50_CACHE_REBUILDABLE/browser-profiles",
             browser_transport="chrome_extension",
         )
 

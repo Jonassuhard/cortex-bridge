@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 import ctypes
 import fcntl
 import hashlib
+import io
 import json
 import os
 import secrets
@@ -22,6 +23,8 @@ from cortex_paths import build_paths
 from lifecycle_lock import LIFECYCLE_LOCK_MARKER, ensure_private_directory, open_lifecycle_lock
 from process_ownership import classify, load_record
 from storage_lock import ordered_storage_locks
+from storage_guard import configured_bootstrap as configured_storage_bootstrap
+from storage_guard import main as storage_guard_main
 from version import current_version
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -2865,6 +2868,88 @@ def _runtime_dependencies_doctor_check() -> dict[str, Any]:
     return check
 
 
+_STORAGE_DOCTOR_HINTS = {
+    "STORAGE_BOOTSTRAP_MISSING": (
+        "Restaure la configuration du volume chiffré, puis relance doctor."
+    ),
+    "STORAGE_BOOTSTRAP_INVALID": (
+        "Régénère la configuration avec configure-external-storage.py après vérification du volume."
+    ),
+    "STORAGE_VOLUME_MISSING": (
+        "Monte et déverrouille l'image sparsebundle configurée, puis relance Cortex. "
+        "Cortex ne monte jamais un disque et ne demande jamais son mot de passe."
+    ),
+    "STORAGE_UUID_MISMATCH": (
+        "Éjecte le volume substitué et monte uniquement le volume dont l'UUID est configuré."
+    ),
+    "STORAGE_FILESYSTEM_UNSAFE": (
+        "Utilise le volume APFS chiffré prévu par la configuration."
+    ),
+    "STORAGE_VOLUME_READ_ONLY": (
+        "Rends le volume APFS inscriptible avant de relancer Cortex."
+    ),
+    "STORAGE_ENCRYPTION_UNVERIFIED": (
+        "Monte directement l'image sparsebundle configurée afin que macOS puisse vérifier son origine."
+    ),
+    "STORAGE_ROOT_UNSAFE": (
+        "Restaure le dossier de stockage réel, privé et situé dans le volume vérifié."
+    ),
+}
+
+
+def _external_storage_doctor_check(home: Path) -> dict[str, Any]:
+    """Expose the fail-closed storage guard in the user-facing doctor output."""
+    check: dict[str, Any] = {
+        "id": "external_storage",
+        "label": "Stockage externe chiffré",
+        "status": "pass",
+        "required": False,
+        "detail": "not configured",
+        "hint": "",
+    }
+    bootstrap = configured_storage_bootstrap(home)
+    if bootstrap is None:
+        return check
+
+    check["required"] = True
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    try:
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            status = storage_guard_main(
+                ["--bootstrap", str(bootstrap), "--json"]
+            )
+    except Exception as error:  # pragma: no cover - defensive doctor boundary
+        status = 2
+        stderr.write(f"STORAGE_GUARD_ERROR: {error}")
+
+    if status == 0:
+        try:
+            payload = json.loads(stdout.getvalue().strip())
+        except (TypeError, json.JSONDecodeError):
+            payload = {}
+        if payload.get("status") == "ready":
+            check["status"] = "pass"
+            check["detail"] = "ready"
+            return check
+        marker = "STORAGE_GUARD_OUTPUT_INVALID"
+    else:
+        marker = "STORAGE_GUARD_FAILED"
+        for line in stderr.getvalue().splitlines():
+            candidate = line.split(":", 1)[0].strip()
+            if candidate.startswith("STORAGE_"):
+                marker = candidate
+                break
+
+    check["status"] = "fail"
+    check["detail"] = marker
+    check["hint"] = _STORAGE_DOCTOR_HINTS.get(
+        marker,
+        "Consulte docs/troubleshooting.md, corrige le stockage vérifié, puis relance doctor.",
+    )
+    return check
+
+
 def doctor() -> dict[str, Any]:
     paths = build_paths()
     record = paths.pids / "console.json"
@@ -2913,6 +2998,7 @@ def doctor() -> dict[str, Any]:
             "hint": "",
         },
         _runtime_dependencies_doctor_check(),
+        _external_storage_doctor_check(paths.home),
         _swift_toolchain_doctor_check(),
         {
             "id": "chrome_extension",
