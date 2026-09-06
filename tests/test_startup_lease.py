@@ -7,8 +7,10 @@ import time
 import unittest
 from pathlib import Path
 
+import startup_lease
 from startup_lease import (
     ManagedProcessIdentity,
+    ManagedStartContext,
     StartupLeaseError,
     child_consume_startup_lease,
     parent_release_and_wait_ack,
@@ -18,6 +20,22 @@ from storage_broker import BootIdentity
 
 
 class StartupLeaseTests(unittest.TestCase):
+    def _writer(self):
+        writer = getattr(startup_lease, "write_runtime_lifespan_record", None)
+        self.assertTrue(callable(writer), "runtime lifespan writer is missing")
+        return writer
+
+    @staticmethod
+    def _context():
+        return ManagedStartContext(
+            lease_id="11111111-1111-4111-8111-111111111111",
+            identity=ManagedProcessIdentity(os.getpid(), os.getpgrp(), "test-start"),
+            storage_transaction_id=None,
+            boot=BootIdentity(1, 2),
+            generation_record_sha256="a" * 64,
+            receipt_sha256="b" * 64,
+        )
+
     def test_one_shot_parent_child_handshake_and_replay_rejection(self):
         with tempfile.TemporaryDirectory() as td:
             pids = Path(td) / "pids"
@@ -68,6 +86,48 @@ class StartupLeaseTests(unittest.TestCase):
                 child_consume_startup_lease(control_fd=right.detach(), pids_fd=pids_fd, expected_transaction_id=None)
             left.close()
             os.close(pids_fd)
+
+    def test_runtime_lifespan_records_follow_starting_ready_closed_chain(self):
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td) / "home"
+            home.mkdir(mode=0o700)
+            context = self._context()
+            write_runtime_lifespan_record = self._writer()
+            starting = write_runtime_lifespan_record(home, context=context, state="STARTING")
+            self.assertEqual(starting.state, "STARTING")
+            self.assertTrue((home / "runtime-lifespan.json").is_file())
+            ready = write_runtime_lifespan_record(
+                home, context=context, state="READY",
+                previous_record_sha256=starting.record_sha256,
+            )
+            self.assertEqual(ready.state, "READY")
+            closed = write_runtime_lifespan_record(
+                home, context=context, state="CLOSED",
+                previous_record_sha256=ready.record_sha256,
+            )
+            self.assertEqual(closed.state, "CLOSED")
+            self.assertNotEqual(starting.record_sha256, ready.record_sha256)
+            self.assertNotEqual(ready.record_sha256, closed.record_sha256)
+
+    def test_runtime_lifespan_rejects_skipped_or_wrong_previous_state(self):
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td) / "home"
+            home.mkdir(mode=0o700)
+            context = self._context()
+            write_runtime_lifespan_record = self._writer()
+            with self.assertRaisesRegex(StartupLeaseError, "LIFESPAN_TRANSITION_INVALID"):
+                write_runtime_lifespan_record(home, context=context, state="READY")
+            starting = write_runtime_lifespan_record(home, context=context, state="STARTING")
+            with self.assertRaisesRegex(StartupLeaseError, "LIFESPAN_PREVIOUS_MISMATCH"):
+                write_runtime_lifespan_record(
+                    home, context=context, state="READY", previous_record_sha256="c" * 64
+                )
+            write_runtime_lifespan_record(
+                home, context=context, state="READY",
+                previous_record_sha256=starting.record_sha256,
+            )
+            with self.assertRaisesRegex(StartupLeaseError, "LIFESPAN_TRANSITION_INVALID"):
+                write_runtime_lifespan_record(home, context=context, state="STARTING")
 
 
 if __name__ == "__main__":

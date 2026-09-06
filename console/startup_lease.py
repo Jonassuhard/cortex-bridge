@@ -15,6 +15,7 @@ import os
 import secrets
 import socket
 import stat
+import tempfile
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -235,6 +236,174 @@ def _receipt_sha(lease: StartupLease) -> str:
     return hashlib.sha256(json.dumps(_json(lease), separators=(",", ":"), sort_keys=True).encode("utf-8")).hexdigest()
 
 
+def _runtime_record_sha(record: RuntimeLifespanRecord) -> str:
+    raw = _json(record)
+    raw.pop("record_sha256", None)
+    return hashlib.sha256(json.dumps(raw, separators=(",", ":"), sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _duplicate_key_rejector(items: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in items:
+        if key in result:
+            raise ValueError("duplicate object key")
+        result[key] = value
+    return result
+
+
+def _owner_only_home(home: Path) -> None:
+    home = Path(home)
+    try:
+        details = home.lstat()
+    except (FileNotFoundError, OSError) as exc:
+        raise StartupLeaseError("LIFESPAN_HOME_INVALID") from exc
+    if home.is_symlink() or not stat.S_ISDIR(details.st_mode):
+        raise StartupLeaseError("LIFESPAN_HOME_INVALID")
+    if details.st_uid != os.getuid() or stat.S_IMODE(details.st_mode) != 0o700:
+        raise StartupLeaseError("LIFESPAN_HOME_INVALID")
+
+
+def _read_runtime_lifespan_record(home: Path) -> RuntimeLifespanRecord | None:
+    _owner_only_home(home)
+    path = Path(home) / "runtime-lifespan.json"
+    try:
+        details = path.lstat()
+        if path.is_symlink() or not stat.S_ISREG(details.st_mode):
+            raise StartupLeaseError("LIFESPAN_RECORD_INVALID")
+        if details.st_uid != os.getuid() or stat.S_IMODE(details.st_mode) != 0o600:
+            raise StartupLeaseError("LIFESPAN_RECORD_INVALID")
+        raw = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=_duplicate_key_rejector)
+    except StartupLeaseError:
+        raise
+    except (FileNotFoundError, OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        if isinstance(exc, FileNotFoundError):
+            return None
+        raise StartupLeaseError("LIFESPAN_RECORD_INVALID") from exc
+    if not isinstance(raw, dict) or set(raw) != set(RuntimeLifespanRecord.__dataclass_fields__):
+        raise StartupLeaseError("LIFESPAN_RECORD_INVALID")
+    try:
+        record_data = dict(raw)
+        identity = record_data.get("identity")
+        boot = record_data.get("boot")
+        if not isinstance(identity, dict) or not isinstance(boot, dict):
+            raise ValueError("nested record data is invalid")
+        record_data["identity"] = ManagedProcessIdentity(**identity)
+        record_data["boot"] = BootIdentity(**boot)
+        record = RuntimeLifespanRecord(**record_data)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise StartupLeaseError("LIFESPAN_RECORD_INVALID") from exc
+    if _runtime_record_sha(record) != record.record_sha256:
+        raise StartupLeaseError("LIFESPAN_RECORD_INVALID")
+    return record
+
+
+def _fsync_directory(path: Path) -> None:
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    fd = os.open(path, flags)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _atomic_write_runtime_lifespan(home: Path, record: RuntimeLifespanRecord) -> None:
+    _owner_only_home(home)
+    path = Path(home) / "runtime-lifespan.json"
+    if path.is_symlink():
+        raise StartupLeaseError("LIFESPAN_RECORD_INVALID")
+    payload = json.dumps(_json(record), separators=(",", ":"), sort_keys=True).encode("utf-8") + b"\n"
+    fd, temporary = tempfile.mkstemp(prefix=".runtime-lifespan.", dir=home)
+    temporary_path = Path(temporary)
+    try:
+        try:
+            os.fchmod(fd, 0o600)
+            view = memoryview(payload)
+            while view:
+                written = os.write(fd, view)
+                if written <= 0:
+                    raise StartupLeaseError("LIFESPAN_WRITE_FAILED")
+                view = view[written:]
+            os.fsync(fd)
+        except OSError as exc:
+            raise StartupLeaseError("LIFESPAN_WRITE_FAILED") from exc
+        finally:
+            os.close(fd)
+        if path.is_symlink():
+            raise StartupLeaseError("LIFESPAN_RECORD_INVALID")
+        os.replace(temporary_path, path)
+        _fsync_directory(Path(home))
+    except OSError as exc:
+        raise StartupLeaseError("LIFESPAN_WRITE_FAILED") from exc
+    finally:
+        try:
+            temporary_path.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def write_runtime_lifespan_record(
+    home: Path,
+    *,
+    context: ManagedStartContext,
+    state: RuntimeLifespanState,
+    previous_record_sha256: str | None = None,
+) -> RuntimeLifespanRecord:
+    if not isinstance(context, ManagedStartContext) or not isinstance(state, str) or state not in {"STARTING", "READY", "CLOSED"}:
+        raise StartupLeaseError("LIFESPAN_TRANSITION_INVALID")
+    current = _read_runtime_lifespan_record(Path(home))
+    if current is None:
+        if state != "STARTING" or previous_record_sha256 is not None:
+            raise StartupLeaseError("LIFESPAN_TRANSITION_INVALID")
+        previous = None
+    elif state == "STARTING":
+        if current.state != "CLOSED":
+            raise StartupLeaseError("LIFESPAN_TRANSITION_INVALID")
+        if previous_record_sha256 is None:
+            previous = current.record_sha256
+        elif previous_record_sha256 != current.record_sha256:
+            raise StartupLeaseError("LIFESPAN_PREVIOUS_MISMATCH")
+        else:
+            previous = previous_record_sha256
+    elif state == "READY":
+        if current.state != "STARTING":
+            raise StartupLeaseError("LIFESPAN_TRANSITION_INVALID")
+        if previous_record_sha256 != current.record_sha256:
+            raise StartupLeaseError("LIFESPAN_PREVIOUS_MISMATCH")
+        previous = previous_record_sha256
+    else:
+        if current.state != "READY":
+            raise StartupLeaseError("LIFESPAN_TRANSITION_INVALID")
+        if previous_record_sha256 != current.record_sha256:
+            raise StartupLeaseError("LIFESPAN_PREVIOUS_MISMATCH")
+        previous = previous_record_sha256
+    record = RuntimeLifespanRecord(
+        schema_version=1,
+        state=state,
+        lease_id=context.lease_id,
+        lease_receipt_sha256=context.receipt_sha256,
+        identity=context.identity,
+        storage_transaction_id=context.storage_transaction_id,
+        boot=context.boot,
+        generation_record_sha256=context.generation_record_sha256,
+        previous_record_sha256=previous,
+        record_sha256="0" * 64,
+    )
+    record = RuntimeLifespanRecord(
+        schema_version=record.schema_version,
+        state=record.state,
+        lease_id=record.lease_id,
+        lease_receipt_sha256=record.lease_receipt_sha256,
+        identity=record.identity,
+        storage_transaction_id=record.storage_transaction_id,
+        boot=record.boot,
+        generation_record_sha256=record.generation_record_sha256,
+        previous_record_sha256=record.previous_record_sha256,
+        record_sha256=_runtime_record_sha(record),
+    )
+    _atomic_write_runtime_lifespan(Path(home), record)
+    return record
+
+
 def publish_startup_lease(
     *,
     pids_fd: int,
@@ -326,28 +495,14 @@ def child_consume_startup_lease(*, control_fd: int, pids_fd: int, expected_trans
 def _require_managed_start_context(home: Path, storage_status: StorageStatus) -> ManagedStartContext:
     if storage_status.runtime_allowed is not True:
         raise StartupLeaseError("MANAGED_START_REQUIRED")
-    path = Path(home) / "runtime-lifespan.json"
     try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError) as exc:
+        record = _read_runtime_lifespan_record(Path(home))
+    except StartupLeaseError as exc:
         raise StartupLeaseError("MANAGED_START_REQUIRED") from exc
-    if raw.get("state") != "READY":
+    if record is None:
+        raise StartupLeaseError("MANAGED_START_REQUIRED")
+    if record.state != "READY":
         raise StartupLeaseError("MANAGED_START_NOT_READY")
-    required = set(RuntimeLifespanRecord.__dataclass_fields__)
-    if set(raw) != required:
-        raise StartupLeaseError("MANAGED_START_RECORD_INVALID")
-    try:
-        record_data = dict(raw)
-        record_data["identity"] = ManagedProcessIdentity(**record_data["identity"])
-        record_data["boot"] = BootIdentity(**record_data["boot"])
-        record = RuntimeLifespanRecord(**record_data)
-    except (KeyError, TypeError, ValueError) as exc:
-        raise StartupLeaseError("MANAGED_START_RECORD_INVALID") from exc
-    raw_for_hash = _json(record)
-    raw_for_hash.pop("record_sha256", None)
-    expected_record_sha = hashlib.sha256(json.dumps(raw_for_hash, separators=(",", ":"), sort_keys=True).encode("utf-8")).hexdigest()
-    if expected_record_sha != record.record_sha256:
-        raise StartupLeaseError("MANAGED_START_RECORD_INVALID")
     return ManagedStartContext(
         record.lease_id, record.identity, record.storage_transaction_id, record.boot,
         record.generation_record_sha256, record.lease_receipt_sha256,
@@ -371,5 +526,5 @@ __all__ = [
     "ManagedProcessIdentity", "StartupLease", "ManagedStartContext", "ManagedStartReceipt",
     "RuntimeLifespanRecord", "StartupLeaseError", "publish_startup_lease",
     "parent_release_and_wait_ack", "child_consume_startup_lease", "_require_managed_start_context",
-    "managed_runtime_is_ready_locked", "launch_managed_runtime",
+    "write_runtime_lifespan_record", "managed_runtime_is_ready_locked", "launch_managed_runtime",
 ]
