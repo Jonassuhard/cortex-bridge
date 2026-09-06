@@ -32,6 +32,10 @@ py-modules = [
   "server",
   "settings",
   "storage_guard",
+  "storage_broker",
+  "storage_reconciliation",
+  "native_helpers",
+  "installed_storage_runtime",
   "version",
   "write_slots",
 ]

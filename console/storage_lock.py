@@ -5,11 +5,12 @@ from __future__ import annotations
 import fcntl
 import math
 import os
+import stat
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import ContextManager, Literal, Self
+from typing import ContextManager, Literal, Self, Any
 
 from lifecycle_lock import (
     LifecycleLockTimeout,
@@ -29,6 +30,92 @@ class StorageLockError(RuntimeError):
     def __init__(self, code: str):
         self.code = code
         super().__init__(code)
+
+
+@dataclass(slots=True)
+class StorageLockSet:
+    """The S3 lock bundle.
+
+    ``ordered_storage_locks`` predates S3 and intentionally keeps returning its
+    two-value tuple for compatibility.  New code should use
+    ``open_storage_lock_set``; this object is also iterable so callers migrating
+    from the legacy tuple do not accidentally lose the storage lock.
+    """
+
+    home: Path
+    home_dev_u32: int
+    home_ino: int
+    home_uid: int
+    home_mode: int
+    install_fd: int
+    install_dev_u32: int
+    install_ino: int
+    install_uid: int
+    storage_fd: int
+    storage_dev_u32: int
+    storage_ino: int
+    storage_uid: int
+    admission_fd: int
+    admission_dev_u32: int
+    admission_ino: int
+    admission_uid: int
+    install_mode: LockMode
+    storage_mode: LockMode
+    admission_mode: Literal["exclusive"] = "exclusive"
+    marker_mode: Literal[384] = 0o600
+    deadline_ns: int = 0
+    active: bool = True
+    _storage_lock: StorageLock | None = field(default=None, repr=False)
+
+    def __iter__(self):
+        # Compatibility with ``as (install_fd, storage_lock)``.
+        yield self.install_fd
+        if self._storage_lock is None:
+            self._storage_lock = StorageLock(self.storage_fd, self.storage_mode)
+        yield self._storage_lock
+
+    def assert_active(self, *, home: Path, required_install_mode: LockMode, required_storage_mode: LockMode) -> None:
+        if not self.active or Path(home) != self.home:
+            raise StorageLockError("STORAGE_LOCK_INACTIVE")
+        if required_install_mode == "exclusive" and self.install_mode != "exclusive":
+            raise StorageLockError("STORAGE_LOCK_MODE")
+        if required_storage_mode == "exclusive" and self.storage_mode != "exclusive":
+            raise StorageLockError("STORAGE_LOCK_MODE")
+        if os.getuid() != self.home_uid:
+            raise StorageLockError("STORAGE_LOCK_OWNER")
+        for fd, dev, ino, uid in (
+            (self.install_fd, self.install_dev_u32, self.install_ino, self.install_uid),
+            (self.storage_fd, self.storage_dev_u32, self.storage_ino, self.storage_uid),
+            (self.admission_fd, self.admission_dev_u32, self.admission_ino, self.admission_uid),
+        ):
+            try:
+                current = os.fstat(fd)
+            except OSError as exc:
+                raise StorageLockError("STORAGE_LOCK_REPLACED") from exc
+            if (current.st_dev & 0xFFFFFFFF, current.st_ino, current.st_uid) != (dev, ino, uid):
+                raise StorageLockError("STORAGE_LOCK_REPLACED")
+
+    def close(self) -> None:
+        if not self.active:
+            return
+        self.active = False
+        for fd in (self.admission_fd, self.storage_fd, self.install_fd):
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            finally:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+        if self._storage_lock is not None:
+            self._storage_lock._closed = True
+
+    def __enter__(self) -> Self:
+        self.assert_active(home=self.home, required_install_mode="shared", required_storage_mode="shared")
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.close()
 
 
 def _require_mode(mode: object) -> LockMode:
@@ -199,3 +286,64 @@ def ordered_storage_locks(
                 fcntl.flock(install_fd, fcntl.LOCK_UN)
             finally:
                 os.close(install_fd)
+
+
+@contextmanager
+def open_storage_lock_set(
+    home: Path,
+    *,
+    install_mode: LockMode,
+    storage_mode: LockMode,
+    timeout_seconds: float = 5.0,
+) -> ContextManager[StorageLockSet]:
+    """Acquire install → storage → admission under one common deadline."""
+    home = Path(home).resolve(strict=True)
+    checked_install = _require_mode(install_mode)
+    checked_storage = _require_mode(storage_mode)
+    timeout = _require_timeout(timeout_seconds)
+    deadline = _deadline(timeout)
+    install_fd: int | None = None
+    storage_fd: int | None = None
+    admission_fd: int | None = None
+    try:
+        try:
+            install_fd = open_lifecycle_lock(home / ".install.lock", deadline=deadline)
+            _acquire(install_fd, checked_install, deadline)
+            storage_fd = open_lifecycle_lock(home / _LOCK_NAME, deadline=deadline)
+            _acquire(storage_fd, checked_storage, deadline)
+            admission_path = home / "storage-admission.lock"
+            admission_fd = open_lifecycle_lock(admission_path, deadline=deadline)
+            _acquire(admission_fd, "exclusive", deadline)
+        except LifecycleLockTimeout as exc:
+            raise StorageLockError("STORAGE_LOCK_TIMEOUT") from exc
+        except RuntimeError as exc:
+            raise StorageLockError("STORAGE_LOCK_UNSAFE") from exc
+        home_details = os.stat(home, follow_symlinks=False)
+        install_details = os.fstat(install_fd)
+        storage_details = os.fstat(storage_fd)
+        admission_details = os.fstat(admission_fd)
+        result = StorageLockSet(
+            home=Path(home), home_dev_u32=home_details.st_dev & 0xFFFFFFFF,
+            home_ino=home_details.st_ino, home_uid=home_details.st_uid,
+            home_mode=stat.S_IMODE(home_details.st_mode), install_fd=install_fd,
+            install_dev_u32=install_details.st_dev & 0xFFFFFFFF,
+            install_ino=install_details.st_ino, install_uid=install_details.st_uid,
+            storage_fd=storage_fd, storage_dev_u32=storage_details.st_dev & 0xFFFFFFFF,
+            storage_ino=storage_details.st_ino, storage_uid=storage_details.st_uid,
+            admission_fd=admission_fd, admission_dev_u32=admission_details.st_dev & 0xFFFFFFFF,
+            admission_ino=admission_details.st_ino, admission_uid=admission_details.st_uid,
+            install_mode=checked_install, storage_mode=checked_storage,
+            deadline_ns=time.monotonic_ns() + int(timeout * 1_000_000_000),
+        )
+        install_fd = storage_fd = admission_fd = None
+        try:
+            yield result
+        finally:
+            result.close()
+    finally:
+        for fd in (admission_fd, storage_fd, install_fd):
+            if fd is not None:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+                finally:
+                    os.close(fd)

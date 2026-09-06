@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "target": "bootstrap/cortex-launch",
+  "source": "native/macos/storage_bootstrap.swift",
+  "configuration": "production",
+  "swiftc": ["-O", "-parse-as-library"],
+  "frameworks": ["Foundation"],
+  "test_routes": false,
+  "environment": ["PATH=/usr/bin:/bin:/usr/sbin:/sbin", "LANG=C", "LC_ALL=C"]
+}

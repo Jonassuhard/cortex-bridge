@@ -2013,9 +2013,126 @@ private func topLevelObjectKeys(_ input: Data) -> [String]? {
     return keys
 }
 
+// MARK: - Persistent S3 broker mode
+
+private enum BrokerMessageType: String {
+    case hello = "HELLO", recover = "RECOVER", recovered = "RECOVERED"
+    case start = "START", started = "STARTED", cancel = "CANCEL", status = "STATUS"
+    case result = "RESULT", close = "CLOSE", closedReady = "CLOSED_READY"
+    case commitAck = "COMMIT_ACK", committed = "COMMITTED"
+    case reconcileProbe = "RECONCILE_PROBE"
+    case reconciliationResult = "RECONCILIATION_RESULT"
+    case reconciliationAck = "RECONCILIATION_ACK"
+    case finalized = "FINALIZED", lateClose = "LATE_CLOSE"
+    case protocolError = "PROTOCOL_ERROR"
+}
+
+private func brokerFrame(_ object: [String: Any]) -> Data? {
+    guard JSONSerialization.isValidJSONObject(object),
+          let payload = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]),
+          payload.count <= 16 * 1024 else { return nil }
+    var frame = Data()
+    var length = UInt32(payload.count).bigEndian
+    frame.append(Data(bytes: &length, count: MemoryLayout<UInt32>.size))
+    frame.append(payload)
+    return frame
+}
+
+private func readBrokerFrame(_ handle: FileHandle) -> [String: Any]? {
+    guard let prefix = try? handle.read(upToCount: 4), prefix.count == 4 else { return nil }
+    let prefixBytes = [UInt8](prefix)
+    let length = (UInt32(prefixBytes[0]) << 24)
+        | (UInt32(prefixBytes[1]) << 16)
+        | (UInt32(prefixBytes[2]) << 8)
+        | UInt32(prefixBytes[3])
+    guard length <= 16 * 1024,
+          let payload = try? handle.read(upToCount: Int(length)),
+          payload.count == Int(length),
+          let object = try? JSONSerialization.jsonObject(with: payload),
+          let dictionary = object as? [String: Any] else { return nil }
+    return dictionary
+}
+
+private func writeBrokerFrame(_ handle: FileHandle, _ object: [String: Any]) -> Bool {
+    guard let frame = brokerFrame(object) else { return false }
+    do {
+        try handle.write(contentsOf: frame)
+        return true
+    } catch {
+        return false
+    }
+}
+
+private func exactBrokerEnvironment() -> Bool {
+    let environment = ProcessInfo.processInfo.environment
+    guard Set(environment.keys) == ["PATH", "LANG", "LC_ALL"] else { return false }
+    return environment["PATH"] == "/usr/bin:/bin:/usr/sbin:/sbin"
+        && environment["LANG"] == "C"
+        && environment["LC_ALL"] == "C"
+}
+
+private func parseBrokerArguments(_ arguments: [String]) -> (Int32, Int32, Int32, UUID, UInt64)? {
+    guard arguments.count == 10,
+          arguments[0] == "--broker-fd",
+          arguments[2] == "--start-capability-fd",
+          arguments[4] == "--recovery-authority-fd",
+          arguments[6] == "--workflow-id",
+          arguments[8] == "--generation",
+          let brokerFD = Int32(arguments[1]),
+          let capabilityFD = Int32(arguments[3]),
+          let recoveryFD = Int32(arguments[5]),
+          let workflowID = UUID(uuidString: arguments[7]),
+          let generation = UInt64(arguments[9]),
+          brokerFD >= 0, capabilityFD >= 0, recoveryFD >= 0 else { return nil }
+    return (brokerFD, capabilityFD, recoveryFD, workflowID, generation)
+}
+
+private func runPersistentBroker(arguments: [String]) -> Int32? {
+    guard arguments.first == "--broker-fd" else { return nil }
+    guard let parsed = parseBrokerArguments(arguments), exactBrokerEnvironment() else { return 64 }
+    signal(SIGPIPE, SIG_IGN)
+    var noSigPipe: Int32 = 1
+    _ = setsockopt(parsed.0, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
+    let handle = FileHandle(fileDescriptor: parsed.0, closeOnDealloc: false)
+    let hello: [String: Any] = [
+        "type": BrokerMessageType.hello.rawValue,
+        "schema_version": 1,
+        "workflow_id": parsed.3.uuidString.lowercased(),
+        "generation": parsed.4,
+        "boot_seconds": UInt64(0),
+        "boot_microseconds": UInt64(0),
+        "broker_pid": UInt64(getpid()),
+    ]
+    guard writeBrokerFrame(handle, hello) else { return 70 }
+    while let message = readBrokerFrame(handle) {
+        guard let rawType = message["type"] as? String,
+              let type = BrokerMessageType(rawValue: rawType) else {
+            _ = writeBrokerFrame(handle, ["type": BrokerMessageType.protocolError.rawValue, "code": "INVALID_FRAME"])
+            return 64
+        }
+        switch type {
+        case .hello:
+            _ = writeBrokerFrame(handle, ["type": BrokerMessageType.protocolError.rawValue, "code": "INVALID_STATE"])
+        case .start:
+            _ = writeBrokerFrame(handle, ["type": BrokerMessageType.protocolError.rawValue, "code": "AUTH_FAILED"])
+        case .recover, .cancel, .status, .close, .commitAck, .lateClose,
+             .reconcileProbe, .reconciliationAck:
+            _ = writeBrokerFrame(handle, ["type": BrokerMessageType.protocolError.rawValue, "code": "AUTH_FAILED"])
+        case .recovered, .started, .result, .closedReady, .committed,
+             .reconciliationResult, .finalized, .protocolError:
+            _ = writeBrokerFrame(handle, ["type": BrokerMessageType.protocolError.rawValue, "code": "INVALID_STATE"])
+        }
+    }
+    return 0
+}
+
 private func runMain() -> Int32 {
     signal(SIGPIPE, SIG_IGN)
     let arguments = Array(CommandLine.arguments.dropFirst())
+
+    if let brokerResult = runPersistentBroker(arguments: arguments) {
+        return brokerResult
+    }
 
     #if CORTEX_STORAGE_HELPER_TESTING
     if arguments.count == 1, arguments[0] == "--spawn-probe" {
