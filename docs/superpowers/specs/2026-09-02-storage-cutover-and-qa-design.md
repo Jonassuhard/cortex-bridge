@@ -16,13 +16,23 @@ direct Python `hdiutil`/`diskutil` spawn, and helper-preservation uninstall
 clause below is historical and superseded. The persistent S3 broker and its
 integrated storage-runtime generation are the only implementation path.
 
-The R16 S3 contract also supersedes any unbounded or non-lock-carrying storage
+The R17 S3 contract also supersedes any unbounded or non-lock-carrying storage
 factory, any reconciliation route that starts a replacement broker, and any
 public response that exposes a device node. Product construction uses the
 single lock-carrying installed-runtime aggregate. A workflow that requires
 effect reconciliation retains its original broker until the closed probe
 exchange is durably acknowledged; the local device-bearing response is mapped
 to separate redacted storage evidence before rendering or export.
+
+R17 further requires a pre-START durable recovery authority that cannot grant
+START, exact owner-connection/audit-token binding, lock-carrying transition and
+ledger APIs, and non-reconciliation-bearing read-only workflow failures. Only
+the original retained broker may run the closed read-only reconciliation
+observation allowlist. Product launch begins at the stable bootstrap outside
+the mutable generation, retains install-shared through generation/interpreter
+attestation and factory adoption, and treats runtime lifespan as the attested
+`STARTING → READY → CLOSED` chain. These clauses supersede any contrary
+startup, helper, recovery, or unlocked-journal wording below.
 
 All descriptor-first host, APFS, volume-name/UUID, encryption UUID, Keychain,
 mount, transition-journal, vault-only workspace, and live-authorization

@@ -69,6 +69,7 @@ inaccessible, and seed a homonymous module sentinel that must not be imported.
 | `console/storage_reconciliation.py` | Create | Sole reconciliation record/probe/postcondition schema and CAS implementation |
 | `console/native_helpers.py` | Foundation Task 4 creates | S3 Task 7 completes the same atomic installed broker/probe registry and FD-held attestation unit |
 | `console/installed_storage_runtime.py` | Create | Deferred Task 7 lock-bound installed-generation aggregate factory |
+| `native/macos/storage_bootstrap.swift` | Create | Stable pre-generation launcher that acquires install-shared and attests selector/generation/interpreter before exec |
 | `console/storage_lifecycle.py` | Foundation Task 5 creates | Seven lock-carrying descriptor-first methods; S3 Task 6 only gates them |
 | `console/storage_transition.py`, `console/storage_contract.py` | Foundation Tasks 6/7 create | Product journal and APFS/encryption proofs with injected backends; S3 Task 6 only gates them |
 | `console/cortex_paths.py` | Foundation Task 5 modifies | Installed topology paths |
@@ -79,6 +80,7 @@ inaccessible, and seed a homonymous module sentinel that must not be imported.
 | `native/build-profiles/macos-ax-send-v1.json` | Foundation Task 4 creates | Canonical AX helper production build profile in the Task 7 atomic unit |
 | `native/build-profiles/storage-mount-probe-v1.json` | Foundation Task 4 creates | Canonical descriptor-probe production build profile in the Task 7 atomic unit |
 | `native/build-profiles/storage-broker-v1.json` | Foundation Task 4 creates | Canonical broker production build profile without test routes in the Task 7 atomic unit |
+| `native/build-profiles/storage-bootstrap-v1.json` | Create | Canonical stable-bootstrap production build profile |
 | `scripts/cortex-storage.py` | Foundation Task 11 creates | Operator façade over `StorageLifecycle`; redacted unresolved status |
 | `scripts/check-cortex-storage.py` | Foundation Task 7 modifies | Guard wrapper over injected contract until Task 7 installs the aggregate |
 | `scripts/cortex.sh` | Foundation Tasks 12/13 then install unit modify | Recovery admission plus lifecycle mount/start and stop/detach |
@@ -105,7 +107,7 @@ inaccessible, and seed a homonymous module sentinel that must not be imported.
 | `tests/test_store_lifecycle.py` | Foundation Task 13 modifies | Server/store lifecycle integration |
 | `tests/test_installer.py` | Modify | Build/publish/update/Doctor/uninstall ownership |
 | `tests/test_installed_storage_wheel.py` | Create | Installed binary/client/provenance and no-test-route proof |
-| `tests/test_installed_storage_runtime.py` | Create | Same-generation broker/probe/lifecycle/contract aggregate and lock binding |
+| `tests/test_installed_storage_runtime.py` | Create | Stable bootstrap, same-generation broker/probe/lifecycle/contract aggregate, and lock binding |
 | `tests/test_storage_supervision_matrix.py` | Create | Criteria selection, status handling, determinism |
 | `tests/test_public_privacy.py` | Modify | JSON/Markdown redaction and comparison tables |
 | `tests/test_release_manifest.py` | Modify | Hash-bound release contract |
@@ -219,6 +221,63 @@ class InstalledStorageRuntimeGeneration(TypedDict):
     owned_manifest_sha256: str
     generation_record_sha256: str
 
+class InstalledGenerationSelector(TypedDict):
+    schema_version: Literal[1]
+    generation_id: UUID
+    generation_record_sha256: str
+
+class StableBootstrapManifest(TypedDict):
+    schema_version: Literal[1]
+    target: Literal["bootstrap/cortex-launch"]
+    source: Literal["native/macos/storage_bootstrap.swift"]
+    source_sha256: str
+    build_profile_sha256: str
+    sha256: str
+    cdhash: str
+    dev_u32: DarwinU32
+    ino: int
+    uid: int
+    mode: Literal[448]
+    bootstrap_manifest_sha256: str
+
+@dataclass(slots=True)
+class AttestedBootstrapHandle:
+    home: Path
+    install_lock_fd: int
+    install_lock_dev_u32: DarwinU32
+    install_lock_ino: int
+    install_lock_uid: int
+    install_lock_mode: Literal[384]
+    selector_fd: int
+    generation_dir_fd: int
+    generation_record_fd: int
+    owned_manifest_fd: int
+    interpreter_fd: int
+    generation_id: UUID
+    selector_sha256: str
+    generation_record_sha256: str
+    owned_manifest_sha256: str
+    active: bool
+    def assert_locked(self, home: Path, lock_set: StorageLockSet) -> None: ...
+    def close(self) -> None: ...
+
+RecoveryPhase = Literal[
+    "running", "closed_ready", "committed", "reconciliation", "finalized",
+]
+
+@dataclass(slots=True)
+class _RecoveryAuthority:
+    relative_path: PurePosixPath
+    fd: int
+    root: bytearray
+    dev_u32: DarwinU32
+    ino: int
+    uid: int
+    mode: Literal[384]
+    sha256: str
+    consumed: bool
+    def close(self) -> None: ...
+
 @dataclass(frozen=True, slots=True)
 class _StorageBrokerRequest:
     schema_version: Literal[1]
@@ -277,16 +336,19 @@ def to_storage_evidence_response(
 ) -> StorageEvidenceResponse: ...
 
 @dataclass(frozen=True, slots=True)
-class StorageBrokerResult:
+class ClosedReadyResult:
     workflow_id: UUID
     generation: int
-    state: LedgerState
+    outcome: Literal["success", "failure", "unresolved"]
+    code: StorageLocalCode
     response: "BrokerTerminalResponse | None"
+    command_sha256: str
     result_sha256: str
-    closed_ready_sha256: str | None
+    closed_ready_sha256: str
     child_reaped: bool
     group_absent: bool
     native_cleanup_proven: bool
+    reconciliation_required: bool
 
 @dataclass(frozen=True, slots=True)
 class MountedImageProof:
@@ -318,6 +380,10 @@ BrokerTerminalResponse = (
     LocalBrokerTerminalResponse | MountedProofBrokerTerminalResponse
 )
 
+ReconciliationOperation = Literal[
+    "create", "mount", "detach", "delete-disposable-item",
+]
+
 @dataclass(frozen=True, slots=True)
 class StorageWorkflowRecord:
     schema_version: Literal[1]
@@ -333,6 +399,8 @@ class StorageWorkflowRecord:
     broker_ino: int
     broker_uid: int
     broker_mode: int
+    owner_connection_nonce: str | None
+    owner_peer_audit_sha256: str | None
     broker_pid: int | None
     broker_sid: int | None
     broker_pgid: int | None
@@ -340,6 +408,11 @@ class StorageWorkflowRecord:
     boot: BootIdentity
     effect_budget_ns: int
     cleanup_budget_ns: int
+    recovery_authority_relative: PurePosixPath
+    recovery_authority_dev_u32: DarwinU32
+    recovery_authority_ino: int
+    recovery_authority_sha256: str
+    recovery_authority_consumed: bool
     started_monotonic_ns: int | None
     command_sha256: str | None
     unresolved_reason: UnresolvedReason | None
@@ -355,20 +428,35 @@ class StorageWorkflowRecord:
     record_sha256: str
 
 class StorageWorkflowLedger:
-    def prepare(self, request: _StorageBrokerRequest | _BrokerProbeRequest,
-                executable: AttestedBrokerExecutable,
-                socket: BrokerSocketIdentity, boot: BootIdentity,
-                *, effect_budget_ns: int,
-                cleanup_budget_ns: int) -> StorageWorkflowRecord: ...
-    def mark_running_before_start(self, workflow_id: UUID, generation: int,
-                                  *, broker_pid: int, broker_sid: int,
-                                  broker_pgid: int) -> StorageWorkflowRecord: ...
-    def close_preexec_failure(self, workflow_id: UUID,
-                              generation: int) -> StorageWorkflowRecord: ...
-    def mark_unresolved(self, workflow_id: UUID, generation: int,
-                        reason: UnresolvedReason) -> StorageWorkflowRecord: ...
-    def close_from_ready(self, result: StorageBrokerResult) -> StorageWorkflowRecord: ...
-    def load_all(self) -> tuple[StorageWorkflowRecord, ...]: ...
+    def prepare_locked(
+        self, lock_set: StorageLockSet,
+        request: _StorageBrokerRequest | _BrokerProbeRequest,
+        executable: AttestedBrokerExecutable, socket: BrokerSocketIdentity,
+        boot: BootIdentity, recovery: _RecoveryAuthority, *,
+        effect_budget_ns: int, cleanup_budget_ns: int,
+    ) -> StorageWorkflowRecord: ...
+    def mark_running_before_start_locked(
+        self, lock_set: StorageLockSet, workflow_id: UUID, generation: int, *,
+        broker_pid: int, broker_sid: int, broker_pgid: int,
+        owner_connection_nonce: str, owner_peer_audit_sha256: str,
+    ) -> StorageWorkflowRecord: ...
+    def close_preexec_failure_locked(
+        self, lock_set: StorageLockSet, workflow_id: UUID, generation: int,
+    ) -> StorageWorkflowRecord: ...
+    def mark_unresolved_locked(
+        self, lock_set: StorageLockSet, workflow_id: UUID, generation: int,
+        reason: UnresolvedReason,
+    ) -> StorageWorkflowRecord: ...
+    def close_from_ready_locked(
+        self, lock_set: StorageLockSet, result: ClosedReadyResult,
+    ) -> StorageWorkflowRecord: ...
+    def load_all_locked(
+        self, lock_set: StorageLockSet,
+    ) -> tuple[StorageWorkflowRecord, ...]: ...
+    def consume_recovery_authority_after_finalized_locked(
+        self, lock_set: StorageLockSet, workflow_id: UUID, generation: int,
+        *, finalized_record_sha256: str,
+    ) -> StorageWorkflowRecord: ...
 
 # console/storage_reconciliation.py is the sole owner of all reconciliation
 # schemas. storage_broker and storage_transition import them; neither redeclares
@@ -467,7 +555,7 @@ class ReconciliationProbeRequest:
     workflow_id: UUID
     generation: int
     transaction_id: UUID
-    operation: PublicStorageOperation | Literal["probe-mounted-image"]
+    operation: ReconciliationOperation
     request_sha256: str
     result_sha256: str
     payload: ReconciliationProbePayload
@@ -478,7 +566,7 @@ class ReconciliationRecord:
     workflow_id: UUID
     generation: int
     transaction_id: UUID
-    operation: PublicStorageOperation | Literal["probe-mounted-image"]
+    operation: ReconciliationOperation
     request_sha256: str
     result_sha256: str
     state: ReconciliationState
@@ -490,15 +578,15 @@ class ReconciliationRecord:
 
 @dataclass(slots=True)
 class _ReconciliationCapability:
-    fd: int
     workflow_id: UUID
     generation: int
     transaction_id: UUID
     request_sha256: str
     result_sha256: str
     record_sha256: str
+    recovery_authority_sha256: str
+    capability_sha256: str
     consumed: bool
-    def close(self) -> None: ...
 
 class StorageBrokerClient:
     def __init__(self, *, home: Path,
@@ -506,7 +594,7 @@ class StorageBrokerClient:
                  ledger: StorageWorkflowLedger) -> None: ...
     def _run_locked(self, lock_set: StorageLockSet,
                     request: _StorageBrokerRequest, *, effect_budget_ns: int,
-                    cleanup_budget_ns: int) -> StorageBrokerResult: ...
+                    cleanup_budget_ns: int) -> StorageWorkflowRecord: ...
     def _probe_mounted_image_locked(
         self, lock_set: StorageLockSet, *, image_path: Path, mount_path: Path,
         expected_volume_name: str, expected_volume_uuid: UUID,
@@ -529,11 +617,14 @@ class StorageBrokerClient:
 ```
 
 Every method first calls `lock_set.assert_active` for the client's exact home.
-Effect, recovery, late-close, and reconciliation require install-shared or
-stronger, storage-exclusive, and admission-exclusive. Read-only mounted proof
-requires install-shared or stronger, storage-shared or stronger, and
-admission-exclusive. Missing, closed, wrong-home, wrong-mode, replaced, or
-forged lock sets fail before connection, capability use, or attestation.
+Mutating create/mount/detach/delete, recovery, late-close, and mutating-effect
+reconciliation require install-shared or stronger, storage-exclusive, and
+admission-exclusive. Read-only inspect and mounted proof require install-shared
+or stronger, storage-shared or stronger, and admission-exclusive. Their closed
+success or failure always has `reconciliation_required=false`; ambiguous child
+cleanup remains unresolved, and a later read uses a new workflow without an
+upgrade. Missing, closed, wrong-home, wrong-mode, replaced, or forged lock sets
+fail before connection, capability use, or attestation.
 
 `StorageLifecycle` alone constructs `_StorageBrokerRequest` and calls
 `_run_locked()`; neither name is exported or accepted from a CLI caller. The
@@ -572,28 +663,37 @@ class InstalledStorageRuntime:
     @classmethod
     def from_installed_home_locked(
         cls, home: Path, lock_set: StorageLockSet,
+        bootstrap_handle: AttestedBootstrapHandle,
     ) -> Self: ...
     def close(self) -> None: ...
 ```
 
 `InstalledStorageRuntime.from_installed_home_locked` is the sole product
-factory. It first validates an active same-home install-shared-or-stronger,
-storage-shared-or-stronger, admission-exclusive set, then attests one manifest
-generation and composes exactly its broker, descriptor-only
+factory. It first validates the inherited `AttestedBootstrapHandle` against an
+active same-home install-shared-or-stronger, storage-shared-or-stronger,
+admission-exclusive set, then adopts the already attested immutable generation
+and composes exactly its broker, descriptor-only
 `storage-mount-probe --fd`, ledger, paths, lifecycle, and contract. The returned
 objects cannot outlive the lock set; `close()` drops both executable FDs before
 the outer context releases locks. Tests and Foundation Tasks 5-14 use injected
 `AttestedBrokerExecutable`, `FdProbe`, ledger, and client constructors; they do
 not call the installed factory before the installation unit exists.
+The lifecycle receives `contract.probe_locked` as its `MountVerifier`; no
+closure captures a lock set. Passing set B through a component created while
+set A was active must validate B at every call and must not consult closed A.
 
 The Swift broker command line is exactly:
 
 ```text
-cortex-storage-broker --broker-fd FD --start-capability-fd FD --reconciliation-capability-fd FD --workflow-id UUID --generation UINT64
+cortex-storage-broker --broker-fd FD --start-capability-fd FD --recovery-authority-fd FD --workflow-id UUID --generation UINT64
 ```
 
 The START capability carries the exact fsynced record/request/operation/budget/
-boot grant and is inherited only by the broker. Its exec environment is exactly
+boot grant plus accepted owner connection nonce and `LOCAL_PEERTOKEN` digest,
+and is inherited only by the broker. The separate 256-bit durable recovery root
+is fsynced before `OPEN_PREPARED`, transferred by its own inherited FD, and can
+authenticate only a successor owner connection after EOF; it cannot authorize
+`START` and is erased only after `FINALIZED`. Its exec environment is exactly
 `PATH=/usr/bin:/bin:/usr/sbin:/sbin`, `LANG=C`, and `LC_ALL=C`; no parent
 environment entry is inherited. The broker accepts no operation, executable,
 argv, secret, path, or device on its command line or environment. Production
@@ -601,7 +701,8 @@ message names and private native types are:
 
 ```swift
 private enum BrokerMessageType: String {
-    case hello = "HELLO", start = "START", started = "STARTED"
+    case hello = "HELLO", recover = "RECOVER", recovered = "RECOVERED"
+    case start = "START", started = "STARTED"
     case cancel = "CANCEL", status = "STATUS", result = "RESULT"
     case close = "CLOSE", closedReady = "CLOSED_READY"
     case commitAck = "COMMIT_ACK", committed = "COMMITTED"
@@ -803,6 +904,12 @@ only schema/operation/code/item count, and rejects `/dev/disk*` in every public
 API, receipt, and renderer. The same independently
 verified vector file covers ledger, reconciliation-record, and installed-
 generation hash domains; a domain or omitted-field substitution must fail.
+It also covers owner-connection-bound START grants, every nullable recovery
+phase projection/HMAC, stable-bootstrap manifest, generation selector, and the
+acyclic owned-manifest → generation-record → selector chain.
+Cover `ClosedReadyResult` with every normative top-level field and independently
+recompute `result_sha256` and `closed_ready_sha256` for success, failure, and
+null-response cases for every public operation and `probe-mounted-image`.
 
 ```bash
 PYTHONPATH="$SOURCE_ROOT" "$PYTHON311" -m unittest -v \
@@ -839,8 +946,12 @@ fresh proofs, `ECHILD`, exact reap, group absence, post-reap no-signal, and FD
 inheritance. Name the broker-loss test exactly
 `test_broker_loss_after_spawn_marks_unresolved_and_makes_no_orphan_absence_claim`;
 it must assert `native_cleanup_proven=false` and must not assert group absence.
-Race a same-UID listener client before the owner and send a different START;
-without the inherited exact `START_GRANT` it must create zero effect. Pollute
+Race a same-UID listener client before and after grant publication. Send both a
+different request and the exact accepted request from that connection; without
+the owner connection's nonce/audit-token-bound inherited `START_GRANT` each must
+create zero effect. Send stale nonce, wrong audit token, `CANCEL`, `STATUS`,
+`CLOSE`, `COMMIT_ACK`, `LATE_CLOSE`, `RECONCILE_PROBE`, and
+`RECONCILIATION_ACK` from a non-owner connection and require rejection. Pollute
 the parent with `DYLD_*`, `PYTHON*`, `HOME`, virtualenv, and unexpected
 `CORTEX_*`; prove the broker receives only the three allowlisted variables.
 
@@ -857,7 +968,8 @@ registration handshake.
 
 Launch the broker with `start_new_session=True`, an attested listener FD, and an
 exec-status pipe. Pass the private capability FD, but write its exact grant only
-after `OPEN_RUNNING` fsync. Seal envp before exec and verify it before any
+after `OPEN_RUNNING` fsync and bind it to the accepted connection nonce plus
+the canonical `LOCAL_PEERTOKEN` audit-token digest. Seal envp before exec and verify it before any
 effect. Install broker signal dispositions before accepting `START`.
 Spawn every native child suspended with an atomic new group, register identity
 and waitability, then resume. Apply `POSIX_SPAWN_CLOEXEC_DEFAULT` and map only
@@ -949,6 +1061,12 @@ Add mutation and crash tests for:
   `OPEN_RUNNING`, after START write, and after `STARTED`;
 - channel loss, stale generation, CAS failure, `ECHILD`, and ambiguous terminal
   data producing `OPEN_UNRESOLVED` only;
+- every `StorageWorkflowLedger.*_locked` call with the exact active set, plus
+  absent, different-home, closed, replaced-marker, weak-mode, and set-A/state-
+  passed-with-set-B rejection before read/CAS/fsync;
+- exhaustive `ClosedReadyResult` success/failure/null-response decoding for
+  every operation, independent result/closed-ready hash recomputation, and
+  preservation of outcome/code/command digest into the closed ledger;
 - `CLOSED_READY` retained across client death, death after ready before ledger
   fsync, death after fsync before `COMMIT_ACK`, repeated exact ACK, wrong ACK,
   lost `COMMITTED`, closed-record recovery ACK, and `FINALIZED` replay;
@@ -957,6 +1075,17 @@ Add mutation and crash tests for:
 - external construction/call of `_StorageBrokerRequest`/`_run_locked()` rejected
   before connection while lifecycle and the private guard method succeed;
 - no Python call to native-child signal/wait primitives.
+- a 256-bit recovery root durably written and directory-fsynced before
+  `OPEN_PREPARED`, transferred to the broker through one inherited FD, recorded
+  by digest/vnode, and never accepted as START authority;
+- full Python-process death with recovery from a fresh interpreter before
+  spawn, after exec, after HELLO, after `OPEN_RUNNING`, after `STARTED`, after
+  `CLOSED_READY`, after closed-ledger fsync, after `COMMIT_ACK`, after pending
+  reconciliation fsync, after result, after final-record fsync, after
+  `RECONCILIATION_ACK`, and after `FINALIZED` before authority unlink;
+- recovery proof binding every current workflow/generation/transaction/
+  operation/request/result/record/boot/phase/new-connection nonce and peer audit
+  field, with mutation/replay/wrong-authority rejection and exact owner transfer;
 - closed records persist transaction ID and canonical non-secret terminal
   result; crash after `COMMIT_ACK` but before product-journal fsync resumes
   reconciliation without replaying the effect.
@@ -970,6 +1099,15 @@ Add mutation and crash tests for:
   `RECONCILE_PROBE`, `RECONCILIATION_RESULT`, fsynced record,
   `RECONCILIATION_ACK`, and `FINALIZED`, including recovery replay without a
   second `START` or a new broker.
+- read-only `inspect-item` and `probe-mounted-image` success/failure under
+  storage-shared always set `reconciliation_required=false`; exact cleanup is
+  ACKed and a later read may use a new workflow without lock upgrade, while
+  ambiguous cleanup remains `OPEN_UNRESOLVED`;
+- reconciliation of mutating workflows permits only fixed `hdiutil info
+  -plist`, `hdiutil isencrypted -plist`, `diskutil info -plist`, descriptor
+  facts, and UI-forbidden Security.framework metadata/count observations in the
+  original broker. Mutating or extra argv and Python direct subprocess attempts
+  fail closed; replay returns cached bytes without another observation.
 
 ```bash
 PYTHONPATH="$SOURCE_ROOT" "$PYTHON311" -m unittest -v \
@@ -985,7 +1123,9 @@ Implement no-follow ledger CAS and file/directory fsync, the exact launch
 ordering, FD/path/self-identity `HELLO` binding, five states, broker-enforced
 duration budgets, two-phase terminal commit, idempotent recovery/ACK, and
 failure-only `late_close`. `OPEN_RUNNING` must be durable before `START`.
-Closed records are immutable. An unavailable broker after possible effect
+`close_from_ready_locked` accepts only `ClosedReadyResult`, recomputes both
+terminal hashes, and copies its top-level outcome/code/command digest even when
+response is null. Closed records are immutable. An unavailable broker after possible effect
 leaves `OPEN_UNRESOLVED`; no operator API edits it. All broker entrypoints are
 the exact `*_locked` methods and validate the active same-home set before
 attestation or protocol I/O. Persist the exact `ReconciliationRecord` through
@@ -999,6 +1139,10 @@ the final-record-bound `RECONCILIATION_ACK`, replies `FINALIZED`, and only then
 exits. Recovery replays this sequence against that retained broker and never
 sends `START` or executes a second probe. Native cleanup never changes
 reconciliation state.
+The durable recovery root, not an anonymous socketpair endpoint, authenticates
+a fresh Python controller after complete process death. It is erased only after
+`FINALIZED`; START remains impossible on a recovery connection. Read-only
+workflow failures never enter the effect-reconciliation state machine.
 
 Run the complete module under each interpreter:
 
@@ -1027,6 +1171,10 @@ runtime lease/server, and guard entrypoints. Prove:
   callers cannot pass a raw request and facade-operation mismatch is rejected;
 - every native effect reaches the broker backend with preserved APFS name/UUID,
   encryption UUID, image/mount identity, and mapping cardinality;
+- mutating-effect reconciliation in the retained broker can construct only the
+  exact read-only observation allowlist; Python has zero native observation
+  subprocesses, extra/mutating verbs fail closed, and exact replay uses cached
+  bytes without a second observation;
 - guard reaches only `_probe_mounted_image_locked()` with the same active set;
 - `start-local.sh` delegates once to `cortex.sh start` and cannot exec
   `server.py` directly;
@@ -1040,26 +1188,29 @@ runtime lease/server, and guard entrypoints. Prove:
   DiskImages/Keychain capability;
 - unresolved terminal/no broker produces nonzero
   `S3_MANUAL_RECOVERY_REQUIRED`, redacted output, and no ledger mutation.
-- after `STARTED`, `CLOSED_FAILURE` remains admission-blocking until the
-  transition journal fsyncs operation-specific `effect_reconciled=true` for
-  create, mount, detach, inspect, disposable Keychain deletion, or probe;
+- after `STARTED`, mutating create/mount/detach/disposable-deletion
+  `CLOSED_FAILURE` remains admission-blocking until the transition journal
+  fsyncs operation-specific `effect_reconciled=true`; read-only inspect/probe
+  failure closes after exact cleanup with no reconciliation or lock upgrade;
 - guard+Doctor, probe+start, and probe+update races follow install → storage →
   admission ordering with one exclusive admission owner and no nested acquire.
 
 ```bash
-PYTHONPATH="$SOURCE_ROOT" "$PYTHON311" -m unittest -v \
-  tests.test_storage_lifecycle \
-  tests.test_storage_cli \
-  tests.test_storage_transition \
-  tests.test_storage_contract \
-  tests.test_cortex_paths \
-  tests.test_storage_guard \
-  tests.test_storage_guard_integration \
-  tests.test_process_ownership \
-  tests.test_storage_reconciliation \
-  tests.test_startup_lease \
-  tests.test_store_lifecycle \
-  tests.test_start_local
+for PY in "$PYTHON311" "$PYTHON314"; do
+  PYTHONPATH="$SOURCE_ROOT" "$PY" -m unittest -v \
+    tests.test_storage_lifecycle \
+    tests.test_storage_cli \
+    tests.test_storage_transition \
+    tests.test_storage_contract \
+    tests.test_cortex_paths \
+    tests.test_storage_guard \
+    tests.test_storage_guard_integration \
+    tests.test_process_ownership \
+    tests.test_storage_reconciliation \
+    tests.test_startup_lease \
+    tests.test_store_lifecycle \
+    tests.test_start_local
+done
 ```
 
 Expected: PASS under Python 3.11 and 3.14. This is not a RED step: all behavior
@@ -1080,6 +1231,8 @@ second façade or compatibility fallback.
 `native/build-profiles/macos-ax-send-v1.json`,
 `native/build-profiles/storage-mount-probe-v1.json`,
 `native/build-profiles/storage-broker-v1.json`,
+`native/macos/storage_bootstrap.swift`,
+`native/build-profiles/storage-bootstrap-v1.json`,
 `transport/browser_chrome_extension.py`, `scripts/cortex.sh`,
 `tests/test_installer.py`, `tests/test_chrome_extension_driver.py`, and
 `tests/test_cortex_shell_guards.py`; modify `pyproject.toml`; create
@@ -1088,12 +1241,19 @@ and `tests/test_installed_storage_runtime.py`.
 
 **RED**
 
-Build an installed wheel/runtime in a temporary home and require the broker,
+Build an installed wheel/runtime in a temporary home and require the stable
+bootstrap, broker,
 client, lifecycle, Swift source, manifest schema, source digest, production
 build-profile digest, binary digest, vnode, owner, and mode. Execute the
 installed broker—not the checkout or test compilation—with every test-only
 argument and environment switch; require CLI rejection before socket,
 Keychain, or DiskImages access.
+Require exact stable paths `bootstrap/cortex-launch`,
+`bootstrap/bootstrap-v1.json`, `current-generation.json`, and
+`installed-generations/<generation-id>`. Verify the closed
+`StableBootstrapManifest`, `InstalledGenerationSelector`, and
+`AttestedBootstrapHandle` schemas and the acyclic owned-manifest →
+generation-record → selector hash chain.
 
 Require one exact `installed_storage_runtime_generation`: `app/bin` contains
 `cortex-storage-broker`, `storage-mount-probe`, and `cortex-macos-ax-send`;
@@ -1108,15 +1268,26 @@ Doctor evidence, and installed proof. Require
 `storage-mount-probe`, and `storage-broker`, in that order. Every entry has
 exactly `target`, `source`, `source_sha256`, `build_profile_sha256`, `sha256`,
 `cdhash`, `dev_u32`, `ino`, `uid`, and `mode`.
-Install through `scripts/install.sh`, then run installed `cortex.sh` with the
-checkout unreadable and a homonymous site-package sentinel present.
+Install through `scripts/install.sh`, then run only
+`CORTEX_HOME/bootstrap/cortex-launch` with the checkout unreadable and a
+homonymous site-package sentinel present. Before the stable bootstrap acquires
+and attests install-shared, require zero selector/generation/interpreter open;
+before its selector/record/manifest/interpreter checks complete, require zero
+generation script/import/interpreter execution.
+The verified generation entrypoint calls
+`ordered_storage_locks(..., bootstrap_install=bootstrap_handle)`; the context
+adopts the already shared-locked install open-file description and acquires
+storage then admission without nesting. Only then may it call the installed
+factory with that exact set and handle.
 
-Construct `InstalledStorageRuntime.from_installed_home_locked(home, lock_set)`
-under one active same-home set and require that broker, mount-probe `FdProbe`,
-ledger, paths, lifecycle, and contract all bind the same generation. Reject
+Construct `InstalledStorageRuntime.from_installed_home_locked(home, lock_set,
+bootstrap_handle)` under the same inherited active set and require that broker,
+mount-probe `FdProbe`, ledger, paths, lifecycle, and contract all bind the same
+immutable generation. Reject
 factory calls with absent, wrong-home, closed, weak-mode, missing-admission,
-replaced, or nested lock sets. Prove no attestation begins before
-install-shared acquisition and both executable FDs close before set release.
+replaced, or nested lock sets and absent/closed/wrong-selector/wrong-generation
+bootstrap handles. Prove no generation attestation begins before install-shared
+acquisition and both executable FDs close before set release.
 Run start, stop, guard, Doctor, and operator CLI from the installed app with the
 checkout inaccessible. Allow exactly the broker as parent of
 `hdiutil`/`diskutil` and `storage-mount-probe --fd` as the descriptor-only
@@ -1139,6 +1310,11 @@ Inject crashes between application-module tree, installed scripts, extension
 tree, source, profile, each helper binary, and manifest publication; mutate the
 extension relative manifest and `extension_tree_sha256`. Each recovery yields
 one complete generation or refusal, never a mixed executable topology.
+Also pause launch against every tree/manifest/generation-record/selector fsync,
+rename, rollback, and old-generation cleanup boundary. Sentinel partial or
+unselected generations must observe zero script/import/interpreter/broker
+execution. The selector remains on the prior complete generation until the new
+record is durable, then switches atomically.
 
 ```bash
 env -u PYTHONPATH "$PYTHON311" -m unittest -v \
@@ -1152,7 +1328,7 @@ has no installed route.
 
 **GREEN**
 
-Add a production Swift build without the testing compile condition, strict
+Add the stable compiled bootstrap and production Swift broker build without the testing compile condition, strict
 sign/verify/hash staging, atomic publication and directory fsync, packaged
 Python modules/data, `InstalledStorageRuntime.from_installed_home_locked`,
 FD-held broker/probe attestation, and manifest ownership. Refuse
@@ -1160,8 +1336,12 @@ update/reinstall until runtime stop, compatibility, recovery, closure, and
 reconciliation are all proven. Refuse uninstall as a whole while a vault is
 configured. Publish or roll back the complete generation atomically; do not
 adopt a crash-swapped binary. Run the same selection under both interpreters.
+Compatible update/reinstall may publish only a new immutable generation and
+selector; any attempted change to the v1 bootstrap binary or manifest is a
+separate incompatible migration and is refused in this plan.
 Migrate the legacy single-helper manifest atomically to the exact three-entry
-registry and common record schema.
+generation-helper registry and common record schema. Keep the bootstrap in its
+separate stable manifest; it is not a fourth `native_helpers` entry.
 
 Run the same three-module RED selection unchanged under Python 3.11 and 3.14,
 then run the Foundation Task 4 selection. Commit the entire installation unit
@@ -1173,6 +1353,8 @@ git add console/installer.py console/native_helpers.py \
   native/build-profiles/macos-ax-send-v1.json \
   native/build-profiles/storage-mount-probe-v1.json \
   native/build-profiles/storage-broker-v1.json \
+  native/macos/storage_bootstrap.swift \
+  native/build-profiles/storage-bootstrap-v1.json \
   transport/browser_chrome_extension.py scripts/cortex.sh pyproject.toml \
   tests/test_installer.py tests/test_chrome_extension_driver.py \
   tests/test_cortex_shell_guards.py tests/test_installed_storage_wheel.py \
@@ -1279,7 +1461,7 @@ prefix rule. The exact exclusion records are:
 | `docs/superpowers/plans/2026-09-02-v054-hybrid-intent-router.md` | `bcd7a77dbf344c05f60238be326b6a96d853ec8063777e10931b0041502ef6a6` |
 | `docs/superpowers/plans/2026-09-02-v054-live-cutover-and-release-qa.md` | `b8dda2316401eaee1b6408aa6cc68136b783524d6b99e5b30f64db7c30e83277` |
 | `docs/superpowers/plans/2026-09-02-v054-runtime-ui-and-browser-reliability.md` | `25d04484e4dcf337728ce96f0af642d3894be71dea0ef9a616f2552cd9121245` |
-| `docs/superpowers/specs/2026-09-02-storage-cutover-and-qa-design.md` | `a41bd652ece6803afa5a759f6bf806639ff17c1db067bc344aac5f452a04c827` |
+| `docs/superpowers/specs/2026-09-02-storage-cutover-and-qa-design.md` | `30b74475822692388d07a3d3891d12ab625feb0d5cc209b699933c54f8589b4c` |
 
 At Task 9 execution, each exclusion SHA must exactly match the frozen
 completion-ledger/master value or the independently recorded historical-plan

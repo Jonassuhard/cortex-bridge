@@ -1,6 +1,6 @@
 # Cortex Bridge S3 Owned-Process Supervision Design
 
-**Status:** Approved contract; implementation and live evidence do not yet exist
+**Status:** R17 corrective candidate awaiting independent PASS review; implementation and live evidence do not yet exist
 **Target:** Cortex Bridge v0.5.4
 **Scope:** macOS disk-image and Keychain storage workflows
 
@@ -81,6 +81,8 @@ Python owns:
 - the broker process identity and attested local connection, but not its native
   children;
 - durable ledger transitions, recovery, and idempotent close acknowledgement.
+- the private durable recovery root used to authenticate a successor controller;
+  that root is never START authority and is erased only after `FINALIZED`.
 
 Python may supervise or terminate a broker before `START`, but once the ledger
 is `OPEN_RUNNING` it may only request cancellation or recovery through the
@@ -110,10 +112,31 @@ The launcher also creates an unnamed private `AF_UNIX` socketpair before exec.
 The broker inherits one `START_CAPABILITY_FD`; only the preparing Python process
 holds its peer. After `OPEN_RUNNING` is fsynced, Python writes one canonical
 `START_GRANT` binding `record_sha256`, `request_sha256`, operation, both
-budgets, boot identity, workflow, and generation. The broker consumes it once
-and accepts `START` only when every field matches. Recovery never recreates this
-capability and may query, cancel, or close, but cannot start. Peer UID and nonce
-authenticate reconnection; they are not START authority.
+budgets, boot identity, workflow, generation, the accepted connection nonce,
+and the SHA-256 of that connection's `LOCAL_PEERTOKEN` audit-token projection.
+The broker consumes it once and accepts `START` only on that exact owner
+connection when every field matches. `START`, `CANCEL`, `STATUS`, `CLOSE`,
+`COMMIT_ACK`, `LATE_CLOSE`, `RECONCILE_PROBE`, and `RECONCILIATION_ACK` are
+rejected on every non-owner connection. Recovery never recreates START
+authority. A successor connection becomes owner only through the durable
+recovery handshake below after the prior owner has reached EOF.
+
+Before `OPEN_PREPARED`, Python generates a separate 256-bit recovery root,
+writes it to a current-UID, single-link, no-follow mode `0600` authority file,
+fsyncs that file and its owner-only directory, and records its digest and vnode
+identity in the ledger. The broker receives the same root once through a
+dedicated inherited FD, stores it only in mutable memory, and closes the FD.
+For each recovery phase, the successor proves
+`HMAC-SHA256(root, "CORTEX-S3\0RECOVERY\0V1\0" || canonical(projection))`, where
+the projection contains workflow, generation, transaction, operation, request
+digest, current result and closed-record digests or null before they exist,
+boot identity, recovery phase, new connection nonce, and the new peer audit
+token digest. The root or HMAC is never accepted by `START_GRANT` or `START`.
+The broker consumes no durable recovery authority before `FINALIZED`: exact
+retries on a newly authenticated owner connection remain possible. After
+`FINALIZED`, it zeroes its root; Python unlinks the exact authority vnode and
+fsyncs the directory. If Python dies in that last window, closed-ledger recovery
+may delete the still-attested file without contacting an exited broker.
 
 Broker exec receives exactly `PATH=/usr/bin:/bin:/usr/sbin:/sbin`, `LANG=C`,
 and `LC_ALL=C`, constructed from constants. It receives no `HOME`, `DYLD_*`,
@@ -136,18 +159,19 @@ that no `START` was sent.
 
 The order is normative:
 
-1. Under the storage lock, Python creates and fsyncs `OPEN_PREPARED` with the
-   request digest, generation, budgets, boot identity, socket identity, and
-   attested broker identity.
+1. Under the storage lock, Python creates and fsyncs the recovery-authority file,
+   then creates and fsyncs `OPEN_PREPARED` with its digest/vnode, the request
+   digest, generation, budgets, boot identity, socket identity, and attested
+   broker identity.
 2. Python spawns the broker in its separate session with an exec-status pipe,
-   the bound listener FD, the private START-capability FD, and the private
-   reconciliation-capability FD. The broker cannot perform an effect before
-   consuming the matching inherited START grant; reconciliation capability is
-   unusable until a matching terminal result exists.
+   the bound listener FD, the private START-capability FD, and the read end that
+   transfers the durable recovery root. The broker cannot perform an effect
+   before consuming the matching inherited START grant; recovery proof is not
+   START authority.
 3. Python observes exec-status EOF, authenticates `HELLO`, and verifies the
    broker self-identity against the still-open executable FD.
 4. Python writes and fsyncs `OPEN_RUNNING`, then writes the exact single-use
-   `START_GRANT` on the inherited capability.
+   owner-connection-bound `START_GRANT` on the inherited capability.
 5. Only then may Python send matching `START`; only then may the broker spawn a
    native child.
 
@@ -268,15 +292,19 @@ All digest prefixes below are literal ASCII including each shown NUL byte:
 | Digest | Exact input after the prefix |
 | --- | --- |
 | `request_sha256` | `SHA256("CORTEX-S3\0REQUEST\0V1\0" || canonical(request))` |
-| `command_sha256` | `SHA256("CORTEX-S3\0COMMAND\0V1\0" || canonical({workflow_id,generation,operation,request_sha256,broker_sha256,boot_seconds,boot_microseconds,effect_budget_ns,cleanup_budget_ns}))` |
+| `command_sha256` | `SHA256("CORTEX-S3\0COMMAND\0V1\0" || canonical({workflow_id,generation,operation,request_sha256,broker_sha256,boot_seconds,boot_microseconds,effect_budget_ns,cleanup_budget_ns,connection_nonce,peer_audit_sha256}))` |
 | `result_sha256` | `SHA256("CORTEX-S3\0RESULT\0V1\0" || canonical(result excluding result_sha256))` |
 | `closed_ready_sha256` | `SHA256("CORTEX-S3\0CLOSED-READY\0V1\0" || canonical(CLOSED_READY payload excluding closed_ready_sha256))` |
 | `record_sha256` | `SHA256("CORTEX-S3\0LEDGER\0V1\0" || canonical(ledger record excluding record_sha256))` |
-| `capability_sha256` | `SHA256("CORTEX-S3\0RECONCILIATION-CAPABILITY\0V1\0" || canonical({workflow_id,generation,transaction_id,operation,request_sha256,result_sha256,record_sha256,boot_seconds,boot_microseconds}))` |
+| `recovery_authority_sha256` | `SHA256("CORTEX-S3\0RECOVERY-ROOT\0V1\0" || recovery_root_bytes)` |
+| `recovery_proof` | `HMAC-SHA256(recovery_root_bytes, "CORTEX-S3\0RECOVERY\0V1\0" || canonical({workflow_id,generation,transaction_id,operation,request_sha256,result_sha256,record_sha256,boot_seconds,boot_microseconds,recovery_phase,connection_nonce,peer_audit_sha256}))` |
+| `capability_sha256` | `SHA256("CORTEX-S3\0RECONCILIATION-CAPABILITY\0V1\0" || canonical({workflow_id,generation,transaction_id,operation,request_sha256,result_sha256,record_sha256,boot_seconds,boot_microseconds,recovery_authority_sha256}))` |
 | `reconciliation_probe_sha256` | `SHA256("CORTEX-S3\0RECONCILIATION-PROBE\0V1\0" || canonical(ReconciliationProbeRequest))` |
 | `postcondition_sha256` | `SHA256("CORTEX-S3\0RECONCILIATION-POSTCONDITION\0V1\0" || canonical(ReconciliationPostcondition))` |
 | reconciliation `record_sha256` | `SHA256("CORTEX-S3\0RECONCILIATION\0V1\0" || canonical(reconciliation record excluding record_sha256))` |
 | installed-generation `generation_record_sha256` | `SHA256("CORTEX-S3\0INSTALLED-GENERATION\0V1\0" || canonical(generation record excluding generation_record_sha256))` |
+| `bootstrap_manifest_sha256` | `SHA256("CORTEX-S3\0BOOTSTRAP-MANIFEST\0V1\0" || canonical(bootstrap manifest excluding bootstrap_manifest_sha256))` |
+| `selector_sha256` | `SHA256("CORTEX-S3\0GENERATION-SELECTOR\0V1\0" || canonical({schema_version,generation_id,generation_record_sha256}))` |
 
 The command projection contains exactly the fields shown, under canonical key
 ordering. Hashes are lowercase hexadecimal. Shared golden vectors cover every
@@ -296,14 +324,16 @@ a fresh 256-bit nonce for each accepted connection. Cursors start at zero in
 each direction, advance by exactly one without wrap, and are consumed before
 an effect. A nonce/cursor pair is never valid on another connection.
 
-Message types are `HELLO`, `START`, `STARTED`, `CANCEL`, `STATUS`, `RESULT`,
+Message types are `HELLO`, `RECOVER`, `RECOVERED`, `START`, `STARTED`, `CANCEL`, `STATUS`, `RESULT`,
 `CLOSE`, `CLOSED_READY`, `COMMIT_ACK`, `COMMITTED`, `RECONCILE_PROBE`,
 `RECONCILIATION_RESULT`, `RECONCILIATION_ACK`, `FINALIZED`, `LATE_CLOSE`, and
 `PROTOCOL_ERROR`. Unknown keys, values, operations, or states fail closed.
 
 | Type | Direction | Exact payload fields |
 | --- | --- | --- |
-| `HELLO` | broker to Python | `broker_dev_u32`, `broker_ino`, `broker_uid`, `broker_mode`, `broker_sha256`, `boot_seconds`, `boot_microseconds` |
+| `HELLO` | broker to Python | `broker_dev_u32`, `broker_ino`, `broker_uid`, `broker_mode`, `broker_sha256`, `boot_seconds`, `boot_microseconds`, `peer_audit_sha256` |
+| `RECOVER` | successor Python to broker | `recovery_phase`, `request_sha256`, `result_sha256`, `record_sha256`, `recovery_proof` |
+| `RECOVERED` | broker to successor Python | `recovery_phase`, `record_sha256`, `owner_connection=true` |
 | `START` | Python to broker | `request`, `request_sha256`, `effect_budget_ns`, `cleanup_budget_ns` |
 | `STARTED` | broker to Python | `command_sha256`, `started_monotonic_ns` |
 | `CANCEL` | Python to broker | `command_sha256`, `reason` |
@@ -335,6 +365,22 @@ separate `StorageEvidenceResponse` mapping omits both `device` and
 PGID. `CANCEL.reason` is `CLIENT_CANCELLED` or `SHUTDOWN_REQUESTED`.
 Protocol-error codes are `INVALID_FRAME`, `AUTH_FAILED`, `STALE_GENERATION`,
 `REPLAY`, `INVALID_STATE`, `DEADLINE_EXPIRED`, and `BUDGET_EXCEEDED`.
+
+Python decodes `CLOSED_READY` only as `ClosedReadyResult`, containing exactly
+workflow, generation, `outcome`, top-level `code`, nullable `response`,
+`command_sha256`, `result_sha256`, `closed_ready_sha256`, `child_reaped`,
+`group_absent`, `native_cleanup_proven`, and `reconciliation_required`.
+`close_from_ready_locked` independently recomputes both hashes before copying
+any terminal field into the ledger. No field is inferred from the nullable
+response; failure with `response=null` retains its top-level outcome/code.
+
+The broker derives the peer audit-token projection with `LOCAL_PEERTOKEN` and
+hashes its canonical PID, effective UID/GID, audit-session ID, and PID-version
+fields. Initial `HELLO` binds that projection and nonce. After owner EOF, only
+an exact `RECOVER` proof for the new nonce/audit token may transfer owner status;
+until `RECOVERED`, every workflow control frame on that connection is rejected.
+A same-UID peer that knows the request but lacks the inherited START grant or
+durable recovery root cannot start, cancel, close, acknowledge, or reconcile.
 
 Transport reads and writes use local monotonic deadlines no greater than two
 seconds. Native stdout and stderr are each capped at 1 MiB. Boundary and
@@ -440,8 +486,15 @@ no-broker exception because its durable invariant proves `START` was never sent.
 `native_cleanup_proven` means only that the broker reaped its direct child and
 proved the original group absent. `effect_reconciled` is a separate durable
 fact owned by `storage-transition.json`. A `CLOSED_FAILURE` after `STARTED`
-always sets `reconciliation_required=true`; it never authorizes a later
-storage effect, update, reinstall, or uninstall by itself.
+sets `reconciliation_required=true` only for mutating `create`, `mount`,
+`detach`, or `delete-disposable-item`; it never authorizes a later storage
+effect, update, reinstall, or uninstall by itself. Strictly read-only
+`inspect-item` and `probe-mounted-image` always set
+`reconciliation_required=false`. Their failure can close only after exact
+cleanup/reap/group-absence proof for any observation child; ambiguous cleanup
+is `OPEN_UNRESOLVED`. After `FINALIZED`, a fresh read-only workflow may replay
+the observation under a shared storage lock without upgrading or writing an
+effect-reconciliation record.
 
 Each blocking workflow has one durable `ReconciliationRecord` chain containing
 exactly schema version, workflow UUID, generation, transaction UUID, operation,
@@ -458,18 +511,17 @@ the previous digest, use no-follow atomic replacement, and fsync file and parent
 directory. Missing, stale, non-canonical, or mismatched records become
 `unclear`.
 
-Before the original `START`, Python and the broker receive opposite ends of one
-unnamed private reconciliation-capability channel bound to workflow,
-generation, transaction, operation, request digest, budgets, boot identity, and
-the literal terminal-result hash domain; no result digest is guessed before it
-exists. After terminal result construction, both sides derive the single-use
-capability over the actual `result_sha256` and closed-ledger `record_sha256`.
-It cannot be used until that result declares reconciliation required.
-Recovery may reconnect to that retained broker but never mint a replacement
-capability or send another `START`. Under the same active lock owner, the
-capability permits exactly one closed `ReconciliationProbeRequest` for the
-blocking workflow. It cannot grant a public operation, mutation, general
-admission, or another generation. The broker returns a typed
+The pre-START durable recovery root is the sole transmissible recovery
+authority. After terminal result construction, both sides derive the
+single-use reconciliation capability from that root and the actual
+`result_sha256`, closed-ledger `record_sha256`, boot identity, workflow,
+generation, transaction, operation, and request digest. It cannot be used until
+that result declares reconciliation required. Recovery may reconnect and prove
+the current phase to the retained broker but never mint START authority or send
+another `START`. Under the same active lock owner, the capability permits
+exactly one closed `ReconciliationProbeRequest` for the blocking workflow. It
+cannot grant a public operation, mutation, general admission, or another
+generation. The broker returns a typed
 `ReconciliationPostcondition`; the unique probe is executed once and exact
 replays receive the broker's cached response. The proof is consumed only after
 final-record CAS, file/directory fsync, exact `RECONCILIATION_ACK`, and
@@ -485,9 +537,24 @@ generation, transaction, operation, request digest, and result digest; its
 payload carries only the exact image, mount, Keychain-query digest, and expected
 APFS/encryption identities needed by that variant. Operation/probe mismatch,
 extra key, stale digest, partial observation, more than one mapping/item, or
-mount non-emptiness in a zero-mapping result yields `unclear`. The probe has no
-spawn, signal, secret delivery, detach, delete, create, attach, or other
-mutation branch.
+mount non-emptiness in a zero-mapping result yields `unclear`. The retained
+broker may perform only these closed read-only observations:
+
+- `/usr/bin/hdiutil info -plist`;
+- `/usr/bin/hdiutil isencrypted -plist <exact-attested-image>`;
+- `/usr/sbin/diskutil info -plist <exact-attested-device>`; and
+- exact Security.framework item-count/metadata queries with
+  `kSecUseAuthenticationUIFail`.
+
+There is no second `START`, mutating native verb, arbitrary executable/argv,
+secret delivery, create, attach, detach, delete, repair, or verify operation.
+Any observation child uses the same suspended registration, identity,
+waitability, budget, output caps, signal, wait/reap, group-absence, environment,
+and FD-hygiene rules as the original child. Python never spawns a reconciliation
+command. Exact request replay returns cached bytes without another observation.
+The `mounted_image_probe` postcondition is valid here only as an embedded
+observation for the original mutating workflow, never as reconciliation of a
+standalone read-only workflow.
 
 Under the same transaction/workflow/result digests, `StorageLifecycle`
 reconciles operation-specific postconditions and fsyncs the transition journal:
@@ -531,11 +598,15 @@ later lock. One active connection or recovery owner exists per workflow.
 
 Every broker start, mounted-image probe, recovery, late close, and
 reconciliation entrypoint is suffixed `_locked` and receives the active set.
-Every lifecycle and contract operation is likewise a `*_locked` method. Before
+Every ledger mutation/read used for admission or recovery, every transition
+journal read/CAS/fsync, and every lifecycle and contract operation is likewise
+a `*_locked` method taking that same object. A mount verifier receives the set
+as its argument; it may not capture another set. Before
 attestation, connection, capability use, or native effect, it revalidates the
 same home and all marker identities, active state, admission exclusivity, and
 operation-appropriate install/storage modes. Wrong-home, closed, missing,
-forged, replaced, weak-mode, or nested sets fail before effect.
+forged, replaced, weak-mode, nested, or captured-set/passed-set mismatch fails
+before read, CAS, fsync, connection, or effect.
 
 ## Secret handling
 
@@ -550,6 +621,14 @@ staging, Keychain staging, and every application-owned mutable copy of
 Keychain result bytes are overwritten with `memset_s` on every exit path.
 Evidence states that Security.framework-owned immutable copies and kernel pipe
 buffers are outside the erasure proof.
+
+The recovery root is a separate protocol capability, not a disk-image secret.
+Its bytes exist only in the attested private authority file and mutable
+controller/broker buffers; the ledger contains only its relative record name,
+vnode identity, and domain-separated digest. It is never argv, environment,
+ordinary frame content, log, exception, receipt, or evidence. Transfers use the
+dedicated inherited FD; application-owned buffers are zeroed on close and the
+exact file is unlinked/directory-fsynced only after `FINALIZED`.
 
 Every broker socket uses `SO_NOSIGPIPE`; the broker ignores SIGPIPE and handles
 `EPIPE` as a delivery failure without skipping cleanup. Each child resets
@@ -591,11 +670,14 @@ atomic complete-generation installation unit → S3 evidence and release gates.
 No later task requests RED for an already-created behavior, and installed
 attestation/factory code does not exist before the installation unit.
 
-- `InstalledStorageRuntime.from_installed_home_locked(home, lock_set)` is the
-  sole product composition factory. Only after validating an active same-home
-  install-shared-or-stronger set does it attest one generation and compose its
-  broker, descriptor-only mount probe, ledger, paths, lifecycle, and contract.
-  No product factory or executable attestation runs before that lock proof.
+- `InstalledStorageRuntime.from_installed_home_locked(home, lock_set,
+  bootstrap_handle)` is the sole product composition factory; its third
+  argument is the inherited
+  `AttestedBootstrapHandle`. Only after validating that handle against the
+  active same-home install-shared-or-stronger set does it compose the already
+  attested immutable generation's broker, descriptor-only mount probe, ledger,
+  paths, lifecycle, and contract. No generation byte is read or executed before
+  the stable bootstrap's lock and attestation.
 - The existing `StorageLifecycle` remains the authority through
   `preflight_locked`, `keychain_spike_locked`, `create_vault_locked`,
   `initialize_layout_locked`, `mount_or_adopt_locked`, `detach_locked`, and
@@ -615,6 +697,15 @@ attestation/factory code does not exist before the installation unit.
   `cortex_paths`, startup lease, server lifespan, and their tests consume the
   same lifecycle and reconciliation barrier.
 
+The child publishes one private hash-chained `RuntimeLifespanRecord` with exact
+states `STARTING → READY → CLOSED`. It binds lease ID, lease-receipt digest,
+server PID/PGID/start identity, storage transaction or null, boot identity, and
+installed generation-record digest. `STARTING` is fsynced before the startup
+ACK, `READY` only after FastAPI lifespan initialization succeeds, and `CLOSED`
+before teardown begins. `managed_runtime_is_ready_locked` requires the exact live
+server identity plus the current `READY` record; pre-READY crash, missing/stale
+record, and a live process whose record is `CLOSED` are not ready.
+
 The broker is the only parent allowed to spawn `hdiutil` or `diskutil`.
 `storage-mount-probe --fd` is the only other storage subprocess: it accepts one
 inherited directory FD, performs descriptor-only `fstat`/`fstatfs`, and has no
@@ -631,8 +722,37 @@ no test routes. The manifest records source digest, build-profile digest,
 binary digest, device, inode, owner, and mode `0700`; the Python client and
 criteria/evidence schema versions are packaged explicitly.
 
-One `installed_storage_runtime_generation` is fixed beneath the verified
-runtime home. `app/bin` contains `cortex-storage-broker`,
+Product entry starts at the stable compiled
+`CORTEX_HOME/bootstrap/cortex-launch`, never in mutable `app/scripts` or
+`app/python`. Its v1 binary and `bootstrap-v1.json` are outside the selectable
+generation and are not changed by a compatible generation update. Before
+reading the selector or any generation byte, it descriptor-opens and attests
+the owner-only home, attests/acquires `.install.lock` shared using built-in
+code, and keeps that FD locked. It then opens the exact mode `0600`
+`CORTEX_HOME/current-generation.json`, rejects links/extra keys, and resolves
+one immutable `CORTEX_HOME/installed-generations/<generation-id>` directory by
+FD. The selector contains only schema version, generation ID, and
+`generation_record_sha256`.
+
+Under the retained lock, the bootstrap verifies `generation-record.json`, its
+bound `owned_manifest_sha256`, every tree/native-helper identity, and the exact
+interpreter FD before executing anything from the generation. It passes an
+`AttestedBootstrapHandle` containing the still-locked install FD plus open
+selector, generation-directory, record, manifest, and interpreter identities
+to the attested generation entrypoint. That entrypoint calls the sole ordered
+lock context with `bootstrap_install=handle`, which adopts rather than
+reacquires the shared install open-file description and then acquires storage
+and admission. It passes the resulting same-home set and handle to
+`InstalledStorageRuntime.from_installed_home_locked`; the factory rejects a
+missing, closed, wrong-home, wrong-generation, or unlocked handle. The bootstrap
+closes its unnecessary FDs only after the factory has adopted them. The hash
+graph is acyclic: `owned.json` contains component digests but no generation or
+selector digest; `generation-record.json` binds `owned_manifest_sha256` and the
+interpreter/components but not the selector; the selector binds the generation
+record digest but is not hashed by that record.
+
+One immutable `installed_storage_runtime_generation` is fixed beneath
+`installed-generations/<generation-id>`. Its `app/bin` contains `cortex-storage-broker`,
 `storage-mount-probe`, and `cortex-macos-ax-send`; `app/python` contains the
 packaged application; `app/scripts`, `app/native-src`, and
 `app/build-profiles` contain every installed entrypoint, the three native
@@ -663,10 +783,17 @@ binary swap and manifest publication leaves a detectable mismatch and refuses
 execution; it never silently adopts the new file.
 
 Migration from the legacy single-helper manifest to the three-entry registry
-publishes the application module tree, scripts, sources/profile, broker, and
-manifest as one recoverable installer transaction. A crash at any boundary
+publishes a complete immutable generation, generation record, then the selector
+as one recoverable installer transaction. A crash at any boundary
 rolls back to the prior complete generation or leaves a detectable refusal; no
 mixed generation is executable.
+
+Launch-vs-update tests pause at every staged tree, manifest, generation-record,
+selector fsync/rename, and rollback boundary. A sentinel in every unselected or
+partial generation must record zero import, script execution, interpreter
+execution, broker start, and native effect. The prior selector remains usable
+until the new complete record is durable; after selector publication every
+launch sees only the new complete generation.
 
 Update/reinstall is allowed with an existing compatible Keychain item only when
 the runtime is verified stopped, schema/build profile are compatible, every

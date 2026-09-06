@@ -1,25 +1,25 @@
 {
   "schema_version": 3,
   "planning_commit": null,
-  "documentation_state": "R16_UNCOMMITTED_AWAITING_REVIEW",
+  "documentation_state": "R17_UNCOMMITTED_AWAITING_REVIEW",
   "hash_model": {
     "master_contains_own_hash": false,
     "master_contains_ledger_hash": false,
     "ledger_records_master_hash": true
   },
-  "master_plan_sha256": "0c5699b660d66b39f6f85648e685b9b20338b84c349a60c1a05bbaa190a83ef8",
+  "master_plan_sha256": "252bca65d00a5d34e2ce7f301dfa2d28e019a9ff79fa49f3acfd45e570f904ea",
   "spec_sha256": {
     "2026-08-31-hybrid-intent-router-design.md": "472ae88687f6df00be1aac7bb33af536b0456fdc7fd04b7bb5f95e637e4b38f5",
-    "2026-09-02-storage-cutover-and-qa-design.md": "a41bd652ece6803afa5a759f6bf806639ff17c1db067bc344aac5f452a04c827",
+    "2026-09-02-storage-cutover-and-qa-design.md": "30b74475822692388d07a3d3891d12ab625feb0d5cc209b699933c54f8589b4c",
     "2026-09-03-local-alias-action-addendum.md": "38dff2d114ddf3a8f2262f3ac2b37dcbec9fd33951934c5d5c03a9a0c4acc08b",
-    "2026-09-03-s3-owned-process-supervision-design.md": "4bd723ae6db96d8ca5ce4aedec5053d8efa1782af552030fa9c227078f86c05b"
+    "2026-09-03-s3-owned-process-supervision-design.md": "6fbdd97785391bb94a3314be8486d9c3915f2e1719bbb39f866727bd22daa7de"
   },
   "subordinate_plan_sha256": {
     "E": "b98b88a54bc27543555c465839ff1bea912fc343514fa3ffdf15caecfe61ffe1",
     "I": "bcd7a77dbf344c05f60238be326b6a96d853ec8063777e10931b0041502ef6a6",
     "L": "b8dda2316401eaee1b6408aa6cc68136b783524d6b99e5b30f64db7c30e83277",
-    "S": "b34a111b6a8029c82858f9bbf8baff6e95300252db85cd46d76df82ceac89fdd",
-    "S3": "afb695e260b652ddb843d7c673c521aaf412c2dee86bc90718ee5f3f72154778",
+    "S": "d6a2f13e32dfc1ff9abaed9b84d160d1a06cc406bdd146a2a174708dff05674b",
+    "S3": "be2141907c09c25e4d674c02af96b9f74f9d0d6fbc021ac819e8c5b9705ca227",
     "U": "25d04484e4dcf337728ce96f0af642d3894be71dea0ef9a616f2552cd9121245"
   },
   "phases": {
@@ -39,9 +39,9 @@
           "plan_sha256": "6ec2207fc760b556f0e43cd8eef3eb9d25d12557b69f7e47aa6545e2815435e6"
         },
         "S3_corrective": {
-          "status": "R16_AWAITING_INDEPENDENT_REVIEW",
-          "design_sha256": "4bd723ae6db96d8ca5ce4aedec5053d8efa1782af552030fa9c227078f86c05b",
-          "plan_sha256": "afb695e260b652ddb843d7c673c521aaf412c2dee86bc90718ee5f3f72154778",
+          "status": "R17_AWAITING_INDEPENDENT_REVIEW",
+          "design_sha256": "6fbdd97785391bb94a3314be8486d9c3915f2e1719bbb39f866727bd22daa7de",
+          "plan_sha256": "be2141907c09c25e4d674c02af96b9f74f9d0d6fbc021ac819e8c5b9705ca227",
           "implementation_commit": null,
           "review_id": null,
           "reviewed_design_sha256": null,
@@ -62,6 +62,7 @@
           "review_verdict": null,
           "interface_signatures": {
             "InstalledStorageRuntime.from_installed_home_locked": null,
+            "launch_managed_runtime": null,
             "StorageContract.assert_runtime_ready_locked": null,
             "StorageContract.open_locked": null,
             "StorageContract.open_workspace_locked": null,
@@ -115,6 +116,16 @@
         "interpreter_mode": null,
         "owned_manifest_sha256": null,
         "generation_record_sha256": null,
+        "selector_relative_path": "current-generation.json",
+        "selector_sha256": null,
+        "status": null
+      },
+      "stable_storage_bootstrap": {
+        "relative_path": "bootstrap/cortex-launch",
+        "manifest_relative_path": "bootstrap/bootstrap-v1.json",
+        "source": "native/macos/storage_bootstrap.swift",
+        "build_profile": "native/build-profiles/storage-bootstrap-v1.json",
+        "bootstrap_manifest_sha256": null,
         "status": null
       },
       "installed_storage_broker_identity": {
@@ -129,7 +140,17 @@
       },
       "reconciliation_gate": {
         "native_cleanup_proven": null,
-        "effect_reconciled": null
+        "effect_reconciled": null,
+        "recovery_authority_durable": null,
+        "read_only_reconciliation_required": false
+      },
+      "runtime_lifespan": {
+        "states": [
+          "STARTING",
+          "READY",
+          "CLOSED"
+        ],
+        "status": null
       }
     },
     "E": {

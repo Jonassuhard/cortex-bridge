@@ -8,11 +8,11 @@
 
 **Tech Stack:** Python 3.11/3.14, FastAPI/SQLite, Swift/Security.framework, macOS APFS/DiskImages, Bash, Chrome MV3, React/TypeScript/Vitest/Playwright, Git/Gitleaks.
 
-**Spec:** `docs/superpowers/specs/2026-09-02-storage-cutover-and-qa-design.md` at SHA-256 `a41bd652ece6803afa5a759f6bf806639ff17c1db067bc344aac5f452a04c827`; `docs/superpowers/specs/2026-08-31-hybrid-intent-router-design.md` at SHA-256 `472ae88687f6df00be1aac7bb33af536b0456fdc7fd04b7bb5f95e637e4b38f5`; `docs/superpowers/specs/2026-09-03-local-alias-action-addendum.md` at SHA-256 `38dff2d114ddf3a8f2262f3ac2b37dcbec9fd33951934c5d5c03a9a0c4acc08b`; and `docs/superpowers/specs/2026-09-03-s3-owned-process-supervision-design.md` at SHA-256 `4bd723ae6db96d8ca5ce4aedec5053d8efa1782af552030fa9c227078f86c05b`.
+**Spec:** `docs/superpowers/specs/2026-09-02-storage-cutover-and-qa-design.md` at SHA-256 `30b74475822692388d07a3d3891d12ab625feb0d5cc209b699933c54f8589b4c`; `docs/superpowers/specs/2026-08-31-hybrid-intent-router-design.md` at SHA-256 `472ae88687f6df00be1aac7bb33af536b0456fdc7fd04b7bb5f95e637e4b38f5`; `docs/superpowers/specs/2026-09-03-local-alias-action-addendum.md` at SHA-256 `38dff2d114ddf3a8f2262f3ac2b37dcbec9fd33951934c5d5c03a9a0c4acc08b`; and `docs/superpowers/specs/2026-09-03-s3-owned-process-supervision-design.md` at SHA-256 `6fbdd97785391bb94a3314be8486d9c3915f2e1719bbb39f866727bd22daa7de`.
 
 **Review-status provenance:** Approval attaches only to the four exact spec
 hashes above through the reviewed planning-handoff commit; any byte change
-resets it. `S3_FAIL_frozen` records the rejected legacy boundary, while the R16
+resets it. `S3_FAIL_frozen` records the rejected legacy boundary, while the R17
 S3 hash is the corrective candidate requiring its own independent PASS review.
 The current ledger deliberately blocks S4 until that review is recorded;
 documentary approval never authorizes a live effect.
@@ -34,7 +34,7 @@ documentary approval never authorizes a live effect.
 
 | Phase | Plan | Creates the authority used downstream | Shared-file rule |
 | --- | --- | --- | --- |
-| 1 | `2026-09-02-v054-storage-runtime-foundation.md` plus mandatory corrective `2026-09-03-s3-owned-process-supervision.md` | Persistent broker, reconciled `StorageLifecycle`, `StorageContract`, `StorageBinding`, vault-only `WorkspaceHandle`, runtime readiness, transaction/CLI and managed start | One storage writer owns the union of both file maps until checkpoint S4 |
+| 1 | `2026-09-02-v054-storage-runtime-foundation.md` plus mandatory corrective `2026-09-03-s3-owned-process-supervision.md` | Stable locked bootstrap, persistent broker, durable recovery authority, reconciled `StorageLifecycle`, `StorageContract`, `StorageBinding`, vault-only `WorkspaceHandle`, lifespan-bound runtime readiness, transaction/CLI and managed start | One storage writer owns the union of both file maps until checkpoint S4 |
 | 2 | `2026-09-02-v054-durable-effects-and-executor.md` | schema v3 `EffectGate`, exact approvals, durable STOP, effect-bound `ToolExecutor`/browser permits, fixed attested `LocalAliasWorkerRunner` | Begins only after S; sole writer of executor/orchestration/direct-effect/worker-install files until checkpoint E |
 | 3 | `2026-09-02-v054-runtime-ui-and-browser-reliability.md` | authoritative runtime projection, local-action presentation, switch deadlines, tab provenance, categories, diagnostic export | Begins only after E; owns shared `console/chat.py`, extension and frontend files until checkpoint U |
 | 4 | `2026-09-02-v054-hybrid-intent-router.md` | deterministic/local-model routing, clarification, `GeneralMission`/`LocalAliasAction` split, alias catalog/access/finalization services | Begins only after U; consumes rather than redefines storage/effect/UI contracts until checkpoint I |
@@ -44,8 +44,8 @@ documentary approval never authorizes a live effect.
 
 | Phase | Plan | SHA-256 |
 | --- | --- | --- |
-| S | `docs/superpowers/plans/2026-09-02-v054-storage-runtime-foundation.md` | `b34a111b6a8029c82858f9bbf8baff6e95300252db85cd46d76df82ceac89fdd` |
-| S3 | `docs/superpowers/plans/2026-09-03-s3-owned-process-supervision.md` | `afb695e260b652ddb843d7c673c521aaf412c2dee86bc90718ee5f3f72154778` |
+| S | `docs/superpowers/plans/2026-09-02-v054-storage-runtime-foundation.md` | `d6a2f13e32dfc1ff9abaed9b84d160d1a06cc406bdd146a2a174708dff05674b` |
+| S3 | `docs/superpowers/plans/2026-09-03-s3-owned-process-supervision.md` | `be2141907c09c25e4d674c02af96b9f74f9d0d6fbc021ac819e8c5b9705ca227` |
 | E | `docs/superpowers/plans/2026-09-02-v054-durable-effects-and-executor.md` | `b98b88a54bc27543555c465839ff1bea912fc343514fa3ffdf15caecfe61ffe1` |
 | U | `docs/superpowers/plans/2026-09-02-v054-runtime-ui-and-browser-reliability.md` | `25d04484e4dcf337728ce96f0af642d3894be71dea0ef9a616f2552cd9121245` |
 | I | `docs/superpowers/plans/2026-09-02-v054-hybrid-intent-router.md` | `bcd7a77dbf344c05f60238be326b6a96d853ec8063777e10931b0041502ef6a6` |
@@ -57,7 +57,7 @@ documentary approval never authorizes a live effect.
 flowchart LR
     S1[Foundation lock/result] --> S2[Descriptor mount probe]
     S2 --> F[S3_FAIL_frozen<br/>one-shot defect reproduced]
-    F --> R{R16 contract<br/>independent review PASS}
+    F --> R{R17 contract<br/>independent review PASS}
     R --> C[S3 corrective Tasks 1-5<br/>broker/client core]
     C --> FC[Foundation 6,5,7-14<br/>injected consumers]
     FC --> G[S3 Task 6<br/>PASS-only integration gate]
@@ -68,7 +68,7 @@ flowchart LR
 ```
 
 `S3_FAIL_frozen` is a required failing baseline, not executable production and
-not a waived gate. The R16 `S3_corrective` contract must be reviewed PASS before
+not a waived gate. The R17 `S3_corrective` contract must be reviewed PASS before
 the first core or consumer implementation edit. The only execution order is
 Foundation 1-2 → S3 1-5 → Foundation 6,5,7-14 → PASS-only S3 Task 6 → atomic
 Foundation 4/S3 Task 7 → S3 8-12. S4 is the resulting terminal checkpoint, not
@@ -77,8 +77,8 @@ survives that handoff.
 
 ## Planning handoff gate
 
-Before implementation, the planning owner creates one R16 documentation
-candidate commit containing exactly the six corrected files below. Other frozen
+Before implementation, the planning owner creates one R17 documentation
+candidate commit containing exactly the eight corrected files below. Other frozen
 specifications and plans remain byte-identical. This is a later handoff step;
 the documentation author does not stage or commit while revising the contract.
 
@@ -88,6 +88,8 @@ git add \
   docs/superpowers/specs/2026-09-03-s3-owned-process-supervision-design.md \
   docs/superpowers/plans/2026-09-02-v054-storage-runtime-foundation.md \
   docs/superpowers/plans/2026-09-03-s3-owned-process-supervision.md \
+  docs/superpowers/plans/2026-09-02-v054-durable-effects-and-executor.md \
+  docs/superpowers/plans/2026-09-02-v054-hybrid-intent-router.md \
   docs/superpowers/plans/2026-09-02-v054-completion-program.md \
   docs/superpowers/plans/2026-09-02-v054-completion-ledger.json
 git diff --cached --check
@@ -97,14 +99,16 @@ EXPECTED_STAGED="$(printf '%s\n' \
   docs/superpowers/specs/2026-09-03-s3-owned-process-supervision-design.md \
   docs/superpowers/plans/2026-09-02-v054-storage-runtime-foundation.md \
   docs/superpowers/plans/2026-09-03-s3-owned-process-supervision.md \
+  docs/superpowers/plans/2026-09-02-v054-durable-effects-and-executor.md \
+  docs/superpowers/plans/2026-09-02-v054-hybrid-intent-router.md \
   docs/superpowers/plans/2026-09-02-v054-completion-program.md \
   docs/superpowers/plans/2026-09-02-v054-completion-ledger.json | LC_ALL=C sort)"
 ACTUAL_STAGED="$(git diff --cached --name-only | LC_ALL=C sort)"
 test "$ACTUAL_STAGED" = "$EXPECTED_STAGED"
-git commit -m "docs: integrate S3 corrective storage contract"
+git commit -m "docs: integrate R17 S3 corrective storage contract"
 ```
 
-The staged-name output contains those six paths exactly. Frozen tables bind
+The staged-name output contains those eight paths exactly. Frozen tables bind
 four specs and six subordinate plans. The ledger records the master-plan hash,
 but the master contains neither its own hash nor the ledger hash; no self-hash
 cycle exists. A mismatch stops handoff. The implementation owner never creates
@@ -115,7 +119,7 @@ exact S3 design and plan hashes and returns a durable review ID plus
 `PASS|FAIL|UNCLEAR`. Only `PASS` permits the root integrator to update and commit
 the ledger alone: `S3_corrective.review_id`, reviewed design/plan hashes, and
 verdict become immutable; `S4.depends_on_review_id` receives the same ID and
-`planning_commit` and `S4.base_commit` receive the already known six-document
+`planning_commit` and `S4.base_commit` receive the already known eight-document
 candidate commit. `FAIL` or `UNCLEAR` leaves S4 blocked. The integrator stages
 and commits only the ledger after verifying that update. The gate commit itself
 is deliberately not stored inside its own bytes; S4 starts at its child HEAD
@@ -202,7 +206,7 @@ git diff --exit-code "$PLANNING_COMMIT" -- \
 ```
 
 Expected: branch `codex/v054-storage-consolidation`; `PLANNING_COMMIT` is the
-reviewed six-document R16 candidate, `GATE_COMMIT` is its ledger-only child,
+reviewed eight-document R17 candidate, `GATE_COMMIT` is its ledger-only child,
 and both are ancestors of the implementation HEAD. All four specs and seven
 plans in the baseline are tracked and byte-identical to frozen hashes; only the
 review fields differ between candidate and gate commits. If not, stop with
@@ -214,7 +218,7 @@ Resolve the repository's supported Python 3.11 and 3.14 interpreters and existin
 
 - [ ] **Step 3: Create the phase ledger**
 
-The root integrator alone owns `docs/superpowers/plans/2026-09-02-v054-completion-ledger.json`. Schema version 3 records the planning commit, master-plan hash, four spec hashes, six subordinate-plan hashes, phases `S/E/U/I/L`, and Phase S subphases `S3_FAIL_frozen`, `S3_corrective`, and terminal checkpoint `S4`. `S3_FAIL_frozen.status` is the documentary baseline label and its review verdict is `FAIL`; it is never a release waiver. `S3_corrective` stores the independent review ID, exact reviewed design/plan hashes, and verdict. `S4` stores `depends_on_review_id`, base and terminal commits, and the closed interface-signature map. Before the independent R16 review these fields are null and Phase S implementation is explicitly blocked; after PASS the dependency and base are recorded before any core edit, while terminal/signature fields stay null until the full DAG completes. Valid review verdicts remain `PASS`, `FAIL`, or `UNCLEAR`. The master has no self-hash and does not hash the ledger; after subordinate hashes are frozen, compute the master hash once and write it only into the ledger.
+The root integrator alone owns `docs/superpowers/plans/2026-09-02-v054-completion-ledger.json`. Schema version 3 records the planning commit, master-plan hash, four spec hashes, six subordinate-plan hashes, phases `S/E/U/I/L`, and Phase S subphases `S3_FAIL_frozen`, `S3_corrective`, and terminal checkpoint `S4`. `S3_FAIL_frozen.status` is the documentary baseline label and its review verdict is `FAIL`; it is never a release waiver. `S3_corrective` stores the independent review ID, exact reviewed design/plan hashes, and verdict. `S4` stores `depends_on_review_id`, base and terminal commits, and the closed interface-signature map. Before the independent R17 review these fields are null and Phase S implementation is explicitly blocked; after PASS the dependency and base are recorded before any core edit, while terminal/signature fields stay null until the full DAG completes. Valid review verdicts remain `PASS`, `FAIL`, or `UNCLEAR`. The master has no self-hash and does not hash the ledger; after subordinate hashes are frozen, compute the master hash once and write it only into the ledger.
 
 ---
 
@@ -228,7 +232,8 @@ The root integrator alone owns `docs/superpowers/plans/2026-09-02-v054-completio
 - Produces for Phase E:
 
 ```python
-InstalledStorageRuntime.from_installed_home_locked(home, lock_set) -> InstalledStorageRuntime
+InstalledStorageRuntime.from_installed_home_locked(home, lock_set, bootstrap_handle) -> InstalledStorageRuntime
+launch_managed_runtime(home, *, lock_set, lifecycle, contract, timeout_seconds=5.0) -> ManagedStartReceipt
 StorageContract.open_locked(lock_set) -> StorageBinding
 StorageContract.open_workspace_locked(lock_set, binding, requested) -> WorkspaceHandle
 StorageContract.assert_runtime_ready_locked(lock_set) -> StorageStatus
@@ -236,7 +241,7 @@ WorkspaceHandle.revalidate() -> WorkspaceIdentity
 WorkspaceHandle.duplicate_workspace_fd() -> int
 ```
 
-- [ ] **Step 0: Enforce the R16 corrective review gate before Phase S**
+- [ ] **Step 0: Enforce the R17 corrective review gate before Phase S**
 
 Load the ledger before touching any Phase S source or test. Require
 `S3_corrective.review_verdict == "PASS"`, non-null review ID, exact reviewed
@@ -252,7 +257,7 @@ and fill the prerequisite afterward.
 Use this exact handoff:
 
 ```text
-Implement Phase S using the sole DAG in docs/superpowers/plans/2026-09-02-v054-storage-runtime-foundation.md and the mandatory corrective docs/superpowers/plans/2026-09-03-s3-owned-process-supervision.md. Freeze the reproduced one-shot defect as S3_FAIL_frozen; never implement that helper route. Build S3 broker/client core with injected attestation, then Foundation consumers with injected backends, run the PASS-only S3 integration gate, and only then commit the atomic installed-generation unit. Every lifecycle/contract/broker operation carries the same active StorageLockSet. Require retained-broker durable effect reconciliation before admission/update/uninstall. Keep WorkspaceHandle vault-only. Do not run production Keychain/vault/cutover actions. Preserve unrelated changes and stop on any failed gate.
+Implement Phase S using the sole DAG in docs/superpowers/plans/2026-09-02-v054-storage-runtime-foundation.md and the mandatory corrective docs/superpowers/plans/2026-09-03-s3-owned-process-supervision.md. Freeze the reproduced one-shot defect as S3_FAIL_frozen; never implement that helper route. Build S3 broker/client core with injected attestation, then Foundation consumers with injected backends, run the PASS-only S3 integration gate, and only then commit the atomic stable-bootstrap/installed-generation unit. Every lifecycle/contract/transition/ledger/broker operation carries the same active StorageLockSet. Require owner-connection-bound START, durable non-START recovery authority, retained-broker mutating-effect reconciliation, read-only no-reconciliation closure, and STARTING→READY→CLOSED runtime truth before admission/update/uninstall. Keep WorkspaceHandle vault-only. Do not run production Keychain/vault/cutover actions. Preserve unrelated changes and stop on any failed gate.
 ```
 
 - [ ] **Step 2: Verify checkpoint S**
@@ -270,6 +275,7 @@ Give a read-only reviewer the Phase S base and terminal commits plus all four fr
 Preserve the already recorded `S3_corrective` review fields. Record the terminal
 `S4` commit and the closed signature-digest map for
 `InstalledStorageRuntime.from_installed_home_locked`,
+`launch_managed_runtime`,
 `StorageContract.open_locked`, `StorageContract.open_workspace_locked`,
 `StorageContract.assert_runtime_ready_locked`,
 `WorkspaceHandle.revalidate`, and `WorkspaceHandle.duplicate_workspace_fd`.

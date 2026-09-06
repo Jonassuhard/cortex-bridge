@@ -359,7 +359,7 @@ class LocalAliasAccessTest(unittest.IsolatedAsyncioTestCase):
                     self.assertTrue(self.runner.child_closed_and_reaped)
 ```
 
-Cover fixed alias order/labels/leaves, opaque IDs and monotonic revisions; vault root/descendants only for `VaultWorkspaceRef`; hostile `$HOME` ignored; no alias open at startup/routing/preparation; exact Origin/UI session/envelope; two-minute single-use prepared challenge, cap eight/session and 128 global; healthy runtime/readiness; STOP/consent/epoch/restart invalidation; 60-second timeout, EOF, malformed receipt, cancellation, worker crash and fake TCC hold; `EPERM|EACCES`, unavailable/symlinked/wrong-owner/wrong-type/protected/root/home/CORTEX_HOME/vault/profile/credential/device roots; one 15-minute observation only on exact terminal success. Every failed/unclear check closes worker/FDs, persists a terminal failed sensitive-read effect, creates no observation/grant and leaves STOP reset available.
+Cover fixed alias order/labels/leaves, opaque IDs and monotonic revisions; vault root and descendants only for `VaultWorkspaceRef`; hostile `$HOME` ignored; no alias open at startup/routing/preparation; exact Origin/UI session/envelope; two-minute single-use prepared challenge, cap eight/session and 128 global; healthy runtime/readiness; STOP/consent/epoch/restart invalidation; 60-second timeout, EOF, malformed receipt, cancellation, worker crash and fake TCC hold; `EPERM|EACCES`, unavailable, symlinked, wrong-owner, wrong-type, protected root, user directory, `CORTEX_HOME`, vault, profile, credential, and device roots; one 15-minute observation only on exact terminal success. Every failed or unclear check closes worker and FDs, persists a terminal failed sensitive-read effect, creates no observation or grant, and leaves STOP reset available.
 
 - [ ] **Step 2: Run tests to prove RED**
 
@@ -1905,7 +1905,9 @@ class InstalledIntentWheelTest(unittest.TestCase):
                     origin=CONFIGURED_ORIGIN, method=method, header=header,
                 )
                 rejected = self.cors_client.preflight(
-                    origin="http://evil.invalid", method=method, header=header,
+                    origin=self.fixture.untrusted_origin,
+                    method=method,
+                    header=header,
                 )
                 self.assertEqual(accepted.status_code, 200)
                 self.assertNotEqual(rejected.status_code, 200)
