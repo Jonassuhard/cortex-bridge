@@ -17,6 +17,9 @@ from storage_broker import (
     StorageBrokerClient,
     StorageWorkflowLedger,
 )
+from storage_contract import StorageContract, probe_mount_fd
+from storage_lifecycle import StorageLifecycle, StoragePaths
+from storage_result import CheckResult, OperationResult
 
 
 class InstalledRuntimeError(RuntimeError):
@@ -60,16 +63,55 @@ class InstalledStorageRuntime:
         mount_probe = attest_mount_probe(probe_path)
         ledger = StorageWorkflowLedger(home)
         broker = StorageBrokerClient(home=home, executable=broker_executable, ledger=ledger)
-        try:
-            from cortex_paths import build_paths
-            paths = build_paths()
-        except Exception:
-            paths = home
-        # The Foundation lifecycle/contract are optional until their owning
-        # tasks land.  No fake native authority is manufactured here.
-        fd_probe = None
-        lifecycle = None
-        contract = None
+        environment = dict(os.environ)
+        mount_path = Path(environment.get("CORTEX_STORAGE_MOUNT", home / "mount"))
+        root_path = Path(environment.get("CORTEX_STORAGE_ROOT", mount_path / "20_WORKSPACES"))
+        paths = StoragePaths(
+            home=home,
+            host_volume=Path(environment.get("CORTEX_STORAGE_HOST", home / "storage")),
+            legacy_image=home / "legacy" / "CORTEX_BRIDGE_2026_08.sparsebundle",
+            new_image=Path(environment.get("CORTEX_STORAGE_IMAGE", home / "storage" / "CORTEX_BRIDGE_2026_09.sparsebundle")),
+            mount=mount_path,
+            root=root_path,
+            bootstrap=home / "storage-bootstrap.json",
+            marker=home / "storage-required",
+            transition=home / "storage-transition.json",
+            quarantine=home / "private-quarantine",
+        )
+
+        def _probe_path(path: Path) -> Any:
+            descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0))
+            try:
+                return probe_mount_fd(descriptor)
+            finally:
+                os.close(descriptor)
+
+        fd_probe = probe_mount_fd
+        contract = StorageContract(
+            home,
+            environment=environment,
+            broker=broker,
+            fd_probe=fd_probe,
+            managed_runtime_probe=lambda lock_set, *, home, expected_storage_transaction_id: False,
+        )
+
+        def _status_operation(lock_set: Any) -> OperationResult:
+            status = contract.probe_locked(lock_set)
+            return OperationResult(
+                "status", status.verdict, status.transaction_id, status.code,
+                (CheckResult("storage", status.verdict, "contract_passed" if status.verdict == "PASS" else "contract_unclear" if status.verdict == "UNCLEAR" else "contract_rejected"),),
+                storage_state=status.storage_state,
+                mounted=status.mounted,
+                runtime_allowed=status.runtime_allowed,
+                recovery=status.recovery,
+            )
+
+        lifecycle = StorageLifecycle(
+            paths,
+            broker=broker,
+            fd_probe=_probe_path,
+            mount_verifier=_status_operation,
+        )
         return cls(home, generation, broker_executable, mount_probe, ledger, broker, fd_probe, paths, lifecycle, contract)
 
     def close(self) -> None:
