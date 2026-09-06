@@ -1,7 +1,7 @@
 {
   "schema_version": 3,
-  "planning_commit": null,
-  "documentation_state": "R17_COMMITTED_AWAITING_REVIEW",
+  "planning_commit": "d9f2398fc093991cb3558749009f2a4253096bec",
+  "documentation_state": "R17_REVIEWED_PASS_AWAITING_IMPLEMENTATION",
   "hash_model": {
     "master_contains_own_hash": false,
     "master_contains_ledger_hash": false,
@@ -39,22 +39,22 @@
           "plan_sha256": "6ec2207fc760b556f0e43cd8eef3eb9d25d12557b69f7e47aa6545e2815435e6"
         },
         "S3_corrective": {
-          "status": "R17_AWAITING_INDEPENDENT_REVIEW",
+          "status": "R17_PASS_RECORDED",
           "design_sha256": "6fbdd97785391bb94a3314be8486d9c3915f2e1719bbb39f866727bd22daa7de",
           "plan_sha256": "be2141907c09c25e4d674c02af96b9f74f9d0d6fbc021ac819e8c5b9705ca227",
           "implementation_commit": null,
-          "review_id": null,
-          "reviewed_design_sha256": null,
-          "reviewed_plan_sha256": null,
-          "review_verdict": null,
-          "blockers": [
-            "S3_CORRECTIVE_REVIEW_REQUIRED"
-          ]
+          "review_id": "r17-s3-ask-codex-20260906T134929Z",
+          "reviewed_design_sha256": "6fbdd97785391bb94a3314be8486d9c3915f2e1719bbb39f866727bd22daa7de",
+          "reviewed_plan_sha256": "be2141907c09c25e4d674c02af96b9f74f9d0d6fbc021ac819e8c5b9705ca227",
+          "review_verdict": "PASS",
+          "review_artifact": "docs/verification/r17-s3-contract-review-2026-09-06.md",
+          "review_artifact_sha256": "2c4a408c82dd72cc762781073e7f7e8b45568ebbf8e075704a85a024486c113a",
+          "blockers": []
         },
         "S4": {
-          "status": "BLOCKED_PENDING_S3_REVIEW",
-          "depends_on_review_id": null,
-          "base_commit": null,
+          "status": "READY_FOR_IMPLEMENTATION",
+          "depends_on_review_id": "r17-s3-ask-codex-20260906T134929Z",
+          "base_commit": "d9f2398fc093991cb3558749009f2a4253096bec",
           "terminal_commit": null,
           "focused_tests": null,
           "full_gate": null,
@@ -69,9 +69,7 @@
             "WorkspaceHandle.duplicate_workspace_fd": null,
             "WorkspaceHandle.revalidate": null
           },
-          "blockers": [
-            "S3_CORRECTIVE_REVIEW_REQUIRED"
-          ]
+          "blockers": []
         }
       },
       "native_helper_registry": {
