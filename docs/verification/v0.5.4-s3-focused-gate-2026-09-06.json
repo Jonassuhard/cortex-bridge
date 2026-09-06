@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "release": "0.5.4",
   "verificationDate": "2026-09-06",
-  "sourceCommit": "90f66df65fe02d625401a4a15bca024b84c061dd",
+  "sourceCommit": "0b23461b8724f10117c764f7f54d690eb1d11697",
   "scope": "S3 storage contract and lifecycle primitives; hermetic local checks only",
   "privacy": {
     "personalDataRecorded": false,
