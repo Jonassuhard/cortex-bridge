@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
   "release": "0.5.4",
-  "commit": "b2a0659fd7d54241523aa8e381da3491775fb0f6",
-  "generatedAt": "2026-09-06T15:32:00Z",
+  "commit": "8f010fe95b5e949140bb30a6c091dafa8a7036f5",
+  "generatedAt": "2026-09-06T22:15:00Z",
   "environment": {
     "os": "macOS 26.5.1 build 25F80",
-    "python": "3.12.14 isolated fixture environment",
+    "python": "3.14.5 and 3.12.14 isolated fixture environments",
     "node": "25.8.2",
     "browserDriver": "Playwright browser fixtures and Cortex Chrome extension unit fixtures",
     "executorKind": "deterministic local executor; no provider or vault effect",
@@ -13,7 +13,7 @@
   },
   "suites": {
     "backend": {
-      "passed": 960,
+      "passed": 998,
       "failed": 0,
       "skipped": 0
     },
@@ -60,7 +60,7 @@
     "crashPoints": {
       "runs": 6,
       "passed": 6,
-      "sourceCommit": "b2a0659fd7d54241523aa8e381da3491775fb0f6",
+      "sourceCommit": "8f010fe95b5e949140bb30a6c091dafa8a7036f5",
       "command": "python -m unittest -v tests.test_loop_mock.LoopTestCase.test_08_restart_recovery_requires_explicit_resume tests.test_missions_api.MissionsApiTestCase.test_08_restart_recovery_surfaced tests.test_playwright_driver.PlaywrightDriverTest.test_startup_failure_is_evicted_and_factory_recovers tests.test_transport_session_isolation.MissionPersistenceFailureTest.test_sqlite_update_failure_fails_mission_and_releases_exact_lease tests.test_transport_session_isolation.MissionRouteSessionIsolationTest.test_runtime_construction_failure_fails_creation_and_releases_lease tests.test_transport_session_isolation.MissionStopQuiescenceTest.test_cancel_keeps_slot_until_browser_and_background_task_quiesce",
       "evidenceArtifact": "docs/verification/v0.5.4-test-report.md",
       "points": [
@@ -123,7 +123,7 @@
       "fileUpload": false,
       "screenshotUpload": false,
       "personalDataRecorded": false,
-      "notes": "No signed-in ChatGPT, provider, Keychain, external-vault, or browser-profile effect was executed in this run."
+      "notes": "No signed-in ChatGPT, provider, Keychain, external-vault, or browser-profile effect was executed in this run. The local configured external volume was absent, so the fail-closed guard was not bypassed."
     },
     "cleanMacosLifecycle": {
       "status": "NOT_RUN",
@@ -174,14 +174,15 @@
     "VERSION": "a7711142bc1fc55c16b9147a1503a4f2c4717be5c1e4437772a047f52ef81db2",
     "scripts/verify-links.sh": "3eac1b42aeecac4e0d561b750264824fe9bb00af0294f233caf37620a9438677",
     "tests/test_verify_links.py": "9c58f6dd240390bd3a1c8ae31aefa638446903d8334ac9c2f2f2c792a9935f6c",
-    "docs/verification/v0.5.4-test-report.md": "88af7708ca7aa98112997bcbac5f64b61f6f429a88c65ee4f2ef76e2bd5e54ef"
+    "docs/verification/v0.5.4-test-report.md": "688c0f1dad0769cf353c0e2e4629c39f30b0335425c7763f37eed9b0b3d3d1db"
   },
   "implementationReadiness": {
     "status": "BLOCKED",
     "blockers": [
-      "R17 corrective S3 review has no independent PASS verdict",
-      "Persistent storage broker and reconciliation interfaces are not implemented",
-      "Downstream storage, effect, intent, and live-cutover phases are not started"
+      "Installed-generation publisher/bootstrap and the fixed managed server entrypoint are absent",
+      "launch_managed_runtime and the native storage bootstrap remain unwired stubs",
+      "Real APFS, Keychain, Chrome, ChatGPT, clean-macOS, and provider gates were not executed",
+      "Python 3.12 full hermetic run recorded one observation-triggered descendant-cleanup error"
     ]
   },
   "verdict": "PENDING_OWNER_APPROVAL_FOR_LIVE_GATES"
