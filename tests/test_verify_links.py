@@ -73,6 +73,19 @@ class VerifyLinksTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("missing_anchor", result.stdout)
 
+    def test_fenced_markdown_examples_are_not_checked_as_document_links(self) -> None:
+        (self.root / "README.md").write_text(
+            "```python\n"
+            "T17 = {'index.html': '<a href=\"missing.html\">fixture</a>'}\n"
+            "```\n",
+            encoding="utf-8",
+        )
+
+        result = self.run_check()
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("PASS", result.stdout)
+
     def test_external_links_are_counted_but_not_requested_offline(self) -> None:
         (self.root / "README.md").write_text(
             "[Official](https://docs.example.invalid/product)\n", encoding="utf-8"

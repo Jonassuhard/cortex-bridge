@@ -87,7 +87,7 @@ def anchors_for(path: Path) -> set[str]:
     anchors = set(HTML_ANCHOR_RE.findall(text))
     if path.suffix.lower() in {".md", ".markdown"}:
         seen: dict[str, int] = {}
-        for line in text.splitlines():
+        for _, line in iter_document_lines(text):
             match = re.match(r"^#{1,6}\s+(.+?)\s*#*\s*$", line)
             if not match:
                 continue
@@ -96,6 +96,25 @@ def anchors_for(path: Path) -> set[str]:
             seen[base] = count + 1
             anchors.add(base if count == 0 else f"{base}-{count}")
     return anchors
+
+
+def iter_document_lines(text: str):
+    """Yield line numbers and prose lines, excluding fenced code examples."""
+    fenced = False
+    fence_marker: str | None = None
+    for line_number, line in enumerate(text.splitlines(), start=1):
+        marker = re.match(r"^\s*(`{3,}|~{3,})", line)
+        if marker:
+            token = marker.group(1)
+            if not fenced:
+                fenced = True
+                fence_marker = token[0]
+            elif token[0] == fence_marker:
+                fenced = False
+                fence_marker = None
+            continue
+        if not fenced:
+            yield line_number, line
 
 
 def unsafe_external(url: str) -> bool:
@@ -180,7 +199,7 @@ documents = sorted(
 
 for source in documents:
     text = source.read_text(encoding="utf-8")
-    for line_number, line_text in enumerate(text.splitlines(), start=1):
+    for line_number, line_text in iter_document_lines(text):
         refs = MARKDOWN_LINK_RE.findall(line_text) + HTML_LINK_RE.findall(line_text)
         for raw_ref in refs:
             checked_links += 1
