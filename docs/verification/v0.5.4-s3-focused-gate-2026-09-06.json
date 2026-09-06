@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "release": "0.5.4",
   "verificationDate": "2026-09-06",
-  "sourceCommit": "0b23461b8724f10117c764f7f54d690eb1d11697",
+  "sourceCommit": "463e136fcbde92e0ff7c8870e32f51015997e091",
   "scope": "S3 storage contract and lifecycle primitives; hermetic local checks only",
   "privacy": {
     "personalDataRecorded": false,
@@ -14,7 +14,7 @@
       "id": "focused-python-3-14",
       "command": "PYTHONPATH=console python3.14 -m unittest -q storage broker/reconciliation/transition/contract/lifecycle/workspace/startup/native-helper/installed-runtime/lock suites",
       "status": "PASS",
-      "runs": 46,
+      "runs": 48,
       "failures": 0,
       "errors": 0
     },
@@ -22,7 +22,7 @@
       "id": "focused-python-3-12",
       "command": "PYTHONPATH=console python3.12 -m unittest -q storage broker/reconciliation/transition/contract/lifecycle/workspace/startup/native-helper/installed-runtime/lock suites",
       "status": "PASS",
-      "runs": 46,
+      "runs": 48,
       "failures": 0,
       "errors": 0
     },
