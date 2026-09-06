@@ -4,6 +4,30 @@
 **Date:** 2026-09-02
 **Target:** v0.5.4 candidate
 
+## Normative precedence for S3
+
+`docs/superpowers/specs/2026-09-03-s3-owned-process-supervision-design.md`
+takes precedence over this document for every disk-image helper, native-process
+ownership, local protocol, recovery ledger, storage lock bundle, installed
+native topology, update/reinstall/uninstall rule, and storage evidence gate.
+In particular, every one-shot `disk-image-keychain` helper,
+`CORTEX_HOME/native` storage-helper topology, fresh-helper-process mount clause,
+direct Python `hdiutil`/`diskutil` spawn, and helper-preservation uninstall
+clause below is historical and superseded. The persistent S3 broker and its
+integrated storage-runtime generation are the only implementation path.
+
+The R16 S3 contract also supersedes any unbounded or non-lock-carrying storage
+factory, any reconciliation route that starts a replacement broker, and any
+public response that exposes a device node. Product construction uses the
+single lock-carrying installed-runtime aggregate. A workflow that requires
+effect reconciliation retains its original broker until the closed probe
+exchange is durably acknowledged; the local device-bearing response is mapped
+to separate redacted storage evidence before rendering or export.
+
+All descriptor-first host, APFS, volume-name/UUID, encryption UUID, Keychain,
+mount, transition-journal, vault-only workspace, and live-authorization
+requirements in this document remain normative unless S3 strengthens them.
+
 ## Decision
 
 Cortex Bridge will stop depending on the inaccessible legacy disk image. No
@@ -141,6 +165,9 @@ Any failed precondition stops the cutover before image creation.
 
 ### 2. Throwaway Keychain spike
 
+The helper-process wording in this section is superseded by the persistent S3
+broker; the spike invariants and Keychain schema remain normative.
+
 No production image is created until a disposable 64 MiB image proves the
 entire secret and Keychain path. The implementation adds a small signed or
 locally compiled macOS helper that owns the whole image-secret lifecycle. Given
@@ -259,6 +286,10 @@ and rebuildable cache may proceed with the limitation recorded.
 
 ### 4. Mount, ownership and remount gates
 
+The attested-helper wording in this section means the installed persistent S3
+broker. Each workflow retains its one broker; no per-call or replacement helper
+exists.
+
 Every attach is launched by the attested Cortex helper with `-stdinpass`,
 `-owners on`, `-nobrowse` and the exact controlled `NEW_MOUNT`. The helper
 supplies only its own Keychain secret through a private pipe; no caller supplies
@@ -314,6 +345,10 @@ replacement. No `sudo`, `diskutil enableOwnership` or implicit administrator
 change is attempted.
 
 ### 4a. Installed native-helper contract
+
+This subsection's disk-helper names, paths, rebuild veto, and partial uninstall
+preservation are superseded by the complete S3 installed-runtime generation.
+The AX helper and descriptor mount-probe identity requirements remain.
 
 The installer extends its existing owned-helper manifest to an ordered
 `native_helpers` map containing the current AX helper plus

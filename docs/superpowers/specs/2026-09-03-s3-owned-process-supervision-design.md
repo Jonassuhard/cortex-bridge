@@ -1,934 +1,737 @@
 # Cortex Bridge S3 Owned-Process Supervision Design
 
-**Status:** Revision 11 review candidate; implementation remains frozen until these exact specification and plan bytes receive three fresh, mutually blind, read-only reviews with `P0=0`, `P1=0`, `P2=0` and `PASS`
-these exact specification and plan bytes receive three fresh, mutually blind,
-read-only reviews with `P0=0`, `P1=0`, `P2=0` and `PASS`
-**Date:** 2026-09-05
-**Reviewed baseline:** `8e0cbd6516415ee378a5ecb9f42a0c92c60e244c`
-**Revision-8 parent:** `8e0cbd6516415ee378a5ecb9f42a0c92c60e244c`
-**Revision-7 parent:** `8e0cbd6516415ee378a5ecb9f42a0c92c60e244c`
-**Target:** v0.5.4 candidate
-**Supersedes:** the S3 supervision and live-harness design in the current Phase
-S plan; unrelated storage requirements remain in force
+**Status:** Approved contract; implementation and live evidence do not yet exist
+**Target:** Cortex Bridge v0.5.4
+**Scope:** macOS disk-image and Keychain storage workflows
 
 ## Decision
 
-S3 uses three persistent ownership layers rather than treating a helper PID,
-a count or a decoded frame as authority:
+Each storage workflow has one persistent Swift broker. Only that broker may
+spawn, identify, signal, wait for, or reap the workflow's `hdiutil` and
+`diskutil` children. Python owns policy, orchestration, admission, and the
+durable ledger, but receives no usable native child PID or PGID and invokes no
+native-child signal or wait primitive.
 
-1. the Python session owner holds artifact, Keychain, observer and lifecycle
-   registries and starts one persistent Swift broker before live issuance;
-2. that broker alone starts, observes, signals, waits and reaps every native
-   `/usr/bin/hdiutil` child, including when an invocation worker disappears;
-3. invocation workers validate strict requests, manage application secret
-   lifetimes and exchange byte-exact bounded frames with the broker, but never
-   own native process primitives.
+The current disk helper is test-compiled only; it is not part of the installed
+product. S3 must therefore create, integrate, and package both the broker and
+its Python client. It must replace the one-shot helper boundary used by the
+planned storage lifecycle, the guard, the operator CLI, and runtime start/stop.
+There is no production fallback to a direct Python subprocess or one-shot disk
+helper.
 
-The design also fixes one persistent SecurityAgent observer, one serial Python
-effect executor, descriptor-attested artifact cursors, one exact
-`BrokerChildFreeLease`, typed publication proofs and an explicit
-`OPEN_UNRESOLVED` state. At the +115-second decision boundary a still-busy
-native obligation does not authorize STOP, disposition or Python exit. The
-owner, broker and observer remain alive in containment/observation mode until a
-native terminal fact permits the sole late-close chain.
+The reproduced baseline defect is that killing the current Swift helper leaves
+its process-group child reparented to PID 1 until natural exit. S3 closes that
+case only while the broker and kernel remain available. Loss of the broker
+itself while it owns a native obligation is explicitly outside the no-orphan
+claim and must remain durably unresolved.
 
-This revision is documentary candidate material, not implementation or
-approval evidence. It authorizes no live Keychain, DiskImages, `hdiutil`, mount,
-detach, quarantine, SecurityAgent, Chrome, runtime, push, merge, tag or release
-action.
+```mermaid
+flowchart LR
+    P[Python owner<br/>policy and durable ledger] -->|attested private socket| B[Swift broker<br/>native owner]
+    B -->|fixed command and bounded FDs| N[hdiutil or diskutil]
+    B -->|terminal proof without native PID| P
+    P --> L[(five-state ledger)]
+    P -. crash or EOF .-> B
+    B -->|retain result until durable ACK| P
+```
 
-## Trust boundary and exact claim
+## Threat model
 
-Production native execution is fixed to `/usr/bin/hdiutil`. A direct child is
-created suspended in a new session and is registered before any active frame.
-Only the persistent broker owns its PID, original process group, descriptors,
-waitability observations and signal permits. The worker receives no numeric
-process authority. A worker EOF, EPIPE, partial frame, abnormal exit or kill
-changes result delivery; it does not erase the broker's native safety
-obligation.
+S3 protects against:
 
-Every TERM or KILL consumes a one-shot `WaitableSignalPermit` minted from an
-exact same-generation WNOWAIT/identity observation in the same lifecycle turn.
-EINTR mints nothing. `noChild`, wrong PID/status, identity change, lost
-waitability, ECHILD or an unavailable observation irreversibly removes signal
-authority for that attempt. TERM/KILL decisions precede reap. After exact reap,
-only one registry-bound signal-zero observation of the original group is
-representable.
+- Python exit, crash, cancellation, terminal hangup, or control-channel EOF;
+- controller process-group signals, because the broker is launched in a
+  distinct session and process group;
+- replayed, reordered, duplicated, stale-generation, wrong-nonce, oversized,
+  truncated, or non-canonical protocol input;
+- PID/PGID reuse and loss of child identity or waitability before TERM/KILL;
+- path, mount, `/dev/disk` name, socket, ledger, or installed-artifact
+  replacement at the validation boundaries defined here;
+- secrets entering argv, environment, protocol, receipts, or logs;
+- false success after `ECHILD`, lost channel, boot mismatch, uncertain
+  identity, missing reap, group presence, or ambiguous terminal data.
 
-A safely settled native command is not retired merely because its final frame
-was written. Worker delivery requires a distinct exact final ACK. If the worker
-is lost before that ACK, the broker uses the one-shot admin orphan route; only
-an exact Python ACK retires the orphan ledger. Lost delivery can never become
-worker success. A second worker for that generation is refused until the
-orphan ledger is acknowledged or permanently unresolved.
+S3 does not protect against kernel compromise, root, malicious same-UID action
+inside the final path-based macOS syscall gap after all observable checks,
+physical device removal, or any crash,
+abort, forced termination, resource kill, or other loss of the broker while a
+native obligation is open. In that last case S3 proves only that Python records
+`OPEN_UNRESOLVED`, exposes no signal authority, and mints no native-cleanup or
+no-orphan proof. It does not claim that the native child or group is absent.
 
-The S3 guarantee is conditional on the Python owner, broker and kernel
-remaining able to make the documented observations. External destruction of
-the broker, loss of all admin delivery, hostile native nontermination or an
-unobservable escaping descendant produces an open unresolved session, not a
-false close. Achieving bounded caller exit under arbitrary broker destruction
-requires an out-of-scope persistent system service.
+S3 also does not claim that terminating `hdiutil` rolls back a partial disk
+effect, or that application code erases immutable copies retained inside
+Security.framework or kernel buffers.
 
-Artifact authority is likewise narrow. The sealed Python registry authorizes
-only the current registered image/mount/UUID lineage. A continuation resolves
-the current mapping; a historical `/dev/diskN` never becomes detach authority.
-Returned-device comparison is post-effect consistency evidence only.
+## Ownership and isolation
 
-## Goals
+The broker owns for its entire workflow:
 
-- Replace raw PID, PGID, copied-frame and bare-cardinality inputs with private,
-  registry-minted, one-shot receipts.
-- Preserve native cleanup through invocation-worker loss by keeping native
-  ownership in one persistent broker.
-- Make signal authority depend on exact observable waitability, identity,
-  generation, target, signal, sequence and deadline.
-- Admit every child-free Security.framework or filesystem mutation only under
-  one mutually exclusive broker lease and a same-turn terminal-polled permit.
-- Keep every artifact effect in a closed in-flight transition and carry exact
-  old/new facts when completion is ambiguous.
-- Bind response success to exact trace candidate, complete response write,
-  publication receipt and proof; bind response-free exits to a separate proof.
-- Bound every request, channel, output, JSON value, backlog, discard drain and
-  deadline with equality and plus-one oracles.
-- Keep the observer active from preparation through proved broker close and its
-  own final snapshot/STOP/EOF/reap/group-absence sequence.
-- Preserve the public strict ten-key request and six-key response contracts.
-- Make every test, mutant, owner projection, closure hash, package and final
-  commit identity reproducible without executing unreviewed candidate code.
+- native child identity, original process group, waitability, streams, status,
+  TERM/KILL decisions, exact reap, and group-absence observation;
+- the closed operation-to-executable/argv mapping;
+- Keychain access, application-owned secret buffers, and secret delivery;
+- detach attestation and the exact device operand derived from it;
+- terminal result retention until Python acknowledges a durably fsynced ledger
+  record and, when required, a durably fsynced reconciliation record.
 
-## Non-goals and residual assumptions
+Python owns:
 
-- No general macOS sandbox, Endpoint Security client, launch daemon or pidfd
-  substitute.
-- No claim that synchronous Keychain calls are preemptible. A late return may
-  update an uncertainty ledger but cannot authorize a successor effect.
-- No claim that killing `hdiutil` reverses a partial disk-image effect.
-- No claim that a sub-cadence SecurityAgent event must be observed.
-- No claim that Swift registry objects cross a process boundary. Wire fields
-  are validated only by the receiving registry, which mints a local receipt.
-- No claim against a hostile same-UID replacement between final hash
-  revalidation and `execve`; macOS provides no `fexecve` for this path.
-- No S4 implementation in the S3 commit range.
-- No relaxation of authorization, timeout, cleanup, review or immutable-tree
-  gates.
+- public authorization, workflow generation, and storage-lock admission;
+- the broker process identity and attested local connection, but not its native
+  children;
+- durable ledger transitions, recovery, and idempotent close acknowledgement.
 
-## Component and process boundary
+Python may supervise or terminate a broker before `START`, but once the ledger
+is `OPEN_RUNNING` it may only request cancellation or recovery through the
+protocol. Installer and lifecycle code never signal a broker with an open or
+unresolved workflow.
 
-| File | S3 responsibility |
+Python launches the broker with a new session and process group. The broker
+does not share the controller's SID or PGID. It installs explicit handlers for
+`SIGINT`, `SIGHUP`, and `SIGTERM`: while an obligation, unacknowledged terminal
+result, or unfinished required reconciliation exists, these signals latch
+shutdown intent but do not terminate the
+broker; when idle, shutdown still follows the protocol close path. Normal
+cancellation is `CANCEL` or client EOF. The broker ignores `SIGPIPE` with
+`sigaction`; child SIGPIPE is reset to default before exec.
+
+## Launch binding and boot identity
+
+The client holds an `AttestedBrokerExecutable` containing an open read-only FD,
+path, device, inode, owner, mode, and SHA-256. It also holds the shared install
+lock from attestation through authenticated `HELLO`. Immediately before spawn,
+the path must still name the FD's exact vnode and bytes. The broker opens and
+hashes its own executable, reports that vnode identity and hash in `HELLO`, and
+Python revalidates both the original FD and the path before accepting `HELLO`.
+Any mismatch sends no `START` and creates no native effect.
+
+The launcher also creates an unnamed private `AF_UNIX` socketpair before exec.
+The broker inherits one `START_CAPABILITY_FD`; only the preparing Python process
+holds its peer. After `OPEN_RUNNING` is fsynced, Python writes one canonical
+`START_GRANT` binding `record_sha256`, `request_sha256`, operation, both
+budgets, boot identity, workflow, and generation. The broker consumes it once
+and accepts `START` only when every field matches. Recovery never recreates this
+capability and may query, cancel, or close, but cannot start. Peer UID and nonce
+authenticate reconnection; they are not START authority.
+
+Broker exec receives exactly `PATH=/usr/bin:/bin:/usr/sbin:/sbin`, `LANG=C`,
+and `LC_ALL=C`, constructed from constants. It receives no `HOME`, `DYLD_*`,
+`PYTHON*`, virtualenv, or `CORTEX_*` entry. Before accepting the inherited
+capability or opening Keychain/DiskImages, the broker verifies this exact
+allowlist and rejects any additional entry.
+
+This lock-and-FD protocol binds compliant install/update activity and detects
+observable substitution around Darwin's path-based exec. It does not claim to
+eliminate the malicious same-UID syscall gap excluded above.
+
+Both sides derive `BootIdentity(seconds, microseconds)` from the exact
+`kern.boottime` value. The broker reports it in `HELLO`; Python records it in the
+ledger. An open record whose native effect may have started cannot be recovered
+across a boot-identity mismatch and becomes `OPEN_UNRESOLVED`. A strictly
+`OPEN_PREPARED` record may close as pre-exec failure because that state proves
+that no `START` was sent.
+
+## Durable launch ordering
+
+The order is normative:
+
+1. Under the storage lock, Python creates and fsyncs `OPEN_PREPARED` with the
+   request digest, generation, budgets, boot identity, socket identity, and
+   attested broker identity.
+2. Python spawns the broker in its separate session with an exec-status pipe,
+   the bound listener FD, the private START-capability FD, and the private
+   reconciliation-capability FD. The broker cannot perform an effect before
+   consuming the matching inherited START grant; reconciliation capability is
+   unusable until a matching terminal result exists.
+3. Python observes exec-status EOF, authenticates `HELLO`, and verifies the
+   broker self-identity against the still-open executable FD.
+4. Python writes and fsyncs `OPEN_RUNNING`, then writes the exact single-use
+   `START_GRANT` on the inherited capability.
+5. Only then may Python send matching `START`; only then may the broker spawn a
+   native child.
+
+Therefore a crashed owner may close an intact `OPEN_PREPARED` record as
+`CLOSED_FAILURE` when no matching broker is reachable: by construction no
+effect was authorized. A crash after `OPEN_RUNNING` but before observed
+`STARTED` is not given the same inference; recovery must authenticate the broker
+and query it, otherwise the record is `OPEN_UNRESOLVED`.
+
+## Native process invariant
+
+Every native spawn uses `POSIX_SPAWN_START_SUSPENDED`, creates the child's
+process group atomically, and prevents useful child execution until the broker:
+
+1. captures the PID, parent, PGID, UID, start time, and executable vnode;
+2. obtains a non-consuming waitability observation as the direct parent; and
+3. stores that identity and waitability in the broker workflow state.
+
+Only then does the broker resume the child. Failure before resume sends no
+secret and performs no useful native instruction. Identity or waitability
+ambiguity leaves the child suspended under the still-live broker and produces
+`OPEN_UNRESOLVED`; it never grants signal authority.
+
+Before each TERM or KILL, the broker obtains a fresh, same-turn proof that the
+current Darwin process matches the registered identity and original group and
+is still a waitable direct child. TERM and KILL require independent proofs.
+`EINTR` retries within the unchanged deadline. `ECHILD`, a mismatched field,
+missing metadata, or an ambiguous observation revokes signal authority and
+becomes unresolved.
+
+The broker observes exit without reaping, completes every remaining group
+signal decision, then performs the exact reap. After reap, no signal is
+permitted. It may only wait for the original group to become absent. The broker
+stays alive while a child is unreaped, the group remains present, a terminal
+result awaits durable acknowledgement, or required reconciliation has not
+reached exact `FINALIZED`.
+
+Every native spawn applies `POSIX_SPAWN_CLOEXEC_DEFAULT` and explicitly maps
+only stdin, stdout, and stderr. Broker listener/connection FDs, executable and
+install-lock FDs, ledger FDs, exec-status FDs, and unrelated descriptors are
+never inherited. Secret-taking commands receive the dedicated secret pipe as
+stdin; other commands receive a non-sensitive stdin.
+
+## Closed command provenance
+
+The public operations are exactly `create`, `mount`, `detach`, `inspect-item`,
+and `delete-disposable-item`. The private read-only operation
+`probe-mounted-image` is available only through the guard-specific client
+method. It is not constructible as a public request and `_run_locked()` rejects it
+before connecting.
+
+The broker accepts no executable, argv array, signal target, raw device, or
+arbitrary command. It maps each operation to literal system executable paths
+and fixed argument templates. A compensation detach is derived only from the
+same workflow's attach result and a fresh detach attestation.
+
+Every command is bound to workflow UUID, monotonically increasing generation,
+operation, request digest, installed broker digest, boot identity, bounded
+budgets, and a single-use connection nonce/cursor.
+
+## Normative request validation
+
+`StorageLifecycle`, not an external caller or CLI parser, constructs every
+`StorageBrokerRequest` after descriptor-first host, transition-journal, and
+storage-contract checks. Each layer revalidates before capability grant and
+before native spawn:
+
+- schema is exactly `1`; operation matches the lifecycle method and command;
+- paths are absolute valid UTF-8, contain no NUL/control byte or empty, `.` or
+  `..` component, and resolve through retained no-follow descriptors;
+- the production image is the exact managed
+  `CORTEX_BRIDGE_2026_09.sparsebundle` child of the verified host, its mount is
+  the exact managed mount, and disposable paths are transaction-owned children
+  of the dedicated test root;
+- production create size/volume are exactly
+  `256g`/`CORTEX_BRIDGE_2026_09`; disposable create uses exactly
+  `64m`/`CORTEX_BRIDGE_SPIKE`; both fields are null for other operations;
+- UUIDs parse and round-trip in canonical hyphenated form and match the
+  transition journal, APFS volume, and encryption identity in scope;
+- deletion requires `disposable=true`, `cleanup_approved=true`, and exact
+  transaction-owned Keychain/image identities. Production deletion is absent.
+
+Mismatch at the lifecycle layer creates no connection. Mismatch at the client,
+capability, or broker layer creates no native effect and fails closed.
+
+## Canonical codec and hash domains
+
+Protocol and ledger objects use a restricted canonical JSON codec implemented
+independently in Swift and Python:
+
+- a top-level object contains only objects, arrays, strings, unsigned integers,
+  booleans, and null; floating-point numbers are rejected;
+- array order is preserved and every element follows the same value rules;
+- duplicate keys, lone surrogates, invalid UTF-8, and integers outside
+  `UInt64` are rejected;
+- object keys are ordered by their unescaped UTF-8 byte sequence;
+- strings preserve their Unicode scalar sequence without normalization; `"`,
+  `\\`, and U+0000 through U+001F are escaped, with lowercase `\u00xx`; `/` and
+  all other valid scalars are emitted unescaped as UTF-8;
+- integers use shortest unsigned base-10 form; booleans/null are lowercase;
+- no whitespace or trailing newline is present in canonical JSON.
+
+Paths in this protocol must be representable as valid UTF-8 and are not Unicode
+normalized. A frame is `UInt32BE(json_length) || canonical_json(envelope)` and
+the JSON limit is 16 KiB.
+
+Darwin `dev_t` and both `fsid_t.val` components are signed 32-bit observations
+but every wire, hash projection, ledger, reconciliation record, mount fact,
+manifest identity, and installed-generation record encodes their bit pattern as
+an unsigned `0...UInt32.max` field suffixed `_u32`. Swift uses
+`UInt32(bitPattern:)`; Python masks only at the native observation boundary and
+never changes the unsigned canonical value. Conversion back to `Int32` is
+allowed only for comparison with a fresh native observation. Golden vectors
+cover `Int32.min`, `-1`, `0`, and `Int32.max` in every relevant projection.
+
+All digest prefixes below are literal ASCII including each shown NUL byte:
+
+| Digest | Exact input after the prefix |
 | --- | --- |
-| `native/macos/disk_image_keychain.swift` | Public helper modes, persistent broker, invocation worker, byte-exact broker protocol, private native EFSM/registries, command provenance, erasure and testing-only fixture routes. |
-| `tests/disk_image_keychain_harness.py` | Python registries, broker/worker FD transfer, sealed preparation/live session, exact observer Swift source bytes and hashes, observer/broker ownership, artifact effects, immutable review gate source and mutant machinery. |
-| `tests/test_disk_image_keychain_helper.py` | Independent reference machines, full EFSM matrix, exhaustive/causal traces, process/channel/deadline/receipt oracles, immutable-tree runners, manifests and separately selected live class. |
+| `request_sha256` | `SHA256("CORTEX-S3\0REQUEST\0V1\0" || canonical(request))` |
+| `command_sha256` | `SHA256("CORTEX-S3\0COMMAND\0V1\0" || canonical({workflow_id,generation,operation,request_sha256,broker_sha256,boot_seconds,boot_microseconds,effect_budget_ns,cleanup_budget_ns}))` |
+| `result_sha256` | `SHA256("CORTEX-S3\0RESULT\0V1\0" || canonical(result excluding result_sha256))` |
+| `closed_ready_sha256` | `SHA256("CORTEX-S3\0CLOSED-READY\0V1\0" || canonical(CLOSED_READY payload excluding closed_ready_sha256))` |
+| `record_sha256` | `SHA256("CORTEX-S3\0LEDGER\0V1\0" || canonical(ledger record excluding record_sha256))` |
+| `capability_sha256` | `SHA256("CORTEX-S3\0RECONCILIATION-CAPABILITY\0V1\0" || canonical({workflow_id,generation,transaction_id,operation,request_sha256,result_sha256,record_sha256,boot_seconds,boot_microseconds}))` |
+| `reconciliation_probe_sha256` | `SHA256("CORTEX-S3\0RECONCILIATION-PROBE\0V1\0" || canonical(ReconciliationProbeRequest))` |
+| `postcondition_sha256` | `SHA256("CORTEX-S3\0RECONCILIATION-POSTCONDITION\0V1\0" || canonical(ReconciliationPostcondition))` |
+| reconciliation `record_sha256` | `SHA256("CORTEX-S3\0RECONCILIATION\0V1\0" || canonical(reconciliation record excluding record_sha256))` |
+| installed-generation `generation_record_sha256` | `SHA256("CORTEX-S3\0INSTALLED-GENERATION\0V1\0" || canonical(generation record excluding generation_record_sha256))` |
 
-Only those three implementation files may differ between
-`IMPLEMENTATION_BASE` and `S3_FINAL`. The observer remains constant Swift bytes
-stored in `tests/disk_image_keychain_harness.py`; compilation creates only a
-private ignored source and ephemeral binary. No fourth tracked implementation
-file exists.
+The command projection contains exactly the fields shown, under canonical key
+ordering. Hashes are lowercase hexadecimal. Shared golden vectors cover every
+frame type and ledger state, Unicode, `/`, control escapes, zero, and
+`UInt64.max`; Swift and Python each encode and verify the bytes independently.
 
-The process graph is exact:
+## Protocol
 
-~~~text
-Python session owner
-  |-- persistent SecurityAgent observer
-  |-- persistent Swift broker over one admin AF_UNIX SOCK_STREAM
-  `-- per invocation:
-        Python creates one AF_UNIX socketpair
-        Python transfers exactly broker endpoint with one SCM_RIGHTS message
-        broker validates and ACKs transfer
-        worker inherits only its endpoint and stdio/control
-        broker alone owns every native child
-~~~
+Python creates an owner-only directory and bound `AF_UNIX` stream socket, then
+passes the listening FD to the broker. Both sides verify socket type, device,
+inode, owner, mode, and peer UID. Kernel peer credentials plus the
+descriptor-attested private socket are the local authentication boundary.
 
-Python and broker publish exact argv, environment and FD ledgers for success and
-every failure. Each owned close is attempted independently. FD transfer rejects
-`MSG_CTRUNC`, non-SCM ancillary data, zero/multiple FDs, aliases with stdio,
-control or admin, wrong family/type, duplicate session/generation/digest,
-missing or inverted ACK and worker-spawn failure without a closed orphan
-ledger. The received FD is `FD_CLOEXEC|O_NONBLOCK` before insertion.
+The envelope contains exactly `version`, `type`, `workflow_id`, `generation`,
+`connection_nonce`, `cursor`, and `payload`. Version is `1`. The broker creates
+a fresh 256-bit nonce for each accepted connection. Cursors start at zero in
+each direction, advance by exactly one without wrap, and are consumed before
+an effect. A nonce/cursor pair is never valid on another connection.
 
-## Exact environments and interpreter TCB
+Message types are `HELLO`, `START`, `STARTED`, `CANCEL`, `STATUS`, `RESULT`,
+`CLOSE`, `CLOSED_READY`, `COMMIT_ACK`, `COMMITTED`, `RECONCILE_PROBE`,
+`RECONCILIATION_RESULT`, `RECONCILIATION_ACK`, `FINALIZED`, `LATE_CLOSE`, and
+`PROTOCOL_ERROR`. Unknown keys, values, operations, or states fail closed.
 
-The common non-inheriting environment is exactly:
-
-~~~text
-BASE_EXEC_ENV_ITEMS = (("LANG", "C"), ("LC_ALL", "C"),
-                       ("PATH", "/usr/bin:/bin:/usr/sbin:/sbin"))
-CORTEX_S3_ENV_V1\0LANG=C\0LC_ALL=C\0PATH=/usr/bin:/bin:/usr/sbin:/sbin\0
-SHA-256 = 332a3faa28f88fd67e9b9295487b7bbe9c0b41e2828f4283db4f339be9557e85
-~~~
-
-`BASE_EXEC_ENV` is the Python mapping; `sanitizedEnvironmentV1` is its
-byte-equivalent Swift envp. It is used for compilers, private source copies,
-clock reporters, observer, broker and ordinary/continuation workers. The R43
-fresh interpreter adds only canonical UInt64
-`CORTEX_S3_PARENT_HARD_DEADLINE_NS`. A sealed testing worker may additionally
-receive `CORTEX_STORAGE_TEST_MUTANT` only with
-`CORTEX_STORAGE_HELPER_TESTING` and the exact config/report digest. Production
-contains neither lookup nor branch. Every reservation and report binds the
-environment profile and digest.
-
-The equipped CPython executable, loader and stdlib are explicit TCB.
-`InterpreterTCBReceipt` binds absolute interpreter/loader paths, every lstat
-chain, device/inode/mode/UID/size/hash, version, cache tag, trusted stdlib roots,
-bootstrap hash and import-allowlist hash. Group/world-writable or changed facts
-reject, and the receipt is revalidated immediately before GO.
-
-The isolated bootstrap performs `import sys` first, installs its audit hook
-before any later import, and has exactly these direct imports:
-
-~~~text
-errno, fcntl, hashlib, json, os, stat, sys, time
-~~~
-
-No `ImportFrom`, site, user/project/zip origin, dynamic import, `importlib`,
-`__import__`, `eval` or `exec` is accepted. Preloaded interpreter modules and
-transitive builtin/frozen/trusted-stdlib modules are part of the TCB, not
-claimed absent.
-
-## Broker protocol v2
-
-### Common frame header
-
-Admin and worker/broker channels use ASCII magic `CS3B` (`43 53 33 42`),
-version `0x01`, admin channel `0x01`, worker channel `0x02`, flags `0x00` and
-big-endian multi-byte fields. The exact 96-byte header is:
-
-| Offset/size | Field |
-| --- | --- |
-| 0/4 | magic |
-| 4/1 | version |
-| 5/1 | channel |
-| 6/1 | numeric type |
-| 7/1 | flags |
-| 8/2 | header length `0x0060` |
-| 10/2 | reserved `0x0000` |
-| 12/4 | payload length |
-| 16/16 | raw session UUID |
-| 32/8 | generation |
-| 40/8 | directional sequence |
-| 48/32 | raw context/command SHA-256 |
-| 80/8 | stream offset |
-| 88/4 | stream length |
-| 92/4 | subject ordinal |
-
-Sequences start at zero independently per direction, are contiguous UInt64 and
-never wrap. ACK payload is the acknowledged u64 sequence; every ACK frame is
-104 bytes and repeats the paired frame bindings. Wrong magic, version,
-endianness, header length, reserved/flags, channel, type, context, sequence or
-stream position rejects before allocation or effect.
-
-Admin types are exact:
-
-| Code | Type | Payload bytes | Ancillary bytes / FD |
-| ---: | --- | ---: | ---: |
-| `0x01` | `BROKER_READY` | JSON 1..4,000 | 0 |
-| `0x02` | `BROKER_READY_ACK` | 8 | 0 |
-| `0x03` | `TRANSFER_WORKER_FD` | exact JSON 145 | 16 / 1 |
-| `0x04` | `TRANSFER_WORKER_FD_ACK` | 8 | 0 |
-| `0x05` | `WORKER_SPAWN_FAILED` | JSON 1..4,000 | 0 |
-| `0x06` | `WORKER_SPAWN_FAILED_ACK` | 8 | 0 |
-| `0x07` | `BROKER_ORPHAN_SETTLEMENT` | JSON 1..4,000 | 0 |
-| `0x08` | `BROKER_ORPHAN_SETTLEMENT_ACK` | 8 | 0 |
-| `0x09` | `BROKER_STOP` | 0 | 0 |
-| `0x0a` | `BROKER_STOPPED_ACK` | 8 | 0 |
-| `0x0b` | `ADMIN_LEASE_ACQUIRE` | 0 | 0 |
-| `0x0c` | `ADMIN_LEASE_GRANTED_ACK` | 8 | 0 |
-| `0x0d` | `ADMIN_LEASE_RELEASE` | 0 | 0 |
-| `0x0e` | `ADMIN_LEASE_RELEASED_ACK` | 8 | 0 |
-
-Transfer JSON has only canonical keys `command_digest` (64 lowercase hex),
-`generation` (1..7) and `session` (32 lowercase hex): 145 payload bytes, 241
-with header.
-
-Worker types are exact:
-
-~~~text
-COMMAND_JSON=0x20, WIRE_SECRET=0x21, COMMAND_ADMITTED_ACK=0x22,
-COMMAND_CANCEL=0x23, COMMAND_CANCEL_ACK=0x24,
-WORKER_LEASE_ACQUIRE=0x25, WORKER_LEASE_GRANTED_ACK=0x26,
-WORKER_LEASE_RELEASE=0x27, WORKER_LEASE_RELEASED_ACK=0x28,
-STDOUT_CHUNK=0x30, STDOUT_END=0x31,
-STDERR_CHUNK=0x32, STDERR_END=0x33,
-BROKER_SETTLED_COMMAND_JSON=0x34,
-BROKER_UNRESOLVED_COMMAND_JSON=0x35, BROKER_FINAL_ACK=0x36
-~~~
-
-Command/final JSON is 1..4,000 bytes; Wire secret is exactly 44 bytes; controls
-are zero-data; chunks are 1..65,440; END carries raw 32-byte digest with exact
-total offset and zero stream length; ACK is eight bytes. Both END frames precede
-the unique final frame, which repeats exact lengths/digests. A partial final
-frame consumes its only route and is never retried. `BrokerSettledCommandFrame`
-and `BrokerOrphanSettlementFrame` are wire values only; object identity never
-crosses processes.
-
-Golden vectors are byte-identical in Swift and Python for a 4,096-byte READY,
-104-byte ACK, 241-byte transfer plus 16 ancillary bytes, 140-byte Wire frame,
-1,632-byte final chunk for a 1 MiB stream, and empty/nonempty END digests.
-
-### Caps, grammar and exact witnesses
-
-| Resource | Exact cap or witness |
-| --- | ---: |
-| `ADMIN_FRAME_MAX` / payload | 4,096 / 4,000 |
-| `WORKER_FRAME_MAX` / payload/chunk | 65,536 / 65,440 |
-| native stdout / stderr | 1,048,576 each |
-| commands in flight per session | 1 |
-| commands per invocation / closed session | 7 / 20 |
-| workers transferred per session | 7 |
-| full stream fragmentation | 16 x 65,440 + 1,536 = 17 chunks; 34 for two streams |
-| base maximal native command | 40 frames / 2,109,072 bytes |
-| secret plus cancel/ACK command | 43 frames / 2,109,412 bytes |
-| seven-command invocation | 287 frames / 238 chunks / 14,764,324 bytes |
-| normal worker trace | 835 frames / 42,185,060 bytes |
-| separate cancel trace | 829 frames / 42,184,460 bytes |
-| admin frame maximum | 34 frames; approved-close witness 8,415 bytes |
-| admin byte maximum | 12,215 bytes; separate 32-frame error witness |
-| reachable combined frame maximum | 869 |
-| conservative combined byte ceiling | 42,197,275; upper bound only |
-| transfer ancillary total | 112 bytes |
-| broker rolling memory | 131,168 bytes |
-| worker rolling memory | 2,175,020 bytes |
-| observer rolling retained | 16,781,364 bytes |
-| Python retained maximum | 20,979,868 bytes |
-
-The normal worker witness is 20 base commands, three Wire frames and eight
-four-frame leases. The cancel witness is separate: 20 commands, three Wire
-frames, six leases and one cancel/ACK; no later command or lease is legal. The
-34-frame admin witness is READY/ACK, four four-frame leases, seven transfer/ACK
-pairs and STOP/STOPPED_ACK. The 12,215-byte admin witness has three leases,
-seven transfers, one 4,096-byte failure/orphan JSON plus ACK and STOP pair. The
-combined byte ceiling is not asserted equality-reachable.
-
-Darwin ancillary facts are `sizeof(cmsghdr)=12`, `sizeof(Int32)=4`,
-`CMSG_SPACE(4)=CMSG_LEN(4)=16`, hence `ANCILLARY_MAX=16` and exactly one FD.
-All non-transfer frames require zero ancillary.
-
-Canonical JSON uses ASCII, sorted keys, separators `(",", ":")`,
-`ensure_ascii=True`, `allow_nan=False`; floats are forbidden. Limits are depth
-8 (root depth 1), 512 items, decoded key 64 bytes, decoded UTF-8 string 4,096,
-encoded token 24,578, integer token 20 and private observer token 160. The
-sealed global equality witness `JSON_LIMIT_FIXTURE_V1` encodes 4,096 U+0001
-values into token 24,578 and payload 24,584 under the 65,532-byte report limit.
-Broker equality is decoded string 3,992/token 3,994 using canonical
-`{"e":"<3992 ASCII A>"}`; other dimensions have separate legal witnesses.
-Production rejects the fixture profile.
-
-Reads never use `communicate`, `readDataToEndOfFile`, unbounded reads or text
-mode. A 4,096-byte scratch bounds memory. Discard budget is 1,048,576 bytes and
-250,000,000 ns per FD, and 2,097,152 bytes/500,000,000 ns shared by native
-stdout and stderr. The first overflow freezes byte/time budgets; EOF or a later
-error cannot reset them. Exhaustion stops payload reads and allows only
-authorized cleanup through the existing terminal deadline. Lost authority
-enters `OPEN_UNRESOLVED`.
-
-General channel caps are exact: helper stdin 65,536; helper stdout/stderr 4,096
-each; control 1/16; native child aggregate 2,097,196 including Wire; helper
-exchange 73,745; R43 139,290; observer/config/report frame 65,536 with payload
-at most 65,532; observer backlog 4,096 frames and 16,777,216 stdout bytes;
-compiler streams 1,048,576 each; clock 32/4,096; exec-status 8; GO one `0x01`
-plus EOF; guardian/witness zero bytes plus EOF; prior Python accumulator
-4,194,304. Observer STOP is exactly 52 bytes.
-
-Observer backlog caps are rolling retained-memory limits, not lifetime frame
-limits. Processed frames release backlog; checked UInt64 sequence continues.
-Overflow is unresolved without wrap.
-
-## Native lifecycle EFSM
-
-The typed `NativeChildLifecycleEFSM` has exactly fourteen control states, in
-this order:
-
-~~~text
-spawnedActiveFramePending, suspended, validatedSuspended, suspendedCleanup,
-running, exitedUnreaped, reapedAwaitingGroup, groupAbsentAwaitingCloses,
-settledPendingBrokerFrame, unresolvedNoSignalAwaitingCloses,
-unresolvedPendingBrokerFrame, retiredSettled, retiredUnresolved,
-channelLostCleanup
-~~~
-
-`spawn` is a factory from external `noObligation`, not a fifteenth state.
-Applying it to an existing EFSM rejects without syscall. Retired states reject
-every event. Channel loss changes delivery registers without erasing later
-native safety facts.
-
-The nineteen constructors and exact closed member counts are:
-
-| # | Constructor | Closed members | Count |
-| ---: | --- | --- | ---: |
-| 1 | `spawn(SpawnResult)` | spawned, refused, deadlineExpired, failed | 4 |
-| 2 | `publishActive(FrameWriteResult)` | fullyWritten, partial, brokenPipe, deadlineExpired, interruptedAtDeadline, failed | 6 |
-| 3 | `validate(IdentityResult)` | exact, incomplete, changed, unavailable, deadlineExpired | 5 |
-| 4 | `cancelObserved` | singleton | 1 |
-| 5 | `resume(ResumeResult)` | resumed, childGone, identityChanged, deadlineExpired, interruptedAtDeadline, failed | 6 |
-| 6 | `observeExit(ExitObservation)` | running, exactExited, noChild, wrongPID, wrongSignal, wrongCode, interrupted, deadlineExpired, failed | 9 |
-| 7 | `observeWaitability(WaitabilityObservationResult)` | exactWaitable, exactExited, noChild, wrongPID, wrongSignal, wrongCode, identityChanged, notWaitable, interrupted, deadlineExpired, failed | 11 |
-| 8 | `mintSignalPermit(SignalIntent, SignalPermitMintResult)` | four intents times minted, staleObservation, consumedObservation, foreignObservation, deadlineExpired, issuanceExhausted, registryClosed | 28 |
-| 9 | `signal(WaitableSignalPermit, SignalResult)` | delivered, alreadyAbsent, permissionDenied, deadlineExpired, interruptedAtDeadline, failed | 6 |
-| 10 | `wait(WaitResult)` | exactlyReaped, stillRunning, noChild, wrongPID, deadlineExpired, interruptedAtDeadline, failed | 7 |
-| 11 | `reap(ReapResult)` | the same seven members as a distinct type | 7 |
-| 12 | `observeGroup(GroupPresence)` | absentESRCH, present, permissionDenied, deadlineExpired, interruptedAtDeadline, failed | 6 |
-| 13 | `closeNative(CloseSetResult)` | allClosed, partial, interruptedStateUnknown, deadlineExpired, failed | 5 |
-| 14 | `workerChannelLost(WorkerChannelLoss)` | eof, brokenPipe, partialFrame, protocolViolation, workerExited, workerKilled, ioFailure | 7 |
-| 15 | `adminChannelLost(AdminChannelLoss)` | eof, brokenPipe, partialFrame, protocolViolation, pythonExited, pythonKilled, ioFailure | 7 |
-| 16 | `deliverWorkerFinal(WorkerFinalDeliveryResult)` | fullyWrittenMatching, partial, brokenPipe, deadlineExpired, interruptedAtDeadline, failed | 6 |
-| 17 | `acknowledgeWorkerFinal(WorkerFinalAckResult)` | exact, eofBeforeAck, partial, malformed, mismatchedBinding, duplicate, deadlineExpired, interruptedAtDeadline, failed | 9 |
-| 18 | `publishOrphan(OrphanPublicationResult)` | fullyWrittenMatching, partial, brokenPipe, deadlineExpired, interruptedAtDeadline, failed | 6 |
-| 19 | `acknowledgeOrphan(OrphanAckResult)` | exact, eofBeforeAck, partial, malformed, mismatchedBinding, duplicate, deadlineExpired, interruptedAtDeadline, failed | 9 |
-
-The member total is 145. The matrix contains exactly `14 * 145 = 2,030`
-state/member pairs plus four external spawn assertions, for 2,034 assertions.
-Opaque errno/count/identity data does not enlarge enum cardinality; equality
-oracles cover it. Four signal intents count because they change legality.
-
-Every entry returns only
-`accepted(nextState, exactActionVector, exactRegistryDelta)` or
-`rejectedNoSyscall(originalState, zeroActionVector, zeroRegistryDelta)`.
-Reference equality includes obligation, cancel latch, delivery route,
-observation/permit slots, signal stage, close ledger, frame-attempt ledger,
-`workerFinalAckPending` and orphan-ACK ledger. Rejection preserves every byte
-and performs zero syscall, frame, close, issue/consume or deadline resample.
-Accepted entries may have a zero-syscall vector.
-
-Exact validation advances only to `validatedSuspended`; only confirmed resume
-advances to `running`. Every other validation/resume result enters retained
-cleanup. Cleanup is decomposed into waitability observation, permit mint,
-signal, wait and reap; there is no composite abort result. `stillRunning`
-retains the obligation, not a permit. Permit equality binds registry identity,
-session, generation, digest, PID/group target kind, signal, observation
-sequence and deadline.
-
-`deliverWorkerFinal(.fullyWrittenMatching)` creates exactly one
-`workerFinalAckPending: Optional<WorkerFinalWriteReceipt>`. It neither retires
-nor mints worker success. Only exact ACK with local channel identity, session,
-generation, command digest, final sequence/hash, native outcome, transfer
-generation and protocol tag consumes it. A non-exact ACK or loss before ACK
-uses the orphan route once; lost admin remains unresolved.
-
-The matrix is exhaustive; exponential `145^depth` enumeration is forbidden.
-Causal traces are exactly waitability -> permit -> signal -> wait; exit ->
-optional group TERM/KILL -> reap -> group-zero -> closes; worker loss -> native
-settlement -> orphan publication -> ACK; and closes -> worker-final write ->
-exact worker ACK. A route consumes its one publication attempt. One observation
-produces ACK EOF or async channel-loss, never both.
-
-## Child-free mutation authority
-
-The broker arbitrates one mutually exclusive `BrokerChildFreeLease` across
-admin and worker channels. While held, no native admission is possible; a
-second or cross-channel lease is refused. `NoActiveChildProof` requires the
-exclusive lease plus an empty broker registry and never comes from a replayable
-idle snapshot.
-
-Within Swift, each `SecRandomCopyBytes`, `SecItemCopyMatching`, `SecItemAdd`,
-`SecItemDelete`, post-delete requery and child-free filesystem mutation
-consumes a syscall/callsite-bound same-turn terminal-polled permit. Within
-Python, every mutation is structurally dominated by:
-
-~~~text
-consume_admin_child_free_permit(callsite, generation, terminal_watermark)
-~~~
-
-The closed Python callsites are `prepareMountLeaf` mkdirat, quarantine rename,
-image unlink/delete and final mount-leaf removal. Wrong/replayed identity,
-wrong generation/callsite, stale poll, EOF, terminal, double lease or release
-failure performs zero mutation and follows the total release/unresolved path.
-Worker EOF and terminal paths cannot strand or reuse a lease.
-
-## Artifact, mount and in-flight algebra
-
-`ArtifactCursor` starts at `noArtifact`. Before create, `prepareMountLeaf` is a
-named effect:
-
-~~~text
-ArtifactCursor(noArtifact)
--> InFlightOperation(prepareMountLeaf)
--> ArtifactCursor(mountLeafPrepared, MountLeafIdentity)
--> create
-~~~
-
-The leaf is created with descriptor-relative `mkdirat`, opened no-follow as a
-directory, compared by fstat/fstatat, and must be current-UID mode 0700.
-`MountLeafIdentity(dev,ino,mode,uid)` is carried by every relevant cursor. After
-detach the leaf is reopened before comparison/enumeration; the pre-mount FD
-sees the covered directory and cannot prove mount absence. Path-only iteration
-is forbidden. Replacement, symlink, nonempty enumeration, identity mismatch or
-any independent close failure is unresolved/preserve. Final leaf removal is a
-separate named disposition effect with a closed outcome.
-
-`InFlightPredecessor` is a closed union containing every artifact cursor,
-preparation terminal, terminal event, detached-and-absent outcome, every
-quarantine/deletion/preservation/disposition outcome, broker termination
-outcome, disposition receipt and `OpenUnresolvedHandle`. The exact
-predecessor+operation table has one successor per listed pair. Each arm is
-registry-minted, one-shot and atomically consumed; `Any`, free tuples and
-unlisted transitions reject.
-
-The artifact cursor graph is exact:
-
-~~~text
-noArtifact
--> mountLeafPrepared(MountLeafIdentity)
--> created(cycle=0)
--> mounted(i) -> mountVerified(i) -> unmounted(i)
--> created(cycle=i+1), for i in {0,1}
--> cyclesComplete
--> keychainInspected
-   | approved exact delete plus zero requery -> keychainAbsent -> imageAbsent
-   | unapproved inspected-present -> imageQuarantined(keychainStillPresent)
-   ` ambiguous/missing requery -> preserved(keychainPresenceUnknown)
-every effect boundary -> unresolved(complete possible-ledger set)
-eligible final artifact outcome -> mountLeafRemoved
-~~~
-
-The closed transition catalogue is:
-
-| Predecessor arm | Named operation | Sole settled successor class |
+| Type | Direction | Exact payload fields |
 | --- | --- | --- |
-| `ArtifactCursor(noArtifact)` | `prepareMountLeaf` | `ArtifactCursor(mountLeafPrepared(identity))` |
-| `ArtifactCursor(mountLeafPrepared)` | create | `ArtifactCursor(created(0))` |
-| `ArtifactCursor(created(i))` | mount cycle | `ArtifactCursor(mounted(i))` |
-| `ArtifactCursor(mounted(i))` | verify current mapping/APFS | `ArtifactCursor(mountVerified(i))` |
-| `ArtifactCursor(mountVerified(i))` | public `detach26` plus absence | `ArtifactCursor(unmounted(i))` |
-| `ArtifactCursor(unmounted(i))` | advance | `created(i+1)` or `cyclesComplete` after `i=1` |
-| `ArtifactCursor(cyclesComplete)` | inspect item | `keychainInspected` plus exactly one presence receipt |
-| inspected plus cleanup grant | delete and zero requery | `keychainAbsent` or presence-unknown preservation |
-| `keychainAbsent` plus image permit | tombstone/unlink | `imageAbsent` |
-| inspected-present without grant | quarantine | `imageQuarantined(keychainStillPresent)` |
-| current cursor or registered in-flight record | terminal latch | `TerminalEventReceipt` or terminal-pending record |
-| mounted terminal event | disposition detach/absence | `DetachedAndAbsentReceipt` or `UnresolvedContinuationReceipt` |
-| exact unmounted/detached terminal predecessor | quarantine or preserve | exact disposition outcome or unresolved preservation |
-| exact eligible artifact outcome | `removeMountLeaf` | leaf-removed outcome or unresolved preservation |
-| settled artifact disposition | broker close | `BrokerTerminationOutcome` |
-| proved broker close | final snapshot then observer close | `ObserverTerminationOutcome` |
-| stopped observer plus settled disposition | mint disposition | `DispositionReceipt` |
-| `DispositionReceipt` | close | `CLOSED_PROVED` |
-| `OpenUnresolvedHandle` | native terminal then broker/observer late close | locked-non-PASS `DispositionReceipt` |
+| `HELLO` | broker to Python | `broker_dev_u32`, `broker_ino`, `broker_uid`, `broker_mode`, `broker_sha256`, `boot_seconds`, `boot_microseconds` |
+| `START` | Python to broker | `request`, `request_sha256`, `effect_budget_ns`, `cleanup_budget_ns` |
+| `STARTED` | broker to Python | `command_sha256`, `started_monotonic_ns` |
+| `CANCEL` | Python to broker | `command_sha256`, `reason` |
+| `STATUS` request | Python to broker | no fields |
+| `STATUS` reply | broker to Python | `phase`, `command_sha256`, `result_sha256`, `closed_ready_sha256`, `child_reaped`, `group_absent` |
+| `RESULT` | broker to Python | `outcome`, `code`, `response`, `command_sha256`, `result_sha256`, `child_reaped`, `group_absent` |
+| `CLOSE` | Python to broker | `result_sha256` |
+| `CLOSED_READY` | broker to Python | all `RESULT` fields plus `closed_ready_sha256` |
+| `COMMIT_ACK` | Python to broker | `record_sha256`, `closed_ready_sha256` |
+| `COMMITTED` | broker to Python | `record_sha256` |
+| `RECONCILE_PROBE` | Python to broker | `pending_record_sha256`, `capability_sha256`, `probe` |
+| `RECONCILIATION_RESULT` | broker to Python | `pending_record_sha256`, `postcondition`, `postcondition_sha256` |
+| `RECONCILIATION_ACK` | Python to broker | `pending_record_sha256`, `final_record_sha256`, `postcondition_sha256` |
+| `FINALIZED` | broker to Python | `record_sha256`, `reconciliation_record_sha256` |
+| `LATE_CLOSE` | Python to broker | `result_sha256`, `force_failure=true` |
+| `PROTOCOL_ERROR` | either | `code` |
 
-Every effectful row also has its typed unresolved successor carrying all
-possible facts. No row can skip an intermediate predecessor, and no error or
-exception silently returns the consumed predecessor.
+`response` is null or the closed `BrokerTerminalResponse` union. Each union arm
+contains exactly `response_kind` and `response`. The discriminant is `local`
+with the exact six-key `StorageLocalResponse`, or `mounted_image_proof` with the
+private APFS/encryption/image/mount proof.
+The latter is accepted only for `probe-mounted-image`, is stored only in the
+private ledger, and is never returned by a public API or receipt. The local arm
+may contain a device node for private ledger and local lifecycle use; the
+separate `StorageEvidenceResponse` mapping omits both `device` and
+`encryption_uuid`, and `/dev/disk*` is rejected by every public renderer.
+`outcome` is
+`success`, `failure`, or `unresolved`. Result frames expose no native PID or
+PGID. `CANCEL.reason` is `CLIENT_CANCELLED` or `SHUTDOWN_REQUESTED`.
+Protocol-error codes are `INVALID_FRAME`, `AUTH_FAILED`, `STALE_GENERATION`,
+`REPLAY`, `INVALID_STATE`, `DEADLINE_EXPIRED`, and `BUDGET_EXCEEDED`.
 
-Keychain state uses three incompatible receipts:
-`KeychainStillPresentReceipt`, `KeychainAbsentReceipt` and
-`KeychainPresenceUnknownReceipt`. Unapproved inspected-present cleanup goes
-directly to `imageQuarantined(keychainStillPresent)` without fabricating
-absence. Approved cleanup consumes its grant, deletes, then requires an exact
-zero-item requery before absence can authorize image deletion. Ambiguous or
-missing requery is presence-unknown/preserve. The deletion tombstone is
-internal and is not the public unapproved quarantine state.
+Transport reads and writes use local monotonic deadlines no greater than two
+seconds. Native stdout and stderr are each capped at 1 MiB. Boundary and
+one-byte-overflow behavior is executable; no validity claim depends on a frame
+or scenario count.
 
-Quarantine and deletion use only no-follow parent/image descriptors,
-fstat/fstatat identity and
-`renameatx_np(parent_fd, old_leaf, parent_fd, new_leaf, RENAME_EXCL)`. Every
-close is independent. Collision, replacement, removal error, revalidation or
-close error preserves exact old/new facts and never becomes success.
+## Broker-enforced budgets
 
-## Invocation classes, deadlines and publication
+`BudgetPolicyV1` is enforced by the broker using checked `UInt64` arithmetic
+and its own monotonic clock. Python supplies durations, never an absolute broker
+deadline.
 
-Invocation class is authenticated and immutable:
-
-- `workflow70` for public create, mount, inspect-item and
-  delete-disposable-item workers;
-- `detach26` for every public detach worker, ordinary or terminal.
-
-A compensation detach inside public mount remains a broker subcommand in the
-same `workflow70` worker and keeps its original origin/cutoff digest. It is not
-another worker, cannot resample and cannot borrow terminal reserve. Every
-broker command binds the worker origin/cutoff digest.
-
-All ordinary workers share one normal epoch/cutoff. Ordinary detach is admitted
-only when origin+26 fits the normal cutoff. Terminal detach starts only after
-the +72 watermark and requires `now+26 <= live_started+98`. Both public detach
-forms use stage stops +8/+14/+20/+26. All normal workers, EOFs, exact reaps and
-broker settlements finish by +71. The full session cutoffs are first live
-snapshot +1, normal settlement +71, strictly later snapshot +72, continuation
-+98, quarantine/ledger publication +100, verdict +106 and decision boundary
-+115. Equality is accepted only after the complete required transition has
-settled; plus one nanosecond is terminal. Early completion moves no cutoff.
-
-The 20-sample cross-language clock oracle accepts only
-`p0 <= swift_sample <= p1` and `p1-p0 <= 50,000,000 ns`. This is a measured,
-fail-closed sample acceptance criterion, not an operating-system scheduling
-promise. Shared authority uses only Python
-`time.clock_gettime_ns(time.CLOCK_MONOTONIC)` and Swift
-`clock_gettime(CLOCK_MONOTONIC)`.
-
-Zero-child publication is exact:
-
-~~~text
-0x10 + exclusive BrokerChildFreeLease evidence
--> CompleteTraceCandidate(empty trace, expected response bytes)
--> full response-line write
--> ResponsePublishedReceipt
--> CompleteTraceProof
--> acceptedSuccess/error
-~~~
-
-Child-bearing publication is exact:
-
-~~~text
-last BrokerSettledCommandReceipt
--> final helper 0x12 fully published
--> CompleteTraceCandidate(expected response bytes)
--> full response-line write
--> ResponsePublishedReceipt
--> CompleteTraceProof
--> acceptedSuccess/error
-~~~
-
-Response-bearing cancellation and operational errors use the same candidate,
-write, receipt and proof. A partial/failed response consumes the candidate into
-`protocolAbnormal`; it cannot mint a proof. Pre-accept and otherwise
-response-free rows consume `NoResponseRequiredProof`. Settlement or `0x12` on
-a true zero-child path is protocol error. Every path still requires exact EOFs
-and helper/worker reap.
-
-The public code/exit/response-presence table is independent and exact:
-
-| Public code(s) | Exit | Response presence |
-| --- | ---: | --- |
-| `OK` | 0 | exact operation-specific six-key response |
-| `INVALID_REQUEST` | 64 | none; pre-accept only |
-| `CLEANUP_NOT_AUTHORIZED` | 64 | exact six-key response after accept |
-| `PROTOCOL_ERROR` | 65 | exact six-key response iff stdout remains usable |
-| `RANDOM_GENERATION_FAILED`, `HDIUTIL_FAILED`, `IMAGE_ENCRYPTION_INVALID`, `KEYCHAIN_ITEM_COLLISION`, `KEYCHAIN_ITEM_NOT_FOUND`, `KEYCHAIN_ITEM_AMBIGUOUS`, `KEYCHAIN_INTERACTION_FORBIDDEN`, `KEYCHAIN_SECRET_INVALID`, `KEYCHAIN_FAILED`, `MOUNT_MAPPING_INVALID`, `MOUNT_CLEANUP_UNCLEAR`, `INTERNAL_ERROR` | 70 | exact six-key response after accept |
-| `SUPERVISION_UNRESOLVED` | 74 | exact six-key response iff stdout remains usable |
-| `CANCELLED` | 75 | none pre-accept; exact six-key response post-accept |
-
-Internal `PROCESS_*` facts are never public codes. Every post-accept non-OK
-response has exact keys `schema_version`, `operation`, `code`,
-`encryption_uuid=null`, `device=null`, `item_count=null`. OK results are create
-`(uuid,null,1)`, mount `(uuid,device,1)`, detach `(uuid,device,null)`, inspect
-`(uuid,null,1)` and delete `(uuid,null,0)`. Python compares all six values,
-frame grammar, output EOFs, control EOF and exact reap.
-
-## Observer, closure and open-unresolved progress
-
-`ObserverTerminationOutcome` is exactly
-`stopped(ObserverStoppedReceipt) | terminalFailure(ObserverTerminalFailureReceipt)`.
-A stopped receipt requires the accepted final snapshot first, then full
-52-byte STOP write and stdin flush/close, contiguous STOPPED, stdout/stderr
-EOFs, reader joins, exit 0, exact
-waitpid, one-shot post-reap token, `kill(-originalPGID,0)==ESRCH`, and every FD
-closed. Every other STOP/snapshot/frame/EOF/join/exit/reap/group result records
-the last proved step plus unknown facts and cannot mint disposition, close or
-PASS.
-
-The only proved-close order is:
-
-~~~text
-artifact disposition settled
--> every broker invocation retired
--> exclusive BrokerChildFreeLease plus empty broker registry
--> broker STOP, EOFs, exact reap, group ESRCH
--> final observer snapshot
--> observer STOP, EOFs, exact reap, group ESRCH
--> DispositionReceipt
--> CLOSED_PROVED
-~~~
-
-At +115 with any broker/orphan obligation, the session transitions to
-`OPEN_UNRESOLVED`. No `DispositionReceipt`, broker STOP, observer STOP, close or
-Python owner exit occurs. The registry mints one strong-identity, one-shot
-`OpenUnresolvedHandle`, a closed in-flight predecessor arm. It authorizes only:
-
-~~~text
-nativeTerminalObserved
--> brokerProvedClose
--> observerFinalization
--> DispositionReceipt(locked non-PASS)
-~~~
-
-It authorizes no artifact, Keychain or ordinary effect and cannot close
-directly. `SessionProgress` is exactly
-`closed(DispositionReceipt) | openUnresolved(OpenUnresolvedHandle)`.
-
-Verdict and closure are independent and monotone. Busy broker/orphan with a live
-observer is `UNCLEAR/supervision_unresolved`; actual observer loss is
-`UNCLEAR/observer_unavailable`; any latched SecurityAgent observation is
-`FAIL/securityagent_detected`. Detection after +115 escalates UNCLEAR to FAIL.
-Later proved close never restores PASS.
-
-## Sealed Python authority and observer build
-
-Every Python authority shell is frozen, slotted and `eq=False`, holding only a
-private issuance object. Private registries retain all payload and compare with
-`is`. Copy, field-equivalent construction, stale epoch, wrong registry/session,
-wrong result/context or replay rejects before an effect. Generation overflow
-closes issuance without wrap.
-
-Preparation owns one `ArtifactCursor(noArtifact)`. It writes and hashes the
-constant observer source bytes, typechecks, compiles and links a private
-executable, checks regular executable type, records compiler identity/exact
-argv/env/mode/device/inode plus measured source/binary digests, removes all
-static-gate artifacts and proves zero residue. Static build and live-launch
-functions are separate. The source digest is literal/reproducible; linked
-binary identity is ephemeral for that build. The exact inode/digest is
-revalidated immediately before spawn. No cross-build binary digest is claimed.
-Replacement between link and revalidation rejects.
-
-One persistent observer spans the first empty baseline, helper compilation,
-second empty baseline, every live/continuation/disposition action and final
-shutdown. Frames are u32be length plus canonical JSON, total at most 65,536,
-with `CORTEX_S3_OBSERVER_V1`, READY/SNAPSHOT/STOPPED, contiguous checked
-sequence, shared-clock scan timestamps and privacy-bounded tokens. Titles,
-paths, environment, command lines and user text are never retained.
-
-One FIFO lifecycle executor owns observations and effects. It reduces observer
-and cancel/control readiness before helper completion in a shared batch. Every
-ordinary or disposition effect first consumes a closed predecessor into an
-`InFlightOperation`. Raw completion remains pending until the complete tuple,
-all EOFs, exact reap and a strictly later observer scan. A terminal cause first
-moves the record to terminal-pending and revokes ordinary success. Ambiguity is
-a bounded, non-authorizing set that retains every possible ledger; none of its
-members is selected as the successor.
-
-The request builder emits exactly ten keys:
-
-~~~text
-schema_version, operation, image_path, mount_path, volume_name, size,
-transaction_id, expected_encryption_uuid, disposable, cleanup_approved
-~~~
-
-All values come from the current registry context/grant. No live method accepts
-caller path, device, operation or argv. Application-owned entropy, Master,
-Wire and mutable Keychain staging use disjoint erasable storage. Wire is erased
-before every outcome/frame; entropy, Master and staging are erased after their
-single consumers. External framework/kernel/child copies are outside direct
-erasure evidence.
-
-## Independent model architecture
-
-The independent lineage alphabet has exactly 22 symbols:
-
-~~~python
-PROCESS_EVENTS = (
-    "spawn_valid", "validation_exact", "validation_failed",
-    "resume_confirmed", "resume_nonconfirmed",
-    "suspended_abort_nonexact", "suspended_abort_exact",
-    "exact_child", "related_partial", "foreign_uid_bridge",
-    "tracked_uid_changed", "tracked_sid_changed", "group_changed",
-    "request_signal", "root_exit_exact", "exact_reap",
-    "original_group_absent", "pipes_closed",
-    "settlement_frame_published", "scan_incomplete", "late_child",
-    "parent_birth_reused",
-)
-~~~
-
-Depths 0..5 contain exactly 5,399,043 raw sequences. The lineage model is
-independent of the native EFSM and has its own reference oracle.
-
-The effect alphabet has exactly 24 symbols after adding
-`prepare_mount_leaf` and `remove_mount_leaf`; depths 0..5 contain exactly
-8,308,825 sequences. Its other semantic events cover activation, create,
-mount, verification, detach/absence, two cycle advances, inspect, approved
-Keychain/image cleanup, unapproved quarantine, terminal transfer, disposition,
-unresolved preservation and close. Reducers return primitive unstamped actions;
-the explorer attaches transition indices. Independent reference machines
-compare complete action vectors and final primitive state without importing
-implementation registries or permit types.
-
-Long traces cover exact suspended/running settlement, worker loss and orphan
-ACK, all one-shot replays, both artifact cycles, mount-leaf prepare/removal,
-three Keychain presence variants, late open-unresolved close and one final
-close. There is no exponential native-EFSM trace enumeration.
-
-## Guardian/witness fixture and closed routes
-
-Legacy routes remain absent. Testing compilation exposes only
-`--test-scenario`, `--test-supervisor-scenario`,
-`--guardian-witness-probe` and `--guardian-witness-child`. Production contains
-no testing route literal or handler and rejects testing flags before effect.
-
-The guardian fixture is deliberately non-suspended, creates no descendants,
-arms a 2.50-second absolute self-expiry before START, observes guardian EOF and
-closes witness on exit. Self-expiry is containment, never success. The sealed
-bootstrap uses an absolute equipped interpreter, `-I -S -u -c`, exact FDs and
-common environment plus only the parent hard deadline. Report validation
-precedes one GO. `exec_status_w` alone is CLOEXEC; EOF proves direct
-`os.execve`, preserving the registered `Popen.pid`. Failure emits exactly
-`EXEC` plus u32be errno and reserved exit 127 for ENOENT, 126 otherwise.
-
-The fixed schedule is +0.75 report, +1.50 work, +2.00 supervisor settlement,
-+2.50 fixture self-expiry, +3.00 cleanup reserve and +5.00 parent hard stop.
-Cleanup reserve allows only independent endpoint closes, authorized positive
-PID TERM/KILL, exact waitpid, witness EOF and one capped in-process libproc
-scan. PID count and byte capacity remain distinct; full buffer, growth,
-identity change, malformed procargs, ESRCH/EPERM/ENOMEM or cap/error is not
-absence. No process-spawning scanner is reachable.
-
-The observer and fixture Swift sources are compiler/typechecked; observer also
-links without launch. The fixture AST closure resolves every local call and
-allows only predeclared Darwin leaves. Unknown/dynamic/spawn/fork/exec/shell or
-dynamic-loading edges reject.
-
-## Test inventory, mutants and closure
-
-The final sets are exact:
-
-| Set | Cardinality |
+| Scope | Maximum |
 | --- | ---: |
-| normative `R01..R45` | 45 |
-| Task 1 `S3T1_01..S3T1_31` | 31 |
-| Task 2 `S3T2_01..S3T2_45` | 45 |
-| Task 3 `S3T3_01..S3T3_08` | 8 |
-| Task 4 `S3T4_01..S3T4_157` | 157 |
-| Task 5 `S3T5_01..S3T5_110` | 110 |
-| separate `S3C4_01` | 1 |
-| `ALL_TEST_IDS`, `ALL_MUTANTS`, `ORACLE_CLOSURE`, `MUTANT_MANIFEST` | 510 each |
+| effect for every admitted operation | 40,000,000,000 ns |
+| cleanup after effect deadline/EOF/cancel | 12,000,000,000 ns |
+| total effect plus cleanup | 52,000,000,000 ns |
+| recovery or `LATE_CLOSE` exchange | 12,000,000,000 ns |
+| each protocol I/O operation | 2,000,000,000 ns |
 
-Thus task-local IDs total 464 and global IDs total 510. Red policies are
-exactly 364 `natural`, 26 `synthetic_gate` and seven
-`baseline_characterization`. The characterization set is exactly `R45`,
-`S3T4_07..S3T4_11` and `S3C4_01`. New activations are 120 runtime, 88 source
-and 20 synthetic. `SWIFT_RUNTIME_CASES` remains exactly 41;
-`SOURCE_MUTANT_TARGETS` is 123 total (35 existing plus 88 new).
+Zero, overflow, a value above any applicable maximum, or a sum above the total
+maximum is rejected before `START` has an effect. The ledger persists the
+durations, boot identity, and broker-reported monotonic start. Recovery compares
+monotonic values only when boot identity matches. These are elapsed-runtime
+deadlines in the platform monotonic clock domain; tests inject clock advance,
+sleep/resume behavior, overflow, exact maximum, and maximum plus one.
 
-Each manifest record freezes, before mutation, `owning_suite_test_ids`,
-`expected_failure_test_ids` and `exclusivity_claim`. Expected failures are never
-learned from output. The runner executes the entire frozen owning suite and
-compares exact failure/error/skip/timeout/unexpected-success sets. Structural
-atomicity is a separately named pre-frozen policy with its own oracle.
+## Durable states and terminal commit
 
-Manifest kinds are a closed union of `RuntimeMutant`, `SourceMutant` and
-`SyntheticMutant`. A synthetic record contains exactly fixture builder ID,
-builder source/closure SHA, transformation ID, private fixture-root contract,
-cleanup/zero-residue contract, expected assertion label, policy and the three
-pre-frozen suite fields. Target file/range/anchor and runtime selector are
-structurally absent and reject if supplied. Its closure includes builder and
-cleanup logic.
+The ledger has exactly five states:
 
-Owner completeness is independent:
+| State | Meaning | Allowed successor |
+| --- | --- | --- |
+| `OPEN_PREPARED` | Request and launch intent are fsynced; `START` has not been sent. | `OPEN_RUNNING`, `OPEN_UNRESOLVED`, or proved pre-exec `CLOSED_FAILURE` |
+| `OPEN_RUNNING` | Authenticated `HELLO` is fsynced; `START` may have been sent. | `OPEN_UNRESOLVED`, `CLOSED_SUCCESS`, or `CLOSED_FAILURE` |
+| `OPEN_UNRESOLVED` | A required fact is absent or ambiguous; never success. | itself or exact broker-proved `CLOSED_FAILURE` |
+| `CLOSED_SUCCESS` | Exact successful terminal proof is durably fsynced. | itself |
+| `CLOSED_FAILURE` | Exact failed or failure-forced terminal proof is durably fsynced. | itself |
 
-~~~python
-OWNER_SUITE[n] = bytewise_sorted(
-    case for case in ALL_TEST_IDS if owner_for(case) == n
-)
-~~~
+Ledger files are current-UID regular single-link mode `0600` files inside a
+current-UID mode `0700` directory. Updates use no-follow create-or-replace,
+compare generation and previous digest, fsync the file and parent directory,
+and leave closed records immutable.
 
-`S3C4_01` belongs to owner 4. Every manifest entry's owning suite equals the
-full owner projection, never a selected or observed subset.
+Every private record persists `transaction_id`, the canonical non-secret
+request, terminal `outcome`, `code`, the closed `BrokerTerminalResponse` or
+null, `native_cleanup_proven`, and `reconciliation_required`, in addition to
+their digests. A `mounted_image_proof` arm is valid only for the private probe;
+all public operations use the local arm. This is sufficient to resume the
+product transition journal after a crash without replaying the native effect
+or guessing an encryption UUID.
 
-The non-executing Python semantic closure resolver starts from
-`(path,qualname)` and covers reached module initializers, top-level symbol
-mutations, class bodies, bases, metaclasses, MRO, executable annotations,
-decorators/defaults, descriptors/properties, `super`, context managers,
-iterators, operators, explicit imports, functions/methods and constants.
-External leaves require a hashed literal allowlist. Star imports, unresolved
-calls, dynamic attributes, `getattr`, globals/locals, eval/exec/importlib,
-`__import__` and subscript callees reject. Cycles use `visited`; serialization
-is sorted, domain-separated and non-recursive.
+Terminal commit and reconciliation finalization are ordered:
 
-Every expected SHA field normalizes to exactly 64 ASCII zeroes before byte
-ranges/offsets are computed. Populating real 64-hex digests leaves offsets
-unchanged; variable-length placeholders reject. The two arithmetic mutants are
-fixed: `S3T4_84/omit_stop_from_observer_total` produces and rejects
-16,781,312; `S3T4_90/omit_admin_from_python_retained_total` produces and
-rejects 20,975,668.
+1. After exact reap and group-absence proof, the broker emits `CLOSED_READY` and
+   retains the complete terminal result, listener, and workflow identity.
+2. Python validates it, writes `CLOSED_SUCCESS` or `CLOSED_FAILURE`, and fsyncs
+   the ledger file and parent directory.
+3. Only after fsync does Python send `COMMIT_ACK(record_sha256,
+   closed_ready_sha256)`.
+4. The broker accepts only hashes matching its retained result, consumes the ACK
+   idempotently, and replies `COMMITTED`. A repeated exact ACK succeeds; a
+   different ACK fails closed.
+5. When `reconciliation_required=false`, the broker replies `FINALIZED` and may
+   exit. When it is true, the broker retains the terminal result, direct-child
+   cleanup proof, connection authority, and reconciliation capability. Python
+   first writes and fsyncs a `pending` `ReconciliationRecord` containing the
+   exact probe digest, then sends the closed read-only `RECONCILE_PROBE` bound
+   to that pending-record digest.
+6. The broker consumes the capability for that unique probe, executes it once,
+   caches the typed result, and returns `RECONCILIATION_RESULT`. An exact replay
+   returns the cached bytes; any different probe fails closed. Python CAS-writes
+   and fsyncs the final `reconciled|unclear` record with the pending digest as
+   predecessor, then sends `RECONCILIATION_ACK` with pending, final-record, and
+   postcondition digests. Only an exact idempotent ACK permits `FINALIZED` and
+   broker exit.
 
-## Normative regression ownership
+If Python dies before ledger fsync, the broker remains available with
+`CLOSED_READY`. If Python dies after fsync but before ACK, recovery loads the
+closed record and resends the exact ACK. If the broker is absent after a closed
+record exists and reconciliation was not required, the record remains valid
+because native terminal proof was hash-bound and durably committed before
+`FINALIZED`. When reconciliation was required, broker loss before `FINALIZED`
+leaves reconciliation `pending` or `unclear` and blocks admission; Python never
+launches a replacement probe broker. Loss before `CLOSED_READY` leaves an open
+or unresolved record.
 
-| IDs | Required boundary |
-| --- | --- |
-| R01-R05 | Only exact broker-settled attach facts mint one bound compensation detach and absence query. |
-| R06-R10 | WNOWAIT identity, signal-permit, exact wait/reap and post-reap group rules reject wrong or missing native facts. |
-| R11-R14 | Immutable invocation origin/class/cutoff; no stage resampling or one-nanosecond overrun. |
-| R15-R25 | Terminal pre-observation, sealed operands, current cursor, in-flight ownership, two cycles, current-mapping continuation, Keychain-first cleanup and verdict priority. |
-| R26-R32 | Independent lineage uncertainty for partial bridges, identity changes, late children and reused births. |
-| R33-R35 | Permit-aware TERM/KILL order, KILL terminality and total suspended validation/resume cleanup. |
-| R36-R39 | Complete response/frame/EOF/reap proof, no authority from valid-looking unresolved output, shared clock and secret erasure. |
-| R40-R43 | Contained guardian/witness, FD inventories, cross-version suite and report-GO-exec/libproc fresh runs. |
-| R44 | Every obsolete route literal, handler and test is absent before default suite selection. |
-| R45 | Every authorization near miss constructs zero live objects; baseline characterization only. |
+`_recover_open_workflows_locked(lock_set, recovery_budget_ns)` is bounded and idempotent. It
+re-attests the socket and broker, resumes the exact generation, and never sends
+a second `START`. `late_close` may return an existing closed record or convert
+an unresolved record only to `CLOSED_FAILURE` after exact broker-held terminal,
+reap, and group-absence proof. Recovery never converts unresolved to success.
 
-Task-local ownership and all 510 exact method/mutant rows are frozen in the
-implementation plan. Task 1 additionally owns the 2,034 native EFSM assertions;
-Task 2 owns broker/worker authority and publication; Task 3 owns invocation
-class/provenance; Task 4 owns environments, protocol, mounts, observer,
-open-unresolved and Python admin permits; Task 5 owns immutable review and
-execution, manifests, semantic closure and final comparison.
+If a broker is gone after native effect may have started, no product-visible
+operator command can reconstruct waitpid proof. The status CLI reports a
+redacted manual block and leaves `OPEN_UNRESOLVED` unchanged; admission,
+update/reinstall, and uninstall remain blocked. Direct ledger editing is not a
+supported recovery path. An intact `OPEN_PREPARED` record is the sole automatic
+no-broker exception because its durable invariant proves `START` was never sent.
 
-## Non-circular review and immutable final tree
+## External-effect reconciliation barrier
 
-The first documentation review never executes candidate code. Each reviewer is
-given the exact commit, four allowed paths and an external literal Git-plumbing
-identity command whose exact bytes/SHA are part of the task. The reviewer uses
-`ls-tree -z`, `cat-file -s` and streamed `cat-file blob` to verify one `100644
-blob` per path, then reads both documents fully. Its canonical receipt binds
-schema/profile/candidate, identity-command SHA, embedded-gate source SHA, every
-path/mode/type/size/SHA tuple, axis, finding counts and verdict.
+`native_cleanup_proven` means only that the broker reaped its direct child and
+proved the original group absent. `effect_reconciled` is a separate durable
+fact owned by `storage-transition.json`. A `CLOSED_FAILURE` after `STARTED`
+always sets `reconciliation_required=true`; it never authorizes a later
+storage effect, update, reinstall, or uninstall by itself.
 
-Only three matching `P0=P1=P2=0/PASS` receipts authorize extraction of the
-single embedded `CORTEX_S3_DOC_GATE_V1` program. Its independently generated
-four-blob package must be byte-identical to the external identities. Mixed
-candidate/profile/manifest/gate/receipt pairs reject. Task 5 may reuse only the
-approved gate SHA and its fixed five-path final profile.
+Each blocking workflow has one durable `ReconciliationRecord` chain containing
+exactly schema version, workflow UUID, generation, transaction UUID, operation,
+request/result digests, state `pending|reconciled|unclear`, one closed typed
+postcondition, probe and postcondition digests, previous-record digest, and
+record digest. The initial `pending` record has the exact probe digest, null
+postcondition/postcondition digest, and the prior workflow-specific
+reconciliation digest as predecessor. The final record must CAS from that exact
+pending digest and contain the broker-returned postcondition and digest. The postcondition
+union is discriminated as `create`, `mount`, `detach`, `inspect_item`,
+`delete_disposable_item`, or `mounted_image_probe`; each variant contains only
+the identities, cardinality, and absence facts specified below. Updates compare
+the previous digest, use no-follow atomic replacement, and fsync file and parent
+directory. Missing, stale, non-canonical, or mismatched records become
+`unclear`.
 
-Every Git identity subprocess uses exact `/usr/bin/git --no-replace-objects
---git-dir=<absolute validated gitdir>` under an empty environment containing
-only the common map plus `GIT_NO_REPLACE_OBJECTS=1`,
-`GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=/dev/null`. It inherits no HOME,
-Git directory/worktree/object/alternate/config/replace variables. Hostile
-commit/blob replacement refs and hostile configuration are synthetic negative
-fixtures.
+Before the original `START`, Python and the broker receive opposite ends of one
+unnamed private reconciliation-capability channel bound to workflow,
+generation, transaction, operation, request digest, budgets, boot identity, and
+the literal terminal-result hash domain; no result digest is guessed before it
+exists. After terminal result construction, both sides derive the single-use
+capability over the actual `result_sha256` and closed-ledger `record_sha256`.
+It cannot be used until that result declares reconciliation required.
+Recovery may reconnect to that retained broker but never mint a replacement
+capability or send another `START`. Under the same active lock owner, the
+capability permits exactly one closed `ReconciliationProbeRequest` for the
+blocking workflow. It cannot grant a public operation, mutation, general
+admission, or another generation. The broker returns a typed
+`ReconciliationPostcondition`; the unique probe is executed once and exact
+replays receive the broker's cached response. The proof is consumed only after
+final-record CAS, file/directory fsync, exact `RECONCILIATION_ACK`, and
+`FINALIZED`. Native cleanup
+alone never lifts the barrier.
 
-Before Task 1, `HEAD == IMPLEMENTATION_BASE == DOC_CANDIDATE`, the index is
-empty, only the known unstaged `primer.md` diff exists, all four blobs and
-manifest match three reviews, and approved-gate self-tests pass.
+`console/storage_reconciliation.py` is the sole schema owner. The request
+payload union is closed to `create_absent_or_consistent`,
+`mount_mapping_zero_or_one`, `detach_mapping_zero`,
+`item_count_zero_or_one`, `deleted_item_count_zero`, and
+`mounted_image_exact_one`. Each request repeats the blocking workflow,
+generation, transaction, operation, request digest, and result digest; its
+payload carries only the exact image, mount, Keychain-query digest, and expected
+APFS/encryption identities needed by that variant. Operation/probe mismatch,
+extra key, stale digest, partial observation, more than one mapping/item, or
+mount non-emptiness in a zero-mapping result yields `unclear`. The probe has no
+spawn, signal, secret delivery, detach, delete, create, attach, or other
+mutation branch.
 
-Before the real Task 5 commit, exactly the three implementation files are
-staged, no worktree delta exists for them, and `S3_PRECOMMIT_TREE=git
-write-tree` is frozen. An unreferenced temporary commit with that exact tree and
-parent `TASK_5_BASE` is checked out in a private detached worktree. All final
-GREEN/mutant/restored-GREEN receipts bind tree, temporary commit, ordinal,
-case, phase, test, mutant, target blob, closure hash, interpreter, argv, result
-and assertion label. CWD/PYTHONPATH/imports are restricted to the detached
-tree; every project module resolves beneath it. Removal proves zero worktree
-residue.
+Under the same transaction/workflow/result digests, `StorageLifecycle`
+reconciles operation-specific postconditions and fsyncs the transition journal:
 
-Commit occurs without restaging. Require `S3_FINAL^{tree} ==
-S3_PRECOMMIT_TREE`, expected parent and exact receipt order. Then create a fresh
-private detached worktree at exact `S3_FINAL` and rerun complete suites, every
-mutant and Git-dependent gate with explicit repository/commit arguments.
-Precommit receipts cannot substitute for final receipts. Only after these
-postcommit checks may a five-path package and three fresh blind implementation
-reviews begin.
+- create: either the exact sparsebundle and exact Keychain item are both absent,
+  or both exist with matching encryption UUID and image identity;
+- mount: exactly one expected APFS/encryption/image/mount mapping exists, or no
+  mapping and the managed mount is empty;
+- detach: the exact mapping is absent and the managed mount is empty;
+- inspect-item: the observed zero/one-item result is persisted; it is read-only;
+- delete-disposable-item: the exact transaction-owned item is absent, with no
+  production-item deletion inference;
+- private probe: all APFS name/UUID, encryption UUID, image/mount identities,
+  and mapping cardinality are persisted as one read-only observation.
 
-## Compatibility
+Contradictory, partial, unavailable, or multi-match observation keeps
+`effect_reconciled=false`. Admission, update/reinstall, and uninstall require
+both no open/unresolved S3 record and every required product reconciliation.
+The crash window after `COMMIT_ACK` but before product-journal fsync is recovered
+from the closed private record and cannot trigger a second native operation.
 
-- Public response keys remain `schema_version`, `operation`, `code`,
-  `encryption_uuid`, `device` and `item_count`.
-- Stable codes, Keychain attributes, 43-character Base64URL public secret
-  representation, no-UI queries and the strict ten-key request remain stable.
-- The live class remains separately selected and requires fresh action-time
-  authorization; default tests cannot select it.
-- Models and harmless fixtures do not prove live Keychain, DiskImages,
-  SecurityAgent or APFS behavior.
-- This Revision 11 candidate still requires three fresh blind documentation
-  reviews. It is not approved merely because its static gates pass.
+## Lock ownership and scope
 
+The outer product caller owns one `StorageLockSet`; the broker client never
+reacquires it. The set carries the canonical home path and live home
+device/inode/UID/mode, each of the three marker FDs and their
+device/inode/UID, acquisition modes, common deadline, and active flag. Its
+single ordered context creates installation markers only when explicitly in
+installer-create mode, otherwise attests and acquires existing install,
+storage, then private admission locks against one common monotonic budget. All
+markers are current-UID regular single-link mode `0600` files below a
+current-UID mode `0700` directory. Admission is always exclusive.
 
-## Normative EFSM Transition Relation (`EFSM_RULES_V1`)
+Mutating lifecycle and transition calls hold install-shared, storage-exclusive,
+and admission-exclusive from recovery through terminal ACK and effect
+reconciliation. Guard, Doctor, selftest, and private probes hold install-shared,
+storage-shared, then admission-exclusive through their read-only workflow.
+Install/update/reinstall/uninstall hold install-exclusive, storage-exclusive,
+then admission-exclusive. No layer acquires an earlier lock while holding a
+later lock. One active connection or recovery owner exists per workflow.
 
-```text
-EFSM_RULES_V1
-event              constructor.member (expanded for 4 SignalIntent)
-from_states        list of 14 states (bytewise-sorted, no wildcards)
-guard              closed predicate identifier
-next_state         exact target state
-actions            ordered vector of ActionTags
-registry_delta     closed registry delta identifier
-```
+Every broker start, mounted-image probe, recovery, late close, and
+reconciliation entrypoint is suffixed `_locked` and receives the active set.
+Every lifecycle and contract operation is likewise a `*_locked` method. Before
+attestation, connection, capability use, or native effect, it revalidates the
+same home and all marker identities, active state, admission exclusivity, and
+operation-appropriate install/storage modes. Wrong-home, closed, missing,
+forged, replaced, weak-mode, or nested sets fail before effect.
 
-The 14 control states, 145 members, 2,030 pairs, and 2,034 trace total are normatively bound. Unobservable exit events (workerExited, workerKilled, pythonExited, pythonKilled) are removed from broker domain and replaced with observable channel loss (eof, brokenPipe, partialFrame, protocolViolation, readFailure, writeFailure, deadlineExpired).
+## Secret handling
 
+Disk-image secrets remain in Swift. Create uses 32 random bytes and the existing
+43-character Base64URL representation. Mount reads the exact Keychain item.
+Secret bytes reach `hdiutil` only through a dedicated stdin pipe followed by the
+required NUL byte.
 
-## Normative CS3B Protocol Grammar (`CS3B_GRAMMAR_V1`)
+Secrets are forbidden from argv, environment, protocol, ledger, stdout,
+stderr, exceptions, receipts, and public evidence. `SecretBuffer`, Base64
+staging, Keychain staging, and every application-owned mutable copy of
+Keychain result bytes are overwritten with `memset_s` on every exit path.
+Evidence states that Security.framework-owned immutable copies and kernel pipe
+buffers are outside the erasure proof.
 
-```text
-CS3B_GRAMMAR_V1
-- 30 frame types, 96-byte header, exact direction, generation 1..7, context digest, subject_ordinal 0..7.
-- Ancillary SCM_RIGHTS on byte offset 0 of TRANSFER_WORKER_FD only (16 bytes ancillary, 1 FD).
-- Closed JSON Schemas: BROKER_READY, WORKER_SPAWN_FAILED, COMMAND_JSON, BROKER_SETTLED_COMMAND_JSON, BROKER_UNRESOLVED_COMMAND_JSON, BROKER_ORPHAN_SETTLEMENT.
-```
+Every broker socket uses `SO_NOSIGPIPE`; the broker ignores SIGPIPE and handles
+`EPIPE` as a delivery failure without skipping cleanup. Each child resets
+SIGPIPE to default. No sensitive or authority-bearing FD is inherited beyond
+the explicit stdin/stdout/stderr mapping.
+
+## Fresh detach attestation
+
+Python never supplies a detach device as authority. Immediately before the
+fixed detach spawn, in one broker turn with no intervening effect, the broker
+constructs and consumes one single-use `DetachAttestation` binding:
+
+- workflow, generation, request digest, and image descriptor identity;
+- open mount descriptor `stat`/`fstatfs` identity and mount source;
+- exactly one matching image/mount/`dev-entry` relation in fresh
+  `hdiutil info -plist`;
+- fresh `diskutil info -plist` agreement on device node, mount point, APFS, and
+  volume UUID;
+- block-device `lstat` identity including `st_rdev_u32`, encoded from the native
+  `st_rdev` bit pattern;
+- a final unchanged mount and device recheck.
+
+The exact attested device is passed once to normal `hdiutil detach`, never
+`-force`. Replacement, disappearance, extra mapping, stale generation, or
+replay performs no detach and becomes unresolved. Post-effect `hdiutil` and
+`diskutil` checks prove outcome but never authorize the mutation retroactively.
+
+## Product integration
+
+S3 is the authoritative replacement for the one-shot disk-helper portions of
+the v0.5.4 storage-runtime foundation plan. It must land before downstream
+storage lifecycle and runtime-start tasks consume those interfaces.
+
+The single execution DAG is Foundation lock/result and mount probe → S3
+broker/client core with injected attestation → Foundation transition,
+lifecycle, contract, workspace, configuration, import, CLI, managed start, and
+readiness consumers with injected backends → PASS-only S3 cross-plan gate → one
+atomic complete-generation installation unit → S3 evidence and release gates.
+No later task requests RED for an already-created behavior, and installed
+attestation/factory code does not exist before the installation unit.
+
+- `InstalledStorageRuntime.from_installed_home_locked(home, lock_set)` is the
+  sole product composition factory. Only after validating an active same-home
+  install-shared-or-stronger set does it attest one generation and compose its
+  broker, descriptor-only mount probe, ledger, paths, lifecycle, and contract.
+  No product factory or executable attestation runs before that lock proof.
+- The existing `StorageLifecycle` remains the authority through
+  `preflight_locked`, `keychain_spike_locked`, `create_vault_locked`,
+  `initialize_layout_locked`, `mount_or_adopt_locked`, `detach_locked`, and
+  `status_locked`. It constructs validated native requests internally; callers
+  never provide a raw `StorageBrokerRequest`.
+- `StorageBrokerClient` is only its native backend. It routes every internal
+  `hdiutil`/`diskutil` spawn, including reconciliation probes, through the
+  broker while preserving descriptor-first host, APFS name/UUID, encryption
+  UUID, image/mount identity, and mapping-cardinality proofs.
+- `scripts/cortex-storage.py` delegates storage effects to `StorageLifecycle`;
+  it implements no direct native subprocess path.
+- `storage_guard` uses only the private `_probe_mounted_image_locked()` entrypoint.
+- `scripts/check-cortex-storage.py` remains a thin packaged guard wrapper.
+- `cortex.sh start`/`start-local.sh` route mount through the lifecycle before
+  server spawn; `cortex.sh stop` routes normal detach after verified shutdown.
+- `configure-external-storage`, `storage_transition`, `storage_contract`,
+  `cortex_paths`, startup lease, server lifespan, and their tests consume the
+  same lifecycle and reconciliation barrier.
+
+The broker is the only parent allowed to spawn `hdiutil` or `diskutil`.
+`storage-mount-probe --fd` is the only other storage subprocess: it accepts one
+inherited directory FD, performs descriptor-only `fstat`/`fstatfs`, and has no
+Keychain, DiskImages, path-open, or arbitrary-command capability.
+
+Executable integration tests must reach every public operation through these
+product façades and prove that no product route invokes the test-only helper,
+direct `hdiutil`, direct `diskutil`, or Python native-child signaling.
+
+## Installation, update, and uninstall
+
+The installed `cortex-storage-broker` is compiled in a production profile with
+no test routes. The manifest records source digest, build-profile digest,
+binary digest, device, inode, owner, and mode `0700`; the Python client and
+criteria/evidence schema versions are packaged explicitly.
+
+One `installed_storage_runtime_generation` is fixed beneath the verified
+runtime home. `app/bin` contains `cortex-storage-broker`,
+`storage-mount-probe`, and `cortex-macos-ax-send`; `app/python` contains the
+packaged application; `app/scripts`, `app/native-src`, and
+`app/build-profiles` contain every installed entrypoint, the three native
+sources, and their canonical profiles; `app/chrome-extension` contains the
+installed extension. The generation also binds the exact interpreter,
+`owned_manifest_sha256`, and `generation_record_sha256`. Product launch imports from `app/python` with the checkout
+unavailable. `extension_tree_sha256` hashes the canonical raw-UTF-8-sorted list
+of exact relative path, regular-file size, mode, and SHA-256 records. The same
+digest appears in the extension-owned manifest, installed-generation record,
+Doctor output, and install evidence. The ordered
+`owned.json["native_helpers"]` entries are exactly `macos-ax-send`,
+`storage-mount-probe`, and `storage-broker`; every record contains target,
+source, `source_sha256`, `build_profile_sha256`, binary `sha256`, `cdhash`,
+`dev_u32`, `ino`, `uid`, and `mode`.
+
+Production and test broker builds are distinct. The installed binary must
+reject every test-only argument and environment switch before opening a socket
+or invoking Keychain/DiskImages. Tests must execute the installed artifact; a
+source checkout or test compilation is not evidence of this property.
+
+Install publication uses private staging, source/binary revalidation, atomic
+file replacement, directory fsync, and a manifest-owned identity. Update and
+reinstall acquire one install-exclusive, storage-exclusive,
+admission-exclusive `StorageLockSet`, prove the runtime stopped, perform bounded
+recovery, and require zero open or unresolved workflows plus complete
+reconciliation before publishing any generation change. A crash between
+binary swap and manifest publication leaves a detectable mismatch and refuses
+execution; it never silently adopts the new file.
+
+Migration from the legacy single-helper manifest to the three-entry registry
+publishes the application module tree, scripts, sources/profile, broker, and
+manifest as one recoverable installer transaction. A crash at any boundary
+rolls back to the prior complete generation or leaves a detectable refusal; no
+mixed generation is executable.
+
+Update/reinstall is allowed with an existing compatible Keychain item only when
+the runtime is verified stopped, schema/build profile are compatible, every
+workflow is closed, and every required reconciliation is `reconciled`; failure
+rolls back the whole generation atomically. With a configured vault, uninstall
+refuses entirely with `STORAGE_VAULT_CONFIGURED` and preserves the complete
+generation. Otherwise it removes only exact manifest-owned identities and
+never signals a foreign resource.
+
+## Evidence, privacy, and acceptance
+
+Private ledgers retain only facts needed for recovery. Logs and public receipts
+may contain workflow/generation, operation, state, stable code, redacted
+duration, and digests. They contain no secret, native PID/PGID, private path,
+device node, account identifier, Keychain label, environment dump, or child
+output.
+
+A versioned S3 criteria registry and a separate versioned module inventory are
+normative and independent of the number of tests. The module inventory includes
+the native broker module and is hash-bound into runner, receipt, `test-all`,
+final verification, and release validation. Each criterion declares acceptable
+runtime tags, evidence tier, required Python versions, and whether a mutation
+proof is required. The matrix runner
+accepts a criterion only from an explicitly passed test result, rejects
+missing/duplicate/wrong-tier/wrong-version tags, and derives any displayed
+counts from the receipt. Removing a module or satisfying a criterion only from
+a fixture is a failing mutation.
+
+The canonical receipt JSON has its own canonical path and raw-byte SHA-256. Each
+per-test event contains test ID, tags, tier, interpreter identity, one closed
+status (`PASS`, `FAIL`, `ERROR`, `SKIP`, `XFAIL`, `XPASS`, `SUBTEST_FAIL`,
+`SUBTEST_ERROR`, `TIMEOUT`, `INTERRUPTED`, or `MISSING`), a closed cause code,
+and typed mutation proofs. Each proof binds criterion/mutation IDs plus input,
+expected, and observed canonical digests. Missing, mismatched, or non-canonical
+proof blocks any mutation-required criterion. Exception text, stdout, stderr,
+environment, and arbitrary strings never enter the receipt. A bounded
+subprocess supervisor emits `TIMEOUT`, `INTERRUPTED`, and
+`MISSING` rather than silently losing a run.
+
+The public JSON and Markdown each have a separate raw-byte SHA-256 and bind the
+same receipt and module-inventory digests. Their tables use closed schemas,
+fixed columns, typed cells, fixed vocabulary, and canonical row order. Every
+cell derives from a typed Cortex S3 receipt field; third-party brands, tools,
+sources, metrics, extra columns, and free text are rejected. JSON is canonical;
+Markdown is UTF-8 with LF endings and one final LF.
+
+Acceptance requires executable proof of:
+
+- controller crash/EOF/group-signal survival through exact reap and group
+  absence, plus an honestly named broker-loss test that makes no no-orphan
+  claim;
+- suspended child launch, pre-resume identity/waitability registration,
+  TERM/KILL ordering, post-reap no-signal, `ECHILD`, PID reuse, and FD hygiene;
+- durable `OPEN_PREPARED` recovery, every exec/HELLO/START crash window, two-
+  phase terminal ACK, replay safety, boot mismatch, and budget boundaries;
+- secret delivery/erasure/SIGPIPE and detach TOCTOU rejection;
+- real product façade integration and installed-production-binary provenance;
+- the hermetic suite under distinct Python 3.11 and 3.14 interpreters, with
+  every unittest status other than explicit PASS blocking;
+- default no-effect tests, synthetic macOS tests, owner-gated live tests, and
+  provider-gated live evidence reported as distinct tiers.
+
+Live Keychain/DiskImages integration requires the exact action-time gate and
+synthetic disposable data. Fixture and synthetic tests never claim to prove a
+real macOS environment. Provider authorization remains outside S3.
+
+No test or scenario count is normative. Only automatically derived and
+receipt-verified counts may be displayed.

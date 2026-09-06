@@ -1,17 +1,25 @@
 {
-  "schema_version": 1,
-  "planning_commit": "4c8d30fae42ecbc80b8f9719e6b929035613f253",
-  "master_plan_sha256": "51cf9265ae299e7892063dec00bca500f460dbe733a8daf6712d26b5037fc259",
+  "schema_version": 3,
+  "planning_commit": null,
+  "documentation_state": "R16_UNCOMMITTED_AWAITING_REVIEW",
+  "hash_model": {
+    "master_contains_own_hash": false,
+    "master_contains_ledger_hash": false,
+    "ledger_records_master_hash": true
+  },
+  "master_plan_sha256": "0c5699b660d66b39f6f85648e685b9b20338b84c349a60c1a05bbaa190a83ef8",
   "spec_sha256": {
     "2026-08-31-hybrid-intent-router-design.md": "472ae88687f6df00be1aac7bb33af536b0456fdc7fd04b7bb5f95e637e4b38f5",
-    "2026-09-02-storage-cutover-and-qa-design.md": "2034280b1b4943c2b602eba888b58742e2d77b428bdc63dc5f93a4b59c72cb5f",
-    "2026-09-03-local-alias-action-addendum.md": "38dff2d114ddf3a8f2262f3ac2b37dcbec9fd33951934c5d5c03a9a0c4acc08b"
+    "2026-09-02-storage-cutover-and-qa-design.md": "a41bd652ece6803afa5a759f6bf806639ff17c1db067bc344aac5f452a04c827",
+    "2026-09-03-local-alias-action-addendum.md": "38dff2d114ddf3a8f2262f3ac2b37dcbec9fd33951934c5d5c03a9a0c4acc08b",
+    "2026-09-03-s3-owned-process-supervision-design.md": "4bd723ae6db96d8ca5ce4aedec5053d8efa1782af552030fa9c227078f86c05b"
   },
   "subordinate_plan_sha256": {
-    "E": "7974f73e672077956d5e03a6416711791524ab520a8549b729ec4a2feb7c102c",
-    "I": "73987192c4d5dbe3d0fcabf3637bd46f60b0ef50f15c8184b93452b1e7e66fc8",
+    "E": "b98b88a54bc27543555c465839ff1bea912fc343514fa3ffdf15caecfe61ffe1",
+    "I": "bcd7a77dbf344c05f60238be326b6a96d853ec8063777e10931b0041502ef6a6",
     "L": "b8dda2316401eaee1b6408aa6cc68136b783524d6b99e5b30f64db7c30e83277",
-    "S": "94a49fcae36c2fdd662ac88e73468836ab908dcfaf53f003a5537d9f24285859",
+    "S": "b34a111b6a8029c82858f9bbf8baff6e95300252db85cd46d76df82ceac89fdd",
+    "S3": "afb695e260b652ddb843d7c673c521aaf412c2dee86bc90718ee5f3f72154778",
     "U": "25d04484e4dcf337728ce96f0af642d3894be71dea0ef9a616f2552cd9121245"
   },
   "phases": {
@@ -22,7 +30,107 @@
       "full_gate": null,
       "review_id": null,
       "review_verdict": null,
-      "blockers": null
+      "blockers": null,
+      "subphases": {
+        "S3_FAIL_frozen": {
+          "status": "FAIL_frozen",
+          "review_verdict": "FAIL",
+          "design_sha256": "d88b20f54d75e58a61b57be533e46de30ac8d5674eeedab652d53031bf904848",
+          "plan_sha256": "6ec2207fc760b556f0e43cd8eef3eb9d25d12557b69f7e47aa6545e2815435e6"
+        },
+        "S3_corrective": {
+          "status": "R16_AWAITING_INDEPENDENT_REVIEW",
+          "design_sha256": "4bd723ae6db96d8ca5ce4aedec5053d8efa1782af552030fa9c227078f86c05b",
+          "plan_sha256": "afb695e260b652ddb843d7c673c521aaf412c2dee86bc90718ee5f3f72154778",
+          "implementation_commit": null,
+          "review_id": null,
+          "reviewed_design_sha256": null,
+          "reviewed_plan_sha256": null,
+          "review_verdict": null,
+          "blockers": [
+            "S3_CORRECTIVE_REVIEW_REQUIRED"
+          ]
+        },
+        "S4": {
+          "status": "BLOCKED_PENDING_S3_REVIEW",
+          "depends_on_review_id": null,
+          "base_commit": null,
+          "terminal_commit": null,
+          "focused_tests": null,
+          "full_gate": null,
+          "review_id": null,
+          "review_verdict": null,
+          "interface_signatures": {
+            "InstalledStorageRuntime.from_installed_home_locked": null,
+            "StorageContract.assert_runtime_ready_locked": null,
+            "StorageContract.open_locked": null,
+            "StorageContract.open_workspace_locked": null,
+            "WorkspaceHandle.duplicate_workspace_fd": null,
+            "WorkspaceHandle.revalidate": null
+          },
+          "blockers": [
+            "S3_CORRECTIVE_REVIEW_REQUIRED"
+          ]
+        }
+      },
+      "native_helper_registry": {
+        "order": [
+          "macos-ax-send",
+          "storage-mount-probe",
+          "storage-broker"
+        ],
+        "record_fields": [
+          "target",
+          "source",
+          "source_sha256",
+          "build_profile_sha256",
+          "sha256",
+          "cdhash",
+          "dev_u32",
+          "ino",
+          "uid",
+          "mode"
+        ]
+      },
+      "installed_storage_runtime_generation": {
+        "schema_version": 1,
+        "generation_id": null,
+        "resource_roots": [
+          "app/bin",
+          "app/python",
+          "app/scripts",
+          "app/native-src",
+          "app/build-profiles",
+          "app/chrome-extension"
+        ],
+        "python_tree_sha256": null,
+        "scripts_tree_sha256": null,
+        "native_sources_tree_sha256": null,
+        "build_profiles_tree_sha256": null,
+        "extension_tree_sha256": null,
+        "interpreter_sha256": null,
+        "interpreter_dev_u32": null,
+        "interpreter_ino": null,
+        "interpreter_uid": null,
+        "interpreter_mode": null,
+        "owned_manifest_sha256": null,
+        "generation_record_sha256": null,
+        "status": null
+      },
+      "installed_storage_broker_identity": {
+        "manifest_key": "native_helpers.storage-broker",
+        "relative_path": "app/bin/cortex-storage-broker",
+        "sha256": null,
+        "dev_u32": null,
+        "inode": null,
+        "uid": null,
+        "mode": null,
+        "build_profile_sha256": null
+      },
+      "reconciliation_gate": {
+        "native_cleanup_proven": null,
+        "effect_reconciled": null
+      }
     },
     "E": {
       "base_commit": null,

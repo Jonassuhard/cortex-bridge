@@ -4,11 +4,11 @@
 
 **Goal:** Build and test the fail-closed storage runtime foundation for Cortex Bridge without creating the production vault or mutating a real production Keychain, disk image, or Chrome profile.
 
-**Architecture:** A single descriptor-first `StorageContract` owns storage truth, backed by attested Swift helpers, a private ordered lock, and a durable transition journal. A redacted operator CLI composes preflight, disposable Keychain proof, vault lifecycle, controlled import, cutover, rollback, and status, while `cortex.sh` alone owns runtime mount/detach and a one-shot managed-start lease. `WorkspaceHandle` remains a strictly vault-only persistent-FD boundary; a separate read-only runtime-readiness assertion lets later local-alias actions observe storage and managed-start health without receiving vault or local-filesystem authority.
+**Architecture:** A single descriptor-first `StorageContract` owns storage truth, backed by the persistent S3 Swift broker, the descriptor mount probe, a private ordered lock set, and a durable transition journal. A redacted operator CLI composes preflight, disposable Keychain proof, vault lifecycle, controlled import, cutover, rollback, and status, while `cortex.sh` alone owns runtime mount/detach and a one-shot managed-start lease. `WorkspaceHandle` remains a strictly vault-only persistent-FD boundary; a separate read-only runtime-readiness assertion lets later local-alias actions observe storage and managed-start health without receiving vault or local-filesystem authority.
 
-**Tech Stack:** Python 3.11+, Swift with Security.framework and Darwin, macOS 14/15/26, APFS DiskImages on an ExFAT host, FastAPI lifespan, Bash, `unittest`, `xcrun swiftc`, `codesign`, `diskutil`, `hdiutil`, Git and Gitleaks.
+**Tech Stack:** Python 3.11 and 3.14, Swift with Security.framework and Darwin, macOS 14/15/26, APFS DiskImages on an ExFAT host, FastAPI lifespan, Bash, `unittest`, `xcrun swiftc`, `codesign`, `diskutil`, `hdiutil`, Git and Gitleaks.
 
-**Spec:** `docs/superpowers/specs/2026-09-02-storage-cutover-and-qa-design.md` frozen at SHA-256 `2034280b1b4943c2b602eba888b58742e2d77b428bdc63dc5f93a4b59c72cb5f`, plus normative addendum `docs/superpowers/specs/2026-09-03-local-alias-action-addendum.md` frozen at SHA-256 `38dff2d114ddf3a8f2262f3ac2b37dcbec9fd33951934c5d5c03a9a0c4acc08b`.
+**Spec:** `docs/superpowers/specs/2026-09-02-storage-cutover-and-qa-design.md` frozen at SHA-256 `a41bd652ece6803afa5a759f6bf806639ff17c1db067bc344aac5f452a04c827`, normative addendum `docs/superpowers/specs/2026-09-03-local-alias-action-addendum.md` frozen at SHA-256 `38dff2d114ddf3a8f2262f3ac2b37dcbec9fd33951934c5d5c03a9a0c4acc08b`, and the S3 owned-process design/plan frozen by the completion program.
 
 ## Global Constraints
 
@@ -22,23 +22,24 @@
 - Generate 32 random bytes with `SecRandomCopyBytes`, encode 43 Base64URL ASCII characters without padding, append one terminal NUL only for `hdiutil -stdinpass`, keep secrets out of arguments/environment/files/stdout/stderr, and overwrite mutable secret buffers before helper exit.
 - Keychain items use generic-password class, encryption UUID account, service `com.cortexbridge.encrypted-storage`, sparsebundle-basename label, description `disk image password`, transaction UUID generic tag, `kSecUseDataProtectionKeychain=true`, `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`, synchronizable disabled, and `kSecUseAuthenticationUIFail` on every add/read/delete query.
 - `errSecInteractionNotAllowed`, authentication-required/cancelled status, any SecurityAgent observation, UUID collision, zero/multiple reconciliation matches, or an unavailable helper is terminal and never falls back to UI, `-agentpass`, a plaintext recovery file, `security -g`, or a command-line secret.
-- Every attach uses the attested helper with `-stdinpass`, `-owners on`, `-nobrowse`, and the exact controlled mount. Every detach is normal, never forced.
+- Every attach is issued by the attested persistent broker with `-stdinpass`, `-owners on`, `-nobrowse`, and the exact controlled mount. Every detach is fresh-attested and normal, never forced.
 - Keep `CORTEX_HOME`, settings, SQLite, logs, pids, locks, venv, helpers, attachments, runs, and private quarantine on the local internal disk. External storage receives only the canonical directories and allowlisted imported data.
 - External directories are exactly `00_INDEX`, `10_SOURCE`, `20_WORKSPACES`, `30_EVIDENCE`, `50_CACHE_REBUILDABLE/browser-profiles`, `90_ARCHIVES`, and `99_QUARANTINE`, all real owner-only `0700` directories on the verified APFS device; `40_ARCHIVES` is invalid.
 - Required or release runtime accepts only `browser_transport=chrome_extension`. `playwright` and `webbridge` remain development-fixture-only when required storage is absent, and rejection happens before driver construction.
 - `CORTEX_STORAGE_BOOTSTRAP` and `CORTEX_STORAGE_REQUIRED_MARKER` are either unset or resolve to the exact private files under the verified `CORTEX_HOME`; alternate overrides fail closed.
-- `.install.lock` is always acquired before `storage-state.lock`. Installer/cutover/rollback/import take the storage lock exclusively; guard/start/Doctor/selftest take it shared; Settings storage-projection writes take it exclusively. All waits have a bounded deadline.
+- Lock order is `.install.lock` → `storage-state.lock` → `storage-admission.lock`, acquired once by the outer caller. Mutations use install-shared/storage-exclusive/admission-exclusive; guard/Doctor/selftest probes use install-shared/storage-shared/admission-exclusive; installer/update/uninstall use all three exclusive. The broker client never reacquires a lock. All waits are bounded.
 - `storage-transition.json` blocks start, server, API readiness, Doctor, and selftest in every state except a verified `committed`; rollback runs only while Cortex is verified stopped.
-- `WorkspaceHandle`, `StorageBinding`, `StorageContract.open_workspace()`, mission admission, and the generic executor remain strictly vault-only: accepted workspace relative paths have the exact first component `20_WORKSPACES`; Desktop, Documents, Downloads, `LocalAliasRef`, and `LocalAliasHandle` never enter these interfaces.
-- `StorageContract.assert_runtime_ready() -> StorageStatus` is read-only. It opens no standard alias, creates no binding/handle/grant/approval/effect, and fails closed before a later `local_alias_action` can proceed when required storage is absent, detached, contradictory or transitioning, or when the current process lacks a valid consumed managed-start lease.
+- `WorkspaceHandle`, `StorageBinding`, `StorageContract.open_workspace_locked()`, mission admission, and the generic executor remain strictly vault-only: accepted workspace relative paths have the exact first component `20_WORKSPACES`; Desktop, Documents, Downloads, `LocalAliasRef`, and `LocalAliasHandle` never enter these interfaces.
+- `StorageContract.assert_runtime_ready_locked(lock_set) -> StorageStatus` is read-only. It opens no standard alias, creates no binding/handle/grant/approval/effect, and fails closed before a later `local_alias_action` can proceed when required storage is absent, detached, contradictory or transitioning, or when the current process lacks a valid consumed managed-start lease.
 - With no required-storage marker, only a managed product runtime may receive `RUNTIME_READY`; the explicit development fixture may run without the vault but cannot use that absence to authorize a local-alias action.
 - This plan does not implement `LocalAliasHandle`, `LocalAliasActionService`, `executor/local_alias_worker.py`, alias catalog/grants, `mkdirat`, local access checks, TCC prompting, or any Desktop/Documents/Downloads mutation. Those remain sequential downstream-plan ownership.
 - The common storage CLI envelope is exactly `{schema_version:1, operation, verdict:"PASS|FAIL|UNCLEAR", transaction_id, code, checks:[{id,status,evidence}], private_paths_redacted:true}`. Both verdict fields use only `PASS`, `FAIL`, or `UNCLEAR`; evidence contains stable non-sensitive tokens, never a secret or private path.
 - `status` adds exactly `storage_state`, `mounted`, `runtime_allowed`, and `recovery:"UNCLEAR"`. It does not infer readiness from path existence.
 - `scripts/cortex.sh extension-path --json` returns only an installed local extension path whose existence and manifest hash are verified; it never points to the external repository checkout that stop will detach.
 - No unrestricted process execution, arbitrary source/destination import, `sudo`, ownership-setting change, external network expansion, browser-profile copy, production publication, merge, tag, push, or unrelated refactor belongs to this plan.
-- `PYTHON` in every command is the equipped Cortex interpreter returned by the runtime-home preflight; every command runs independently from the repository root and a zero-test selection or required skip is `FAIL`.
-- The authoritative implementation order is Tasks `1, 2, 3, 4, 6, 5, 7, 8, 9, 10, 11`, then the single atomic `12+13` block, then Task `14`. Task numbers preserve interface references; they are not permission to run Task 5 before its journal dependency or to split the mount/start handshake across commits.
+- A single-`PYTHON` test-all invocation is a migration error with code `S3_DUAL_PYTHON_REQUIRED`. Source commands use the absolute repository root as `PYTHONPATH=<root>/console:<root>` and run under distinct Python 3.11 and 3.14; installed-app tests clear that root and make the checkout inaccessible. Legacy `$PYTHON` blocks below are command templates only: execution substitutes each equipped interpreter with that absolute import root, and literal mono-Python execution is forbidden.
+- The sole Phase S DAG is Foundation Tasks `1, 2` → S3 Tasks `1-5` (broker/client core with injected attestation; these replace Foundation Task 3) → Foundation Tasks `6, 5, 7, 8, 9, 10, 11`, atomic `12+13`, then `14` (all consumers use injected backends) → S3 Task `6` (PASS-only integration gate over those existing behaviors) → the atomic Foundation Task `4` + S3 Task `7` installation unit → S3 Tasks `8-12`. A later task never asks for RED on a behavior an earlier task already created, and no file or production behavior is created twice. The completion ledger names the reviewed legacy boundary `S3_FAIL_frozen`, this corrective contract `S3_corrective`, and the resulting implementation checkpoint `S4`.
+- Before the first S4 production or test edit, the completion ledger must already contain the independent `S3_corrective` PASS review ID and exact reviewed design/plan hashes; S4 binds that ID and the reviewed planning base. A pending, failed, unclear, stale, or missing review stops this plan.
 - Tasks 12 and 13 are one reviewable unit. Write both tasks' tests before production code, run the union as RED, implement the blocked lease primitives before wiring runtime mount/start, retain the `StorageBinding` until the exact ACK, run the complete union as GREEN, and create only the combined commit specified at the end of Task 13. The individual Task 12 commit boundary is deliberately suppressed; no test or acceptance criterion is removed.
 
 ---
@@ -48,13 +49,15 @@
 | File | Responsibility in this plan |
 | --- | --- |
 | `console/storage_result.py` | Strict redacted result/check schema plus the canonical `StorageStatus` shared by transition, contract and operator code. |
-| `console/storage_lock.py` | Descriptor-verified `storage-state.lock`, read-only existing-marker acquisition, bounded shared/exclusive locking, and install-before-storage ordering. |
+| `console/storage_lock.py` | Sole descriptor-verified `StorageLockSet` for install → storage → admission, with existing-marker attestation, bounded shared/exclusive locking, and no nested acquisition. |
 | `native/macos/storage_mount_probe.swift` | `fstatfs(2)` facts for one inherited directory FD without reopening a path. |
-| `native/macos/disk_image_keychain.swift` | Secret generation, `hdiutil` stdin pipe, Cortex-owned Keychain add/read/delete, mount and normal detach. |
+| `native/macos/disk_image_keychain.swift` | Persistent S3 broker: secret generation, owned native children, Keychain add/read/delete, mount, attested normal detach, terminal retention. |
 | `console/native_helpers.py` | Ordered helper definitions, manifest attestation, pre-spawn verification, and stable helper invocation. |
 | `console/installer.py` | Transactional installation/Doctor/uninstall policy for three helpers and the installed local extension copy. |
 | `console/storage_transition.py` | Snapshot manifest, journal phases, exact resume, publication, reconciliation, and idempotent rollback. |
-| `console/storage_lifecycle.py` | FD-first host preflight, legacy read-only metadata snapshot, spike/vault/layout/mount/detach orchestration. |
+| `console/storage_reconciliation.py` | Canonical S3 reconciliation records, probe union, postconditions, CAS, and terminal-broker ACK handshake. |
+| `console/storage_broker.py` | S3 native backend, private probe, durable broker ledger and recovery; never a public lifecycle façade. |
+| `console/storage_lifecycle.py` | FD-first seven-method authority that constructs broker requests internally and reconciles native results into the transition journal. |
 | `console/storage_contract.py` | Sole fail-closed vault authority, retained `StorageBinding`, and read-only managed-runtime readiness assertion. |
 | `executor/workspace_handle.py` | Complete vault-only persistent-FD workspace interface for later general-mission executor/effect integration. |
 | `tests/test_storage_runtime_ready.py` | Local-alias consumer boundary matrix proving failed storage/transition/lease state cannot reach a downstream admission callback. |
@@ -69,18 +72,75 @@
 ### Task 1: Redacted result schema and ordered storage lock
 
 **Files:**
-- Create: `console/storage_result.py`
-- Create: `console/storage_lock.py`
-- Create: `tests/test_storage_lock.py`
+- Modify: `console/storage_result.py`
+- Modify: `console/storage_lock.py`
+- Modify: `tests/test_storage_lock.py`
 - Modify: `tests/test_installer.py`
 
 **Interfaces:**
 - Consumes: `console.lifecycle_lock.open_lifecycle_lock(path: Path) -> int` for canonical private marker creation.
-- Produces: `CheckResult`, `OperationResult`, canonical `StorageStatus`, `StorageLock`, `open_storage_lock(home: Path, mode: Literal["shared", "exclusive"], *, timeout_seconds: float = 5.0) -> StorageLock`, read-only `open_existing_storage_lock(home: Path, mode: Literal["shared", "exclusive"], *, timeout_seconds: float = 5.0) -> StorageLock`, and `ordered_storage_locks(home: Path, *, install_mode: Literal["shared", "exclusive"] | None, storage_mode: Literal["shared", "exclusive"], timeout_seconds: float = 5.0) -> ContextManager[tuple[int | None, StorageLock]]`.
+- Produces: `CheckResult`, `OperationResult`, canonical `StorageStatus`, and the
+  sole public lock entrypoint
+  `ordered_storage_locks(home, *, install_mode, storage_mode,
+  timeout_seconds=5.0) -> ContextManager[StorageLockSet]`. Lower-level marker
+  opens are private and reject acquisition while the caller already owns any
+  member of a lock set.
 
 - [ ] **Step 1: Write failing schema and lock tests**
 
-Create tests that reject lowercase/unknown verdicts, path-shaped evidence, extra output fields, unsafe/symlink/hardlinked lock markers, and reversed lock ordering. Prove a shared holder coexists with another shared holder, excludes an exclusive holder until release, and times out with `STORAGE_LOCK_TIMEOUT` without running its callback. Prove `open_existing_storage_lock` never creates a missing marker, returns `STORAGE_LOCK_MISSING`, and leaves the private runtime directory identity and entries unchanged.
+Create tests that reject lowercase/unknown verdicts, path-shaped evidence, extra output fields, unsafe/symlink/hardlinked lock markers, and reversed lock ordering. Prove a shared holder coexists with another shared holder, excludes an exclusive holder until release, and times out with `STORAGE_LOCK_TIMEOUT` without running its callback. Prove the sole public ordered context never creates a missing marker outside installation, returns `STORAGE_LOCK_MISSING`, and leaves the private runtime directory identity and entries unchanged. Forge a wrong-home, closed, wrong-mode, missing-admission, replaced-marker, and nested lock set; `assert_active` must reject each before any callback or attestation.
+
+Define and test the exact bundle:
+
+```python
+LockMode = Literal["shared", "exclusive"]
+
+@dataclass(slots=True)
+class StorageLockSet:
+    home: Path
+    home_dev_u32: int
+    home_ino: int
+    home_uid: int
+    home_mode: Literal[448]
+    install_fd: int
+    install_dev_u32: int
+    install_ino: int
+    install_uid: int
+    storage_fd: int
+    storage_dev_u32: int
+    storage_ino: int
+    storage_uid: int
+    admission_fd: int
+    admission_dev_u32: int
+    admission_ino: int
+    admission_uid: int
+    install_mode: LockMode
+    storage_mode: LockMode
+    admission_mode: Literal["exclusive"]
+    marker_mode: Literal[384]
+    deadline_ns: int
+    active: bool
+    def assert_active(self, *, home: Path,
+                      required_install_mode: LockMode,
+                      required_storage_mode: LockMode) -> None: ...
+    def close(self) -> None: ...
+
+def ordered_storage_locks(
+    home: Path, *, install_mode: LockMode, storage_mode: LockMode,
+    create_markers: Literal["never", "installer"] = "never",
+    timeout_seconds: float = 5.0,
+) -> ContextManager[StorageLockSet]: ...
+```
+
+The one common monotonic deadline covers no-follow creation/attestation and
+acquisition of `.install.lock`, `storage-state.lock`, then
+`storage-admission.lock`. Each is regular, single-link, current-UID mode `0600`
+under a current-UID mode `0700` directory. Release reverses order in `finally`.
+Lifecycle, contract/readiness, guard, Doctor, selftest, runtime, installer, and
+reconciliation receive the acquired bundle and call only `*_locked` internals;
+nested acquisition is `STORAGE_LOCK_NESTED`. `assert_active` revalidates the
+home and all three marker FD identities, current UID, modes, active flag, and
+mode sufficiency; exclusive satisfies a shared requirement, never the reverse.
 
 ```python
 result = OperationResult(
@@ -100,7 +160,11 @@ assert result.to_dict() == {
     "private_paths_redacted": True,
 }
 with self.assertRaisesRegex(StorageLockError, "STORAGE_LOCK_TIMEOUT"):
-    open_storage_lock(home, "exclusive", timeout_seconds=0.05)
+    with ordered_storage_locks(
+        home, install_mode="shared", storage_mode="exclusive",
+        timeout_seconds=0.05,
+    ):
+        self.fail("contended callback reached")
 ```
 
 - [ ] **Step 2: Run focused tests and confirm RED**
@@ -111,7 +175,8 @@ Run:
 "$PYTHON" -m unittest tests.test_storage_lock -v
 ```
 
-Expected: FAIL because `console.storage_result` and `console.storage_lock` do not exist.
+Expected: FAIL because the current lock implementation has no exact three-lock
+`StorageLockSet`, admission marker, shared deadline, or nested-acquire refusal.
 
 - [ ] **Step 3: Implement the strict data and lock contracts**
 
@@ -153,18 +218,50 @@ class OperationResult:
 class StorageLockError(RuntimeError):
     code: str
 
-class StorageLock:
-    fd: int
-    mode: LockMode
+@dataclass(slots=True)
+class StorageLockSet:
+    home: Path
+    home_dev_u32: int
+    home_ino: int
+    home_uid: int
+    home_mode: Literal[448]
+    install_fd: int
+    install_dev_u32: int
+    install_ino: int
+    install_uid: int
+    storage_fd: int
+    storage_dev_u32: int
+    storage_ino: int
+    storage_uid: int
+    admission_fd: int
+    admission_dev_u32: int
+    admission_ino: int
+    admission_uid: int
+    install_mode: LockMode
+    storage_mode: LockMode
+    admission_mode: Literal["exclusive"]
+    marker_mode: Literal[384]
+    deadline_ns: int
+    active: bool
+    def assert_active(self, *, home: Path,
+                      required_install_mode: LockMode,
+                      required_storage_mode: LockMode) -> None: ...
     def close(self) -> None: ...
-    def __enter__(self) -> Self: ...
-    def __exit__(self, exc_type, exc, tb) -> None: ...
 
-def open_existing_storage_lock(home: Path, mode: LockMode, *,
-                               timeout_seconds: float = 5.0) -> StorageLock: ...
+def ordered_storage_locks(
+    home: Path, *, install_mode: LockMode, storage_mode: LockMode,
+    create_markers: Literal["never", "installer"] = "never",
+    timeout_seconds: float = 5.0,
+) -> ContextManager[StorageLockSet]: ...
 ```
 
-Create `storage-state.lock` during installation through the same private no-follow marker discipline as `.install.lock`, then use `fcntl.flock(..., LOCK_SH|LOCK_NB)` or `LOCK_EX|LOCK_NB` with a monotonic deadline and 20 ms capped polling. `open_existing_storage_lock` uses the same descriptor identity checks with no create flag and fails closed on absence. `ordered_storage_locks` opens/acquires `.install.lock` first and releases storage before install in `finally`.
+`create_markers="installer"` is accepted only with install/storage exclusive and
+creates all three markers through private no-follow helpers. Every other caller
+uses the default `"never"`; missing markers fail closed. Then use
+`fcntl.flock(..., LOCK_SH|LOCK_NB)` or `LOCK_EX|LOCK_NB` with one monotonic
+deadline and 20 ms capped polling. The context acquires install, storage, and
+admission in that order and releases them in reverse order in `finally`. No
+lower-level lock opener is public.
 `OperationResult.to_dict()` always emits the seven common keys in the global constraint and rejects non-status use of the four status-only fields. For `operation="status"`, it emits those seven plus all four non-optional status additions; it never serializes a `None` status field for another operation.
 
 - [ ] **Step 4: Run GREEN tests**
@@ -187,12 +284,12 @@ git commit -m "feat(storage): add redacted results and ordered lock"
 ### Task 2: Descriptor-only mount probe helper
 
 **Files:**
-- Create: `native/macos/storage_mount_probe.swift`
-- Create: `tests/test_storage_mount_probe.py`
+- Modify: `native/macos/storage_mount_probe.swift`
+- Modify: `tests/test_storage_mount_probe.py`
 
 **Interfaces:**
 - Consumes: one inherited directory FD supplied as decimal `--fd FD_NUMBER`; no path argument is accepted.
-- Produces: one JSON line `{schema_version:1,st_dev:int,fsid:[int,int],flags:int,filesystem_type:str,mount_from:str,mount_on:str}` and exit codes `0` success, `64` invalid input, `70` `fstat`/`fstatfs` failure.
+- Produces: one JSON line `{schema_version:1,st_dev_u32:uint32,fsid_u32:[uint32,uint32],flags:uint64,filesystem_type:str,mount_from:str,mount_on:str}` and exit codes `0` success, `64` invalid input, `70` `fstat`/`fstatfs` failure. Every Darwin `dev_t`/`fsid_t` component is encoded as `UInt32(bitPattern:)`; Python preserves the `0...UInt32.max` bit pattern and converts back to signed only for native comparison.
 
 - [ ] **Step 1: Write the failing native contract tests**
 
@@ -206,7 +303,7 @@ completed = subprocess.run(
 )
 payload = json.loads(completed.stdout)
 self.assertEqual(set(payload), {
-    "schema_version", "st_dev", "fsid", "flags",
+    "schema_version", "st_dev_u32", "fsid_u32", "flags",
     "filesystem_type", "mount_from", "mount_on",
 })
 self.assertEqual(payload["schema_version"], 1)
@@ -220,7 +317,9 @@ Run:
 "$PYTHON" tests/test_storage_mount_probe.py
 ```
 
-Expected: FAIL because `native/macos/storage_mount_probe.swift` is absent. A zero-test selection or skip is a failure.
+Expected: FAIL because the current probe does not yet satisfy every exact
+descriptor, closed-key, replacement, and production-build-profile assertion. A
+zero-test selection or skip is a failure.
 
 - [ ] **Step 3: Implement the minimal Swift helper**
 
@@ -229,8 +328,8 @@ Use `Darwin.fstat` to require a directory, then `Darwin.fstatfs` on the inherite
 ```swift
 struct MountFacts: Codable {
     let schema_version: Int
-    let st_dev: Int64
-    let fsid: [Int32]
+    let st_dev_u32: UInt32
+    let fsid_u32: [UInt32]
     let flags: UInt64
     let filesystem_type: String
     let mount_from: String
@@ -240,7 +339,7 @@ struct MountFacts: Codable {
 func probe(fd: Int32) throws -> MountFacts
 ```
 
-Require `fcntl(fd, F_GETFD) != -1`, `S_IFDIR`, two-element `fsid`, valid UTF-8 filesystem/mount strings without control characters, and exactly one newline-terminated JSON result.
+Require `fcntl(fd, F_GETFD) != -1`, `S_IFDIR`, two-element `fsid_u32`, valid UTF-8 filesystem/mount strings without control characters, and exactly one newline-terminated JSON result. Golden cases cover native signed values `Int32.min`, `-1`, `0`, and `Int32.max` and their exact unsigned JSON projections.
 
 - [ ] **Step 4: Run GREEN tests and compile the production form**
 
@@ -263,110 +362,29 @@ git add native/macos/storage_mount_probe.swift tests/test_storage_mount_probe.py
 git commit -m "feat(storage): add descriptor mount probe"
 ```
 
-### Task 3: Helper-owned disk-image secret and Keychain lifecycle
+### Task 3: Freeze the unsafe one-shot boundary as `S3_FAIL_frozen`
 
-**Files:**
-- Create: `native/macos/disk_image_keychain.swift`
-- Create: `tests/test_disk_image_keychain_helper.py`
+**Normative disposition:** This is a frozen finding, not an implementation
+task. Inspect the existing test-compiled
+`native/macos/disk_image_keychain.swift` and
+`tests/test_disk_image_keychain_helper.py`, and retain the reviewed proof that
+terminating the one-shot helper can leave its native group reparented. Record
+that rejected boundary as `S3_FAIL_frozen`. Do not modify, compile, invoke,
+install, stage, or commit a one-shot `disk-image-keychain` route from this
+task. S3 Tasks 1-5 own the next source/test changes and require their own RED
+selection before creating the persistent broker/client core.
 
-**Interfaces:**
-- Consumes: non-secret JSON on stdin plus exact commands `create`, `mount`, `detach`, `inspect-item`, and `delete-disposable-item`; the caller supplies image/mount paths and transaction UUID but never a passphrase.
-- Produces: one non-secret JSON line `HelperResponse(schema_version: 1, operation: String, code: String, encryption_uuid: String?, device: String?, item_count: Int?)`; it never returns image/mount paths or Keychain data.
+The one-shot JSON-stdin interface, per-call helper lifecycle, direct detach
+device input, and any claim that helper exit proves child cleanup are
+superseded. They are neither an accepted interface nor a compatibility path.
 
-- [ ] **Step 1: Write failing pure and negative helper tests**
-
-Compile a `-D CORTEX_STORAGE_HELPER_TESTING` harness that replaces Security/hdiutil adapters without adding production environment or executable overrides. Cover 32 random bytes to 43 URL-safe characters, one terminal NUL on the child pipe, `POSIX_SPAWN_CLOEXEC_DEFAULT`, no unrelated inherited FD, exact `hdiutil` argv, add-only collision, one-match read/delete, zero/multiple-match rejection, buffer zeroing on success/error, and injected `errSecInteractionNotAllowed` producing `KEYCHAIN_INTERACTION_FORBIDDEN` with zero `hdiutil` calls.
-
-```python
-self.assertEqual(create_call["argv"], [
-    "/usr/bin/hdiutil", "create", "-stdinpass", "-encryption", "AES-256",
-    "-type", "SPARSEBUNDLE", "-size", "64m", "-fs", "APFS",
-    "-volname", "CORTEX_BRIDGE_SPIKE", image_path,
-])
-self.assertEqual(mount_call["argv"], [
-    "/usr/bin/hdiutil", "attach", "-stdinpass", "-owners", "on",
-    "-nobrowse", "-mountpoint", mount_path, image_path,
-])
-self.assertEqual(fake_hdiutil.secret_bytes[-1:], b"\0")
-self.assertEqual(len(fake_hdiutil.secret_bytes[:-1]), 43)
-```
-
-- [ ] **Step 2: Run focused tests and confirm RED**
-
-Run:
-
-```bash
-"$PYTHON" tests/test_disk_image_keychain_helper.py
-```
-
-Expected: FAIL because the Swift source does not exist. This default invocation uses only compiled fakes and performs no Keychain or disk-image effect.
-
-- [ ] **Step 3: Implement the production helper contract**
-
-Define exact request/response and Keychain attributes:
-
-```swift
-enum Operation: String, Codable {
-    case create, mount, detach, inspectItem = "inspect-item"
-    case deleteDisposableItem = "delete-disposable-item"
-}
-
-struct HelperRequest: Codable {
-    let schema_version: Int
-    let operation: Operation
-    let image_path: String
-    let mount_path: String?
-    let volume_name: String?
-    let size: String?
-    let transaction_id: UUID
-    let expected_encryption_uuid: String?
-    let disposable: Bool
-    let cleanup_approved: Bool
-}
-
-struct HelperResponse: Codable {
-    let schema_version: Int
-    let operation: String
-    let code: String
-    let encryption_uuid: String?
-    let device: String?
-    let item_count: Int?
-}
-```
-
-Generate the secret and run `hdiutil create -stdinpass` inside the same process, parse `hdiutil isencrypted -plist`, require `encrypted=true`, exactly one passphrase, zero private-key slots, then `SecItemAdd` the exact schema. Mount retrieves with `SecItemCopyMatching` and feeds its own private pipe to attach. Delete requires `disposable=true`, `cleanup_approved=true`, exact service/account/transaction tag, and exactly one prior match. Detach resolves only the expected `mounted_device` from the verified plist mapping and invokes `[/usr/bin/hdiutil, detach, mounted_device]` without `-force`. Sanitize child environment to `PATH=/usr/bin:/bin:/usr/sbin:/sbin`, `LANG=C`, `LC_ALL=C`, `HOME` omitted, and close every unrelated FD.
-
-- [ ] **Step 4: Run GREEN pure tests; keep real effects action-gated**
-
-Run the no-effect suite:
-
-```bash
-"$PYTHON" tests/test_disk_image_keychain_helper.py
-```
-
-Expected: PASS with the fake Security/hdiutil adapters, including the interaction-required negative harness.
-
-Do not run the following without a fresh, explicit action-time approval. The test runner must exit `64` before any effect when either gate is absent:
-
-```bash
-CORTEX_KEYCHAIN_TEST_EFFECT_AUTHORIZATION=YES_DISPOSABLE_64_MIB_ONLY \
-  "$PYTHON" tests/test_disk_image_keychain_helper.py \
-  --integration --allow-effects
-```
-
-When separately authorized, expected: create one unique 64 MiB disposable image, add one disposable Cortex item, normal detach, two mounts from two fresh helper processes without SecurityAgent, UUID/mount/APFS verification after each, normal detach after each, then cleanup only if the operator also supplied the test's explicit cleanup approval. Otherwise quarantine the exact disposable image/item and report `UNCLEAR cleanup_not_authorized` without deletion.
-
-- [ ] **Step 5: Commit the secret lifecycle**
-
-```bash
-git add native/macos/disk_image_keychain.swift tests/test_disk_image_keychain_helper.py
-git commit -m "feat(storage): add Keychain disk image helper"
-```
-
-### Task 4: Install, attest, diagnose and preserve native helpers and local extension
+### Task 4: Install the three-helper registry and persistent S3 broker
 
 **Files:**
 - Create: `console/native_helpers.py`
+- Create: `native/build-profiles/macos-ax-send-v1.json`
+- Create: `native/build-profiles/storage-mount-probe-v1.json`
+- Create: `native/build-profiles/storage-broker-v1.json`
 - Modify: `console/installer.py`
 - Modify: `transport/browser_chrome_extension.py`
 - Modify: `scripts/cortex.sh`
@@ -375,8 +393,13 @@ git commit -m "feat(storage): add Keychain disk image helper"
 - Modify: `tests/test_cortex_shell_guards.py`
 
 **Interfaces:**
-- Consumes: the AX source `transport/macos_ax_send.swift`, the two sources from Tasks 2-3, existing installer transaction primitives, and `storage-state.lock` from Task 1.
-- Produces: ordered `NATIVE_HELPERS`, `attest_helper(name: str, manifest: Mapping[str, object]) -> AttestedHelper`, `run_attested_helper(name: str, request: Mapping[str, object], *, pass_fds: tuple[int, ...] = ()) -> Mapping[str, object]`, manifest `native_helpers`, and `cortex.sh extension-path --json`.
+- Consumes: the AX source `transport/macos_ax_send.swift`, the Task 2 mount-probe
+  source, the persistent broker source completed by S3 Tasks 1-5, existing
+  installer transaction primitives, and the Task 1 `StorageLockSet`.
+- Produces: ordered `NATIVE_HELPERS`, S3 `AttestedBrokerExecutable`, manifest
+  `owned.json["native_helpers"]`, and `cortex.sh extension-path --json`. Disk
+  operations use `StorageBrokerClient`; `run_attested_helper` remains only for
+  `macos-ax-send` and `storage-mount-probe` and cannot run a disk helper.
 
 - [ ] **Step 1: Write failing installer/lifecycle tests**
 
@@ -384,17 +407,18 @@ Extend installer tests to require this exact order and record shape:
 
 ```python
 self.assertEqual(list(manifest["native_helpers"]), [
-    "macos-ax-send", "disk-image-keychain", "storage-mount-probe",
+    "macos-ax-send", "storage-mount-probe", "storage-broker",
 ])
 for record in manifest["native_helpers"].values():
     self.assertEqual(set(record), {
-        "target", "source", "source_sha256", "sha256", "cdhash",
-        "dev", "ino", "uid", "mode",
+        "target", "source", "source_sha256", "build_profile_sha256",
+        "sha256", "cdhash",
+        "dev_u32", "ino", "uid", "mode",
     })
     self.assertEqual(record["mode"], 0o700)
 ```
 
-Cover `xcrun swiftc`, ad-hoc signing, strict signature verification, staged fsync/publication rollback, source/binary/CDHash/device/inode/owner/mode tampering, helper execution refusal before spawn, rebuild refusal while a production item exists, and uninstall preservation of both storage helpers plus their manifest record while a vault journal/bootstrap exists. Also require an exact local extension copy, ordered relative file manifest, reinstall hash stability, tamper failure, and preservation during vault-aware uninstall.
+Cover `xcrun swiftc`, ad-hoc signing, strict signature verification, staged fsync/publication rollback, source/profile/binary/CDHash/device/inode/owner/mode tampering, helper execution refusal before spawn, compatible stopped update, incompatible update refusal, and whole-operation uninstall refusal while a vault is configured. Also require an exact local extension copy, ordered relative file manifest, reinstall hash stability, tamper failure, and all-or-nothing preservation during vault-aware uninstall.
 
 ```python
 payload = json.loads(self.run_script("cortex.sh", "extension-path", "--json").stdout)
@@ -428,12 +452,13 @@ class NativeHelperSpec:
     name: str
     source: Path
     target_name: str
+    build_profile: Path
     frameworks: tuple[str, ...] = ()
 
 NATIVE_HELPERS: tuple[NativeHelperSpec, ...] = (
-    NativeHelperSpec("macos-ax-send", ROOT / "transport/macos_ax_send.swift", "cortex-macos-ax-send"),
-    NativeHelperSpec("disk-image-keychain", ROOT / "native/macos/disk_image_keychain.swift", "disk-image-keychain", ("Security",)),
-    NativeHelperSpec("storage-mount-probe", ROOT / "native/macos/storage_mount_probe.swift", "storage-mount-probe"),
+    NativeHelperSpec("macos-ax-send", ROOT / "transport/macos_ax_send.swift", "cortex-macos-ax-send", ROOT / "native/build-profiles/macos-ax-send-v1.json"),
+    NativeHelperSpec("storage-mount-probe", ROOT / "native/macos/storage_mount_probe.swift", "storage-mount-probe", ROOT / "native/build-profiles/storage-mount-probe-v1.json"),
+    NativeHelperSpec("storage-broker", ROOT / "native/macos/disk_image_keychain.swift", "cortex-storage-broker", ROOT / "native/build-profiles/storage-broker-v1.json", ("Security",)),
 )
 
 @dataclass(frozen=True)
@@ -446,7 +471,20 @@ class AttestedHelper:
     def close(self) -> None: ...
 ```
 
-Compile into private staging with `xcrun swiftc`, append `-framework Security` only for the Keychain helper, chmod `0700`, run `codesign --force --sign -`, verify `codesign --verify --strict`, extract CDHash from `codesign -dvv`, and publish all helper records in one ordered manifest replacement under install-then-storage exclusive locks. Before spawn, open `CORTEX_HOME/native` by FD, compare path and opened FD, all recorded fields, SHA-256 and live CDHash immediately before `subprocess.run(close_fds=True, pass_fds=...)`.
+Compile into private staging with `xcrun swiftc`, append `-framework Security` only for the Keychain helper, chmod `0700`, run `codesign --force --sign -`, verify `codesign --verify --strict`, extract CDHash from `codesign -dvv`, and publish all helper records in one ordered manifest replacement under install/storage/admission exclusive locks. Before spawn, open the generation's `app/bin` by FD, compare path and opened FD, every recorded field including `dev_u32`, SHA-256 and live CDHash. `run_attested_helper` may launch only AX or `storage-mount-probe --fd`; broker launch uses the lock-bound client path.
+
+The S3 installer unit replaces `CORTEX_HOME/native` disk-helper publication with
+one `installed_storage_runtime_generation`: `app/bin` contains the broker,
+mount probe, and AX helper; `app/python` contains the installed application;
+`app/scripts`, `app/native-src`, and `app/build-profiles` contain the exact
+scripts, three native sources, and three canonical build profiles;
+`app/chrome-extension` contains the installed extension; `owned.json` contains
+the interpreter identity and complete ordered manifest. Its
+recoverable transaction binds and publishes all of these resources as one
+generation, publishes exactly three `owned.json["native_helpers"]` entries in
+the order above with the same closed field set, and refuses a mixed generation.
+Installed commands import only `app/python`; wheel tests clear the checkout
+import root and use a homonymous-module sentinel.
 
 Copy `chrome-extension` descriptor-relatively to `CORTEX_HOME/app/chrome-extension`, reject symlinks/special files/device changes, fsync every file/directory, and add its ordered relative SHA-256 manifest to `owned.json`. `extension-path --json` verifies the copy against that record before returning exactly four keys: `schema_version=1`, `status="verified"`, `path=str(CORTEX_HOME / "app" / "chrome-extension")`, and `manifest_sha256` as 64 lowercase hex characters. This command is the deliberate exception that returns its required local path; storage operator results remain redacted. Replace `transport/browser_chrome_extension.py` runtime compilation with `attest_helper("macos-ax-send", manifest)` and pre-spawn FD/hash/signature revalidation; migrate the old single-helper manifest/path transactionally rather than silently adopting it.
 
@@ -454,7 +492,7 @@ Treat legacy `owned.json["chrome_extension_path"]` as untrusted historical metad
 
 - [ ] **Step 4: Implement Doctor/rebuild/uninstall fail-closed behavior and run GREEN**
 
-Doctor returns one required check per storage helper and one local-extension check. If a production bootstrap/journal or exact service/item reconciliation query proves a vault Keychain item exists, install/update refuses rebuilding either storage helper with `STORAGE_HELPER_REKEY_REQUIRED`; an unreadable/interaction-required item query also fails closed rather than assuming absence. Uninstall removes neither storage helper, its manifest records, nor the local extension, and reports them in `preserved`. It never calls the helper's delete operation.
+Doctor returns one required check per helper, the complete generation, and the local extension. Update/reinstall may publish a compatible generation only while runtime is proven stopped, every broker workflow is durably closed, every transition effect is reconciled, and no unresolved record exists; the presence of a compatible vault Keychain item alone is not a veto. Any incompatible schema/build profile, unreadable reconciliation state, or failed attestation refuses before publication. Publication and rollback cover the complete generation atomically. If a vault bootstrap/journal configures a vault, uninstall refuses the whole operation with `STORAGE_VAULT_CONFIGURED` and preserves the generation byte-for-byte; it does not partially remove application, Python, scripts, helpers, profiles, manifest, interpreter, or extension. Without a configured vault, uninstall removes only resources whose full manifest identity still matches and never calls a helper delete operation or signals a foreign process.
 
 Run:
 
@@ -465,14 +503,16 @@ Run:
 
 Expected: PASS; helper tamper is detected before execution, local extension resolution never depends on the repo after install, and uninstall cannot strand the vault.
 
-- [ ] **Step 5: Commit installer ownership**
+- [ ] **Step 5: Preserve the atomic installer unit and continue to S3 Task 7**
 
 ```bash
-git add console/native_helpers.py console/installer.py transport/browser_chrome_extension.py \
-  scripts/cortex.sh tests/test_installer.py tests/test_chrome_extension_driver.py \
-  tests/test_cortex_shell_guards.py
-git commit -m "feat(storage): attest helpers and local extension"
+git diff --check
+git status --short
 ```
+
+Expected: only the Foundation Task 4 and S3 Task 7 installation-unit files are
+modified. Do not stage or commit; S3 Task 7 adds the installed aggregate,
+checkout-inaccessible tests, and the single atomic commit for this union.
 
 ### Task 5: FD-first preflight and storage lifecycle primitives
 
@@ -482,12 +522,16 @@ git commit -m "feat(storage): attest helpers and local extension"
 - Modify: `console/cortex_paths.py`
 
 **Interfaces:**
-- Consumes: attested `storage-mount-probe` and `disk-image-keychain`, `StorageLock`, Task 6 `TransitionJournal`, `load_transition`, `advance_transition`, and exact journal publication, `/usr/sbin/diskutil`, and `/usr/bin/hdiutil` through injected strict runners, plus an injected mounted-storage verifier callback owned by the caller.
-- Produces: `StoragePaths`, `HostBinding`, `LegacySnapshot`, `StorageLifecycle.preflight()`, `.keychain_spike()`, `.create_vault()`, `.initialize_layout()`, `.mount_or_adopt()`, `.detach()`, and `.status()`.
+- Consumes: attested `storage-mount-probe`, S3 `StorageBrokerClient`, the active
+  Task 1 `StorageLockSet`, Task 6 `TransitionJournal`,
+  `load_transition`, `advance_transition`, and exact journal publication. Every
+  `hdiutil`/`diskutil` operation and private mapping probe goes through the
+  broker; no direct runner or raw caller request exists.
+- Produces: `StoragePaths`, `HostBinding`, `LegacySnapshot`, and the seven lock-carrying methods `StorageLifecycle.preflight_locked()`, `.keychain_spike_locked()`, `.create_vault_locked()`, `.initialize_layout_locked()`, `.mount_or_adopt_locked()`, `.detach_locked()`, and `.status_locked()`.
 
 - [ ] **Step 1: Write failing no-effect lifecycle tests**
 
-Use temporary directories, fake plist runners, and fake attested helpers. Prove all of the following ordering and failure behavior:
+Use temporary directories, a fake S3 broker, and fake descriptor probes. Prove all of the following ordering and failure behavior:
 
 - host FD opens with `O_DIRECTORY | O_NOFOLLOW` and remains live through each operation/post-check;
 - host `volume_uuid`, `filesystem_type`, `fsid`, mount point, and `MNT_NOATIME` match before any legacy snapshot function is called;
@@ -503,12 +547,11 @@ Use temporary directories, fake plist runners, and fake attested helpers. Prove 
 ```python
 lifecycle = StorageLifecycle(
     paths,
-    helper_runner=fake_helpers,
-    plist_runner=fake_plists,
+    broker=fake_broker,
     fd_probe=fake_fd_probe,
     mount_verifier=fake_mount_verifier,
 )
-status = lifecycle.preflight()
+status = lifecycle.preflight_locked(lock_set)
 self.assertEqual(status.code, "HOST_NOATIME_REQUIRED")
 self.assertEqual(legacy_snapshot_spy.call_count, 0)
 
@@ -552,7 +595,7 @@ class HostBinding:
     fd: int
     volume_uuid: str
     filesystem_type: str
-    fsid: tuple[int, int]
+    fsid_u32: tuple[DarwinU32, DarwinU32]
     mount_from: str
     flags: int
     def close(self) -> None: ...
@@ -566,25 +609,55 @@ class LegacySnapshot:
 MountVerifier = Callable[[], OperationResult]
 
 class StorageLifecycle:
-    def __init__(self, paths: StoragePaths, *, helper_runner: HelperRunner,
-                 plist_runner: PlistRunner, fd_probe: FdProbe,
+    def __init__(self, paths: StoragePaths, *, broker: StorageBrokerClient,
+                 fd_probe: FdProbe,
                  mount_verifier: MountVerifier) -> None: ...
-    def preflight(self) -> OperationResult: ...
-    def keychain_spike(self, *, cleanup_approved: bool) -> OperationResult: ...
-    def create_vault(self) -> OperationResult: ...
-    def initialize_layout(self) -> OperationResult: ...
-    def mount_or_adopt(self) -> OperationResult: ...
-    def detach(self) -> OperationResult: ...
-    def status(self) -> OperationResult: ...
+    def preflight_locked(self, lock_set: StorageLockSet) -> OperationResult: ...
+    def keychain_spike_locked(self, lock_set: StorageLockSet, *,
+                              cleanup_approved: bool) -> OperationResult: ...
+    def create_vault_locked(self, lock_set: StorageLockSet) -> OperationResult: ...
+    def initialize_layout_locked(self, lock_set: StorageLockSet) -> OperationResult: ...
+    def mount_or_adopt_locked(self, lock_set: StorageLockSet) -> OperationResult: ...
+    def detach_locked(self, lock_set: StorageLockSet) -> OperationResult: ...
+    def status_locked(self, lock_set: StorageLockSet) -> OperationResult: ...
 ```
+
+Every method validates the active same-home install/storage/admission set before
+using the injected broker or FD probe. Mutations require storage-exclusive;
+preflight/status may use storage-shared. The constructor performs no installed
+attestation and Tasks 5-14 exercise only injected backends.
 
 Open and traverse relative names from `host_fd`; reject symlinks and special files with `os.stat(..., dir_fd=..., follow_symlinks=False)`. Reprobe the same FD before and after each subprocess/helper call. Treat ExFAT inode as observational only; bind host identity to UUID, fsid, filesystem type, mount-from, and retained FD. Snapshot the three legacy metadata names read-only only after host/noatime/absence/free-space/attachment gates, and never read `bands/*`. Create `CORTEX_HOME/mounts` and the exact empty mount leaf through a pinned local owner-only no-follow chain, both mode `0700`; never use `/Volumes`.
 
 - [ ] **Step 4: Implement spike/create/layout/mount/detach state machines and run GREEN**
 
-`keychain_spike` begins or resumes the one exact Task 6 transition, generates a unique disposable transaction and basename, invokes helper create, normal detach, two fresh-process mounts with full UUID/APFS/mount checks and detach after each, then atomically publishes `phase="spike_passed"` with the canonical non-secret receipt SHA-256. The gated live harness records the baseline SecurityAgent process/window set and fails if any new prompt/process/window is observed. Without cleanup authorization it quarantines by exact host-FD-relative rename and leaves the item intact; with authorization it requests exact disposable cleanup. A missing, replaced, mismatched or non-`spike_passed` receipt blocks production creation.
+`keychain_spike_locked` begins or resumes the one exact Task 6 transition,
+generates a unique disposable transaction and basename, constructs each
+validated S3 request internally, invokes the locked broker create, normal
+detach, two fresh-process mounts with full UUID/APFS/mount checks and detach
+after each, then atomically publishes `phase="spike_passed"` with the canonical
+non-secret receipt SHA-256. The gated live harness records the baseline
+SecurityAgent process/window set and fails if any new prompt/process/window is
+observed. Without cleanup authorization it quarantines by exact host-FD-relative
+rename and leaves the item intact; with authorization it requests exact
+disposable cleanup. A missing, replaced, mismatched or non-`spike_passed`
+receipt blocks production creation.
 
-`create_vault` requires a journaled passed spike, records `image_create_started` before helper invocation, reconciles a missing receipt only by transaction tag plus UUID/service, and never deletes. Reconciliation adopts exactly one item only after the helper mounts that exact image twice; zero matches quarantines the unrecoverable image before a new transaction, and multiple/mismatched matches stop for manual review. After create, require encryption metadata, attach with `-owners on`, exact same-FD guard, `diskutil verifyVolume` success without repair, normal detach/no mapping/empty mount, repeat that attach/verify/detach once, then a third attach establishes the live cutover mount. A failed new bundle may only be quarantined by host-FD-relative rename after host UUID/path/basename, `Info.plist` hash, and ordered bundle manifest revalidation; it is never deleted. `mount_or_adopt` is a self-contained lifecycle primitive: after its own exact image-to-device and same-FD checks, it calls the constructor-injected `mount_verifier()` and adopts only `verdict == "PASS"`. It does not import or construct `StorageContract`. `detach` accepts only the exact mapping and leaves the mount directory empty.
+`create_vault_locked` requires a journaled passed spike, records
+`image_create_started` before broker invocation, and reconciles a missing
+lifecycle receipt from the S3 closed private record plus transaction tag and
+UUID/service. Reconciliation adopts exactly one item only after the broker
+mounts that exact image twice; zero matches quarantines the unrecoverable image
+before a new transaction, and multiple/mismatched matches stop for manual
+review. After create, require encryption metadata, attach with `-owners on`,
+exact same-FD guard, broker-owned `diskutil verifyVolume` success without
+repair, normal detach/no mapping/empty mount, repeat that cycle once, then a
+third attach establishes the live cutover mount. `native_cleanup_proven` never
+sets `effect_reconciled`; the transition journal does so only after the S3
+reconciliation handshake and operation-specific postcondition fsync.
+`mount_or_adopt_locked` calls the injected verifier and adopts only `PASS`.
+`detach_locked` accepts only the broker's fresh attested exact mapping and
+leaves the mount directory empty.
 
 Run:
 
@@ -608,7 +681,9 @@ git commit -m "feat(storage): add FD-first lifecycle primitives"
 - Create: `tests/test_storage_transition.py`
 
 **Interfaces:**
-- Consumes: Task 1 canonical `StorageStatus`, exclusive `StorageLock`, private `CORTEX_HOME` descriptor, and verified stopped-process callback.
+- Consumes: Task 1 canonical `StorageStatus`, the active exclusive
+  `StorageLockSet`, private `CORTEX_HOME` descriptor, and verified
+  stopped-process callback.
 - Produces: `StorageProjection`, `TransitionJournal`, `SnapshotManifest`, `begin_transition(home: Path, target: StorageProjection, *, target_image_basename: Literal["CORTEX_BRIDGE_2026_09.sparsebundle"]) -> TransitionJournal`, `advance_transition(...)`, `commit_transition(...)`, `load_transition(...)`, `runtime_transition_status(home: Path) -> StorageStatus`, and `rollback_transition(home: Path, *, process_status: ProcessStatus) -> OperationResult`.
 
 - [ ] **Step 1: Write failing snapshot/journal crash tests**
@@ -664,7 +739,7 @@ class SnapshotEntry:
     mode: int | None
     size: int | None
     sha256: str | None
-    dev: int | None
+    dev_u32: DarwinU32 | None
     ino: int | None
 
 @dataclass(frozen=True)
@@ -692,7 +767,28 @@ class TransitionJournal:
     spike_receipt_sha256: str | None
     target_encryption_uuid: str | None
     reconciliation: Literal["not_started", "image_create_started", "keychain_bound"]
+    s3_workflow_id: str | None
+    s3_generation: int | None
+    s3_operation: Literal[
+        "create", "mount", "detach", "inspect-item",
+        "delete-disposable-item", "probe-mounted-image",
+    ] | None
+    s3_request_sha256: str | None
+    s3_result_sha256: str | None
+    effect_reconciled: bool
+    reconciliation_record_sha256: str | None
 ```
+
+`console/storage_transition.py` imports the sole S3 `ReconciliationRecord`,
+`ReconciliationProbeRequest`, and closed `ReconciliationPostcondition` union
+from `console/storage_reconciliation.py`; it declares no parallel schema. The
+reconciliation module stores one current-UID mode `0600` no-follow record per
+workflow under the private reconciliation directory. Every transition is
+`pending → reconciled|unclear`, binds workflow/generation/transaction/operation/
+request/result digests, compares the previous digest, atomically replaces, and
+fsyncs file and directory. `TransitionJournal.reconciliation_record_sha256`
+must equal the current record; all five duplicated correlation fields must
+equal that record before `effect_reconciled=true`, admission, or publication.
 
 Snapshot through verified descriptors into one unique `private-quarantine/` child named `f"storage-cutover-{transaction_id}"`. Fsync every file, manifest, snapshot directory, quarantine directory, then exclusively publish and fsync `storage-transition.json` in `in_progress` before any control-file change. `begin_transition` receives `target_image_basename` explicitly and accepts only the literal `CORTEX_BRIDGE_2026_09.sparsebundle`; Task 6 never imports or anticipates Task 5 `StoragePaths`.
 
@@ -728,22 +824,24 @@ git commit -m "feat(storage): journal cutover and rollback"
 - Modify: `tests/test_storage_guard_integration.py`
 
 **Interfaces:**
-- Consumes: exact committed transition/bootstrap, attested helpers, mount probe, descriptor host/image facts, `diskutil info -plist`, `hdiutil info -plist`, and `hdiutil isencrypted -plist`.
+- Consumes: exact committed transition/bootstrap, S3 private broker probe,
+  mount probe, and descriptor host/image facts. All `diskutil`/`hdiutil`
+  observations preserve APFS/encryption/mapping identities through the broker.
 - Produces: canonical `executor.workspace_handle.MountFacts`, a core vault-only `WorkspaceHandle` returned by general-mission admission, `StorageStatus`, `StorageBinding`, `StorageContract`, stable `check_required_storage(home: Path) -> int`, and redacted `storage-check --json`.
 
 - [ ] **Step 1: Write failing same-FD/identity/ownership tests**
 
-Extend unit/integration tests to cover missing/failed probe, `MNT_IGNORE_OWNERSHIP` set, missing host `MNT_NOATIME`, probe-before/after device/fsid/mount-from/mount-on/flags change, mount path replacement, cloned APFS UUID, wrong volume name, wrong encryption UUID, wrong canonical image, multiple image mappings, image device mismatch, storage-root symlink/cross-device, hostile env overrides, and active transition. Prove `open_workspace()` accepts exactly the vault `20_WORKSPACES` root or a descriptor-opened descendant and rejects `Desktop`, `Documents`, `Downloads`, `20_WORKSPACES-escape`, absolute local paths, and an object shaped like `LocalAliasRef` before duplicating a workspace FD. Task 13, after creating the lease implementation, owns the mounted-but-unleased direct-Uvicorn regression.
+Extend unit/integration tests to cover missing/failed probe, `MNT_IGNORE_OWNERSHIP` set, missing host `MNT_NOATIME`, probe-before/after device/fsid/mount-from/mount-on/flags change, mount path replacement, cloned APFS UUID, wrong volume name, wrong encryption UUID, wrong canonical image, multiple image mappings, image device mismatch, storage-root symlink/cross-device, hostile env overrides, and active transition. Prove `open_workspace_locked()` accepts exactly the vault `20_WORKSPACES` root or a descriptor-opened descendant and rejects `Desktop`, `Documents`, `Downloads`, `20_WORKSPACES-escape`, absolute local paths, and an object shaped like `LocalAliasRef` before duplicating a workspace FD. Task 13, after creating the lease implementation, owns the mounted-but-unleased direct-Uvicorn regression.
 
 ```python
 before = MountFacts(41, (9, 10), 0, "apfs", "/dev/disk9s1", str(mount))
-after = dataclasses.replace(before, fsid=(9, 11))
+after = dataclasses.replace(before, fsid_u32=(9, 11))
 with self.assertRaisesRegex(StorageContractError, "STORAGE_DESCRIPTOR_CHANGED"):
-    contract.open()
+    contract.open_locked(lock_set)
 
 ignored = dataclasses.replace(before, flags=MNT_IGNORE_OWNERSHIP)
-self.assertEqual(contract.probe().code, "STORAGE_OWNERSHIP_IGNORED")
-self.assertFalse(contract.probe().runtime_allowed)
+self.assertEqual(contract.probe_locked(lock_set).code, "STORAGE_OWNERSHIP_IGNORED")
+self.assertFalse(contract.probe_locked(lock_set).runtime_allowed)
 ```
 
 Require `diskutil info -plist` to be called on `mount_from` (`/dev/disk…`), never on a path, and assert no test/parser expects a localized `Owners` field.
@@ -768,8 +866,8 @@ from console.storage_result import StorageStatus, Verdict
 
 @dataclass(frozen=True)
 class MountFacts:
-    st_dev: int
-    fsid: tuple[int, int]
+    st_dev_u32: DarwinU32
+    fsid_u32: tuple[DarwinU32, DarwinU32]
     flags: int
     filesystem_type: str
     mount_from: str
@@ -782,9 +880,9 @@ class StorageBinding:
     mount_fd: int
     root_fd: int
     host_volume_uuid: str
-    host_fsid: tuple[int, int]
-    mount_device: int
-    mount_fsid: tuple[int, int]
+    host_fsid_u32: tuple[DarwinU32, DarwinU32]
+    mount_device_u32: DarwinU32
+    mount_fsid_u32: tuple[DarwinU32, DarwinU32]
     apfs_volume_uuid: str
     encryption_uuid: str
     volume_name: str
@@ -799,19 +897,35 @@ class StorageContractError(RuntimeError):
 
 class StorageContract:
     def __init__(self, home: Path, *, environment: Mapping[str, str] | None = None,
-                 helper_runner: HelperRunner = run_attested_helper,
-                 plist_runner: PlistRunner = run_plist_command,
+                 broker: StorageBrokerClient,
                  fd_probe: FdProbe = probe_mount_fd) -> None: ...
-    def probe(self) -> StorageStatus: ...
-    def open(self) -> StorageBinding: ...
-    def revalidate(self, binding: StorageBinding) -> MountFacts: ...
-    def open_workspace(self, binding: StorageBinding,
-                       requested: str | Path) -> WorkspaceHandle: ...
+    def probe_locked(self, lock_set: StorageLockSet) -> StorageStatus: ...
+    def open_locked(self, lock_set: StorageLockSet) -> StorageBinding: ...
+    def revalidate_locked(self, lock_set: StorageLockSet,
+                          binding: StorageBinding) -> MountFacts: ...
+    def open_workspace_locked(self, lock_set: StorageLockSet,
+                              binding: StorageBinding,
+                              requested: str | Path) -> WorkspaceHandle: ...
 ```
 
-`probe()` opens transient FDs and always closes them. With neither required marker nor transition journal it returns exactly `StorageStatus("PASS", "STORAGE_NOT_REQUIRED", None, "unconfigured", False, True)` without probing an external host or mount. `open()` remains vault-only and therefore rejects that optional-storage status; it retains host/mount/root FDs and returns them only after: exact private control files and committed projection; host same-FD UUID/fsid/filesystem/noatime; mount `O_DIRECTORY|O_NOFOLLOW`; probe one; `diskutil` exact APFS name/UUID/writable on `mount_from`; exactly one `hdiutil` image/entity mapping to that device; exact encryption UUID; probe two exact equality; and descriptor-relative root open with current UID/mode `0700`/same APFS device. Derive `owners_enabled = not (flags & MNT_IGNORE_OWNERSHIP)` and fail when false.
+Each method first validates an active same-home `StorageLockSet` with
+install-shared or stronger and admission-exclusive; `open_locked`,
+`revalidate_locked`, and `open_workspace_locked` also require
+storage-exclusive, while `probe_locked` permits storage-shared. The injected
+backend is supplied by tests and callers in Tasks 5-14; no installed artifact
+is attested in this task. `probe_locked()` opens transient FDs and always
+closes them. With neither required marker nor transition journal it returns
+exactly `StorageStatus("PASS", "STORAGE_NOT_REQUIRED", None, "unconfigured",
+False, True)` without probing an external host or mount. `open_locked()`
+remains vault-only and therefore rejects that optional-storage status; it
+retains host/mount/root FDs and returns them only after exact private control
+files and committed projection, host and mount descriptor proofs, and one S3
+private locked probe that returns exact APFS name/UUID/writable/encryption/
+image/mount/mapping facts. It repeats descriptor probes around the broker
+observation and opens the root descriptor-relatively with current UID/mode
+`0700` on the same APFS device.
 
-Create the core `WorkspaceHandle.from_verified_fds(...)`, borrowed `mount_fd`/`workspace_fd`, `identity`, `revalidate()`, and `close()` contract in `executor/workspace_handle.py` now so `open_workspace()` is a functioning interface in this task. The first normalized relative component must equal `20_WORKSPACES`; use component equality, never string-prefix matching. `StorageContract` gains no local-root constructor, alias parameter, or local action method. Task 8 adds the remaining duplication/context-manager API and adversarial lifetime/fuzz coverage before any downstream plan consumes it.
+Create the core `WorkspaceHandle.from_verified_fds(...)`, borrowed `mount_fd`/`workspace_fd`, `identity`, `revalidate()`, and `close()` contract in `executor/workspace_handle.py` now so `open_workspace_locked()` is a functioning interface in this task. The first normalized relative component must equal `20_WORKSPACES`; use component equality, never string-prefix matching. `StorageContract` gains no local-root constructor, alias parameter, or local action method. Task 8 adds the remaining duplication/context-manager API and adversarial lifetime/fuzz coverage before any downstream plan consumes it.
 
 - [ ] **Step 4: Reduce the old guard to an adapter and run GREEN**
 
@@ -883,9 +997,9 @@ Expected: FAIL because Task 7's existing core handle deliberately lacks `duplica
 @dataclass(frozen=True)
 class WorkspaceIdentity:
     storage_transaction_id: str
-    mount_dev: int
-    mount_fsid: tuple[int, int]
-    workspace_dev: int
+    mount_dev_u32: DarwinU32
+    mount_fsid_u32: tuple[DarwinU32, DarwinU32]
+    workspace_dev_u32: DarwinU32
     workspace_ino: int
     apfs_volume_uuid: str
     relative_path: PurePosixPath
@@ -948,7 +1062,7 @@ git commit -m "feat(executor): add persistent workspace handle"
 - Modify: `tests/test_chrome_extension_driver.py`
 
 **Interfaces:**
-- Consumes: `StorageProjection` from Task 6, `StorageContract.probe() -> StorageStatus`, committed journal projection, and existing `CORTEX_ALLOW_DEVELOPMENT_FIXTURES` fixture gate.
+- Consumes: `StorageProjection` from Task 6, `StorageContract.probe_locked(lock_set) -> StorageStatus`, committed journal projection, and existing `CORTEX_ALLOW_DEVELOPMENT_FIXTURES` fixture gate.
 - Produces: `canonical_storage_projection(settings: Mapping[str, object]) -> StorageProjection`, `storage_projection_sha256(projection: StorageProjection) -> str`, and `validate_browser_transport(settings: Mapping[str, object], *, storage_status: StorageStatus, development_fixture: bool) -> Literal["chrome_extension", "playwright", "webbridge"]`.
 
 - [ ] **Step 1: Write failing projection/clamp tests**
@@ -1092,7 +1206,7 @@ class ManifestEntry:
     size: int
     sha256: str
     mode: int
-    dev: int
+    dev_u32: DarwinU32
     ino: int
 
 @dataclass(frozen=True)
@@ -1254,16 +1368,19 @@ git commit -m "feat(storage): add journaled operator CLI"
 - Modify: `tests/test_installer.py`
 
 **Interfaces:**
-- Consumes: `StorageLifecycle.mount_or_adopt()`, `StorageLifecycle.detach()`, shared/exclusive storage locks, owned-process status, and the existing `/api/transport/stop-everything` quiescence endpoint.
-- Produces: `RuntimeMount`, `runtime_mount(home: Path) -> RuntimeMount`, `cortex.sh start` as the sole mount owner, `cortex.sh stop` as the sole detach owner, `STORAGE_ATTACHED_BLOCKED`, and a `start-local.sh` delegate that cannot execute `server.py` directly.
+- Consumes: `StorageLifecycle.mount_or_adopt_locked(lock_set)`,
+  `StorageLifecycle.detach_locked(lock_set)`, the active `StorageLockSet`,
+  owned-process status, and the existing `/api/transport/stop-everything`
+  quiescence endpoint.
+- Produces: `RuntimeMount`, `runtime_mount_locked(...) -> RuntimeMount`, `runtime_detach_locked(...) -> OperationResult`, `cortex.sh start` as the sole mount owner, `cortex.sh stop` as the sole detach owner, `STORAGE_ATTACHED_BLOCKED`, and a `start-local.sh` delegate that cannot execute `server.py` directly.
 
 - [ ] **Step 1: Write failing lifecycle owner tests**
 
-Build a fake attested helper/guard/server harness and prove:
+Build a fake attested broker/guard/server harness and prove:
 
 - start acquires shared install lock then exclusive storage lock before adopt/mount;
 - an already mounted image is adopted only after the full contract, otherwise start performs no server spawn;
-- an absent mount causes exactly one helper mount then a full guard before spawn;
+- an absent mount causes exactly one broker mount then a full guard before spawn;
 - missing host, locked Keychain, prompt-required result, missing item, transition-active state, or contradictory image mapping prints only an actionable stable code and spawns no server;
 - start never mentions/opens the legacy image and never passes a credential;
 - stop calls durable STOP/quiescence, closes the owned server/workspace lifetime, then takes exclusive storage lock and performs one normal detach;
@@ -1273,8 +1390,8 @@ Build a fake attested helper/guard/server harness and prove:
 
 ```python
 self.assertEqual(events, [
-    "install_lock_shared", "storage_lock_exclusive", "helper_mount",
-    "guard_open", "storage_lock_release", "server_spawn",
+    "install_lock_shared", "storage_lock_exclusive", "admission_lock_exclusive",
+    "broker_mount", "contract_open", "lock_set_release", "server_spawn",
 ])
 self.assertNotIn("-force", helper_detach_argv)
 self.assertNotIn("server.py", start_local_calls)
@@ -1324,20 +1441,44 @@ def operation_from_storage_status(operation: str,
         ),),
     )
 
-def runtime_mount(home: Path) -> RuntimeMount:
-    """Adopt or mount under ordered locks and retain the verified binding."""
+def runtime_mount_locked(*, lock_set: StorageLockSet,
+                         lifecycle: StorageLifecycle,
+                         contract: StorageContract) -> RuntimeMount:
+    """Adopt or mount under the caller's active set and retain the binding."""
 
-def runtime_detach(home: Path, *, process_status: ProcessStatus) -> OperationResult:
+def runtime_detach_locked(*, lock_set: StorageLockSet,
+                          lifecycle: StorageLifecycle,
+                          process_status: ProcessStatus) -> OperationResult:
     """Require verified stopped state, normal detach, no mapping and empty mount."""
 ```
 
-`runtime_mount` constructs `contract = StorageContract(home)`, then constructs `StorageLifecycle(..., mount_verifier=lambda: operation_from_storage_status("mount-or-adopt", contract.probe()))`; the adapter copies only verdict, code, and transaction ID plus one stable redacted check, never a path or the status-only fields. It calls `mount_or_adopt()` and, only after that returns `PASS`, calls `contract.open()`. A non-PASS result returns `RuntimeMount(result=<failure>, binding=None)`; a PASS result is valid only with the retained `StorageBinding`. `RuntimeMount.close()` closes that binding idempotently, and every exception/failure path closes it. Thus Task 5 stays independently GREEN with a fake callback, while this task supplies the real post-mount authority without changing the lifecycle primitive.
+`runtime_mount_locked` validates the same-home install-shared-or-stronger,
+storage-exclusive, admission-exclusive set. Tasks 12-14 inject the already
+constructed lifecycle, contract, broker, ledger, and FD probe; they neither
+attest nor import an installed runtime. Its mount verifier calls
+`contract.probe_locked(lock_set)` and the adapter copies only verdict, code,
+and transaction ID plus one stable redacted check, never a path or status-only
+field. It calls `lifecycle.mount_or_adopt_locked(lock_set)` and, only after that
+returns `PASS`, calls `contract.open_locked(lock_set)`. A non-PASS result returns
+`RuntimeMount(result=<failure>, binding=None)`; a PASS result is valid only with
+the retained `StorageBinding`. `RuntimeMount.close()` closes that binding
+idempotently, and every exception/failure path closes it. Task 5 stays
+independently GREEN with an injected verifier, and S3 Task 7 later replaces the
+injected construction only at the product entrypoint with
+`InstalledStorageRuntime.from_installed_home_locked`.
 
-`cortex.sh start` invokes the one Task 13 Python `launch_managed_runtime(home)`, never a separate mount subprocess whose exit would discard the FDs. That coordinator calls `runtime_mount` only when storage is required, retains the returned object in one `with`/`finally` scope through child spawn, durable lease/ownership publication and `parent_release_and_wait_ack`, and closes the parent binding only after the exact ACK or after verified failure cleanup. The server lifespan then owns its independently reopened binding. Tests pause inside the ACK callback and require every retained host/mount/root FD is valid there, then closed after success, timeout, EOF, malformed/missing ACK, child exit and storage-identity change. Any failure exits before log rotation or a second child creation. `start-local.sh` retains runtime-home/dependency validation, then `exec bash "$ROOT/scripts/cortex.sh" start`.
+`cortex.sh start` invokes the one Task 13 Python coordinator, never a separate
+mount subprocess whose exit would discard the FDs. In Foundation tests the
+coordinator receives the injected runtime components and active set, calls
+`runtime_mount_locked` only when storage is required, retains the returned
+object through child spawn, durable lease/ownership publication and exact ACK,
+then closes it. S3 Task 7 wires the installed factory without changing this
+behavior. Tests pause inside the ACK callback and require every retained
+host/mount/root FD is valid there, then closed after success or failure.
 
 - [ ] **Step 4: Implement ordered shutdown, Doctor/selftest integration and run GREEN**
 
-When the owned server is running, `stop` first POSTs the existing loopback STOP endpoint, waits for quiescence, terminates only the verified owned process group, verifies no listener, then calls `runtime_detach` under exclusive storage lock. When already stopped but storage is mapped, it still attempts verified normal detach. Doctor and selftest take the shared storage lock and consume `StorageContract.probe`; neither can report healthy/pass when transition, ownership, image, projection, helper, or env override checks fail.
+When the owned server is running, `stop` first POSTs the existing loopback STOP endpoint, waits for quiescence, terminates only the verified owned process group, verifies no listener, then calls `runtime_detach_locked` under the same active exclusive set. When already stopped but storage is mapped, it still attempts verified normal detach. Doctor and selftest receive one shared set and consume `StorageContract.probe_locked`; neither can report healthy/pass when transition, ownership, image, projection, helper, or env override checks fail.
 
 Run:
 
@@ -1375,19 +1516,22 @@ Expected: only files owned by Tasks 12 and 13 are modified. Do not stage or comm
 - Modify: `tests/test_executor_runtime_truth.py`
 
 **Interfaces:**
-- Consumes: Task 12 `RuntimeMount`, optional committed storage transaction ID, private pids-directory FD, `socket.socketpair`, stable PID/PGID/parent/start identity, and `StorageContract.open()` when storage is required.
+- Consumes: Task 12 `RuntimeMount`, optional committed storage transaction ID,
+  attested private pids-directory FD, `socket.socketpair`, stable server
+  PID/PGID/start identity, handshake-only launcher identity, the caller's
+  active `StorageLockSet`, and injected lifecycle/contract backends when
+  storage is required.
 - Produces: `ManagedProcessIdentity`, `StartupLease`, `ManagedStartContext`, `ManagedStartReceipt`, `launch_managed_runtime(home: Path, *, timeout_seconds: float = 5.0) -> ManagedStartReceipt`, `publish_startup_lease(...)`, `child_consume_startup_lease(...)`, `parent_release_and_wait_ack(...)`, `require_managed_start_context(...)`, and read-only `managed_runtime_is_ready(...)` consumed by Task 14.
 
 - [ ] **Step 1: Write failing handshake/lease tests**
 
-Use real local socketpairs and disposable pids directories without binding a network port. Pause deterministically at child-spawn, identity-capture, lease-fsync, ownership-record-fsync, parent-send, child-consume, receipt-fsync, ACK, and pre-bind boundaries. Cover success plus timeout, EOF, malformed frame, wrong lease ID, wrong nonce, expired lease, wrong PID/PPID/PGID/start identity, wrong transaction, replay, lease/receipt replacement, missing ACK, child exit, and ACK followed by changed storage binding.
+Use real local socketpairs and disposable pids directories without binding a network port. Pause deterministically at child-spawn, identity-capture, lease-fsync, ownership-record-fsync, parent-send, child-consume, receipt-fsync, ACK, and pre-bind boundaries. Cover success plus timeout, EOF, malformed frame, wrong lease ID, wrong nonce, expired lease, wrong server PID/PGID/start, wrong launcher identity before ACK, wrong pids FD identity, wrong transaction, replay, replacement, missing ACK, child exit, launcher exit after ACK, repeated readiness, and ACK followed by changed storage binding.
 
 ```python
 lease = publish_startup_lease(
     pids_fd=pids_fd,
     identity=ManagedProcessIdentity(
         pid=child_pid, pgid=child_pgid, start_time=child_start,
-        parent_pid=os.getpid(), parent_start_time=parent_start,
     ),
     storage_transaction_id=transaction_id,
     ttl_seconds=5.0,
@@ -1432,8 +1576,6 @@ class ManagedProcessIdentity:
     pid: int
     pgid: int
     start_time: str
-    parent_pid: int
-    parent_start_time: str
 
 @dataclass(frozen=True)
 class StartupLease:
@@ -1441,6 +1583,12 @@ class StartupLease:
     lease_id: str
     nonce: str
     identity: ManagedProcessIdentity
+    launcher_pid: int
+    launcher_start_time: str
+    pids_dev_u32: DarwinU32
+    pids_ino: int
+    pids_uid: int
+    pids_mode: Literal[448]
     storage_transaction_id: str | None
     expires_at_monotonic_ns: int
 
@@ -1458,8 +1606,11 @@ class ManagedStartReceipt:
     storage_transaction_id: str | None
     acknowledged: Literal[True]
 
-def launch_managed_runtime(home: Path, *,
-                           timeout_seconds: float = 5.0) -> ManagedStartReceipt: ...
+def launch_managed_runtime(
+    home: Path, *, lock_set: StorageLockSet,
+    lifecycle: StorageLifecycle, contract: StorageContract,
+    timeout_seconds: float = 5.0,
+) -> ManagedStartReceipt: ...
 
 def publish_startup_lease(*, pids_fd: int, identity: ManagedProcessIdentity,
                           storage_transaction_id: str | None,
@@ -1478,11 +1629,11 @@ def managed_runtime_is_ready(*, home: Path,
                              expected_storage_transaction_id: str | None) -> bool: ...
 ```
 
-Create one private `SOCK_STREAM` socketpair for every non-fixture product start. `launch_managed_runtime` is the sole Python owner of the optional Task 12 `RuntimeMount`, the socketpair, child process and parent handshake. It uses only the installed/equipped fixed server entrypoint and exposes no arbitrary argv or executable parameter. Spawn the child with only its control FD inherited and `close_fds=True`; the child blocks on a length-bounded JSON frame before calling `uvicorn.run`. Parent captures stable PID/PGID/child+parent start identities, atomically publishes/fsyncs lease and owned process record, then sends only lease ID plus nonce. Child opens the lease relative to the already verified pids FD, validates it against process/parent identity and the retained binding's exact transaction ID, exclusively renames it to a consumed receipt, fsyncs receipt and directory, stores the in-process context, and ACKs the receipt hash. `launch_managed_runtime` calls `parent_release_and_wait_ack` while the `RuntimeMount` binding is still open and returns only `ManagedStartReceipt(acknowledged=True)`; it closes the parent binding immediately afterward in `finally`. Required storage binds a non-null committed transaction; a no-marker managed product runtime binds `None` and still uses the same blocked handshake. The lease/receipt is `0600` and never printed. `managed_runtime_is_ready` is a read-only check of the already consumed in-process context, receipt identity, current PID/parent/start identity and exact optional transaction; it never creates or consumes a lease.
+Create one private `SOCK_STREAM` socketpair for every non-fixture product start. `launch_managed_runtime` is the sole Python owner of the optional Task 12 `RuntimeMount`, the socketpair, child process and parent handshake. It uses only the installed/equipped fixed server entrypoint and exposes no arbitrary argv or executable parameter. Spawn with `close_fds=True` and exactly two explicit inherited descriptors: `control_fd` and a `F_DUPFD_CLOEXEC` duplicate of the already attested `pids_fd`. The lease binds that directory's device/inode/UID/mode `0700`; the child `fstat`s the duplicate before descriptor-relative consume and closes both inherited FDs after ACK. Parent captures stable server PID/PGID/start plus launcher identity, atomically publishes/fsyncs lease and owned process record, then sends only lease ID plus nonce. Parent identity is validated only during consume/ACK. The child exclusively renames the lease to a consumed receipt, fsyncs receipt and directory, stores the in-process context, and ACKs the receipt hash. `launch_managed_runtime` returns after ACK and may exit normally. Required storage binds a non-null committed transaction; a no-marker managed runtime binds `None`. `managed_runtime_is_ready` validates the live server PID/PGID/start, consumed receipt, and exact transaction without requiring the launcher PID to exist.
 
 - [ ] **Step 4: Enforce parent cleanup and independent lifespan gate; run GREEN**
 
-Parent accepts only the exact ACK before continuing readiness checks. Timeout, EOF, invalid/missing ACK, child exit, or changed identity terminates the exact owned process group with TERM then bounded KILL only after revalidation, verifies disappearance/no listener, and removes only its exact lease/record identity. In `_application_lifespan`, every non-fixture product runtime calls `require_managed_start_context` before `_initialize_runtime`; when storage is required it additionally verifies the context transaction equals the newly opened `StorageBinding`, while a no-marker managed runtime requires both values are `None`. Close binding and mission store in every failure/finally path. Add GREEN assertions that `managed_runtime_is_ready(home=..., expected_storage_transaction_id=...)` returns true only for the live context whose lease was consumed before expiry, remains true for that context throughout the owning lifespan, and returns false for the development fixture, an unconsumed/expired lease, wrong or missing transaction, replay, replaced receipt, PID/start mismatch, and closed lifespan.
+Parent accepts only the exact ACK before continuing readiness checks. Timeout, EOF, invalid/missing ACK, child exit, changed identity, or wrong pids descriptor terminates the exact owned process group after revalidation. In `_application_lifespan`, every non-fixture runtime calls `require_managed_start_context` before initialization and matches the binding transaction. Add GREEN assertions that readiness remains true across repeated checks after the launcher exits, using only live server PID/PGID/start, consumed receipt, and transaction; it is false for a development fixture, unconsumed/expired lease, wrong transaction, replay, replaced receipt, server identity mismatch, or closed lifespan.
 
 Run:
 
@@ -1531,8 +1682,8 @@ git commit -m "feat(storage): own managed mount and startup lifecycle"
 - Create: `tests/test_storage_runtime_ready.py`
 
 **Interfaces:**
-- Consumes: read-only `open_existing_storage_lock(home: Path, mode="shared", *, timeout_seconds=5.0) -> StorageLock` from Task 1, `StorageContract.probe() -> StorageStatus` from Task 7, and `managed_runtime_is_ready(*, home: Path, expected_storage_transaction_id: str | None) -> bool` from Task 13.
-- Produces: exact read-only `StorageContract.assert_runtime_ready() -> StorageStatus`; it produces no `WorkspaceHandle`, `StorageBinding`, alias handle, grant, approval, effect, worker process, mount, or filesystem mutation.
+- Consumes: one read-only `ordered_storage_locks(home, install_mode="shared", storage_mode="shared") -> ContextManager[StorageLockSet]` from Task 1, `StorageContract.probe_locked(lock_set) -> StorageStatus` from Task 7, and `managed_runtime_is_ready(*, home: Path, expected_storage_transaction_id: str | None) -> bool` from Task 13.
+- Produces: exact read-only `StorageContract.assert_runtime_ready_locked(lock_set: StorageLockSet) -> StorageStatus`; it produces no `WorkspaceHandle`, `StorageBinding`, alias handle, grant, approval, effect, worker process, mount, or filesystem mutation.
 
 - [ ] **Step 1: Write the failing local-alias readiness matrix**
 
@@ -1553,8 +1704,9 @@ Use this test-only consumer to prove the future `local_alias_action` boundary wi
 
 ```python
 def consume_local_alias_readiness(contract: StorageContract,
+                                  lock_set: StorageLockSet,
                                   admission: Callable[[], None]) -> StorageStatus:
-    status = contract.assert_runtime_ready()
+    status = contract.assert_runtime_ready_locked(lock_set)
     if status.verdict == "PASS" and status.runtime_allowed:
         admission()
     return status
@@ -1565,7 +1717,7 @@ for case in RUNTIME_READINESS_CASES:
         storage_status=case.storage_status,
         managed_runtime_ready=case.managed_runtime_ready,
     )
-    status = consume_local_alias_readiness(contract, admission)
+    status = consume_local_alias_readiness(contract, lock_set, admission)
     self.assertEqual((status.verdict, status.code), case.expected)
     self.assertEqual(admission.call_count, case.expected_admissions)
 ```
@@ -1574,15 +1726,16 @@ Add this second test-only two-boundary harness:
 
 ```python
 def consume_local_alias_twice(contract: StorageContract,
+                              lock_set: StorageLockSet,
                               finalize: Callable[[], None],
                               mutate_observation: Callable[[], None],
                               activate: Callable[[], None]) -> tuple[StorageStatus, StorageStatus | None]:
-    before_finalize = contract.assert_runtime_ready()
+    before_finalize = contract.assert_runtime_ready_locked(lock_set)
     if before_finalize.verdict != "PASS" or not before_finalize.runtime_allowed:
         return before_finalize, None
     finalize()
     mutate_observation()
-    before_activation = contract.assert_runtime_ready()
+    before_activation = contract.assert_runtime_ready_locked(lock_set)
     if before_activation.verdict == "PASS" and before_activation.runtime_allowed:
         activate()
     return before_finalize, before_activation
@@ -1590,7 +1743,18 @@ def consume_local_alias_twice(contract: StorageContract,
 
 Start healthy, let finalization pass once, then separately inject required-vault detach, host loss, `in_progress`, `rolling_back`, and loss/mismatch of the consumed managed-start context before the second call. Each case must record `finalize.call_count == 1` and `activate.call_count == 0`; an unchanged healthy case records `1/1`. This proves both mandated checks and prevents a grant created while healthy from becoming a storage-recovery escape after readiness changes.
 
-The fixture must make `StorageContract.open()`, `open_workspace()`, every `StorageLifecycle` create/mount/detach method, alias opens, and any actual grant/approval/effect/worker callback raise immediately. Snapshot the temporary runtime tree before and after each assertion and require identical relative entries, bytes, modes, and inode identities. Assert one bounded shared `storage-state.lock` acquisition encloses both the storage probe and managed-context check, then is released on success, failure, exception, and timeout; a queued exclusive transition must not interleave between those two observations. Also inject a managed-runtime probe exception and require `UNCLEAR/STORAGE_NOT_READY`, not admission.
+The fixture must make `StorageContract.open_locked(lock_set)`,
+`open_workspace_locked(lock_set, binding, requested)`, every mutating
+`StorageLifecycle.*_locked` method,
+alias opens, and any actual grant/approval/effect/worker callback raise
+immediately. Snapshot the temporary runtime tree before and after each
+assertion and require identical relative entries, bytes, modes, and inode
+identities. Assert one bounded install-shared/storage-shared/admission-exclusive
+`StorageLockSet` encloses both the locked storage probe and managed-context
+check, then releases on success, failure, exception, and timeout; a queued
+transition cannot interleave and no nested acquire occurs. Also inject a
+managed-runtime probe exception and require `UNCLEAR/STORAGE_NOT_READY`, not
+admission.
 
 - [ ] **Step 2: Run focused tests and confirm RED**
 
@@ -1600,7 +1764,9 @@ Run:
 "$PYTHON" tests/test_storage_runtime_ready.py
 ```
 
-Expected: FAIL with `AttributeError: 'StorageContract' object has no attribute 'assert_runtime_ready'`; every mutation and admission sentinel remains at zero.
+Expected: FAIL with `AttributeError: 'StorageContract' object has no attribute
+'assert_runtime_ready_locked'`; every mutation and admission sentinel remains
+at zero.
 
 - [ ] **Step 3: Implement the exact read-only interface**
 
@@ -1621,56 +1787,58 @@ def _default_managed_runtime_probe(*, home: Path,
 
 class StorageContract:
     def __init__(self, home: Path, *, environment: Mapping[str, str] | None = None,
-                 helper_runner: HelperRunner = run_attested_helper,
-                 plist_runner: PlistRunner = run_plist_command,
+                 broker: StorageBrokerClient,
                  fd_probe: FdProbe = probe_mount_fd,
                  managed_runtime_probe: ManagedRuntimeProbe =
                      _default_managed_runtime_probe) -> None: ...
 
-    def assert_runtime_ready(self) -> StorageStatus:
+    def assert_runtime_ready_locked(
+        self, lock_set: StorageLockSet,
+    ) -> StorageStatus:
         try:
-            with open_existing_storage_lock(
-                self._home, "shared", timeout_seconds=5.0
+            lock_set.assert_active(
+                home=self._home, required_install_mode="shared",
+                required_storage_mode="shared",
+            )
+            status = self.probe_locked(lock_set)
+            optional = (
+                status.storage_state == "unconfigured"
+                and not status.mounted
+                and status.transaction_id is None
+            )
+            required = (
+                status.storage_state == "committed"
+                and status.mounted
+                and status.transaction_id is not None
+            )
+            if (
+                status.verdict != "PASS"
+                or not status.runtime_allowed
+                or not (optional or required)
             ):
-                status = self.probe()
-                optional = (
-                    status.storage_state == "unconfigured"
-                    and not status.mounted
-                    and status.transaction_id is None
+                return dataclasses.replace(
+                    status,
+                    verdict="UNCLEAR" if status.verdict == "UNCLEAR" else "FAIL",
+                    code="STORAGE_NOT_READY",
+                    runtime_allowed=False,
                 )
-                required = (
-                    status.storage_state == "committed"
-                    and status.mounted
-                    and status.transaction_id is not None
+            try:
+                managed = self._managed_runtime_probe(
+                    home=self._home,
+                    expected_storage_transaction_id=status.transaction_id,
                 )
-                if (
-                    status.verdict != "PASS"
-                    or not status.runtime_allowed
-                    or not (optional or required)
-                ):
-                    return dataclasses.replace(
-                        status,
-                        verdict="UNCLEAR" if status.verdict == "UNCLEAR" else "FAIL",
-                        code="STORAGE_NOT_READY",
-                        runtime_allowed=False,
-                    )
-                try:
-                    managed = self._managed_runtime_probe(
-                        home=self._home,
-                        expected_storage_transaction_id=status.transaction_id,
-                    )
-                except Exception:
-                    return dataclasses.replace(
-                        status, verdict="UNCLEAR", code="STORAGE_NOT_READY",
-                        runtime_allowed=False,
-                    )
-                if not managed:
-                    return dataclasses.replace(
-                        status, verdict="FAIL", code="STORAGE_NOT_READY",
-                        runtime_allowed=False,
-                    )
-                return dataclasses.replace(status, code="RUNTIME_READY")
-        except StorageLockError:
+            except Exception:
+                return dataclasses.replace(
+                    status, verdict="UNCLEAR", code="STORAGE_NOT_READY",
+                    runtime_allowed=False,
+                )
+            if not managed:
+                return dataclasses.replace(
+                    status, verdict="FAIL", code="STORAGE_NOT_READY",
+                    runtime_allowed=False,
+                )
+            return dataclasses.replace(status, code="RUNTIME_READY")
+        except (StorageLockError, OSError):
             return StorageStatus(
                 verdict="UNCLEAR",
                 code="STORAGE_NOT_READY",
@@ -1681,9 +1849,21 @@ class StorageContract:
             )
 ```
 
-Store the injected probe as `self._managed_runtime_probe`. `assert_runtime_ready()` acquires the bounded existing shared storage lock once, retains it through both observations, calls `probe()` once, and accepts only one of two coherent storage projections: `(storage_state="unconfigured", mounted=False, transaction_id=None)` or `(storage_state="committed", mounted=True, transaction_id=<non-empty UUID>)`, always with `verdict="PASS"` and `runtime_allowed=True`. Missing/unsafe/timed-out lock returns the exact `UNCLEAR/STORAGE_NOT_READY` unknown-state value shown above without creating the lock marker. A storage failure, `UNCLEAR`, active/rollback journal, detached committed vault, missing transaction, or contradictory tuple returns a status with `code="STORAGE_NOT_READY"` and `runtime_allowed=False`; preserve `UNCLEAR` for unavailable/contradictory observation, otherwise use `FAIL`. Do not call the managed-runtime probe after a storage failure, and release the shared lock in `finally` on every path.
+Store the injected probe as `self._managed_runtime_probe`.
+`assert_runtime_ready_locked()` accepts only the caller-owned active same-home
+install-shared/storage-shared/admission-exclusive set, retains it through both
+observations, calls `probe_locked()` once, and accepts only one of two coherent
+storage projections: `(storage_state="unconfigured", mounted=False,
+transaction_id=None)` or `(storage_state="committed", mounted=True,
+transaction_id=<non-empty UUID>)`, always with `verdict="PASS"` and
+`runtime_allowed=True`. A missing, closed, wrong-home, wrong-mode, replaced, or
+forged set returns the exact `UNCLEAR/STORAGE_NOT_READY` unknown-state value.
+A storage failure, `UNCLEAR`, active/rollback journal, detached committed vault,
+missing transaction, or contradictory tuple returns `STORAGE_NOT_READY` with
+`runtime_allowed=False`. Do not call the managed-runtime probe after a storage
+failure. The outer caller, not this method, releases the set.
 
-For a coherent projection, call the injected probe once with `home` and the exact transaction ID or `None`. False returns `FAIL/STORAGE_NOT_READY`; an exception returns `UNCLEAR/STORAGE_NOT_READY`; true returns `PASS/RUNTIME_READY` while preserving storage state, mounted flag, transaction ID, and `recovery="UNCLEAR"`. This method takes only shared/read-only observations: it does not call `open()`, `open_workspace()`, a lifecycle operation, or any local-alias module, and it never creates, consumes, refreshes, or deletes a lease.
+For a coherent projection, call the injected probe once with `home` and the exact transaction ID or `None`. False returns `FAIL/STORAGE_NOT_READY`; an exception returns `UNCLEAR/STORAGE_NOT_READY`; true returns `PASS/RUNTIME_READY` while preserving storage state, mounted flag, transaction ID, and `recovery="UNCLEAR"`. This method takes only shared/read-only observations: it does not call `open_locked(lock_set)`, `open_workspace_locked(lock_set, binding, requested)`, a lifecycle mutation, or any local-alias module, and it never creates, consumes, refreshes, or deletes a lease.
 
 - [ ] **Step 4: Run GREEN contract and lease integration tests**
 
@@ -1705,14 +1885,20 @@ git add console/storage_contract.py tests/test_storage_runtime_ready.py
 git commit -m "feat(storage): expose managed runtime readiness"
 ```
 
-## Final verification gate (no implementation task or additional commit)
+## Deferred final verification gate (after Foundation 4 + S3 Task 7)
+
+Do not execute this section immediately after Task 14. First run the PASS-only
+S3 Task 6 gate, then complete and commit the atomic Foundation Task 4 + S3 Task
+7 installation unit. Execute this section immediately before S3 Task 8; it
+creates no behavior and no commit.
 
 **Files:**
 - Inspect: `git diff --name-only`
 - Inspect: `git status --short`
 
 **Interfaces:**
-- Consumes: all interfaces produced by Tasks 1-14.
+- Consumes: all interfaces produced by Tasks 1-14 plus the installed aggregate
+  and complete-generation publication from S3 Task 7.
 - Produces: a tested code foundation ready for the separate live-vault plan and later mission/effect integration; it creates no production vault and performs no real production Keychain/disk mutation.
 
 - [ ] **Step 1: Run all storage-focused suites independently**
@@ -1721,6 +1907,8 @@ Run each command from the repository root:
 
 ```bash
 "$PYTHON" tests/test_disk_image_keychain_helper.py
+"$PYTHON" tests/test_storage_broker.py
+"$PYTHON" tests/test_storage_reconciliation.py
 "$PYTHON" tests/test_storage_mount_probe.py
 "$PYTHON" tests/test_storage_lock.py
 "$PYTHON" tests/test_storage_lifecycle.py
@@ -1731,6 +1919,8 @@ Run each command from the repository root:
 "$PYTHON" tests/test_storage_import.py
 "$PYTHON" tests/test_storage_cli.py
 "$PYTHON" tests/test_installer.py
+"$PYTHON" tests/test_installed_storage_runtime.py
+"$PYTHON" tests/test_installed_storage_wheel.py
 "$PYTHON" tests/test_selftest.py
 "$PYTHON" tests/test_start_local.py
 "$PYTHON" tests/test_startup_lease.py
@@ -1744,7 +1934,9 @@ Run each command from the repository root:
 "$PYTHON" tests/test_executor_runtime_truth.py
 ```
 
-Expected: every command exits `0`, selects at least one test, and performs no real Keychain or disk-image operation. The disposable integration command from Task 3 remains unexecuted unless separately authorized at action time.
+Expected: every command exits `0`, selects at least one test, and performs no
+real Keychain or disk-image operation. The separate owner-live command in S3
+Task 11 remains unexecuted unless separately authorized at action time.
 
 - [ ] **Step 2: Run syntax, type-adjacent and shell gates**
 
@@ -1782,7 +1974,9 @@ Run:
 
 ```bash
 test -d frontend/node_modules
-PYTHON="$PYTHON" scripts/test-all.sh
+PYTHON311="$(command -v python3.11)" \
+PYTHON314="$(command -v python3.14)" \
+scripts/test-all.sh
 ```
 
 Expected: the complete backend, extension, frontend unit/coverage, typecheck, lint, fresh build, E2E, accessibility, runtime, privacy and release-evidence gate exits `0` without a frontend-skip message.
@@ -1807,5 +2001,5 @@ Do not create an additional completion commit when the tree is already clean. If
 - This plan ends with implementation and isolated verification of the storage foundation.
 - The separately authorized live plan may call the eight `scripts/cortex-storage.py` subcommands in order without rebuilding their logic.
 - The live plan must still show each dry-run hash before applying a mutating command, separately authorize disposable cleanup, and never infer production authorization from approval of this implementation plan.
-- `WorkspaceHandle` remains vault-only. Downstream local-alias finalization/activation may consume only `StorageContract.assert_runtime_ready() -> StorageStatus`; it cannot receive a `StorageBinding` or `WorkspaceHandle` and must repeat the assertion at both boundaries.
+- `WorkspaceHandle` remains vault-only. Downstream local-alias finalization/activation may consume only `StorageContract.assert_runtime_ready_locked(lock_set) -> StorageStatus`; it cannot receive a `StorageBinding` or `WorkspaceHandle` and must repeat the assertion at both boundaries under an active set.
 - Mission admission, `ToolExecutor(workspace: WorkspaceHandle)`, FD-relative file tools/process `addfchdir`, local-alias catalog/grant/action/worker implementation, runtime truth UI, STOP effect epochs, black-box T12-T18, and live R1-R5 remain owned by their separate implementation/live plans.
