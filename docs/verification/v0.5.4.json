@@ -1,0 +1,188 @@
+{
+  "schemaVersion": 1,
+  "release": "0.5.4",
+  "commit": "b2a0659fd7d54241523aa8e381da3491775fb0f6",
+  "generatedAt": "2026-09-06T15:32:00Z",
+  "environment": {
+    "os": "macOS 26.5.1 build 25F80",
+    "python": "3.12.14 isolated fixture environment",
+    "node": "25.8.2",
+    "browserDriver": "Playwright browser fixtures and Cortex Chrome extension unit fixtures",
+    "executorKind": "deterministic local executor; no provider or vault effect",
+    "simulation": true
+  },
+  "suites": {
+    "backend": {
+      "passed": 960,
+      "failed": 0,
+      "skipped": 0
+    },
+    "frontendUnit": {
+      "passed": 155,
+      "failed": 0,
+      "skipped": 0
+    },
+    "e2e": {
+      "passed": 12,
+      "failed": 0,
+      "skipped": 1
+    },
+    "a11y": {
+      "passed": 4,
+      "failed": 0,
+      "skipped": 0
+    },
+    "extension": {
+      "passed": 130,
+      "failed": 0,
+      "skipped": 0
+    }
+  },
+  "performance": {
+    "cachedUsabilityMs": 147.4,
+    "switchP95Ms": 92.4,
+    "switchMaxMs": 92.4
+  },
+  "dualConversations": {
+    "runs": 10,
+    "crossovers": 0,
+    "thirdWriterDraftPreserved": true
+  },
+  "acceptance": {
+    "fixtureMissions": {
+      "runs": 20,
+      "passed": 20
+    },
+    "coldDualRuns": {
+      "runs": 10,
+      "passed": 10
+    },
+    "crashPoints": {
+      "runs": 6,
+      "passed": 6,
+      "sourceCommit": "b2a0659fd7d54241523aa8e381da3491775fb0f6",
+      "command": "python -m unittest -v tests.test_loop_mock.LoopTestCase.test_08_restart_recovery_requires_explicit_resume tests.test_missions_api.MissionsApiTestCase.test_08_restart_recovery_surfaced tests.test_playwright_driver.PlaywrightDriverTest.test_startup_failure_is_evicted_and_factory_recovers tests.test_transport_session_isolation.MissionPersistenceFailureTest.test_sqlite_update_failure_fails_mission_and_releases_exact_lease tests.test_transport_session_isolation.MissionRouteSessionIsolationTest.test_runtime_construction_failure_fails_creation_and_releases_lease tests.test_transport_session_isolation.MissionStopQuiescenceTest.test_cancel_keeps_slot_until_browser_and_background_task_quiesce",
+      "evidenceArtifact": "docs/verification/v0.5.4-test-report.md",
+      "points": [
+        {
+          "id": "crash-1",
+          "test": "tests.test_loop_mock.LoopTestCase.test_08_restart_recovery_requires_explicit_resume",
+          "transport": "deterministic_fixture",
+          "injectionBoundary": "store restart while WAITING_FOR_CHATGPT",
+          "status": "PASS"
+        },
+        {
+          "id": "crash-2",
+          "test": "tests.test_missions_api.MissionsApiTestCase.test_08_restart_recovery_surfaced",
+          "transport": "api_store",
+          "injectionBoundary": "API reads a reopened non-terminal mission store",
+          "status": "PASS"
+        },
+        {
+          "id": "crash-3",
+          "test": "tests.test_playwright_driver.PlaywrightDriverTest.test_startup_failure_is_evicted_and_factory_recovers",
+          "transport": "playwright_development_fixture",
+          "injectionBoundary": "browser driver startup fails before use",
+          "status": "PASS"
+        },
+        {
+          "id": "crash-4",
+          "test": "tests.test_transport_session_isolation.MissionPersistenceFailureTest.test_sqlite_update_failure_fails_mission_and_releases_exact_lease",
+          "transport": "mission_runtime_sqlite",
+          "injectionBoundary": "binding persistence update fails after lease acquisition",
+          "status": "PASS"
+        },
+        {
+          "id": "crash-5",
+          "test": "tests.test_transport_session_isolation.MissionRouteSessionIsolationTest.test_runtime_construction_failure_fails_creation_and_releases_lease",
+          "transport": "mission_runtime",
+          "injectionBoundary": "runtime construction fails after lease acquisition",
+          "status": "PASS"
+        },
+        {
+          "id": "crash-6",
+          "test": "tests.test_transport_session_isolation.MissionStopQuiescenceTest.test_cancel_keeps_slot_until_browser_and_background_task_quiesce",
+          "transport": "mission_runtime",
+          "injectionBoundary": "cancellation while browser and background work quiesce",
+          "status": "PASS"
+        }
+      ]
+    },
+    "liveChatGPT": {
+      "status": "PENDING_OWNER_APPROVAL",
+      "singleConversation": {
+        "runs": 0,
+        "passed": 0
+      },
+      "dualConversations": {
+        "runs": 0,
+        "passed": 0,
+        "crossovers": null
+      },
+      "thirdWriterRefused": false,
+      "fileUpload": false,
+      "screenshotUpload": false,
+      "personalDataRecorded": false,
+      "notes": "No signed-in ChatGPT, provider, Keychain, external-vault, or browser-profile effect was executed in this run."
+    },
+    "cleanMacosLifecycle": {
+      "status": "NOT_RUN",
+      "realCommands": false,
+      "install": false,
+      "browserLaunch": false,
+      "serviceLifecycle": false,
+      "doctor": false,
+      "reinstall": false,
+      "uninstall": false,
+      "foreignSentinelPreserved": false,
+      "attempts": 0,
+      "failedAttempts": 0,
+      "failedAttemptsRetained": false,
+      "planHashes": {
+        "install": null,
+        "reinstall": null,
+        "uninstall": null
+      },
+      "notes": "Only an isolated fixture CORTEX_HOME was used; no clean macOS account or VM was available."
+    },
+    "miniSites": {
+      "runs": 0,
+      "passed": 0,
+      "status": "PENDING_OWNER_APPROVAL"
+    },
+    "selfDiagnostic": {
+      "status": "NOT_RUN",
+      "worktree": "not executed in this verification run",
+      "evidence": "docs/verification/v0.5.4-test-report.md",
+      "steps": []
+    }
+  },
+  "gates": {
+    "privacy": "PASS",
+    "links": "PASS",
+    "secrets": "PASS",
+    "dependencies": "PASS",
+    "install": "PASS",
+    "doctor": "PASS",
+    "uninstall": "PASS",
+    "build": "PASS",
+    "e2e": "PASS",
+    "a11y": "PASS",
+    "consoleErrors": 0
+  },
+  "artifacts": {
+    "VERSION": "a7711142bc1fc55c16b9147a1503a4f2c4717be5c1e4437772a047f52ef81db2",
+    "scripts/verify-links.sh": "3eac1b42aeecac4e0d561b750264824fe9bb00af0294f233caf37620a9438677",
+    "tests/test_verify_links.py": "9c58f6dd240390bd3a1c8ae31aefa638446903d8334ac9c2f2f2c792a9935f6c",
+    "docs/verification/v0.5.4-test-report.md": "88af7708ca7aa98112997bcbac5f64b61f6f429a88c65ee4f2ef76e2bd5e54ef"
+  },
+  "implementationReadiness": {
+    "status": "BLOCKED",
+    "blockers": [
+      "R17 corrective S3 review has no independent PASS verdict",
+      "Persistent storage broker and reconciliation interfaces are not implemented",
+      "Downstream storage, effect, intent, and live-cutover phases are not started"
+    ]
+  },
+  "verdict": "PENDING_OWNER_APPROVAL_FOR_LIVE_GATES"
+}
