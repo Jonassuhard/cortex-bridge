@@ -29,9 +29,18 @@
   descendant-cleanup error. The failing test passes in isolation, so it remains
   recorded as an honest hermetic blocker.
 - Link check: 124/124 PASS. Privacy: 392 files and 43 images PASS.
+- Fresh targeted rerun: launcher plus installer suites pass 101/101; the
+  source `go` command returns code 3 with `STORAGE_VOLUME_MISSING` as designed;
+  the exact privacy invocation passes 392 files and 43 images; release-evidence
+  and link checks pass.
+- The installed application bundle still differs from the source checkout and
+  lacks the current storage/runtime modules. Its installer dry-run fails closed
+  on the existing native-helper ownership mismatch, so no bundle overwrite was
+  attempted.
 
 ## Next
 
-Update the evidence documents on the next local implementation commit, run the
-release validator with only manifest drift allowed, and leave the missing
-installed-generation/managed-launch and real macOS/provider gates explicit.
+Leave the missing installed-generation/managed-launch, external-volume, native
+helper, and real macOS/provider gates explicit. The next required action is a
+targeted owner decision to mount/unlock the configured volume and separately
+authorize a safe installed-bundle synchronization path.

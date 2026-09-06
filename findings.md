@@ -3,7 +3,7 @@
 ## Verified on 2026-09-06
 
 - Branch: `codex/v054-storage-consolidation`.
-- HEAD: `ea1ca479ee551eaeb0e2307412eab70af7e7d80e`.
+- HEAD: `ca2c304a7419f9e322e327ccb10e719c6950cad4`.
 - User-owned dirty files: `frontend/out/_next/static/chunks/3bvs1nl3bjmpb.js`,
   `primer.md`, `tests/test_storage_lock.py`; they must not be staged.
 - Focused S3/runtime lifespan gate: 50 tests PASS on Python 3.14 and 50 tests
@@ -39,6 +39,10 @@
 - The source double-click launcher now dispatches explicit commands such as
   `doctor --json`, preserves the storage guard's exit code, and prints a
   storage-specific remediation when the required volume is absent.
+- The `doctor` command intentionally returns zero after completing diagnostics;
+  required health failures remain explicit in the JSON `ok=false` field and in
+  the per-check `status=fail` entries. This preserves the existing diagnostic
+  command contract while `go` still returns the storage guard's code 3.
 - Doctor now includes an `external_storage` check, so the local diagnostic no
   longer reports an apparently healthy installation when `go` is blocked by a
   missing required volume.
