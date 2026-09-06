@@ -35,11 +35,11 @@
       },
       "full_gate": {
         "status": "FAIL",
-        "runs": 990,
+        "runs": 992,
         "failures": 6,
         "errors": 1,
-        "python_3_14": {"runs": 990, "failures": 6, "errors": 1},
-        "python_3_12": {"runs": 990, "failures": 6, "errors": 1},
+        "python_3_14": {"runs": 992, "failures": 6, "errors": 1},
+        "python_3_12": {"runs": 992, "failures": 6, "errors": 1},
         "evidence_artifact": "docs/verification/v0.5.4-s3-focused-gate-2026-09-06.md"
       },
       "review_id": null,
