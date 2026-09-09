@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import socket
 import sys
 import tempfile
@@ -24,6 +25,7 @@ import unittest
 import urllib.error
 import urllib.request
 import uuid
+from unittest.mock import patch
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -35,6 +37,7 @@ import uvicorn  # noqa: E402
 import missions as missions_api  # noqa: E402  (console/missions.py)
 import server as console_server  # noqa: E402  (console/server.py)
 import write_slots  # noqa: E402
+from cortex_paths import build_paths  # noqa: E402
 from conversation_sessions import ConversationSessionRegistry  # noqa: E402
 from orchestration.store import Store  # noqa: E402
 from transport.chatgpt_web.adapter import (  # noqa: E402
@@ -45,7 +48,7 @@ from transport.chatgpt_web.fixture import FixtureServer  # noqa: E402
 
 
 def decision_reply(mission_id, iteration, state, tool=None, arguments=None,
-                   criteria=None, terminal=False):
+                   criteria=None, terminal=False, requires_approval=False):
     decision = {
         "protocol": "cortex.v1",
         "missionId": mission_id,
@@ -55,7 +58,7 @@ def decision_reply(mission_id, iteration, state, tool=None, arguments=None,
         "summary": f"api-fixture decision {iteration}",
         "action": {"tool": tool, "arguments": arguments or {}} if tool else None,
         "acceptanceCriteria": criteria if criteria is not None else ["criterion"],
-        "requiresApproval": False,
+        "requiresApproval": requires_approval,
         "terminal": terminal,
     }
     return "Decision:\n```cortex-decision\n" + json.dumps(decision, indent=2) + "\n```"
@@ -73,7 +76,23 @@ class MissionsApiTestCase(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls._tmp = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(cls._tmp.cleanup)
         tmp = Path(cls._tmp.name)
+        with patch.dict(os.environ, {"CORTEX_HOME": str(tmp / "runtime")}):
+            paths = build_paths()
+        # Replace only filesystem destinations and the legacy input directory.
+        # Keep the actual lifespan, storage guard, migration and initialization.
+        for target, attributes in (
+            (console_server, dict(RUNTIME_PATHS=paths, STORE_FILE=paths.iterations,
+                                  BASE_DIR=tmp / "legacy-console", _runtime_initialized=False,
+                                  _iterations=[])),
+            (missions_api, dict(RUNTIME_PATHS=paths, DATA_DIR=paths.home,
+                                DB_PATH=paths.database, LEGACY_CHAT_RUNS_FILE=paths.chat_runs,
+                                LEGACY_ITERATIONS_FILE=paths.iterations)),
+        ):
+            isolated = patch.multiple(target, **attributes)
+            isolated.start()
+            cls.addClassCleanup(isolated.stop)
         cls.fixture = FixtureServer().start()
         cls.store_path = tmp / "cortex.db"
         cls.original_store = missions_api._store
@@ -291,6 +310,27 @@ class MissionsApiTestCase(unittest.TestCase):
         d = self.wait_terminal(self.mission_id)
         self.assertEqual(d["mission"]["state"], "BLOCKED")
         self.assertFalse((self.ws / "b.txt").exists())  # rejected → never written
+        approvals = missions_api.get_store().rows("approvals", self.mission_id)
+        self.assertEqual(approvals[0]["approved"], 0)
+
+    def test_model_required_approval_cannot_be_bypassed_by_automatic_mode(self):
+        self.optin()
+        status, body = self.start_mission([
+            decision_reply(self.mission_id, 1, "EXECUTE", tool="write_file",
+                           arguments={"path": "guarded.txt", "content": "not approved"},
+                           requires_approval=True),
+            decision_reply(self.mission_id, 2, "BLOCKED", criteria=[], terminal=True),
+        ])
+        self.assertEqual(status, 201, body)
+        self.wait_state(self.mission_id, "WAITING_FOR_APPROVAL",
+                        extra=lambda d: d["awaiting_approval"])
+        self.assertFalse((self.ws / "guarded.txt").exists())
+        status, _ = self.post(f"/api/missions/{self.mission_id}/approve",
+                              {"scope": "once", "approve": False})
+        self.assertEqual(status, 200)
+        self.assertEqual(self.wait_terminal(self.mission_id)["mission"]["state"], "BLOCKED")
+        self.assertFalse((self.ws / "guarded.txt").exists())
+        self.assertEqual(missions_api.get_store().count("tool_executions", self.mission_id), 0)
         approvals = missions_api.get_store().rows("approvals", self.mission_id)
         self.assertEqual(approvals[0]["approved"], 0)
 
@@ -566,7 +606,10 @@ class MissionsApiTestCase(unittest.TestCase):
             # Unknown ids still 404.
             with self.assertRaises(urllib.error.HTTPError) as ctx:
                 self.get("/api/missions/does-not-exist")
-            self.assertEqual(ctx.exception.code, 404)
+            try:
+                self.assertEqual(ctx.exception.code, 404)
+            finally:
+                ctx.exception.close()
         finally:
             missions_api.LEGACY_CHAT_RUNS_FILE = old_runs
             missions_api.LEGACY_ITERATIONS_FILE = old_iterations

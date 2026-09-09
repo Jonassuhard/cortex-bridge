@@ -18,6 +18,7 @@ import sys
 import tempfile
 from pathlib import Path
 from typing import Any
+from dataclasses import dataclass
 
 from cortex_paths import build_paths
 from lifecycle_lock import LIFECYCLE_LOCK_MARKER, ensure_private_directory, open_lifecycle_lock
@@ -32,6 +33,27 @@ STAGING_NAME = ".install-staging"
 TRANSACTION_NAME = "transaction.json"
 MACOS_AX_HELPER_NAME = "cortex-macos-ax-send"
 MACOS_AX_HELPER_SOURCE = ROOT / "transport" / "macos_ax_send.swift"
+
+
+@dataclass(frozen=True)
+class NativeHelperSpec:
+    name: str
+    source: Path
+    target_name: str
+    build_profile: Path
+    frameworks: tuple[str, ...] = ()
+
+
+NATIVE_HELPERS = (
+    NativeHelperSpec("macos-ax-send", MACOS_AX_HELPER_SOURCE, "cortex-macos-ax-send",
+                     ROOT / "native/build-profiles/macos-ax-send-v1.json"),
+    NativeHelperSpec("storage-mount-probe", ROOT / "native/macos/storage_mount_probe.swift",
+                     "storage-mount-probe", ROOT / "native/build-profiles/storage-mount-probe-v1.json"),
+    NativeHelperSpec("storage-broker", ROOT / "native/macos/disk_image_keychain.swift",
+                     "cortex-storage-broker", ROOT / "native/build-profiles/storage-broker-v1.json", ("Security",)),
+    NativeHelperSpec("process-release", ROOT / "native/macos/process_release.swift", "process-release",
+                     ROOT / "native/build-profiles/process-release-v1.json"),
+)
 RENAME_SWAP = 0x00000002
 RENAME_EXCL = 0x00000004
 AT_FDCWD = -2
@@ -1990,6 +2012,18 @@ def _recover_interrupted_install(home: Path) -> None:
 
 
 def apply_install(plan: dict[str, Any], approved_hash: str) -> dict[str, Any]:
+    if plan.get("installation_mode") == "generation":
+        from generation_install import apply_locked
+        unsigned = {key: value for key, value in plan.items() if key != "plan_hash"}
+        if approved_hash != _hashed(unsigned)["plan_hash"] or approved_hash != plan.get("plan_hash"):
+            raise PermissionError("approved generation plan hash does not match its content")
+        if plan.get("target") != str(build_paths().home):
+            raise PermissionError("approved generation target changed")
+        from storage_lock import open_storage_lock_set
+        home = build_paths().home
+        ensure_private_directory(home)
+        with open_storage_lock_set(home, install_mode="exclusive", storage_mode="exclusive") as locks:
+            return apply_locked(plan, lock_set=locks)
     if approved_hash != plan["plan_hash"]:
         raise PermissionError("approved plan hash does not match the current plan")
     paths = build_paths()
@@ -2698,6 +2732,25 @@ def _swift_toolchain_doctor_check() -> dict[str, Any]:
     return check
 
 
+def _process_helper_doctor_check(home: Path, manifest: dict) -> dict[str, Any]:
+    from native_helpers import load_verified_native_helper_registry, attest_helper, NativeHelperAttestationError
+    check = {"id": "native_process_helper", "label": "Programme natif d’exécution",
+             "status": "warning", "required": False, "runtime_ready": False,
+             "detail": "not registered by installer",
+             "hint": "Le contrôle du binaire ne valide pas le branchement du moteur."}
+    if not manifest.get("native_helper_registry"):
+        return check
+    try:
+        registry = load_verified_native_helper_registry(home, manifest)
+        helper = attest_helper("process-release", registry, home=home)
+        helper.close()
+    except NativeHelperAttestationError:
+        check.update(status="fail", detail="registry or signed binary verification failed")
+    else:
+        check.update(status="pass", detail="signed binary verified; runtime integration not verified")
+    return check
+
+
 def _native_helper_doctor_checks() -> tuple[list[dict[str, Any]], bool]:
     binary_check: dict[str, Any] = {
         "id": "macos_ax_helper",
@@ -2761,6 +2814,11 @@ def _native_helper_doctor_checks() -> tuple[list[dict[str, Any]], bool]:
         except RuntimeError:
             binary_check["status"] = "fail"
             binary_check["detail"] = "owned binary identity mismatch"
+            binary_check["hint"] = (
+                "Préserve le binaire trouvé et le manifeste d’installation. "
+                "Vérifie leur provenance et résous le conflit d’identité avant "
+                "toute réinstallation contrôlée."
+            )
         else:
             if not isinstance(expected_hash, str) or actual_hash != expected_hash:
                 binary_check["status"] = "fail"
@@ -2952,6 +3010,11 @@ def _external_storage_doctor_check(home: Path) -> dict[str, Any]:
 
 def doctor() -> dict[str, Any]:
     paths = build_paths()
+    if any((paths.home / name).exists() or (paths.home / name).is_symlink()
+           for name in ("current-generation.json", "installed-generations", "bootstrap")):
+        from generation_install import doctor_locked
+        with _shared_install_lock_if_present(paths.home):
+            return doctor_locked(paths.home)
     record = paths.pids / "console.json"
     port = int(os.environ.get("PORT", "8420"))
     local_url = f"http://127.0.0.1:{port}"
@@ -2972,6 +3035,7 @@ def doctor() -> dict[str, Any]:
         pass
     with _shared_install_lock_if_present(paths.home):
         native_checks, native_helper_ready = _native_helper_doctor_checks()
+        native_checks.append(_process_helper_doctor_check(paths.home, _load_owned_manifest() or {}))
     checks = [
         {
             "id": "python",
@@ -3105,6 +3169,8 @@ def main(argv: list[str] | None = None) -> int:
     install_parser.add_argument("--json", action="store_true")
     install_parser.add_argument("--rebuild-ui", action="store_true")
     install_parser.add_argument("--with-ollama-model")
+    install_parser.add_argument("--generation-wheel", type=Path)
+    install_parser.add_argument("--bootstrap-migration", choices=["missing-v1"])
     uninstall_parser = subparsers.add_parser("uninstall")
     uninstall_parser.add_argument("--dry-run", action="store_true")
     uninstall_parser.add_argument("--approve-plan")
@@ -3117,7 +3183,15 @@ def main(argv: list[str] | None = None) -> int:
             _print(doctor(), args.json, kind="doctor")
             return 0
         if args.action == "install":
-            plan = build_install_plan(rebuild_ui=args.rebuild_ui, ollama_model=args.with_ollama_model)
+            if args.generation_wheel:
+                if args.rebuild_ui or args.with_ollama_model:
+                    raise ValueError("Generation installation uses prebuilt UI and does not install models")
+                from generation_install import build_plan
+                plan = build_plan(args.generation_wheel, bootstrap_migration=args.bootstrap_migration)
+            else:
+                if args.bootstrap_migration:
+                    raise ValueError("Bootstrap migration requires --generation-wheel")
+                plan = build_install_plan(rebuild_ui=args.rebuild_ui, ollama_model=args.with_ollama_model)
             if args.dry_run:
                 _print(plan, args.json)
                 return 0

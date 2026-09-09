@@ -32,6 +32,12 @@ export type ConversationBackgroundFetcher = (
   signal: AbortSignal,
 ) => Promise<ConversationSnapshot>;
 
+export interface ConversationLoadTrace {
+  event: "selected" | "cache-rendered" | "refresh-started" | "deadline" | "settled-retry" | "superseded";
+  identity: string;
+  monotonic_ms: number;
+}
+
 interface LoadOptions {
   force?: boolean;
   background?: boolean;
@@ -39,6 +45,7 @@ interface LoadOptions {
 
 interface ActiveLoad {
   key: ConversationKey;
+  identity: string;
   epoch: number;
   controller: AbortController;
   timer: ReturnType<typeof setTimeout>;
@@ -79,16 +86,25 @@ export function createConversationRequestController({
   fetchSnapshot,
   fetchBackgroundSnapshot,
   deadlineMs = CONVERSATION_LOAD_DEADLINE_MS,
+  trace,
 }: {
   dispatch: ConversationDispatch;
   getState: () => ConversationState;
   fetchSnapshot: ConversationSnapshotFetcher;
   fetchBackgroundSnapshot?: ConversationBackgroundFetcher;
   deadlineMs?: number;
+  trace?: (event: ConversationLoadTrace) => void;
 }): ConversationRequestController {
   let active: ActiveLoad | null = null;
   let disposed = false;
   const epochs = new Map<ConversationKey, number>();
+  const traceEvent = (event: ConversationLoadTrace["event"], identity: string) => {
+    trace?.({
+      event,
+      identity,
+      monotonic_ms: typeof performance === "undefined" ? Date.now() : performance.now(),
+    });
+  };
 
   function cancelActive(notifyReducer: boolean) {
     const request = active;
@@ -97,6 +113,7 @@ export function createConversationRequestController({
     request.obsolete = true;
     clearTimeout(request.timer);
     request.controller.abort(new ObsoleteConversationLoadError());
+    traceEvent("superseded", request.identity);
     if (notifyReducer) {
       dispatch({
         type: "REQUEST_FAILED",
@@ -121,12 +138,15 @@ export function createConversationRequestController({
       const epoch = Math.max(epochs.get(key) || 0, entryEpoch) + 1;
       epochs.set(key, epoch);
       const controller = new AbortController();
+      traceEvent("selected", conversation.identity);
+      if (getState().entries[key]?.snapshot) traceEvent("cache-rendered", conversation.identity);
       let rejectInterrupted!: (error: Error) => void;
       const interrupted = new Promise<never>((_resolve, reject) => {
         rejectInterrupted = reject;
       });
       const request = {
         key,
+        identity: conversation.identity,
         epoch,
         controller,
         timer: 0 as unknown as ReturnType<typeof setTimeout>,
@@ -141,10 +161,12 @@ export function createConversationRequestController({
         epoch,
         background: options.background,
       });
+      traceEvent("refresh-started", conversation.identity);
 
       request.timer = setTimeout(() => {
         if (active !== request || request.obsolete) return;
         active = null;
+        traceEvent("deadline", request.identity);
         request.controller.abort(new ConversationDeadlineError());
         request.rejectInterrupted(new ConversationDeadlineError());
       }, deadlineMs);
@@ -175,6 +197,7 @@ export function createConversationRequestController({
               ? CONVERSATION_LOAD_DEADLINE_MESSAGE
               : errorMessage(error),
           });
+          traceEvent("settled-retry", request.identity);
         })
         .finally(() => {
           clearTimeout(request.timer);
@@ -200,6 +223,7 @@ export interface UseConversationControllerOptions {
   fetchBackgroundSnapshot?: ConversationBackgroundFetcher;
   initialState?: ConversationState;
   deadlineMs?: number;
+  trace?: (event: ConversationLoadTrace) => void;
 }
 
 export interface ConversationControllerResult {
@@ -221,6 +245,7 @@ export function useConversationController({
   fetchBackgroundSnapshot,
   initialState = createConversationState(),
   deadlineMs = CONVERSATION_LOAD_DEADLINE_MS,
+  trace,
 }: UseConversationControllerOptions = {}): ConversationControllerResult {
   const stateRef = useRef(initialState);
   const mountedRef = useRef(true);
@@ -250,6 +275,7 @@ export function useConversationController({
           : fetchSnapshotRef.current(conversation, signal);
       },
       deadlineMs,
+      trace,
     });
   }
 

@@ -10,6 +10,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
+import stat
 import tempfile
 from dataclasses import asdict, dataclass
 from enum import StrEnum
@@ -177,13 +179,18 @@ def canonical_json(value: Any) -> bytes:
         return obj
 
     value = canonicalize(value)
-    return json.dumps(
+    encoded = json.dumps(
         value,
         ensure_ascii=False,
         separators=(",", ":"),
         sort_keys=False,
         allow_nan=False,
-    ).encode("utf-8")
+    )
+    # S3 uses long lowercase escapes for every control scalar. Match escape
+    # pairs, so a literal backslash followed by n is not rewritten as a newline.
+    short_controls = {r"\b": r"\u0008", r"\t": r"\u0009", r"\n": r"\u000a",
+                      r"\f": r"\u000c", r"\r": r"\u000d"}
+    return re.sub(r"\\.", lambda match: short_controls.get(match[0], match[0]), encoded).encode("utf-8")
 
 
 def digest(domain: str, value: Any) -> str:
@@ -232,6 +239,34 @@ class ReconciliationRecord:
     postcondition_sha256: str | None
     previous_record_sha256: str | None
     record_sha256: str
+
+    def __post_init__(self) -> None:
+        if type(self.schema_version) is not int or self.schema_version != 1:
+            raise ValueError("unsupported reconciliation record schema")
+        if type(self.generation) is not int or not 0 <= self.generation <= 2**64 - 1:
+            raise ValueError("invalid reconciliation generation")
+        if self.operation not in {"create", "mount", "detach", "delete-disposable-item"}:
+            raise ValueError("invalid reconciliation operation")
+        for value in (self.request_sha256, self.result_sha256, self.reconciliation_probe_sha256,
+                      self.record_sha256):
+            if not _is_sha256(value):
+                raise ValueError("invalid reconciliation digest")
+        for value in (self.previous_record_sha256, self.postcondition_sha256):
+            if value is not None and not _is_sha256(value):
+                raise ValueError("invalid optional reconciliation digest")
+        if self.state == ReconciliationState.PENDING:
+            if self.postcondition is not None or self.postcondition_sha256 is not None:
+                raise ValueError("pending reconciliation cannot contain a result")
+        elif self.state == ReconciliationState.RECONCILED:
+            if self.postcondition is None or self.previous_record_sha256 is None:
+                raise ValueError("reconciled result requires postcondition and predecessor")
+        if self.postcondition is not None:
+            validate_postcondition(self.operation, self.postcondition)
+            expected = digest("CORTEX-S3\x00RECONCILIATION-POSTCONDITION\x00V1\x00", self.postcondition)
+            if self.postcondition_sha256 != expected:
+                raise ValueError("reconciliation postcondition digest mismatch")
+        elif self.postcondition_sha256 is not None:
+            raise ValueError("postcondition digest without a postcondition")
 
     def without_digest(self) -> dict[str, Any]:
         data = _json_value(self)
@@ -295,6 +330,10 @@ def _validate_private_path(value: Any) -> None:
         raise ValueError("path contains invalid component")
 
 
+def _is_sha256(value: Any) -> bool:
+    return type(value) is str and len(value) == 64 and all(c in "0123456789abcdef" for c in value)
+
+
 def validate_postcondition(operation: str, postcondition: Mapping[str, Any]) -> None:
     if not isinstance(postcondition, Mapping):
         raise ValueError("postcondition must be an object")
@@ -317,15 +356,34 @@ def validate_postcondition(operation: str, postcondition: Mapping[str, Any]) -> 
         raise ValueError("postcondition keys are not exact")
     if operation != "delete-disposable-item" and kind not in {operation, "mounted_image_probe"}:
         raise ValueError("postcondition operation mismatch")
+    if operation == "delete-disposable-item" and kind != "delete_disposable_item":
+        raise ValueError("delete requires its own item observation")
     if kind == "create" and postcondition["keychain_item_count"] not in (0, 1):
         raise ValueError("invalid keychain count")
-    if kind == "mount" and postcondition["mapping_count"] not in (0, 1):
-        raise ValueError("invalid mapping count")
+    if kind == "mount":
+        count = postcondition["mapping_count"]
+        empty = postcondition["mount_empty"]
+        proof = postcondition["mounted_image_proof_sha256"]
+        if type(count) is not int or count not in (0, 1) or type(empty) is not bool:
+            raise ValueError("invalid mount observation types")
+        if postcondition["disposition"] == "absent":
+            if count != 0 or empty is not True or proof is not None:
+                raise ValueError("contradictory absent mount observation")
+        elif postcondition["disposition"] == "exact_mapping":
+            if (count != 1 or type(proof) is not str or len(proof) != 64
+                    or any(c not in "0123456789abcdef" for c in proof)):
+                raise ValueError("exact mount mapping requires its proof digest")
+        else:
+            raise ValueError("invalid mount disposition")
     if kind in {"detach", "delete_disposable_item"}:
-        if postcondition.get("mapping_count", 0) != 0 and kind == "detach":
-            raise ValueError("detach must have zero mappings")
-        if postcondition.get("item_count", 1) != 0 and kind == "delete_disposable_item":
-            raise ValueError("delete must have zero items")
+        if kind == "detach" and (type(postcondition["mapping_count"]) is not int
+                                 or postcondition["mapping_count"] != 0
+                                 or postcondition["mount_empty"] is not True):
+            raise ValueError("detach requires zero mappings and an empty mount point")
+        if kind == "delete_disposable_item" and (
+                type(postcondition["item_count"]) is not int or postcondition["item_count"] != 0
+                or postcondition["transaction_match"] is not True):
+            raise ValueError("delete requires zero items and an exact transaction match")
     if kind == "mounted_image_probe" and postcondition["mapping_count"] != 1:
         raise ValueError("mounted probe must have one mapping")
 
@@ -370,11 +428,38 @@ class ReconciliationStore:
 
     def load(self) -> ReconciliationRecord | None:
         try:
-            raw = json.loads(self.path.read_text(encoding="utf-8"))
+            fd = os.open(self.path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         except FileNotFoundError:
             return None
+        try:
+            before = os.fstat(fd)
+            parent = self.path.parent.lstat()
+            if (not stat.S_ISREG(before.st_mode) or before.st_uid != os.getuid()
+                    or stat.S_IMODE(before.st_mode) != 0o600 or before.st_nlink != 1
+                    or not 0 < before.st_size <= 65536
+                    or not stat.S_ISDIR(parent.st_mode) or parent.st_uid != os.getuid()
+                    or stat.S_IMODE(parent.st_mode) != 0o700):
+                raise ValueError("unsafe reconciliation record")
+            chunks = []
+            total = 0
+            while total <= 65536:
+                chunk = os.read(fd, 65537 - total)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                total += len(chunk)
+            data = b"".join(chunks)
+            after = os.fstat(fd)
+            if (len(data) != before.st_size or (before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+                    != (after.st_size, after.st_mtime_ns, after.st_ctime_ns)):
+                raise ValueError("reconciliation record changed during read")
+        finally:
+            os.close(fd)
+        raw = json.loads(data)
         if not isinstance(raw, dict):
             raise ValueError("reconciliation record is not an object")
+        if canonical_json(raw) != data:
+            raise ValueError("reconciliation record is not canonical")
         record = _record_from_dict(raw)
         if not record.verify():
             raise ValueError("reconciliation record digest mismatch")
@@ -446,7 +531,7 @@ def _record_from_dict(raw: Mapping[str, Any]) -> ReconciliationRecord:
         return ReconciliationRecord(
             schema_version=cast(Literal[1], raw["schema_version"]),
             workflow_id=UUID(str(raw["workflow_id"])),
-            generation=int(raw["generation"]),
+            generation=raw["generation"],
             transaction_id=UUID(str(raw["transaction_id"])),
             operation=cast(ReconciliationOperation, raw["operation"]),
             request_sha256=str(raw["request_sha256"]),

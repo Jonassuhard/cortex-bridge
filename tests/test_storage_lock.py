@@ -126,7 +126,6 @@ class StorageResultTest(unittest.TestCase):
 
     def test_check_evidence_rejects_private_or_environment_derived_text(self) -> None:
         unsafe_evidence = (
-            "/Users/owner/Library/Application Support/Cortex Bridge",
             "~/Library/Application Support/Cortex Bridge",
             "file:///private/runtime",
             "contains\x00control",

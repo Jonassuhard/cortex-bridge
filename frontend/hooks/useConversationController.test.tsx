@@ -198,6 +198,94 @@ describe("useConversationController", () => {
     expect(result.current.selectedEntry?.loadPhase).toBe("loading");
   });
 
+  it("traces B cache refresh through its retryable deadline without accepting a late result", async () => {
+    vi.useFakeTimers();
+    let state = createConversationState([summary("b")], "b");
+    state = conversationReducer(state, { type: "SWITCH_STARTED", key: "b", epoch: 1 });
+    state = conversationReducer(state, {
+      type: "SNAPSHOT_RECEIVED",
+      key: "b",
+      epoch: 1,
+      snapshot: snapshot("b", "B en cache"),
+    });
+    const pending = deferred<ConversationSnapshot>();
+    const trace: Array<{ event: string; identity: string }> = [];
+    const dispatch = (event: Parameters<typeof conversationReducer>[1]) => {
+      state = conversationReducer(state, event);
+      return state;
+    };
+    const options: Parameters<typeof createConversationRequestController>[0] & {
+      trace(event: { event: string; identity: string }): void;
+    } = {
+      dispatch,
+      getState: () => state,
+      fetchSnapshot: () => pending.promise,
+      deadlineMs: 10_000,
+      trace: (event) => trace.push(event),
+    };
+    const controller = createConversationRequestController(options);
+
+    const refresh = controller.load(summary("b"));
+    expect(state.entries.b.messages[0].text).toBe("B en cache");
+    expect(trace.map(({ event, identity }) => ({ event, identity }))).toEqual([
+      { event: "selected", identity: "b" },
+      { event: "cache-rendered", identity: "b" },
+      { event: "refresh-started", identity: "b" },
+    ]);
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    await refresh;
+    expect(state.entries.b.loadPhase).toBe("error");
+    expect(state.entries.b.freshness).toBe("stale");
+    expect(state.entries.b.messages[0].text).toBe("B en cache");
+    expect(trace.map((event) => event.event)).toEqual([
+      "selected",
+      "cache-rendered",
+      "refresh-started",
+      "deadline",
+      "settled-retry",
+    ]);
+
+    await act(async () => pending.resolve(snapshot("b", "B trop tardive")));
+    expect(state.entries.b.messages[0].text).toBe("B en cache");
+  });
+
+  it("traces a superseded A without allowing its late snapshot to replace B", async () => {
+    const pendingA = deferred<ConversationSnapshot>();
+    const pendingB = deferred<ConversationSnapshot>();
+    let state = createConversationState([summary("a"), summary("b")], "a");
+    const trace: Array<{ event: string; identity: string }> = [];
+    const dispatch = (event: Parameters<typeof conversationReducer>[1]) => {
+      state = conversationReducer(state, event);
+      return state;
+    };
+    const options: Parameters<typeof createConversationRequestController>[0] & {
+      trace(event: { event: string; identity: string }): void;
+    } = {
+      dispatch,
+      getState: () => state,
+      fetchSnapshot: (conversation) => conversation.identity === "a"
+        ? pendingA.promise
+        : pendingB.promise,
+      trace: (event) => trace.push(event),
+    };
+    const controller = createConversationRequestController(options);
+
+    const loadingA = controller.load(summary("a"));
+    dispatch({ type: "SELECT", key: "b", summary: summary("b") });
+    const loadingB = controller.load(summary("b"));
+    await act(async () => pendingB.resolve(snapshot("b", "B fraîche")));
+    await act(async () => pendingA.resolve(snapshot("a", "A tardive")));
+    await Promise.all([loadingA, loadingB]);
+
+    expect(state.selectedKey).toBe("b");
+    expect(state.entries.a.messages).toEqual([]);
+    expect(state.entries.b.messages[0].text).toBe("B fraîche");
+    expect(trace.map(({ event, identity }) => ({ event, identity }))).toContainEqual(
+      { event: "superseded", identity: "a" },
+    );
+  });
+
   it("uses the delta-aware background fetcher with the current cache", async () => {
     let initial = createConversationState([summary("b")], "b");
     initial = conversationReducer(initial, { type: "SWITCH_STARTED", key: "b", epoch: 1 });

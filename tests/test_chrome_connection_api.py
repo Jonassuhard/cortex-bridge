@@ -13,6 +13,7 @@ if str(CONSOLE) not in sys.path:
     sys.path.insert(0, str(CONSOLE))
 
 import onboarding  # noqa: E402
+from chrome_extension import EXTENSION_PROTOCOL_VERSION  # noqa: E402
 
 
 class ChromeConnectionResultTest(unittest.TestCase):
@@ -24,7 +25,7 @@ class ChromeConnectionResultTest(unittest.TestCase):
                 "paired": False,
                 "protocol_compatible": False,
                 "extension_protocol_version": 1,
-                "required_protocol_version": 2,
+                "required_protocol_version": EXTENSION_PROTOCOL_VERSION,
             }
         )
 

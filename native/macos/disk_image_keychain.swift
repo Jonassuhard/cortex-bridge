@@ -1,4 +1,5 @@
 import Darwin
+import CryptoKit
 import Foundation
 import Security
 
@@ -351,6 +352,449 @@ private func withCStringArray<R>(
     pointers.append(nil)
     return pointers.withUnsafeMutableBufferPointer { buffer in
         body(buffer.baseAddress!)
+    }
+}
+
+private struct NativeChildIdentity: Equatable {
+    let pid: pid_t
+    let parentPID: pid_t
+    let groupID: pid_t
+    let uid: uid_t
+    let startSeconds: UInt64
+    let startMicroseconds: UInt64
+    let executableDevice: UInt32
+    let executableInode: UInt64
+    let executablePath: String
+}
+
+private func nativePathString(_ bytes: UnsafeRawBufferPointer) -> String? {
+    guard let end = bytes.firstIndex(of: 0), end > 0 else { return nil }
+    return String(bytes: bytes.prefix(end), encoding: .utf8)
+}
+
+private func nativeChildSnapshot(_ pid: pid_t, deadline: UInt64) -> NativeChildIdentity? {
+    guard pid > 0, let now = monotonicNanoseconds(), now < deadline else { return nil }
+    var bsd = proc_bsdinfo()
+    guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &bsd, Int32(MemoryLayout.size(ofValue: bsd)))
+            == MemoryLayout.size(ofValue: bsd),
+          bsd.pbi_pid == UInt32(pid), bsd.pbi_ppid == UInt32(getpid()),
+          bsd.pbi_pgid == UInt32(pid), bsd.pbi_uid == geteuid(),
+          bsd.pbi_start_tvsec > 0, bsd.pbi_start_tvusec < 1_000_000 else { return nil }
+    // proc_info.h defines PROC_PIDPATHINFO_MAXSIZE as 4*MAXPATHLEN; the
+    // compound macro is not imported by Swift.
+    var pathBytes = [UInt8](repeating: 0, count: 4 * Int(MAXPATHLEN))
+    let pathCount = pathBytes.withUnsafeMutableBytes {
+        proc_pidpath(pid, $0.baseAddress, UInt32($0.count))
+    }
+    guard pathCount > 0, let path = pathBytes.withUnsafeBytes(nativePathString) else { return nil }
+    // Obtain vnode identity from the child's mapped executable, not from stat
+    // of its pathname (which could now name a replacement). Walk boundedly.
+    var address: UInt64 = 0
+    for _ in 0..<1_024 {
+        guard let now = monotonicNanoseconds(), now < deadline else { return nil }
+        var region = proc_regionwithpathinfo()
+        guard proc_pidinfo(pid, PROC_PIDREGIONPATHINFO, address, &region,
+                          Int32(MemoryLayout.size(ofValue: region))) == MemoryLayout.size(ofValue: region) else { return nil }
+        let regionPath = withUnsafeBytes(of: region.prp_vip.vip_path, nativePathString)
+        let vnode = region.prp_vip.vip_vi.vi_stat
+        if regionPath == path, region.prp_prinfo.pri_protection & UInt32(VM_PROT_EXECUTE) != 0,
+           vnode.vst_mode & UInt16(S_IFMT) == UInt16(S_IFREG), vnode.vst_ino != 0 {
+            return NativeChildIdentity(pid: pid, parentPID: pid_t(bsd.pbi_ppid),
+                groupID: pid_t(bsd.pbi_pgid), uid: bsd.pbi_uid,
+                startSeconds: bsd.pbi_start_tvsec, startMicroseconds: bsd.pbi_start_tvusec,
+                executableDevice: vnode.vst_dev, executableInode: vnode.vst_ino, executablePath: path)
+        }
+        let start = region.prp_prinfo.pri_address
+        let size = region.prp_prinfo.pri_size
+        guard size > 0, start <= UInt64.max - size, start + size > address else { return nil }
+        address = start + size
+    }
+    return nil
+}
+
+private func nativeChildWaitable(_ pid: pid_t, requireStopped: Bool, deadline: UInt64) -> Bool {
+    while let now = monotonicNanoseconds(), now < deadline {
+        var info = siginfo_t()
+        let result = waitid(P_PID, id_t(pid), &info, WEXITED | WSTOPPED | WCONTINUED | WNOHANG | WNOWAIT)
+        if result == 0 {
+            return !requireStopped || (info.si_pid == pid && info.si_code == CLD_STOPPED)
+        }
+        if errno != EINTR { return false }
+    }
+    return false
+}
+
+private final class RegisteredNativeChild {
+    let identity: NativeChildIdentity
+    private var resumed = false
+    private var reaped = false
+    private var revoked = false
+    private var signalsSent = Set<Int32>()
+
+    private init(identity: NativeChildIdentity) { self.identity = identity }
+
+    static func captureSuspended(pid: pid_t, executableFD: Int32, deadline limit: UInt64) -> RegisteredNativeChild? {
+        guard let now = monotonicNanoseconds(), now < limit, now <= UInt64.max - brokerIOBudgetNS else { return nil }
+        let deadline = min(limit, now + brokerIOBudgetNS)
+        var executable = stat()
+        guard fstat(executableFD, &executable) == 0, executable.st_mode & S_IFMT == S_IFREG,
+              let first = nativeChildSnapshot(pid, deadline: deadline),
+              first.executableDevice == UInt32(bitPattern: Int32(executable.st_dev)),
+              first.executableInode == UInt64(executable.st_ino),
+              nativeChildWaitable(pid, requireStopped: true, deadline: deadline),
+              nativeChildSnapshot(pid, deadline: deadline) == first else { return nil }
+        return RegisteredNativeChild(identity: first)
+    }
+
+    func resume(deadline limit: UInt64) -> Bool {
+        guard !resumed, !reaped, !revoked, signalsSent.isEmpty,
+              let now = monotonicNanoseconds(), now < limit, now <= UInt64.max - brokerIOBudgetNS else { return false }
+        let deadline = min(limit, now + brokerIOBudgetNS)
+        guard nativeChildSnapshot(identity.pid, deadline: deadline) == identity,
+              nativeChildWaitable(identity.pid, requireStopped: true, deadline: deadline) else {
+            revoked = true
+            return false
+        }
+        guard let finalNow = monotonicNanoseconds(), finalNow < deadline else { return false }
+        // Consume before the syscall: uncertain delivery never grants a retry.
+        resumed = true
+        return kill(identity.pid, SIGCONT) == 0
+    }
+
+    func signalGroup(_ signal: Int32, deadline limit: UInt64) -> Bool {
+        guard !reaped, !revoked, signal == SIGTERM || signal == SIGKILL,
+              !signalsSent.contains(signal),
+              let now = monotonicNanoseconds(), now < limit, now <= UInt64.max - brokerIOBudgetNS else { return false }
+        let deadline = min(limit, now + brokerIOBudgetNS)
+        while let now = monotonicNanoseconds(), now < deadline {
+            guard nativeChildSnapshot(identity.pid, deadline: deadline) == identity,
+                  nativeChildWaitable(identity.pid, requireStopped: false, deadline: deadline) else {
+                revoked = true
+                return false
+            }
+            guard let finalNow = monotonicNanoseconds(), finalNow < deadline else { return false }
+            signalsSent.insert(signal)
+            if kill(-identity.groupID, signal) == 0 { return true }
+            if errno != EINTR { return false }
+        }
+        return false
+    }
+
+    func reapExited(deadline: UInt64) -> Int32? {
+        guard !reaped, !revoked, let now = monotonicNanoseconds(), now < deadline else { return nil }
+        var info = siginfo_t()
+        let observed = waitid(P_PID, id_t(identity.pid), &info, WEXITED | WNOHANG | WNOWAIT)
+        if observed != 0 {
+            if errno != EINTR { revoked = true }
+            return nil
+        }
+        if info.si_pid == 0 { return nil }
+        // Darwin waitid leaves si_uid unset; UID was checked in the registered
+        // BSD identity and again before signaling. Use its actual exit-event
+        // contract here, not an unpopulated field.
+        guard info.si_pid == identity.pid, info.si_signo == SIGCHLD,
+              [CLD_EXITED, CLD_KILLED, CLD_DUMPED].contains(info.si_code) else {
+            revoked = true
+            return nil
+        }
+        guard let finalNow = monotonicNanoseconds(), finalNow < deadline else { return nil }
+        var status: Int32 = 0
+        let result = waitpid(identity.pid, &status, WNOHANG)
+        if result == identity.pid {
+            reaped = true
+            return status
+        }
+        if result < 0 && errno != EINTR { revoked = true }
+        return nil
+    }
+
+    func groupIsAbsent(deadline: UInt64) -> Bool {
+        // Only observation after exact reap; this never sends TERM or KILL.
+        guard reaped, let now = monotonicNanoseconds(), now < deadline else { return false }
+        return kill(-identity.groupID, 0) == -1 && errno == ESRCH
+    }
+}
+
+private final class NativeOwnedProcess {
+    let pid: pid_t
+    private var executableFD: Int32
+    private(set) var stdinFD: Int32
+    private(set) var stdoutFD: Int32
+    private(set) var stderrFD: Int32
+    private(set) var registration: RegisteredNativeChild?
+    private(set) var unresolved = false
+    private var registrationAttempted = false
+    private var resumed = false
+
+    init(pid: pid_t, executableFD: Int32, stdinFD: Int32, stdoutFD: Int32, stderrFD: Int32) {
+        self.pid = pid
+        self.executableFD = executableFD
+        self.stdinFD = stdinFD
+        self.stdoutFD = stdoutFD
+        self.stderrFD = stderrFD
+    }
+
+    func register(deadline: UInt64) -> Bool {
+        guard !registrationAttempted else { return false }
+        registrationAttempted = true
+        registration = RegisteredNativeChild.captureSuspended(pid: pid,
+            executableFD: executableFD, deadline: deadline)
+        unresolved = registration == nil
+        return !unresolved
+    }
+
+    func resume(deadline: UInt64) -> Bool {
+        guard !unresolved, !resumed, let registration else { return false }
+        guard registration.resume(deadline: deadline) else {
+            unresolved = true
+            return false
+        }
+        resumed = true
+        return true
+    }
+
+    func closeInput() {
+        if stdinFD >= 0 { close(stdinFD); stdinFD = -1 }
+    }
+
+    fileprivate func closeHandles() {
+        for fd in [stdinFD, stdoutFD, stderrFD, executableFD] where fd >= 0 { close(fd) }
+        stdinFD = -1; stdoutFD = -1; stderrFD = -1; executableFD = -1
+    }
+
+    deinit { closeHandles() }
+}
+
+// The persistent controller must retain this owner and must not exit while
+// children is nonempty. An unregistered child remains suspended and owned;
+// no cleanup signal is fabricated when identity proof is unavailable.
+private final class NativeSpawnOwner {
+    private(set) var children = [NativeOwnedProcess]()
+
+    func spawnSuspended(executable: String, argv: [String], deadline: UInt64) -> NativeOwnedProcess? {
+        guard argv.first == executable, !executable.contains("\0"),
+              !argv.contains(where: { $0.contains("\0") }),
+              let now = monotonicNanoseconds(), now < deadline else { return nil }
+        let executableFD = open(executable, O_RDONLY | O_CLOEXEC | O_NOFOLLOW)
+        guard executableFD >= 0 else { return nil }
+        var held = stat()
+        var transferred = false
+        var descriptors = [Int32]()
+        defer {
+            if !transferred {
+                descriptors.forEach { close($0) }
+                close(executableFD)
+            }
+        }
+        guard fstat(executableFD, &held) == 0, held.st_mode & S_IFMT == S_IFREG else { return nil }
+        for _ in 0..<3 {
+            var pair: [Int32] = [-1, -1]
+            guard pipe(&pair) == 0 else { return nil }
+            descriptors.append(contentsOf: pair)
+        }
+        // Keep source descriptors distinct from the three destinations. Closed
+        // stdio is a pre-spawn failure, never an accidentally closed child pipe.
+        guard descriptors.allSatisfy({ $0 > STDERR_FILENO }) else { return nil }
+        let inputRead = descriptors[0], inputWrite = descriptors[1]
+        let outputRead = descriptors[2], outputWrite = descriptors[3]
+        let errorRead = descriptors[4], errorWrite = descriptors[5]
+        do {
+            try setNonBlocking(inputWrite)
+            try setNonBlocking(outputRead)
+            try setNonBlocking(errorRead)
+        } catch { return nil }
+        var actions: posix_spawn_file_actions_t?
+        guard posix_spawn_file_actions_init(&actions) == 0 else { return nil }
+        defer { posix_spawn_file_actions_destroy(&actions) }
+        guard posix_spawn_file_actions_adddup2(&actions, inputRead, STDIN_FILENO) == 0,
+              posix_spawn_file_actions_adddup2(&actions, outputWrite, STDOUT_FILENO) == 0,
+              posix_spawn_file_actions_adddup2(&actions, errorWrite, STDERR_FILENO) == 0 else { return nil }
+        for fd in descriptors {
+            guard posix_spawn_file_actions_addclose(&actions, fd) == 0 else { return nil }
+        }
+        var attributes: posix_spawnattr_t?
+        guard posix_spawnattr_init(&attributes) == 0 else { return nil }
+        defer { posix_spawnattr_destroy(&attributes) }
+        guard posix_spawnattr_setflags(&attributes,
+              Int16(POSIX_SPAWN_START_SUSPENDED | POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_CLOEXEC_DEFAULT)) == 0,
+              posix_spawnattr_setpgroup(&attributes, 0) == 0 else { return nil }
+        // Path-based exec must still name the held vnode immediately beforehand.
+        var pathStat = stat()
+        guard lstat(executable, &pathStat) == 0,
+              pathStat.st_dev == held.st_dev, pathStat.st_ino == held.st_ino,
+              pathStat.st_mode == held.st_mode, pathStat.st_uid == held.st_uid,
+              let finalNow = monotonicNanoseconds(), finalNow < deadline else { return nil }
+        var pid: pid_t = 0
+        let result = withCStringArray(argv) { arguments in
+            withCStringArray(childEnvironment) { environment in
+                executable.withCString {
+                    posix_spawn(&pid, $0, &actions, &attributes, arguments, environment)
+                }
+            }
+        }
+        guard result == 0 else { return nil }
+        let child = NativeOwnedProcess(pid: pid, executableFD: executableFD,
+            stdinFD: inputWrite, stdoutFD: outputRead, stderrFD: errorRead)
+        children.append(child)
+        transferred = true
+        close(inputRead); close(outputWrite); close(errorWrite)
+        return child
+    }
+
+    func releaseCompleted(_ child: NativeOwnedProcess, deadline: UInt64) -> Bool {
+        guard let index = children.firstIndex(where: { $0 === child }),
+              child.registration?.groupIsAbsent(deadline: deadline) == true else { return false }
+        child.closeHandles()
+        children.remove(at: index)
+        return true
+    }
+}
+
+private enum NativePumpControl { case keepGoing, cancel, ownerLost }
+
+private struct NativePumpResult {
+    let code: String
+    let stdout: Data
+    let stderr: Data
+    let childReaped: Bool
+    let groupAbsent: Bool
+}
+
+private enum NativeCommandPump {
+    // A bounded drain lets owner-control processing run even during output
+    // floods. Output is private parser input, never public protocol evidence.
+    private static func drain(_ fd: Int32, into output: inout Data, eof: inout Bool,
+                              discard: Bool, deadline: UInt64) -> String? {
+        if eof { return nil }
+        var bytes = [UInt8](repeating: 0, count: 4_096)
+        for _ in 0..<16 {
+            guard let now = monotonicNanoseconds(), now < deadline else { return "DEADLINE_EXPIRED" }
+            let count = bytes.withUnsafeMutableBytes { Darwin.read(fd, $0.baseAddress, $0.count) }
+            if count > 0 {
+                if !discard {
+                    guard output.count + count <= childOutputLimit else { return "PROCESS_OUTPUT_LIMIT" }
+                    output.append(contentsOf: bytes.prefix(count))
+                }
+            } else if count == 0 { eof = true; return nil }
+            else if errno == EAGAIN || errno == EWOULDBLOCK { return nil }
+            else if errno != EINTR { return "PROCESS_IO_FAILED" }
+        }
+        return nil
+    }
+
+    static func run(owner: NativeSpawnOwner, executable: String, argv: [String],
+                    secret: SecretBuffer?, effectDeadline: UInt64, cleanupDeadline finalCleanupDeadline: UInt64,
+                    control: (Int, Int) -> NativePumpControl) -> NativePumpResult {
+        var stdout = Data(), stderr = Data()
+        var outEOF = false, errEOF = false
+        var status: Int32?
+        func result(_ code: String, reaped: Bool, absent: Bool) -> NativePumpResult {
+            NativePumpResult(code: code, stdout: stdout, stderr: stderr,
+                             childReaped: reaped, groupAbsent: absent)
+        }
+        guard finalCleanupDeadline >= effectDeadline,
+              secret == nil || isValidDiskImageSecret(secret!),
+              let now = monotonicNanoseconds(), now < effectDeadline else {
+            return result("INVALID_REQUEST", reaped: true, absent: true)
+        }
+        var cleanupDeadline = finalCleanupDeadline
+        let cleanupBudgetNS = finalCleanupDeadline - effectDeadline
+        guard let child = owner.spawnSuspended(executable: executable, argv: argv, deadline: effectDeadline) else {
+            return result("PROCESS_SPAWN_FAILED", reaped: true, absent: true)
+        }
+        guard child.register(deadline: effectDeadline), let registration = child.registration,
+              child.resume(deadline: effectDeadline) else {
+            return result("SUPERVISION_UNRESOLVED", reaped: false, absent: false)
+        }
+        if secret == nil { child.closeInput() }
+        var inputOffset = 0
+        var failure: String?
+        func recordFailure(_ code: String) {
+            guard failure == nil else { return }
+            failure = code
+            guard let observed = monotonicNanoseconds() else { cleanupDeadline = 0; return }
+            let (deadline, overflow) = observed.addingReportingOverflow(cleanupBudgetNS)
+            cleanupDeadline = min(finalCleanupDeadline, overflow ? finalCleanupDeadline : deadline)
+        }
+        var killAt: UInt64?
+        var killed = false
+        while let now = monotonicNanoseconds(), now < cleanupDeadline {
+            if let problem = drain(child.stdoutFD, into: &stdout, eof: &outEOF,
+                                   discard: failure != nil, deadline: cleanupDeadline) {
+                recordFailure(problem)
+            }
+            if let problem = drain(child.stderrFD, into: &stderr, eof: &errEOF,
+                                   discard: failure != nil, deadline: cleanupDeadline) {
+                recordFailure(problem)
+            }
+            if failure == nil {
+                switch control(stdout.count, stderr.count) {
+                case .keepGoing: break
+                case .cancel: recordFailure("CANCELLED")
+                case .ownerLost: recordFailure("CHANNEL_LOST")
+                }
+                if let current = monotonicNanoseconds(), current >= effectDeadline {
+                    recordFailure("DEADLINE_EXPIRED")
+                }
+            }
+            // All signal decisions must precede reap. EOF on both streams or
+            // an already-issued KILL ends this command's signal sequence.
+            if status == nil && ((outEOF && errEOF) || killed) {
+                status = registration.reapExited(deadline: cleanupDeadline)
+            }
+            if let status, outEOF, errEOF,
+               registration.groupIsAbsent(deadline: cleanupDeadline),
+               owner.releaseCompleted(child, deadline: cleanupDeadline) {
+                let exitCode = status == 0 ? "OK" : (waitStatusSignaled(status) ? "PROCESS_SIGNALED" : "PROCESS_EXIT_NONZERO")
+                return result(failure ?? exitCode,
+                              reaped: true, absent: true)
+            }
+            if failure != nil {
+                child.closeInput()
+                if status == nil && killAt == nil {
+                    guard registration.signalGroup(SIGTERM, deadline: cleanupDeadline),
+                          let current = monotonicNanoseconds() else {
+                        return result("SUPERVISION_UNRESOLVED", reaped: false, absent: false)
+                    }
+                    let grace = UInt64(childTermGraceSeconds * 1_000_000_000)
+                    killAt = current > UInt64.max - grace ? cleanupDeadline : min(cleanupDeadline, current + grace)
+                } else if status == nil, !killed, let killAt,
+                          let current = monotonicNanoseconds(), current >= killAt {
+                    guard registration.signalGroup(SIGKILL, deadline: cleanupDeadline) else {
+                        return result("SUPERVISION_UNRESOLVED", reaped: false, absent: false)
+                    }
+                    killed = true
+                }
+            } else if let secret, child.stdinFD >= 0 {
+                guard let current = monotonicNanoseconds(), current < effectDeadline else { continue }
+                let written: Int
+                if inputOffset < secret.count {
+                    written = secret.withUnsafeBytes {
+                        Darwin.write(child.stdinFD, $0.baseAddress!.advanced(by: inputOffset), secret.count - inputOffset)
+                    }
+                    if written > 0 { inputOffset += written }
+                } else {
+                    var nul: UInt8 = 0
+                    written = Darwin.write(child.stdinFD, &nul, 1)
+                    if written == 1 { child.closeInput() }
+                }
+                if written < 0 && errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK {
+                    recordFailure("PROCESS_STDIN_FAILED")
+                }
+            }
+            var descriptors = [pollfd(fd: child.stdoutFD, events: outEOF ? 0 : Int16(POLLIN), revents: 0),
+                               pollfd(fd: child.stderrFD, events: errEOF ? 0 : Int16(POLLIN), revents: 0)]
+            if child.stdinFD >= 0 && failure == nil {
+                descriptors.append(pollfd(fd: child.stdinFD, events: Int16(POLLOUT), revents: 0))
+            }
+            guard let current = monotonicNanoseconds(), current < cleanupDeadline else { break }
+            let bound = failure == nil ? min(effectDeadline, cleanupDeadline) : cleanupDeadline
+            let delay = bound > current ? min(UInt64(20), (bound - current) / 1_000_000) : 0
+            let polled = poll(&descriptors, nfds_t(descriptors.count), Int32(delay))
+            if polled < 0 && errno != EINTR { recordFailure("PROCESS_IO_FAILED") }
+        }
+        child.closeInput()
+        return result("SUPERVISION_UNRESOLVED", reaped: status != nil, absent: false)
     }
 }
 
@@ -2027,10 +2471,95 @@ private enum BrokerMessageType: String {
     case protocolError = "PROTOCOL_ERROR"
 }
 
-private func brokerFrame(_ object: [String: Any]) -> Data? {
-    guard JSONSerialization.isValidJSONObject(object),
-          let payload = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]),
-          payload.count <= 16 * 1024 else { return nil }
+private let brokerFrameLimit = 16 * 1024
+private let brokerIOBudgetNS: UInt64 = 2_000_000_000
+
+private indirect enum BrokerJSON {
+    case object([String: BrokerJSON])
+    case array([BrokerJSON])
+    case string(String)
+    case unsigned(UInt64)
+    case bool(Bool)
+    case null
+}
+
+private func brokerJSON(from value: Any) -> BrokerJSON? {
+    if value is NSNull { return .null }
+    if let string = value as? String { return .string(string) }
+    if let array = value as? [Any] {
+        var converted = [BrokerJSON]()
+        converted.reserveCapacity(array.count)
+        for item in array {
+            guard let element = brokerJSON(from: item) else { return nil }
+            converted.append(element)
+        }
+        return .array(converted)
+    }
+    if let dictionary = value as? [String: Any] {
+        var converted = [String: BrokerJSON]()
+        for (key, item) in dictionary {
+            guard let element = brokerJSON(from: item) else { return nil }
+            converted[key] = element
+        }
+        return .object(converted)
+    }
+    if let number = value as? NSNumber {
+        if String(cString: number.objCType) == "c" {
+            return .bool(number.boolValue)
+        }
+        let representation = number.stringValue
+        guard !representation.isEmpty,
+              representation.allSatisfy({ $0 >= "0" && $0 <= "9" }),
+              let integer = UInt64(representation) else { return nil }
+        return .unsigned(integer)
+    }
+    return nil
+}
+
+private func brokerJSONString(_ value: String) -> String {
+    var output = "\""
+    for scalar in value.unicodeScalars {
+        switch scalar.value {
+        case 0x22: output += "\\\""
+        case 0x5C: output += "\\\\"
+        case 0x00...0x1F: output += String(format: "\\u%04x", scalar.value)
+        default: output.unicodeScalars.append(scalar)
+        }
+    }
+    output += "\""
+    return output
+}
+
+private func canonicalBrokerJSON(_ value: BrokerJSON) -> Data? {
+    func encode(_ item: BrokerJSON) -> String {
+        switch item {
+        case .null: return "null"
+        case .bool(let flag): return flag ? "true" : "false"
+        case .unsigned(let integer): return String(integer)
+        case .string(let string): return brokerJSONString(string)
+        case .array(let array): return "[" + array.map(encode).joined(separator: ",") + "]"
+        case .object(let object):
+            let keys = object.keys.sorted {
+                Array($0.utf8).lexicographicallyPrecedes(Array($1.utf8))
+            }
+            return "{" + keys.map { brokerJSONString($0) + ":" + encode(object[$0]!) }
+                .joined(separator: ",") + "}"
+        }
+    }
+    return encode(value).data(using: .utf8)
+}
+
+private func parseCanonicalBrokerObject(_ payload: Data) -> [String: BrokerJSON]? {
+    guard let raw = try? JSONSerialization.jsonObject(with: payload, options: [.fragmentsAllowed]),
+          let converted = brokerJSON(from: raw),
+          case .object(let object) = converted,
+          canonicalBrokerJSON(converted) == payload else { return nil }
+    return object
+}
+
+private func brokerFrame(_ object: [String: BrokerJSON]) -> Data? {
+    guard let payload = canonicalBrokerJSON(.object(object)),
+          payload.count <= brokerFrameLimit else { return nil }
     var frame = Data()
     var length = UInt32(payload.count).bigEndian
     frame.append(Data(bytes: &length, count: MemoryLayout<UInt32>.size))
@@ -2038,37 +2567,332 @@ private func brokerFrame(_ object: [String: Any]) -> Data? {
     return frame
 }
 
-private func readBrokerFrame(_ handle: FileHandle) -> [String: Any]? {
-    guard let prefix = try? handle.read(upToCount: 4), prefix.count == 4 else { return nil }
-    let prefixBytes = [UInt8](prefix)
-    let length = (UInt32(prefixBytes[0]) << 24)
-        | (UInt32(prefixBytes[1]) << 16)
-        | (UInt32(prefixBytes[2]) << 8)
-        | UInt32(prefixBytes[3])
-    guard length <= 16 * 1024,
-          let payload = try? handle.read(upToCount: Int(length)),
-          payload.count == Int(length),
-          let object = try? JSONSerialization.jsonObject(with: payload),
-          let dictionary = object as? [String: Any] else { return nil }
-    return dictionary
+private func monotonicNanoseconds() -> UInt64? {
+    var value = timespec()
+    guard clock_gettime(CLOCK_MONOTONIC, &value) == 0,
+          value.tv_sec >= 0, value.tv_nsec >= 0 else { return nil }
+    let seconds = UInt64(value.tv_sec)
+    let nanos = UInt64(value.tv_nsec)
+    guard seconds <= (UInt64.max - nanos) / 1_000_000_000 else { return nil }
+    return seconds * 1_000_000_000 + nanos
 }
 
-private func writeBrokerFrame(_ handle: FileHandle, _ object: [String: Any]) -> Bool {
-    guard let frame = brokerFrame(object) else { return false }
-    do {
-        try handle.write(contentsOf: frame)
-        return true
-    } catch {
-        return false
+private func brokerPoll(_ descriptor: Int32, events: Int16, deadline: UInt64) -> Bool {
+    while true {
+        guard let now = monotonicNanoseconds(), now < deadline else { return false }
+        let remaining = deadline - now
+        let milliseconds = Int32(min((remaining + 999_999) / 1_000_000, UInt64(Int32.max)))
+        var item = pollfd(fd: descriptor, events: events, revents: 0)
+        let result = poll(&item, 1, milliseconds)
+        if result > 0 { return (item.revents & events) != 0 }
+        if result == 0 { return false }
+        if errno != EINTR { return false }
     }
 }
 
+private enum BrokerReadResult {
+    case pending
+    case frame([String: BrokerJSON])
+    case eof
+    case invalid
+    case deadline
+}
+
+// One bounded, nonblocking step; retain partial frames across control-loop ticks.
+// A terminal read error is sticky so trailing data cannot revive a failed channel.
+private final class IncrementalBrokerReader {
+    private var bytes = Data()
+    private var payloadLength: Int?
+    private var terminal: BrokerReadResult?
+    var hasPartialFrame: Bool { !bytes.isEmpty }
+
+    func step(_ descriptor: Int32, deadline: UInt64) -> BrokerReadResult {
+        if let terminal { return terminal }
+        func fail(_ result: BrokerReadResult) -> BrokerReadResult {
+            terminal = result
+            bytes.removeAll(keepingCapacity: false)
+            return result
+        }
+        for attempt in 0...8 {
+            guard let now = monotonicNanoseconds(), now < deadline else { return fail(.deadline) }
+            if payloadLength == nil && bytes.count == 4 {
+                let length = bytes.reduce(UInt32(0)) { ($0 << 8) | UInt32($1) }
+                guard length > 0, length <= brokerFrameLimit else { return fail(.invalid) }
+                payloadLength = Int(length)
+            }
+            let target = payloadLength.map { $0 + 4 } ?? 4
+            if bytes.count == target, payloadLength != nil {
+                guard let object = parseCanonicalBrokerObject(Data(bytes.dropFirst(4))) else {
+                    return fail(.invalid)
+                }
+                bytes.removeAll(keepingCapacity: false)
+                payloadLength = nil
+                return .frame(object)
+            }
+            // Decode bytes received on the final attempt before yielding; a
+            // blocking wrapper must not poll for bytes already fully buffered.
+            if attempt == 8 { return .pending }
+            var buffer = [UInt8](repeating: 0, count: min(4_096, target - bytes.count))
+            let count = buffer.withUnsafeMutableBytes {
+                recv(descriptor, $0.baseAddress, $0.count, MSG_DONTWAIT)
+            }
+            if count > 0 {
+                bytes.append(contentsOf: buffer.prefix(count))
+            } else if count == 0 {
+                return fail(bytes.isEmpty ? .eof : .invalid)
+            } else if errno == EAGAIN || errno == EWOULDBLOCK {
+                return .pending
+            } else if errno != EINTR {
+                return fail(.invalid)
+            }
+        }
+        return .pending
+    }
+}
+
+// Borrowed authenticated owner connection, valid only while its command runs.
+// Construct only after START authorization and STARTED cursor consumption.
+// This does not authenticate a fresh socket or grant operation authority.
+private final class BrokerRunningControl {
+    private let descriptor: Int32
+    private let workflowID: String
+    private let generation: UInt64
+    private let nonce: String
+    private let commandSHA256: String
+    private var nextIncoming: UInt64?
+    private var nextOutgoing: UInt64?
+    private let reader = IncrementalBrokerReader()
+    private var partialDeadline: UInt64?
+    private var output = Data()
+    private var outputOffset = 0
+    private var outputDeadline: UInt64 = 0
+    private var terminal: NativePumpControl?
+    private(set) var errorCode: String?
+
+    init(descriptor: Int32, workflowID: String, generation: UInt64, nonce: String,
+         commandSHA256: String, nextIncoming: UInt64, nextOutgoing: UInt64) {
+        self.descriptor = descriptor; self.workflowID = workflowID
+        self.generation = generation; self.nonce = nonce; self.commandSHA256 = commandSHA256
+        self.nextIncoming = nextIncoming; self.nextOutgoing = nextOutgoing
+        // Darwin send(MSG_DONTWAIT) alone can wait on a full stream socket.
+        // Enforce the descriptor invariant, retaining all unrelated flags.
+        let flags = fcntl(descriptor, F_GETFL)
+        if flags < 0 || fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) != 0 {
+            errorCode = "CHANNEL_LOST"
+            terminal = .ownerLost
+        }
+    }
+
+    private func fail(_ code: String) -> NativePumpControl {
+        errorCode = code
+        terminal = .ownerLost
+        return .ownerLost
+    }
+
+    private func flush(deadline: UInt64) -> Bool {
+        guard !output.isEmpty else { return true }
+        guard let now = monotonicNanoseconds(), now < min(deadline, outputDeadline) else {
+            _ = fail("DEADLINE_EXPIRED"); return false
+        }
+        let count = output.withUnsafeBytes {
+            send(descriptor, $0.baseAddress!.advanced(by: outputOffset), $0.count - outputOffset, MSG_DONTWAIT)
+        }
+        if count > 0 {
+            outputOffset += count
+            if outputOffset == output.count { output.removeAll(); outputOffset = 0; return true }
+        } else if count == 0 || (errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK) {
+            _ = fail("CHANNEL_LOST")
+        }
+        return false
+    }
+
+    func step(deadline: UInt64) -> NativePumpControl {
+        if let terminal { return terminal }
+        guard flush(deadline: deadline) else { return terminal ?? .keepGoing }
+        guard let now = monotonicNanoseconds(), now < deadline,
+              now <= UInt64.max - brokerIOBudgetNS else { return fail("DEADLINE_EXPIRED") }
+        switch reader.step(descriptor, deadline: min(deadline, partialDeadline ?? deadline)) {
+        case .pending:
+            if reader.hasPartialFrame && partialDeadline == nil {
+                partialDeadline = min(deadline, now + brokerIOBudgetNS)
+            }
+            return .keepGoing
+        case .eof: return fail("CHANNEL_LOST")
+        case .invalid: return fail("INVALID_FRAME")
+        case .deadline: return fail("DEADLINE_EXPIRED")
+        case .frame(let frame):
+            partialDeadline = nil
+            guard Set(frame.keys) == ["version", "type", "workflow_id", "generation", "connection_nonce", "cursor", "payload"],
+                  brokerUInt(frame["version"]) == 1,
+                  let type = brokerString(frame["type"]),
+                  case .object(let payload)? = frame["payload"] else { return fail("INVALID_FRAME") }
+            guard brokerString(frame["workflow_id"]) == workflowID,
+                  brokerUInt(frame["generation"]) == generation else { return fail("STALE_GENERATION") }
+            guard brokerString(frame["connection_nonce"]) == nonce else { return fail("AUTH_FAILED") }
+            guard let expected = nextIncoming, brokerUInt(frame["cursor"]) == expected else { return fail("REPLAY") }
+            // Consume before any control action or response is made observable.
+            nextIncoming = expected == UInt64.max ? nil : expected + 1
+            if type == "CANCEL" {
+                guard Set(payload.keys) == ["command_sha256", "reason"],
+                      let reason = brokerString(payload["reason"]),
+                      ["CLIENT_CANCELLED", "SHUTDOWN_REQUESTED"].contains(reason) else { return fail("INVALID_FRAME") }
+                guard brokerDigest(payload["command_sha256"]) == commandSHA256 else { return fail("AUTH_FAILED") }
+                terminal = .cancel
+                return .cancel
+            }
+            guard type == "STATUS" else { return fail("INVALID_STATE") }
+            guard payload.isEmpty else { return fail("INVALID_FRAME") }
+            guard let outgoing = nextOutgoing else { return fail("REPLAY") }
+            let reply: [String: BrokerJSON] = ["version": .unsigned(1), "type": .string("STATUS"),
+                "workflow_id": .string(workflowID), "generation": .unsigned(generation),
+                "connection_nonce": .string(nonce), "cursor": .unsigned(outgoing),
+                "payload": .object(["phase": .string("running"), "command_sha256": .string(commandSHA256),
+                    "result_sha256": .null, "closed_ready_sha256": .null,
+                    "child_reaped": .bool(false), "group_absent": .bool(false)])]
+            guard let encoded = brokerFrame(reply) else { return fail("INVALID_FRAME") }
+            nextOutgoing = outgoing == UInt64.max ? nil : outgoing + 1
+            output = encoded
+            outputDeadline = min(deadline, now + brokerIOBudgetNS)
+            _ = flush(deadline: deadline)
+            return terminal ?? .keepGoing
+        }
+    }
+}
+
+private func readBrokerBytes(
+    _ descriptor: Int32, count: Int, deadline: UInt64, allowInitialEOF: Bool
+) -> (Data?, Bool) {
+    var output = Data()
+    while output.count < count {
+        guard brokerPoll(descriptor, events: Int16(POLLIN), deadline: deadline) else {
+            return (nil, false)
+        }
+        var buffer = [UInt8](repeating: 0, count: count - output.count)
+        let received = buffer.withUnsafeMutableBytes {
+            Darwin.read(descriptor, $0.baseAddress, $0.count)
+        }
+        if received > 0 {
+            output.append(contentsOf: buffer.prefix(received))
+        } else if received == 0 {
+            return (allowInitialEOF && output.isEmpty ? Data() : nil, true)
+        } else if errno != EINTR {
+            return (nil, true)
+        }
+    }
+    return (output, true)
+}
+
+private func readBrokerFrame(_ descriptor: Int32, deadline: UInt64) -> BrokerReadResult {
+    let reader = IncrementalBrokerReader()
+    while true {
+        let result = reader.step(descriptor, deadline: deadline)
+        if case .pending = result {
+            guard brokerPoll(descriptor, events: Int16(POLLIN), deadline: deadline) else { return .deadline }
+        } else { return result }
+    }
+}
+
+private func writeBrokerFrame(_ descriptor: Int32, _ object: [String: BrokerJSON], deadline: UInt64) -> Bool {
+    guard let frame = brokerFrame(object) else { return false }
+    var offset = 0
+    return frame.withUnsafeBytes { raw in
+        while offset < raw.count {
+            guard brokerPoll(descriptor, events: Int16(POLLOUT), deadline: deadline) else {
+                return false
+            }
+            let written = Darwin.write(descriptor, raw.baseAddress!.advanced(by: offset), raw.count - offset)
+            if written > 0 { offset += written }
+            else if written < 0, errno == EINTR { continue }
+            else { return false }
+        }
+        return true
+    }
+}
+
+@_silgen_name("_NSGetEnviron")
+private func cortexNSGetEnviron()
+    -> UnsafeMutablePointer<UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?>
+
+private func originalBrokerEnvironment() -> [String: String]? {
+    var argumentMaximum: Int32 = 0
+    var maximumSize = MemoryLayout<Int32>.size
+    var maximumMib = [Int32(CTL_KERN), Int32(KERN_ARGMAX)]
+    let maximumResult = maximumMib.withUnsafeMutableBufferPointer {
+        sysctl($0.baseAddress, 2, &argumentMaximum, &maximumSize, nil, 0)
+    }
+    guard maximumResult == 0, argumentMaximum > 0 else { return nil }
+    var bytes = [UInt8](repeating: 0, count: Int(argumentMaximum))
+    var actualSize = bytes.count
+    var argumentsMib = [Int32(CTL_KERN), Int32(KERN_PROCARGS2), getpid()]
+    let argumentsResult = argumentsMib.withUnsafeMutableBufferPointer { mib in
+        bytes.withUnsafeMutableBytes {
+            sysctl(mib.baseAddress, 3, $0.baseAddress, &actualSize, nil, 0)
+        }
+    }
+    guard argumentsResult == 0, actualSize >= MemoryLayout<Int32>.size else { return nil }
+    let argumentCount = bytes.withUnsafeBytes { $0.load(as: Int32.self) }
+    guard argumentCount > 0 else { return nil }
+    var index = MemoryLayout<Int32>.size
+
+    func skipCString() -> Bool {
+        guard index < actualSize else { return false }
+        while index < actualSize, bytes[index] != 0 { index += 1 }
+        guard index < actualSize else { return false }
+        index += 1
+        return true
+    }
+
+    guard skipCString() else { return nil }
+    while index < actualSize, bytes[index] == 0 { index += 1 }
+    for _ in 0..<argumentCount {
+        guard skipCString() else { return nil }
+    }
+    var environment = [String: String]()
+    while index < actualSize, bytes[index] != 0 {
+        let start = index
+        guard skipCString(),
+              let entry = String(bytes: bytes[start..<(index - 1)], encoding: .utf8),
+              let separator = entry.firstIndex(of: "=") else { return nil }
+        let key = String(entry[..<separator])
+        let value = String(entry[entry.index(after: separator)...])
+        guard !key.isEmpty, environment[key] == nil else { return nil }
+        environment[key] = value
+    }
+    return environment
+}
+
+private func currentBrokerEnvironment() -> [String: String]? {
+    guard let environmentPointer = cortexNSGetEnviron().pointee else { return nil }
+    var environment = [String: String]()
+    var index = 0
+    while let entryPointer = environmentPointer[index] {
+        let entry = String(cString: entryPointer)
+        guard let separator = entry.firstIndex(of: "=") else { return nil }
+        let key = String(entry[..<separator])
+        let value = String(entry[entry.index(after: separator)...])
+        guard environment[key] == nil else { return nil }
+        environment[key] = value
+        index += 1
+    }
+    return environment
+}
+
 private func exactBrokerEnvironment() -> Bool {
-    let environment = ProcessInfo.processInfo.environment
-    guard Set(environment.keys) == ["PATH", "LANG", "LC_ALL"] else { return false }
-    return environment["PATH"] == "/usr/bin:/bin:/usr/sbin:/sbin"
-        && environment["LANG"] == "C"
-        && environment["LC_ALL"] == "C"
+    let expected = [
+        "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+        "LANG": "C",
+        "LC_ALL": "C",
+    ]
+    guard originalBrokerEnvironment() == expected,
+          var current = currentBrokerEnvironment() else { return false }
+    let coreFoundationKey = "__CF_USER_TEXT_ENCODING"
+    if let synthesized = current[coreFoundationKey] {
+        let prefix = String(format: "0x%X:0x0:", geteuid())
+        guard [prefix + "0x0", prefix + "0x1"].contains(synthesized),
+              unsetenv(coreFoundationKey) == 0 else { return false }
+        current.removeValue(forKey: coreFoundationKey)
+    }
+    return current == expected
 }
 
 private func parseBrokerArguments(_ arguments: [String]) -> (Int32, Int32, Int32, UUID, UInt64)? {
@@ -2083,47 +2907,462 @@ private func parseBrokerArguments(_ arguments: [String]) -> (Int32, Int32, Int32
           let recoveryFD = Int32(arguments[5]),
           let workflowID = UUID(uuidString: arguments[7]),
           let generation = UInt64(arguments[9]),
-          brokerFD >= 0, capabilityFD >= 0, recoveryFD >= 0 else { return nil }
+          brokerFD >= 0, capabilityFD >= 0, recoveryFD >= 0,
+          brokerFD != capabilityFD, brokerFD != recoveryFD,
+          capabilityFD != recoveryFD else { return nil }
     return (brokerFD, capabilityFD, recoveryFD, workflowID, generation)
+}
+
+private struct BrokerListenerIdentity {
+    let path: String
+    let descriptorDevice: dev_t
+    let descriptorInode: ino_t
+    let pathDevice: dev_t
+    let pathInode: ino_t
+    let uid: uid_t
+    let mode: mode_t
+}
+
+private struct ValidatedBrokerListener {
+    let identity: BrokerListenerIdentity
+    let pendingConnection: Int32?
+}
+
+private func socketIntegerOption(_ descriptor: Int32, level: Int32, option: Int32) -> Int32? {
+    var value: Int32 = 0
+    var length = socklen_t(MemoryLayout<Int32>.size)
+    guard getsockopt(descriptor, level, option, &value, &length) == 0,
+          length == MemoryLayout<Int32>.size else { return nil }
+    return value
+}
+
+private struct UnixSocketAddressObservation {
+    let address: sockaddr_un
+    let length: socklen_t
+}
+
+private let unixSocketAddressHeaderLength = socklen_t(
+    MemoryLayout<UInt8>.size + MemoryLayout<sa_family_t>.size
+)
+
+private func unixSocketAddress(
+    _ descriptor: Int32, peer: Bool
+) -> UnixSocketAddressObservation? {
+    var address = sockaddr_un()
+    var length = socklen_t(MemoryLayout<sockaddr_un>.size)
+    let result = withUnsafeMutablePointer(to: &address) { pointer in
+        pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+            peer ? getpeername(descriptor, $0, &length) : getsockname(descriptor, $0, &length)
+        }
+    }
+    guard result == 0,
+          length >= unixSocketAddressHeaderLength,
+          length <= socklen_t(MemoryLayout<sockaddr_un>.size),
+          address.sun_family == sa_family_t(AF_UNIX),
+          socklen_t(address.sun_len) >= unixSocketAddressHeaderLength,
+          socklen_t(address.sun_len) <= length else { return nil }
+    return UnixSocketAddressObservation(address: address, length: length)
+}
+
+private func unixSocketPath(_ observation: UnixSocketAddressObservation) -> String? {
+    var address = observation.address
+    guard observation.length > unixSocketAddressHeaderLength else { return nil }
+    return withUnsafePointer(to: &address.sun_path) { pointer in
+        pointer.withMemoryRebound(to: CChar.self, capacity: 104) {
+            $0.pointee == 0 ? nil : String(cString: $0)
+        }
+    }
+}
+
+private func unixSocketNameIsEmpty(_ observation: UnixSocketAddressObservation) -> Bool {
+    let nameLength = Int(observation.length - unixSocketAddressHeaderLength)
+    return withUnsafeBytes(of: observation.address.sun_path) {
+        $0.prefix(nameLength).allSatisfy { $0 == 0 }
+    }
+}
+
+private func validateBrokerListener(_ descriptor: Int32) -> ValidatedBrokerListener? {
+    guard socketIntegerOption(descriptor, level: SOL_SOCKET, option: SO_TYPE) == SOCK_STREAM,
+          let address = unixSocketAddress(descriptor, peer: false),
+          let path = unixSocketPath(address), !path.isEmpty else { return nil }
+    let flags = fcntl(descriptor, F_GETFL)
+    guard flags >= 0, fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) == 0 else { return nil }
+    let probe = accept(descriptor, nil, nil)
+    guard probe >= 0 || errno == EAGAIN || errno == EWOULDBLOCK else { return nil }
+    var descriptorStat = stat()
+    var pathStat = stat()
+    guard fstat(descriptor, &descriptorStat) == 0,
+          lstat(path, &pathStat) == 0,
+          (descriptorStat.st_mode & S_IFMT) == S_IFSOCK,
+          (pathStat.st_mode & S_IFMT) == S_IFSOCK,
+          descriptorStat.st_uid == geteuid(),
+          pathStat.st_uid == geteuid(),
+          (pathStat.st_mode & 0o777) == 0o600 else { return nil }
+    let parent = (path as NSString).deletingLastPathComponent
+    var parentStat = stat()
+    guard lstat(parent, &parentStat) == 0,
+          (parentStat.st_mode & S_IFMT) == S_IFDIR,
+          parentStat.st_uid == geteuid(),
+          (parentStat.st_mode & 0o077) == 0 else { return nil }
+    return ValidatedBrokerListener(
+        identity: BrokerListenerIdentity(
+            path: path,
+            descriptorDevice: descriptorStat.st_dev, descriptorInode: descriptorStat.st_ino,
+            pathDevice: pathStat.st_dev, pathInode: pathStat.st_ino,
+            uid: pathStat.st_uid, mode: pathStat.st_mode & 0o777
+        ),
+        pendingConnection: probe >= 0 ? probe : nil
+    )
+}
+
+private func listenerStillMatches(_ descriptor: Int32, _ identity: BrokerListenerIdentity) -> Bool {
+    var descriptorStat = stat()
+    var pathStat = stat()
+    return fstat(descriptor, &descriptorStat) == 0
+        && lstat(identity.path, &pathStat) == 0
+        && descriptorStat.st_dev == identity.descriptorDevice
+        && descriptorStat.st_ino == identity.descriptorInode
+        && pathStat.st_dev == identity.pathDevice
+        && pathStat.st_ino == identity.pathInode
+        && pathStat.st_uid == identity.uid
+        && (pathStat.st_mode & 0o777) == identity.mode
+}
+
+private func validateCapabilitySocket(_ descriptor: Int32) -> Bool {
+    guard socketIntegerOption(descriptor, level: SOL_SOCKET, option: SO_TYPE) == SOCK_STREAM,
+          let local = unixSocketAddress(descriptor, peer: false),
+          let peer = unixSocketAddress(descriptor, peer: true),
+          unixSocketNameIsEmpty(local),
+          unixSocketNameIsEmpty(peer),
+          peerAuditSHA256(descriptor) != nil else { return false }
+    var details = stat()
+    return fstat(descriptor, &details) == 0 && (details.st_mode & S_IFMT) == S_IFSOCK
+}
+
+private func consumeRecoveryRoot(_ descriptor: Int32) -> SecretBuffer? {
+    defer { close(descriptor) }
+    var details = stat()
+    guard fstat(descriptor, &details) == 0,
+          (details.st_mode & S_IFMT) == S_IFIFO,
+          (fcntl(descriptor, F_GETFL) & O_ACCMODE) == O_RDONLY,
+          let now = monotonicNanoseconds(), now <= UInt64.max - brokerIOBudgetNS else { return nil }
+    let deadline = now + brokerIOBudgetNS
+    let root = SecretBuffer(count: 32)
+    var count = 0
+    var accepted = false
+    defer { if !accepted { root.zeroize() } }
+    while count < root.count {
+        guard brokerPoll(descriptor, events: Int16(POLLIN), deadline: deadline) else { return nil }
+        let received = root.withUnsafeMutableBytes {
+            Darwin.read(descriptor, $0.baseAddress!.advanced(by: count), root.count - count)
+        }
+        if received > 0 { count += received }
+        else if received == 0 { return nil }
+        else if errno != EINTR { return nil }
+    }
+    // An exact root requires EOF, not just an available 32-byte prefix. Keep
+    // any surplus byte mutable and erase it; never copy authority into Data.
+    var extra: UInt8 = 0
+    defer { memset_s(&extra, 1, 0, 1) }
+    while brokerPoll(descriptor, events: Int16(POLLIN), deadline: deadline) {
+        let received = Darwin.read(descriptor, &extra, 1)
+        if received == 0 {
+            accepted = true
+            return root
+        }
+        if received > 0 || errno != EINTR { return nil }
+    }
+    return nil
+}
+
+private func acceptBrokerConnection(_ listener: Int32) -> Int32? {
+    guard let now = monotonicNanoseconds(), now <= UInt64.max - brokerIOBudgetNS else { return nil }
+    let deadline = now + brokerIOBudgetNS
+    let flags = fcntl(listener, F_GETFL)
+    guard flags >= 0, fcntl(listener, F_SETFL, flags | O_NONBLOCK) == 0 else { return nil }
+    while brokerPoll(listener, events: Int16(POLLIN), deadline: deadline) {
+        let accepted = accept(listener, nil, nil)
+        if accepted >= 0 { return accepted }
+        if errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK { return nil }
+    }
+    return nil
+}
+
+private func sha256Hex(_ data: Data) -> String {
+    SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+}
+
+private func currentExecutableIdentity() -> [String: BrokerJSON]? {
+    var required: UInt32 = 0
+    _ = _NSGetExecutablePath(nil, &required)
+    guard required > 0 else { return nil }
+    var buffer = [CChar](repeating: 0, count: Int(required))
+    guard _NSGetExecutablePath(&buffer, &required) == 0 else { return nil }
+    let path = String(cString: buffer)
+    let descriptor = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW)
+    guard descriptor >= 0 else { return nil }
+    defer { close(descriptor) }
+    var details = stat()
+    guard fstat(descriptor, &details) == 0, (details.st_mode & S_IFMT) == S_IFREG else { return nil }
+    var hasher = SHA256()
+    var chunk = [UInt8](repeating: 0, count: 1024 * 1024)
+    while true {
+        let count = chunk.withUnsafeMutableBytes { Darwin.read(descriptor, $0.baseAddress, $0.count) }
+        if count > 0 { hasher.update(data: Data(chunk.prefix(count))) }
+        else if count == 0 { break }
+        else if errno != EINTR { return nil }
+    }
+    let digest = hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    return [
+        "broker_dev_u32": .unsigned(UInt64(UInt32(bitPattern: Int32(details.st_dev)))),
+        "broker_ino": .unsigned(UInt64(details.st_ino)),
+        "broker_uid": .unsigned(UInt64(details.st_uid)),
+        "broker_mode": .unsigned(UInt64(details.st_mode & 0o777)),
+        "broker_sha256": .string(digest),
+    ]
+}
+
+private func currentBootIdentity() -> (UInt64, UInt64)? {
+    var boot = timeval()
+    var size = MemoryLayout<timeval>.size
+    guard sysctlbyname("kern.boottime", &boot, &size, nil, 0) == 0,
+          size == MemoryLayout<timeval>.size,
+          boot.tv_sec > 0, boot.tv_usec >= 0, boot.tv_usec < 1_000_000 else { return nil }
+    return (UInt64(boot.tv_sec), UInt64(boot.tv_usec))
+}
+
+private func connectionNonce() -> String? {
+    var bytes = [UInt8](repeating: 0, count: 32)
+    guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess,
+          bytes.contains(where: { $0 != 0 }) else { return nil }
+    return bytes.map { String(format: "%02x", $0) }.joined()
+}
+
+private func peerAuditSHA256(_ descriptor: Int32) -> String? {
+    var token = audit_token_t()
+    var length = socklen_t(MemoryLayout<audit_token_t>.size)
+    guard getsockopt(descriptor, SOL_LOCAL, LOCAL_PEERTOKEN, &token, &length) == 0,
+          length == MemoryLayout<audit_token_t>.size else { return nil }
+    let words: [UInt32] = withUnsafeBytes(of: token) { raw in
+        Array(raw.bindMemory(to: UInt32.self))
+    }
+    guard words.count == 8, words[1] == UInt32(geteuid()) else { return nil }
+    let projection: BrokerJSON = .object([
+        "pid": .unsigned(UInt64(words[5])),
+        "effective_uid": .unsigned(UInt64(words[1])),
+        "effective_gid": .unsigned(UInt64(words[2])),
+        "audit_session_id": .unsigned(UInt64(words[6])),
+        "pid_version": .unsigned(UInt64(words[7])),
+    ])
+    guard let canonical = canonicalBrokerJSON(projection) else { return nil }
+    return sha256Hex(canonical)
+}
+
+private func brokerString(_ value: BrokerJSON?) -> String? {
+    guard case .string(let string)? = value else { return nil }
+    return string
+}
+
+private func brokerUInt(_ value: BrokerJSON?) -> UInt64? {
+    guard case .unsigned(let integer)? = value else { return nil }
+    return integer
+}
+
+private struct AuthorizedBrokerStart {
+    let recordSHA256: String
+    let requestSHA256: String
+    let request: [String: BrokerJSON]
+    let effectBudgetNS: UInt64
+    let cleanupBudgetNS: UInt64
+}
+
+// Structural public protocol validation, distinct from legacy helper arguments.
+// Retained no-follow filesystem and operation preconditions are still required
+// before any effect; this parser alone confers no execution authority.
+private func validatedBrokerPublicRequest(_ request: [String: BrokerJSON]) -> HelperRequest? {
+    guard Set(request.keys) == ["schema_version", "operation", "image_path", "mount_path",
+        "volume_name", "size", "transaction_id", "expected_encryption_uuid", "disposable", "cleanup_approved"],
+          brokerUInt(request["schema_version"]) == 1,
+          let rawOperation = brokerString(request["operation"]),
+          let operation = Operation(rawValue: rawOperation),
+          let image = brokerString(request["image_path"]), isLexicallySafeAbsolutePath(image),
+          let transaction = brokerString(request["transaction_id"]),
+          let uuid = UUID(uuidString: transaction), uuid.uuidString.lowercased() == transaction,
+          case .bool(let disposable)? = request["disposable"],
+          case .bool(let cleanup)? = request["cleanup_approved"] else { return nil }
+    func optionalString(_ key: String) -> Bool {
+        if case .null? = request[key] { return true }
+        return brokerString(request[key]) != nil
+    }
+    guard ["mount_path", "volume_name", "size", "expected_encryption_uuid"].allSatisfy(optionalString) else { return nil }
+    let mount = brokerString(request["mount_path"])
+    let volume = brokerString(request["volume_name"])
+    let size = brokerString(request["size"])
+    let encryption = brokerString(request["expected_encryption_uuid"])
+    if let mount, !isLexicallySafeAbsolutePath(mount) { return nil }
+    if let encryption {
+        guard let value = UUID(uuidString: encryption), value.uuidString.lowercased() == encryption else { return nil }
+    }
+    switch operation {
+    case .create:
+        guard encryption == nil, mount == nil,
+              size == (disposable ? "64m" : "256g"),
+              volume == (disposable ? "CORTEX_BRIDGE_SPIKE" : "CORTEX_BRIDGE_2026_09") else { return nil }
+    case .mount, .detach:
+        guard encryption != nil, mount != nil, size == nil, volume == nil else { return nil }
+    case .inspectItem, .deleteDisposableItem:
+        guard encryption != nil, mount == nil, size == nil, volume == nil else { return nil }
+        if operation == .deleteDisposableItem && !(disposable && cleanup) { return nil }
+    }
+    return HelperRequest(schema_version: 1, operation: operation, image_path: image,
+        mount_path: mount, volume_name: volume, size: size, transaction_id: uuid,
+        expected_encryption_uuid: encryption, disposable: disposable, cleanup_approved: cleanup)
+}
+
+private func brokerDigest(_ value: BrokerJSON?) -> String? {
+    guard let text = brokerString(value), text.utf8.count == 64,
+          text.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else { return nil }
+    return text
+}
+
+// Only the inherited private endpoint can carry this authority. This function
+// validates START binding, not the operation's semantic/pre-effect conditions.
+private func consumeStartGrant(
+    _ descriptor: Int32, start: [String: BrokerJSON], workflowID: String,
+    generation: UInt64, nonce: String, peerAudit: String, boot: (UInt64, UInt64)
+) -> AuthorizedBrokerStart? {
+    defer { close(descriptor) }
+    let flags = fcntl(descriptor, F_GETFL)
+    guard flags >= 0, fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) == 0,
+          let now = monotonicNanoseconds(), now <= UInt64.max - brokerIOBudgetNS else { return nil }
+    let deadline = now + brokerIOBudgetNS
+    guard case .frame(let grant) = readBrokerFrame(descriptor, deadline: deadline) else { return nil }
+    // The producer publishes exactly one frame and closes. Reject trailing data
+    // rather than leaving a second authorization available to a later reader.
+    let (trailing, ready) = readBrokerBytes(descriptor, count: 1, deadline: deadline, allowInitialEOF: true)
+    guard ready, let trailing, trailing.isEmpty,
+          Set(grant.keys) == ["version", "type", "workflow_id", "generation",
+              "record_sha256", "request_sha256", "operation", "effect_budget_ns",
+              "cleanup_budget_ns", "boot_seconds", "boot_microseconds",
+              "connection_nonce", "peer_audit_sha256"],
+          brokerUInt(grant["version"]) == 1, brokerString(grant["type"]) == "START_GRANT",
+          brokerString(grant["workflow_id"]) == workflowID,
+          brokerUInt(grant["generation"]) == generation,
+          brokerString(grant["connection_nonce"]) == nonce,
+          brokerString(grant["peer_audit_sha256"]) == peerAudit,
+          brokerUInt(grant["boot_seconds"]) == boot.0,
+          brokerUInt(grant["boot_microseconds"]) == boot.1,
+          let recordHash = brokerDigest(grant["record_sha256"]),
+          let requestHash = brokerDigest(grant["request_sha256"]),
+          let operation = brokerString(grant["operation"]),
+          ["create", "mount", "detach", "inspect-item", "delete-disposable-item",
+           "probe-mounted-image"].contains(operation),
+          let effect = brokerUInt(grant["effect_budget_ns"]), effect > 0, effect <= 40_000_000_000,
+          let cleanup = brokerUInt(grant["cleanup_budget_ns"]), cleanup > 0, cleanup <= 12_000_000_000,
+          case .object(let payload)? = start["payload"],
+          Set(payload.keys) == ["request", "request_sha256", "effect_budget_ns", "cleanup_budget_ns"],
+          brokerString(payload["request_sha256"]) == requestHash,
+          brokerUInt(payload["effect_budget_ns"]) == effect,
+          brokerUInt(payload["cleanup_budget_ns"]) == cleanup,
+          case .object(let request)? = payload["request"],
+          brokerString(request["operation"]) == operation,
+          let canonicalRequest = canonicalBrokerJSON(.object(request)) else { return nil }
+    var projection = Data("CORTEX-S3\0REQUEST\0V1\0".utf8)
+    projection.append(canonicalRequest)
+    guard sha256Hex(projection) == requestHash else { return nil }
+    return AuthorizedBrokerStart(recordSHA256: recordHash, requestSHA256: requestHash,
+        request: request, effectBudgetNS: effect, cleanupBudgetNS: cleanup)
+}
+
+private func protocolErrorCode(
+    _ object: [String: BrokerJSON], workflowID: String, generation: UInt64, nonce: String
+) -> String {
+    guard Set(object.keys) == [
+        "version", "type", "workflow_id", "generation", "connection_nonce", "cursor", "payload"
+    ], brokerUInt(object["version"]) == 1,
+       case .object? = object["payload"] else { return "INVALID_FRAME" }
+    guard brokerString(object["workflow_id"]) == workflowID,
+          brokerUInt(object["generation"]) == generation else { return "STALE_GENERATION" }
+    guard brokerString(object["connection_nonce"]) == nonce else { return "AUTH_FAILED" }
+    guard brokerUInt(object["cursor"]) == 0 else { return "REPLAY" }
+    guard let rawType = brokerString(object["type"]),
+          let type = BrokerMessageType(rawValue: rawType) else { return "INVALID_FRAME" }
+    switch type {
+    case .start, .recover, .cancel, .status, .close, .commitAck, .lateClose,
+         .reconcileProbe, .reconciliationAck:
+        return "AUTH_FAILED"
+    case .hello, .recovered, .started, .result, .closedReady, .committed,
+         .reconciliationResult, .finalized, .protocolError:
+        return "INVALID_STATE"
+    }
 }
 
 private func runPersistentBroker(arguments: [String]) -> Int32? {
     guard arguments.first == "--broker-fd" else { return nil }
-    guard let parsed = parseBrokerArguments(arguments), exactBrokerEnvironment() else { return 64 }
+    guard exactBrokerEnvironment(), let parsed = parseBrokerArguments(arguments) else { return 64 }
     signal(SIGPIPE, SIG_IGN)
+    guard validateCapabilitySocket(parsed.1),
+          let recoveryRoot = consumeRecoveryRoot(parsed.2) else { return 64 }
+    defer { recoveryRoot.zeroize() }
+    guard
+          let validatedListener = validateBrokerListener(parsed.0) else { return 64 }
     var noSigPipe: Int32 = 1
     _ = setsockopt(parsed.0, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
-    let handle = FileHandle(fileDescriptor: parsed.0, closeOnDealloc: false)
-    let hello: [String: Any] = [
-        "type": BrokerMessageType.hello.rawValue,
-        "schema_version": 1,
-        "workflow_id": parsed.3.uuidString.lowercased(),
-        "generation": parsed.4,
-        "boot_seconds": UInt64(0),
-        "boot_microseconds": UInt64(0),
-        "broker_pid": UInt64(getpid()),
+    guard let connection = validatedListener.pendingConnection ?? acceptBrokerConnection(parsed.0),
+          listenerStillMatches(parsed.0, validatedListener.identity) else { return 70 }
+    defer { close(connection) }
+    _ = setsockopt(connection, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
+    let connectionFlags = fcntl(connection, F_GETFL)
+    guard connectionFlags >= 0,
+          fcntl(connection, F_SETFL, connectionFlags | O_NONBLOCK) == 0,
+          let nonce = connectionNonce(),
+          let boot = currentBootIdentity(),
+          let peerAudit = peerAuditSHA256(connection),
+          var payload = currentExecutableIdentity(),
+          let writeStart = monotonicNanoseconds(), writeStart <= UInt64.max - brokerIOBudgetNS else { return 70 }
+    payload["boot_seconds"] = .unsigned(boot.0)
+    payload["boot_microseconds"] = .unsigned(boot.1)
+    payload["peer_audit_sha256"] = .string(peerAudit)
+    let workflowID = parsed.3.uuidString.lowercased()
+    let hello: [String: BrokerJSON] = [
+        "version": .unsigned(1),
+        "type": .string(BrokerMessageType.hello.rawValue),
+        "workflow_id": .string(workflowID),
+        "generation": .unsigned(parsed.4),
+        "connection_nonce": .string(nonce),
+        "cursor": .unsigned(0),
+        "payload": .object(payload),
     ]
-    guard writeBrokerFrame(handle, hello) else { return 70 }
-    while let message = readBrokerFrame(handle) {
-        guard let rawType = message["type"] as? String,
-              let type = BrokerMessageType(rawValue: rawType) else {
-            _ = writeBrokerFrame(handle, ["type": BrokerMessageType.protocolError.rawValue, "code": "INVALID_FRAME"])
-            return 64
+    guard writeBrokerFrame(connection, hello, deadline: writeStart + brokerIOBudgetNS),
+          let readStart = monotonicNanoseconds(), readStart <= UInt64.max - brokerIOBudgetNS else { return 70 }
+    switch readBrokerFrame(connection, deadline: readStart + brokerIOBudgetNS) {
+    case .eof:
+        return 0
+    case .pending, .invalid, .deadline:
+        return 64
+    case .frame(let message):
+        var code = protocolErrorCode(message, workflowID: workflowID, generation: parsed.4, nonce: nonce)
+        if code == "AUTH_FAILED", brokerString(message["type"]) == "START",
+           brokerString(message["connection_nonce"]) == nonce,
+           let authorized = consumeStartGrant(parsed.1, start: message, workflowID: workflowID,
+               generation: parsed.4, nonce: nonce, peerAudit: peerAudit, boot: boot) {
+            // Authorization is real; supervised dispatch/terminal commit is not
+            // connected yet. Never report STARTED or fall back to one-shot code.
+            code = validatedBrokerPublicRequest(authorized.request) == nil ? "INVALID_FRAME" : "INVALID_STATE"
         }
-        switch type {
-        case .hello:
-            _ = writeBrokerFrame(handle, ["type": BrokerMessageType.protocolError.rawValue, "code": "INVALID_STATE"])
-        case .start:
-            _ = writeBrokerFrame(handle, ["type": BrokerMessageType.protocolError.rawValue, "code": "AUTH_FAILED"])
-        case .recover, .cancel, .status, .close, .commitAck, .lateClose,
-             .reconcileProbe, .reconciliationAck:
-            _ = writeBrokerFrame(handle, ["type": BrokerMessageType.protocolError.rawValue, "code": "AUTH_FAILED"])
-        case .recovered, .started, .result, .closedReady, .committed,
-             .reconciliationResult, .finalized, .protocolError:
-            _ = writeBrokerFrame(handle, ["type": BrokerMessageType.protocolError.rawValue, "code": "INVALID_STATE"])
-        }
+        guard let errorStart = monotonicNanoseconds(), errorStart <= UInt64.max - brokerIOBudgetNS else { return 64 }
+        let response: [String: BrokerJSON] = [
+            "version": .unsigned(1),
+            "type": .string(BrokerMessageType.protocolError.rawValue),
+            "workflow_id": .string(workflowID),
+            "generation": .unsigned(parsed.4),
+            "connection_nonce": .string(nonce),
+            "cursor": .unsigned(1),
+            "payload": .object(["code": .string(code)]),
+        ]
+        _ = writeBrokerFrame(connection, response, deadline: errorStart + brokerIOBudgetNS)
+        return 64
     }
-    return 0
 }
 
 private func runMain() -> Int32 {

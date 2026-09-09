@@ -168,11 +168,26 @@ class ChatCancelIn(BaseModel):
 # Read-only browsing always uses a session outside the bounded writer registry.
 READ_ONLY_SESSION_ID = "cortex-view-read-only"
 SCREENSHOT_SESSION_ID = "cortex-capture-read-only"
+TRANSPORT_SNAPSHOT_BUDGET_SECONDS = 8.0
+SNAPSHOT_ACQUISITION_TIMEOUT = "SNAPSHOT_ACQUISITION_TIMEOUT"
+# Reserve a small local release window inside the one route budget.  This is
+# an engineering allowance for the extension's session-map ACK, not a latency
+# guarantee; selection retains 7.9 seconds of the 8 second acquisition budget.
+SNAPSHOT_CANDIDATE_CLEANUP_RESERVE_SECONDS = 0.1
 ui_transport_factory = create_transport
+
+
+@dataclass
+class _UnpublishedViewCandidate:
+    """Own a reader until it is either released or safely published."""
+
+    transport: Any
+    cleanup_state: str = "owned"
 
 _runs: dict[str, ChatRunRuntime] = {}
 _view_transport: ChatGPTWebTransport | None = None
 _view_url: str | None = None
+_view_cleanup_candidate: _UnpublishedViewCandidate | None = None
 _view_mutex = asyncio.Lock()
 _view_operation_mutex: asyncio.Lock | None = None
 _view_operation_loop: asyncio.AbstractEventLoop | None = None
@@ -186,6 +201,124 @@ def _view_operation_lock() -> asyncio.Lock:
         _view_operation_mutex = asyncio.Lock()
         _view_operation_loop = loop
     return _view_operation_mutex
+
+
+def _snapshot_remaining(deadline: float) -> float:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TransportError(
+            SNAPSHOT_ACQUISITION_TIMEOUT,
+            "conversation snapshot acquisition exceeded its 8 second budget",
+            details={"retryable": True},
+        )
+    return remaining
+
+
+async def _await_snapshot_stage(awaitable, deadline: float):
+    """Await one read-only stage without allowing it to reset the route budget."""
+    try:
+        remaining = _snapshot_remaining(deadline)
+    except BaseException:
+        # A coroutine may have been constructed by a caller immediately before
+        # discovering that the absolute budget elapsed.  Dispose of that
+        # unopened coroutine rather than warning or accidentally running it.
+        dispose = getattr(awaitable, "close", None)
+        if dispose is not None:
+            dispose()
+        raise
+    try:
+        result = await asyncio.wait_for(awaitable, timeout=remaining)
+    except asyncio.TimeoutError as exc:
+        raise TransportError(
+            SNAPSHOT_ACQUISITION_TIMEOUT,
+            "conversation snapshot acquisition exceeded its 8 second budget",
+            details={"retryable": True},
+        ) from exc
+    except TransportError as exc:
+        if time.monotonic() >= deadline:
+            raise TransportError(
+                SNAPSHOT_ACQUISITION_TIMEOUT,
+                "conversation snapshot acquisition exceeded its 8 second budget",
+                details={"retryable": True},
+            ) from exc
+        raise
+    _snapshot_remaining(deadline)
+    return result
+
+
+async def _select_view_conversation(
+    transport: ChatGPTWebTransport,
+    url: str,
+    deadline: float,
+) -> None:
+    if isinstance(transport, ChatGPTWebTransport):
+        if url.rstrip("/") == "https://chatgpt.com":
+            await _await_snapshot_stage(
+                transport.start_new_conversation(url, deadline=deadline),
+                deadline,
+            )
+        else:
+            await _await_snapshot_stage(
+                transport.select_conversation(url, deadline=deadline),
+                deadline,
+            )
+        return
+    if url.rstrip("/") == "https://chatgpt.com":
+        await _await_snapshot_stage(transport.start_new_conversation(url), deadline)
+    else:
+        await _await_snapshot_stage(transport.select_conversation(url), deadline)
+
+
+def _candidate_selection_deadline(deadline: float) -> float:
+    """Keep a small portion of the original deadline for candidate release."""
+    selection_deadline = deadline - SNAPSHOT_CANDIDATE_CLEANUP_RESERVE_SECONDS
+    if selection_deadline <= time.monotonic():
+        _snapshot_remaining(deadline)
+        raise TransportError(
+            SNAPSHOT_ACQUISITION_TIMEOUT,
+            "conversation snapshot acquisition has no time left to release a candidate",
+            details={"retryable": True},
+        )
+    return selection_deadline
+
+
+async def _close_unpublished_view_candidate(
+    candidate: _UnpublishedViewCandidate,
+    deadline: float,
+) -> None:
+    """Release the owned candidate inside the route deadline, or retain it."""
+    candidate.cleanup_state = "closing"
+    try:
+        if isinstance(candidate.transport, ChatGPTWebTransport):
+            await _await_snapshot_stage(
+                candidate.transport.close(deadline=deadline),
+                deadline,
+            )
+        else:
+            await _await_snapshot_stage(candidate.transport.close(), deadline)
+    except BaseException:
+        candidate.cleanup_state = "cleanup_pending"
+        raise
+    candidate.cleanup_state = "closed"
+
+
+async def _reconcile_view_cleanup_candidate(deadline: float) -> None:
+    """Do not create another reader until the prior candidate is confirmed closed."""
+    global _view_cleanup_candidate
+    candidate = _view_cleanup_candidate
+    if candidate is None:
+        return
+    try:
+        await _close_unpublished_view_candidate(candidate, deadline)
+    except asyncio.CancelledError:
+        raise
+    except BaseException as exc:
+        raise TransportError(
+            SNAPSHOT_ACQUISITION_TIMEOUT,
+            "conversation snapshot candidate cleanup pending; retry required",
+            details={"retryable": True, "cleanup_state": candidate.cleanup_state},
+        ) from exc
+    _view_cleanup_candidate = None
 
 
 def _make_transport(session_id: str) -> ChatGPTWebTransport:
@@ -323,9 +456,14 @@ async def _ensure_view_transport(
     url: str,
     *,
     force_recreate: bool = False,
+    deadline: float | None = None,
 ) -> ChatGPTWebTransport:
-    global _view_transport, _view_url
-    async with _view_mutex:
+    global _view_cleanup_candidate, _view_transport, _view_url
+    if deadline is None:
+        deadline = time.monotonic() + TRANSPORT_SNAPSHOT_BUDGET_SECONDS
+    await _await_snapshot_stage(_view_mutex.acquire(), deadline)
+    try:
+        await _reconcile_view_cleanup_candidate(deadline)
         if (
             not force_recreate
             and _view_transport is not None
@@ -333,16 +471,76 @@ async def _ensure_view_transport(
         ):
             return _view_transport
         previous = _view_transport
-        transport = _make_transport(READ_ONLY_SESSION_ID)
-        if url.rstrip("/") == "https://chatgpt.com":
-            await transport.start_new_conversation(url)
-        else:
-            await transport.select_conversation(url)
-        _view_transport = transport
+        selection_deadline = _candidate_selection_deadline(deadline)
+        if previous is not None:
+            # The transport factory may wrap its cached live driver again for
+            # this constant session ID. Release the published generation before
+            # asking the factory for its successor, otherwise closing the old
+            # wrapper can close the newly published reader as well.
+            previous_cleanup = _UnpublishedViewCandidate(
+                previous,
+                cleanup_state="published",
+            )
+            _view_transport = None
+            _view_url = None
+            try:
+                await _close_unpublished_view_candidate(
+                    previous_cleanup,
+                    selection_deadline,
+                )
+            except asyncio.CancelledError:
+                _view_cleanup_candidate = previous_cleanup
+                raise
+            except BaseException as cleanup_error:
+                _view_cleanup_candidate = previous_cleanup
+                raise TransportError(
+                    SNAPSHOT_ACQUISITION_TIMEOUT,
+                    "conversation snapshot candidate cleanup pending; retry required",
+                    details={
+                        "retryable": True,
+                        "cleanup_state": previous_cleanup.cleanup_state,
+                    },
+                ) from cleanup_error
+            _snapshot_remaining(selection_deadline)
+        candidate = _UnpublishedViewCandidate(
+            _make_transport(READ_ONLY_SESSION_ID)
+        )
+        try:
+            await _select_view_conversation(
+                candidate.transport,
+                url,
+                selection_deadline,
+            )
+        except BaseException as selection_error:
+            # A candidate is never published after a failed or cancelled
+            # selection.  If its release cannot be confirmed, retain the one
+            # owner so the next request reconciles it before creating another.
+            try:
+                await _close_unpublished_view_candidate(candidate, deadline)
+            except asyncio.CancelledError:
+                _view_cleanup_candidate = candidate
+                raise
+            except BaseException as cleanup_error:
+                _view_cleanup_candidate = candidate
+                if isinstance(selection_error, asyncio.CancelledError):
+                    raise selection_error
+                raise TransportError(
+                    SNAPSHOT_ACQUISITION_TIMEOUT,
+                    "conversation snapshot candidate cleanup pending; retry required",
+                    details={
+                        "retryable": True,
+                        "cleanup_state": candidate.cleanup_state,
+                    },
+                ) from cleanup_error
+            raise
+        if candidate.cleanup_state != "owned":
+            raise RuntimeError("cannot publish a released view candidate")
+        _view_transport = candidate.transport
         _view_url = url
-        if previous is not None and previous is not transport:
-            await previous.close()
-        return transport
+        candidate.cleanup_state = "published"
+        return candidate.transport
+    finally:
+        _view_mutex.release()
 
 
 async def _run_chat(run: ChatRunRuntime) -> None:
@@ -502,10 +700,17 @@ async def conversation_snapshot(url: str = Query(..., min_length=1), light: int 
     light=1 returns identity/count/streaming only (P0c) — the UI polls this
     cheaply and fetches the full snapshot only when the signature changes."""
     clean_url = _validate_chatgpt_url(url)
+    deadline = time.monotonic() + TRANSPORT_SNAPSHOT_BUDGET_SECONDS
 
     async def read_snapshot(transport: ChatGPTWebTransport) -> dict[str, Any]:
         if light:
-            light_state = await transport._light_state()
+            if isinstance(transport, ChatGPTWebTransport):
+                light_state = await _await_snapshot_stage(
+                    transport._light_state(deadline=deadline),
+                    deadline,
+                )
+            else:
+                light_state = await _await_snapshot_stage(transport._light_state(), deadline)
             return {
                 "url": light_state.get("url", clean_url),
                 "conversation_id": light_state.get("conversation_id"),
@@ -517,9 +722,21 @@ async def conversation_snapshot(url: str = Query(..., min_length=1), light: int 
                 "last_id": light_state.get("last_id"),
                 "light": True,
             }
-        state = await transport.snapshot(
-            verify_lock=clean_url.rstrip("/") != "https://chatgpt.com"
-        )
+        if isinstance(transport, ChatGPTWebTransport):
+            state = await _await_snapshot_stage(
+                transport.snapshot(
+                    verify_lock=clean_url.rstrip("/") != "https://chatgpt.com",
+                    deadline=deadline,
+                ),
+                deadline,
+            )
+        else:
+            state = await _await_snapshot_stage(
+                transport.snapshot(
+                    verify_lock=clean_url.rstrip("/") != "https://chatgpt.com"
+                ),
+                deadline,
+            )
         # Do not expose protocol reconstruction or any browser-level secret.
         return {
             "url": state.get("url", clean_url),
@@ -535,18 +752,25 @@ async def conversation_snapshot(url: str = Query(..., min_length=1), light: int 
         }
 
     try:
-        async with _view_operation_lock():
-            transport = await _ensure_view_transport(clean_url)
+        operation_lock = _view_operation_lock()
+        await _await_snapshot_stage(operation_lock.acquire(), deadline)
+        try:
+            transport = await _ensure_view_transport(clean_url, deadline=deadline)
             try:
                 return await read_snapshot(transport)
             except TransportError as exc:
+                if exc.code == SNAPSHOT_ACQUISITION_TIMEOUT:
+                    raise
                 if exc.code not in {TAB_CLOSED, CONVERSATION_MISMATCH}:
                     raise
                 recovered = await _ensure_view_transport(
                     clean_url,
                     force_recreate=True,
+                    deadline=deadline,
                 )
                 return await read_snapshot(recovered)
+        finally:
+            operation_lock.release()
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"cannot read conversation: {exc}")
 

@@ -2,7 +2,7 @@
 /* eslint-disable react/no-unescaped-entities */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { ChatGPTModelInfo, CortexSettings, OllamaModelInfo, RuntimeTruth } from "@/lib/types";
+import type { ChatGPTModelInfo, CortexSettings, OllamaModelInfo, RuntimeStatus, RuntimeTruth } from "@/lib/types";
 import { formatBytes } from "@/lib/api";
 import { executorDiagnosticsLabel, isAvailableComponentState } from "@/lib/runtimeTruth";
 import { useAccessibleDialog } from "@/hooks/useAccessibleDialog";
@@ -28,6 +28,7 @@ interface SettingsPanelProps {
   settings: CortexSettings;
   ollamaModels: OllamaModelInfo[];
   chatgptModels: ChatGPTModelInfo[];
+  runtime: RuntimeStatus;
   runtimeExecution: RuntimeTruth;
   saving: boolean;
   onClose: () => void;
@@ -36,6 +37,38 @@ interface SettingsPanelProps {
 }
 
 export type SettingsTabId = "general" | "models" | "permissions" | "transport" | "runtime" | "storage" | "diagnostics" | "info";
+
+export interface RuntimePanelState {
+  label: string;
+  tone: "good" | "bad" | "unknown";
+}
+
+export function runtimePanelState(runtime: Partial<RuntimeStatus>): {
+  ollama: RuntimePanelState;
+  storage: RuntimePanelState;
+  storagePath: string;
+} {
+  const ollamaStatus = typeof runtime.ollama_status === "string"
+    ? runtime.ollama_status.trim().toLowerCase()
+    : "";
+  const ollama = runtime.ollama_up === true && ["healthy", "available", "connected"].includes(ollamaStatus)
+    ? { label: `Vérifié : ${runtime.ollama_status}`, tone: "good" as const }
+    : runtime.ollama_up === false && ["unavailable", "missing", "offline", "failed"].includes(ollamaStatus)
+      ? { label: "Indisponible", tone: "bad" as const }
+      : { label: "Non vérifié", tone: "unknown" as const };
+  const storageStatus = typeof runtime.storage_status === "string"
+    ? runtime.storage_status.trim().toLowerCase()
+    : "";
+  const storage = runtime.volume_mounted === true && storageStatus === "ok"
+    ? { label: `Vérifié : ${runtime.storage_status}`, tone: "good" as const }
+    : runtime.volume_mounted === false || ["missing", "unavailable", "failed"].includes(storageStatus)
+      ? { label: "Indisponible", tone: "bad" as const }
+      : { label: "Non vérifié", tone: "unknown" as const };
+  const storagePath = typeof runtime.storage_path === "string" && runtime.storage_path.trim()
+    ? runtime.storage_path
+    : "Chemin non vérifié";
+  return { ollama, storage, storagePath };
+}
 
 const tabs: { id: SettingsTabId; label: string; icon: React.ReactNode }[] = [
   { id: "general", label: "Général", icon: <SettingsIcon /> },
@@ -72,6 +105,7 @@ export function SettingsPanel({
   settings,
   ollamaModels,
   chatgptModels,
+  runtime,
   runtimeExecution,
   saving,
   onClose,
@@ -84,6 +118,11 @@ export function SettingsPanel({
   const [labConfirmation, setLabConfirmation] = useState("");
   const [diagTesting, setDiagTesting] = useState<string | null>(null);
   const [diagResult, setDiagResult] = useState<{ label: string; state: string; detail: string } | null>(null);
+  const [diagnosticExport, setDiagnosticExport] = useState<{
+    state: "pending" | "requested" | "error";
+    detail: string;
+  } | null>(null);
+  const diagnosticExportInFlightRef = useRef(false);
   const [transportOptIn, setTransportOptIn] = useState<boolean | null>(null);
   const [optInBusy, setOptInBusy] = useState(false);
   const dialogRef = useAccessibleDialog<HTMLDivElement>({ open, onClose });
@@ -152,6 +191,7 @@ export function SettingsPanel({
     names.add(settings.primary_executor);
     return Array.from(names).filter(Boolean);
   }, [ollamaModels, settings.primary_executor]);
+  const runtimePanel = runtimePanelState(runtime);
 
   if (!open) return null;
 
@@ -161,6 +201,9 @@ export function SettingsPanel({
   };
 
   const exportDiagnostics = async () => {
+    if (diagnosticExportInFlightRef.current) return;
+    diagnosticExportInFlightRef.current = true;
+    setDiagnosticExport({ state: "pending", detail: "Préparation du rapport de diagnostic…" });
     try {
       const response = await fetch("/api/diagnostics/export");
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -168,12 +211,22 @@ export function SettingsPanel({
       const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
+      const filename = `cortex-diagnostic-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.json`;
       link.href = url;
-      link.download = `cortex-diagnostic-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.json`;
+      link.download = filename;
+      link.hidden = true;
+      document.body.appendChild(link);
       link.click();
-      URL.revokeObjectURL(url);
-    } catch {
-      window.alert("Impossible de générer le rapport de diagnostic. La console est-elle démarrée ?");
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 0);
+      setDiagnosticExport({ state: "requested", detail: `Téléchargement demandé : ${filename}` });
+    } catch (error) {
+      const detail = error instanceof Error && /^HTTP \d+$/.test(error.message)
+        ? `Impossible de demander le téléchargement du rapport de diagnostic (${error.message}).`
+        : "Impossible de demander le téléchargement du rapport de diagnostic. La console est-elle démarrée ?";
+      setDiagnosticExport({ state: "error", detail });
+    } finally {
+      diagnosticExportInFlightRef.current = false;
     }
   };
 
@@ -286,19 +339,19 @@ export function SettingsPanel({
               <div className="settings-section-stack">
                 <div className="settings-section-title"><h3>Runtime local</h3><p>État des services utilisés par Cortex Bridge.</p></div>
                 <div className="settings-runtime-cards">
-                  <div><CpuIcon /><span><strong>Ollama</strong><small>127.0.0.1:11434 · loopback uniquement</small></span><em className="good">healthy</em></div>
-                  <div><BrowserIcon /><span><strong>Extension Chrome</strong><small>127.0.0.1:8420 · jumelage local</small></span><em className="good">à vérifier</em></div>
-                  <div><DatabaseIcon /><span><strong>SQLite</strong><small>missions, décisions, preuves et approbations</small></span><em className="good">ready</em></div>
+                  <div><CpuIcon /><span><strong>Ollama</strong><small>{runtime.endpoint || "Endpoint non vérifié"}</small></span><em className={runtimePanel.ollama.tone}>{runtimePanel.ollama.label}</em></div>
+                  <div><BrowserIcon /><span><strong>Extension Chrome</strong><small>Jumelage local</small></span><em className="unknown">Non vérifié</em></div>
+                  <div><DatabaseIcon /><span><strong>SQLite</strong><small>missions, décisions, preuves et approbations</small></span><em className="unknown">Non vérifié</em></div>
                 </div>
               </div>
             )}
 
             {tab === "storage" && (
               <div className="settings-section-stack">
-                <div className="settings-section-title"><h3>Stockage</h3><p>Modèles, preuves, archives et historique local.</p></div>
-                <div className="storage-path-card"><FolderIcon /><span><strong>Modèles Ollama</strong><small>/tmp/cortex-demo-workspace/models</small></span></div>
-                <div className="storage-path-card"><DatabaseIcon /><span><strong>Base de missions</strong><small>console/data/cortex.db</small></span></div>
-                <div className="storage-path-card"><TrashBlockedIcon /><span><strong>Archives restaurables</strong><small>.cortex-archive/&lt;mission&gt;/&lt;timestamp&gt;</small></span></div>
+                <div className="settings-section-title"><h3>Stockage Ollama</h3><p>Disponibilité du dossier des modèles Ollama. Ce statut ne prouve ni le workspace actif ni le coffre Cortex.</p></div>
+                <div className="storage-path-card"><FolderIcon /><span><strong>Dossier des modèles Ollama</strong><small>{runtimePanel.storagePath}</small></span><em className={runtimePanel.storage.tone}>{runtimePanel.storage.label}</em></div>
+                <div className="storage-path-card"><DatabaseIcon /><span><strong>Base de missions</strong><small>Chemin non vérifié par le statut runtime</small></span><em className="unknown">Non vérifié</em></div>
+                <div className="storage-path-card"><TrashBlockedIcon /><span><strong>Archives restaurables</strong><small>Chemin non vérifié par le statut runtime</small></span><em className="unknown">Non vérifié</em></div>
                 <div className="settings-notice"><ShieldIcon /><span><strong>Repli interdit</strong><small>Si le stockage local est absent, Cortex n'enregistre pas silencieusement les modèles ailleurs.</small></span></div>
               </div>
             )}
@@ -310,8 +363,13 @@ export function SettingsPanel({
                   <button disabled={diagTesting !== null} onClick={() => void runDiagnostic("transport", "WebBridge")}>{diagTesting === "transport" ? "Test…" : "Tester WebBridge"}</button>
                   <button disabled={diagTesting !== null} onClick={() => void runDiagnostic("ollama", "Ollama")}>{diagTesting === "ollama" ? "Test…" : "Tester Ollama"}</button>
                   <button disabled={diagTesting !== null} onClick={() => void runDiagnostic("database", "SQLite")}>{diagTesting === "database" ? "Test…" : "Vérifier SQLite"}</button>
-                  <button onClick={() => void exportDiagnostics()}>Exporter le rapport</button>
+                  <button disabled={diagnosticExport?.state === "pending"} onClick={() => void exportDiagnostics()}>{diagnosticExport?.state === "pending" ? "Exportation…" : "Exporter le rapport"}</button>
                 </div>
+                {diagnosticExport && (
+                  <p role="status" className={`diagnostic-result ${diagnosticExport.state}`}>
+                    {diagnosticExport.detail}
+                  </p>
+                )}
                 {diagResult && (
                   <p className={`diagnostic-result ${diagResult.state}`}>
                     {diagResult.state === "ok" ? "✅" : "❌"} {diagResult.label} — {diagResult.detail}

@@ -27,6 +27,8 @@ class MountFacts:
     filesystem_type: str
     mount_from: str
     mount_on: str
+    # None is explicitly unobserved, never an environment-derived UUID proof.
+    volume_uuid: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,7 +111,9 @@ class WorkspaceHandle:
             if mount_stat.st_dev != workspace_stat.st_dev:
                 raise ValueError("workspace is on a different device")
             facts = fd_probe(mount_dup)
-            if not isinstance(facts, MountFacts) or facts.st_dev_u32 != (mount_stat.st_dev & 0xFFFFFFFF):
+            if (not isinstance(facts, MountFacts)
+                    or facts.st_dev_u32 != (mount_stat.st_dev & 0xFFFFFFFF)
+                    or facts.volume_uuid != apfs_volume_uuid):
                 raise ValueError("mount descriptor identity is invalid")
             identity = WorkspaceIdentity(
                 storage_transaction_id,
@@ -172,6 +176,7 @@ class WorkspaceHandle:
             or not stat.S_ISDIR(workspace_stat.st_mode)
             or current != expected
             or facts.st_dev_u32 != (mount_stat.st_dev & 0xFFFFFFFF)
+            or facts.volume_uuid != self._identity.apfs_volume_uuid
         ):
             raise WorkspaceIdentityChanged("workspace descriptor identity changed")
         return self._identity

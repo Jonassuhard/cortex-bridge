@@ -466,11 +466,16 @@ class ChatGPTWebTransport:
         self._pending_new_chat = False
         self._selection_generation = 0
 
-    async def close(self) -> None:
+    async def close(self, *, deadline: float | None = None) -> None:
         """Release the logical browser page owned by this transport."""
         closer = getattr(self.driver, "close", None)
-        if closer is not None:
-            await closer()
+        if closer is None:
+            return
+        close_with_deadline = getattr(self.driver, "close_with_deadline", None)
+        if deadline is not None and close_with_deadline is not None:
+            await close_with_deadline(deadline)
+            return
+        await closer()
 
     # -- pause/resume (§5: pause safely on any blocker) ------------------------------
 
@@ -558,16 +563,20 @@ class ChatGPTWebTransport:
         url: str,
         *,
         budget: float | None = None,
+        deadline: float | None = None,
         _force_reload: bool = False,
     ) -> ConversationLock:
         """Navigate to a user-chosen conversation and lock the mission to it.
 
         P0: prefer an in-app SPA switch (sidebar link click, no page reload)
         when the driver supports it; fall back to full navigation."""
-        selection_budget = self.selection_budget if budget is None else budget
-        if selection_budget <= 0:
-            raise SelectionTimeoutError("conversation selection budget must be positive")
-        deadline = time.monotonic() + selection_budget
+        if deadline is None:
+            selection_budget = self.selection_budget if budget is None else budget
+            if selection_budget <= 0:
+                raise SelectionTimeoutError("conversation selection budget must be positive")
+            deadline = time.monotonic() + selection_budget
+        else:
+            self._remaining(deadline)
         self._selection_generation += 1
         generation = self._selection_generation
         want = url.rsplit("/c/", 1)[-1] if "/c/" in url else None
@@ -673,11 +682,13 @@ class ChatGPTWebTransport:
         url: str,
         *,
         budget: float | None = None,
+        deadline: float | None = None,
     ) -> ConversationLock:
         """Explicit operator-approved recovery path using full navigation."""
         return await self.select_conversation(
             url,
             budget=self.selection_budget if budget is None else budget,
+            deadline=deadline,
             _force_reload=True,
         )
 
@@ -695,12 +706,15 @@ class ChatGPTWebTransport:
         self.lock = lock
         self._baseline = {m["id"] for m in state.get("messages", []) if m["role"] == "assistant"}
 
-    async def start_new_conversation(self, url: str) -> None:
+    async def start_new_conversation(self, url: str, *, deadline: float | None = None) -> None:
         """§8 brand-new chat case: navigate to a fresh chat surface. The
         /c/<id> identity only exists after the first send; the lock is
         captured by send_message → _capture_new_lock()."""
         try:
-            await self.driver.navigate(url)
+            if deadline is None:
+                await self.driver.navigate(url)
+            else:
+                await self._selection_await(self.driver.navigate(url), deadline)
         except TabClosedError as exc:
             raise TransportError(
                 TAB_CLOSED,
@@ -720,9 +734,9 @@ class ChatGPTWebTransport:
         target = urllib.parse.urlparse(url)
         target_path = target.path.rstrip("/") or "/"
         if target_path != "/":
-            await self.select_conversation(url)
+            await self.select_conversation(url, deadline=deadline)
             return
-        deadline = time.monotonic() + self.selection_budget
+        deadline = deadline if deadline is not None else time.monotonic() + self.selection_budget
         while True:
             state = await self._state(deadline=deadline)
             current = urllib.parse.urlparse(str(state.get("url") or ""))
@@ -778,7 +792,7 @@ class ChatGPTWebTransport:
             DELIVERY_UNCERTAIN, "message sent but no /c/<id> URL appeared — cannot lock"
         )
 
-    async def verify_lock(self) -> None:
+    async def verify_lock(self, *, deadline: float | None = None) -> None:
         """Verify before every message: current conversation == locked one."""
         if self._pending_new_chat:
             return  # identity does not exist yet; captured after first send
@@ -786,7 +800,11 @@ class ChatGPTWebTransport:
             raise TransportError(NO_CONVERSATION, "no conversation selected")
         # Short grace poll: SPA re-renders can briefly report the previous
         # route; a real mismatch (user switched chats) persists.
-        state = await self._await_conversation(self.lock.identity, timeout=8.0)
+        state = await self._await_conversation(
+            self.lock.identity,
+            timeout=8.0,
+            deadline=deadline,
+        )
         if state.get("conversation_id") != self.lock.identity:
             self.pause(CONVERSATION_MISMATCH)
             raise ConversationMismatch(
@@ -1115,15 +1133,20 @@ class ChatGPTWebTransport:
 
     # -- §13 response-completion detection (multi-signal) --------------------------------------
 
-    async def snapshot(self, *, verify_lock: bool = True) -> dict:
+    async def snapshot(
+        self,
+        *,
+        verify_lock: bool = True,
+        deadline: float | None = None,
+    ) -> dict:
         """Return the current sanitized page state for the locked conversation.
 
         This is the read-only surface used by the localhost conversation client.
         It deliberately goes through the same blocker detection as mission traffic.
         """
         if verify_lock and not self._pending_new_chat:
-            await self.verify_lock()
-        return await self._state()
+            await self.verify_lock(deadline=deadline)
+        return await self._state(deadline=deadline)
 
     async def stream_response(self, on_update=None) -> dict:
         """Wait for the next assistant response and optionally mirror visible text.

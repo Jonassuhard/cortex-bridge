@@ -7,7 +7,9 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -28,6 +30,44 @@ LISTENER_PROBE_TIMEOUT_SECONDS = 10
 
 class ListenerProbeError(RuntimeError):
     pass
+
+
+def reconcile_process_effect(ownership):
+    """Observe group/leader absence without sending a terminating signal.
+
+    This never proves task success and never inspects or kills a reused PID.
+    The durable ownership must come from the attested runner, not a request.
+    It covers the owned group, not descendants which escaped that group.
+    """
+    from effect_gate import ReconcileResult
+    unclear = ReconcileResult("outcome_unclear", "PROCESS_OWNERSHIP_UNCLEAR", {})
+    if (sys.platform != "darwin" or type(ownership) is not dict
+            or set(ownership) != {"pid", "pgid", "start_time", "executable", "argv_hash"}
+            or type(ownership["pid"]) is not int or not 0 < ownership["pid"] <= 2147483647
+            or type(ownership["pgid"]) is not int or ownership["pgid"] != ownership["pid"]
+            or type(ownership["start_time"]) is not str
+            or re.fullmatch(r"darwin-proc-bsdinfo-v1:[1-9][0-9]*:[0-9]{6}", ownership["start_time"]) is None
+            or type(ownership["executable"]) is not str or not ownership["executable"].startswith("/")
+            or any(ord(char) < 32 for char in ownership["executable"])
+            or type(ownership["argv_hash"]) is not str
+            or re.fullmatch(r"[0-9a-f]{64}", ownership["argv_hash"]) is None):
+        return unclear
+    try:
+        os.killpg(ownership["pgid"], 0)
+    except ProcessLookupError:
+        pass
+    except OSError:
+        return unclear
+    else:
+        return unclear
+    try:
+        os.kill(ownership["pid"], 0)
+    except ProcessLookupError:
+        return ReconcileResult("failed", "PROCESS_GROUP_GONE",
+                               {"groupAbsent": True, "leaderAbsent": True})
+    except OSError:
+        return unclear
+    return unclear
 
 
 @dataclass(frozen=True)

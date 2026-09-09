@@ -11,12 +11,12 @@ from __future__ import annotations
 import hashlib
 import os
 import stat
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping
 from uuid import UUID, uuid4
 
-from storage_broker import StorageBrokerError, StorageBrokerClient, _StorageBrokerRequest
+from storage_broker import StorageBrokerError, StorageBrokerClient, StorageLocalResponse, _StorageBrokerRequest
 from storage_result import CheckResult, OperationResult
 
 
@@ -109,18 +109,61 @@ class StorageLifecycle:
         self._operation("keychain_spike", lock_set)
         if cleanup_approved is not True:
             return self._fail("keychain_spike", "CLEANUP_NOT_AUTHORIZED")
-        request = _StorageBrokerRequest(
-            1, "create", self.paths.quarantine / f"spike-{uuid4()}.sparsebundle", None,
-            "CORTEX_BRIDGE_SPIKE", "64m", uuid4(), None, True, True,
-        )
+        transaction_id = uuid4()
+        image = self.paths.quarantine / f"spike-{transaction_id}.sparsebundle"
+        encryption_uuid = None
         try:
-            record = self.broker._run_locked(
-                lock_set, request, effect_budget_ns=self.effect_budget_ns,
-                cleanup_budget_ns=self.cleanup_budget_ns,
-            )
+            for operation, expected_count in (("create", 1), ("inspect-item", 1), ("delete-disposable-item", 0)):
+                request = _StorageBrokerRequest(
+                    1, operation, image, None,
+                    "CORTEX_BRIDGE_SPIKE" if operation == "create" else None,
+                    "64m" if operation == "create" else None,
+                    transaction_id, encryption_uuid, True, True,
+                )
+                record = self.broker._run_locked(
+                    lock_set, request, effect_budget_ns=self.effect_budget_ns,
+                    cleanup_budget_ns=self.cleanup_budget_ns,
+                )
+                encryption_uuid = self._confirmed_spike_step(record, request, expected_count)
         except StorageBrokerError as exc:
-            return self._fail("keychain_spike", exc.code)
-        return self._ok("keychain_spike", "SPIKE_PASSED", record.transaction_id)
+            # Preserve the quarantine image and exact transaction on ambiguity;
+            # never infer cleanup or issue a compensating delete to a guessed item.
+            return self._fail("keychain_spike", exc.code, transaction_id)
+        return self._ok("keychain_spike", "SPIKE_PASSED", transaction_id)
+
+    @staticmethod
+    def _confirmed_spike_step(record: Any, request: _StorageBrokerRequest, expected_count: int) -> str:
+        def reject() -> None:
+            raise StorageBrokerError("SPIKE_RESPONSE_UNCONFIRMED")
+        if (getattr(record, "state", None) != "CLOSED_SUCCESS"
+                or getattr(record, "transaction_id", None) != request.transaction_id
+                or getattr(record, "terminal_outcome", None) != "success"
+                or getattr(record, "terminal_code", None) != "OK"
+                or any(getattr(record, field, None) is not True for field in
+                       ("child_reaped", "group_absent", "native_cleanup_proven", "recovery_authority_consumed"))):
+            reject()
+        terminal = getattr(record, "terminal_response", None)
+        if not isinstance(terminal, Mapping) or set(terminal) != {"response_kind", "response"} or terminal["response_kind"] != "local":
+            reject()
+        response = terminal["response"]
+        if isinstance(response, StorageLocalResponse):
+            response = asdict(response)
+        if not isinstance(response, Mapping) or set(response) != {"schema_version", "operation", "code", "encryption_uuid", "device", "item_count"}:
+            reject()
+        if (type(response["schema_version"]) is not int or response["schema_version"] != 1
+                or response["operation"] != request.operation or response["code"] != "OK"
+                or response["device"] is not None or type(response["item_count"]) is not int
+                or response["item_count"] != expected_count):
+            reject()
+        encryption_uuid = response["encryption_uuid"]
+        try:
+            if not isinstance(encryption_uuid, str) or str(UUID(encryption_uuid)) != encryption_uuid:
+                reject()
+        except (ValueError, AttributeError):
+            reject()
+        if request.expected_encryption_uuid is not None and encryption_uuid != request.expected_encryption_uuid:
+            reject()
+        return encryption_uuid
 
     def create_vault_locked(self, lock_set: Any) -> OperationResult:
         self._operation("create_vault", lock_set)

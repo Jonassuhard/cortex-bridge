@@ -9,12 +9,15 @@ receipt as readiness.
 
 from __future__ import annotations
 
+import ctypes
+import errno
 import hashlib
 import json
 import os
 import secrets
 import socket
 import stat
+import sys
 import tempfile
 import time
 from dataclasses import asdict, dataclass
@@ -22,7 +25,7 @@ from pathlib import Path
 from typing import Any, Literal, Mapping
 from uuid import UUID, uuid4
 
-from storage_broker import BootIdentity
+from storage_broker import BootIdentity, _safe_boot_identity
 from storage_result import StorageStatus
 
 
@@ -31,6 +34,25 @@ class StartupLeaseError(RuntimeError):
 
 
 _SHA256 = set("0123456789abcdef")
+_RENAME_EXCL = 0x00000004
+_PROC_PIDTBSDINFO = 3
+
+
+class _ProcBSDInfo(ctypes.Structure):
+    _fields_ = [
+        ("pbi_flags", ctypes.c_uint32), ("pbi_status", ctypes.c_uint32),
+        ("pbi_xstatus", ctypes.c_uint32), ("pbi_pid", ctypes.c_uint32),
+        ("pbi_ppid", ctypes.c_uint32), ("pbi_uid", ctypes.c_uint32),
+        ("pbi_gid", ctypes.c_uint32), ("pbi_ruid", ctypes.c_uint32),
+        ("pbi_rgid", ctypes.c_uint32), ("pbi_svuid", ctypes.c_uint32),
+        ("pbi_svgid", ctypes.c_uint32), ("rfu_1", ctypes.c_uint32),
+        ("pbi_comm", ctypes.c_char * 16), ("pbi_name", ctypes.c_char * 32),
+        ("pbi_nfiles", ctypes.c_uint32), ("pbi_pgid", ctypes.c_uint32),
+        ("pbi_pjobc", ctypes.c_uint32), ("e_tdev", ctypes.c_uint32),
+        ("e_tpgid", ctypes.c_uint32), ("pbi_nice", ctypes.c_int32),
+        ("pbi_start_tvsec", ctypes.c_uint64),
+        ("pbi_start_tvusec", ctypes.c_uint64),
+    ]
 
 
 def _is_sha256(value: object) -> bool:
@@ -50,6 +72,50 @@ class ManagedProcessIdentity:
             raise ValueError("managed process pgid is invalid")
         if type(self.start_time) is not str or not self.start_time or any(ord(ch) < 0x20 for ch in self.start_time):
             raise ValueError("managed process start identity is invalid")
+
+
+def _read_kernel_process_identity(pid: int) -> ManagedProcessIdentity | None:
+    """Read one exact Darwin PID/PGID/creation tuple without a text fallback.
+
+    ``start_time`` is the kernel ``proc_bsdinfo`` timeval encoded as
+    ``darwin-proc-bsdinfo-v1:<seconds>:<microseconds-six-digits>``.  Failure to
+    obtain the complete owner process snapshot is deliberately not recoverable
+    through ``ps lstart`` because that representation loses sub-second identity.
+    """
+    if sys.platform != "darwin" or type(pid) is not int or pid <= 0:
+        return None
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        proc_pidinfo = libc.proc_pidinfo
+        proc_pidinfo.argtypes = [
+            ctypes.c_int, ctypes.c_int, ctypes.c_uint64,
+            ctypes.c_void_p, ctypes.c_int,
+        ]
+        proc_pidinfo.restype = ctypes.c_int
+        info = _ProcBSDInfo()
+        copied = proc_pidinfo(
+            pid, _PROC_PIDTBSDINFO, 0, ctypes.byref(info), ctypes.sizeof(info)
+        )
+    except (AttributeError, OSError, TypeError, ValueError):
+        return None
+    seconds = int(info.pbi_start_tvsec)
+    microseconds = int(info.pbi_start_tvusec)
+    observed_pid = int(info.pbi_pid)
+    observed_pgid = int(info.pbi_pgid)
+    if (
+        copied != ctypes.sizeof(info)
+        or observed_pid != pid
+        or observed_pgid <= 0
+        or int(info.pbi_uid) != os.getuid()
+        or seconds <= 0
+        or not 0 <= microseconds < 1_000_000
+    ):
+        return None
+    return ManagedProcessIdentity(
+        observed_pid,
+        observed_pgid,
+        f"darwin-proc-bsdinfo-v1:{seconds}:{microseconds:06d}",
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -197,10 +263,13 @@ def _send_json(sock: socket.socket, value: Mapping[str, Any]) -> None:
 
 
 def _recv_json(sock: socket.socket, timeout: float) -> dict[str, Any]:
-    sock.settimeout(timeout)
+    deadline = time.monotonic() + timeout
     data = bytearray()
     while len(data) <= 4096:
-        chunk = sock.recv(1024)
+        sock.settimeout(max(0.001, deadline - time.monotonic()))
+        if time.monotonic() >= deadline:
+            raise StartupLeaseError("STARTUP_LEASE_TIMEOUT")
+        chunk = sock.recv(1)  # Leave the next frame queued for the next reader.
         if not chunk:
             raise StartupLeaseError("STARTUP_LEASE_EOF")
         data.extend(chunk)
@@ -228,8 +297,43 @@ def _recv_json(sock: socket.socket, timeout: float) -> dict[str, Any]:
 
 
 def _lease_filename(lease_id: str, *, consumed: bool = False) -> str:
+    try:
+        if str(UUID(lease_id)) != lease_id:
+            raise ValueError()
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise StartupLeaseError("STARTUP_LEASE_ID_INVALID") from exc
     suffix = ".consumed" if consumed else ""
     return f"startup-lease-{lease_id}{suffix}.json"
+
+
+def _rename_exclusive_at(directory_fd: int, source: str, target: str) -> None:
+    """Atomically consume one lease without replacing an existing receipt."""
+    if sys.platform != "darwin":
+        # The product route is macOS.  Keep non-macOS fixture execution
+        # no-clobber without pretending that it proves renameatx_np.
+        os.link(
+            source, target, src_dir_fd=directory_fd,
+            dst_dir_fd=directory_fd, follow_symlinks=False,
+        )
+        os.unlink(source, dir_fd=directory_fd)
+        return
+    libc = ctypes.CDLL(None, use_errno=True)
+    renameatx_np = libc.renameatx_np
+    renameatx_np.argtypes = [
+        ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p,
+        ctypes.c_uint,
+    ]
+    renameatx_np.restype = ctypes.c_int
+    result = renameatx_np(
+        directory_fd, os.fsencode(source), directory_fd, os.fsencode(target),
+        _RENAME_EXCL,
+    )
+    if result == 0:
+        return
+    error = ctypes.get_errno()
+    if error == errno.EEXIST:
+        raise FileExistsError(error, os.strerror(error), target)
+    raise OSError(error, os.strerror(error), target)
 
 
 def _receipt_sha(lease: StartupLease) -> str:
@@ -295,6 +399,106 @@ def _read_runtime_lifespan_record(home: Path) -> RuntimeLifespanRecord | None:
     if _runtime_record_sha(record) != record.record_sha256:
         raise StartupLeaseError("LIFESPAN_RECORD_INVALID")
     return record
+
+
+def _read_selected_generation_digest(home: Path) -> str:
+    path = Path(home) / "current-generation.json"
+    try:
+        details = path.lstat()
+        if (
+            path.is_symlink()
+            or not stat.S_ISREG(details.st_mode)
+            or details.st_uid != os.getuid()
+            or stat.S_IMODE(details.st_mode) != 0o600
+            or details.st_nlink != 1
+        ):
+            raise StartupLeaseError("MANAGED_START_GENERATION_INVALID")
+        raw = json.loads(
+            path.read_text(encoding="utf-8"),
+            object_pairs_hook=_duplicate_key_rejector,
+        )
+    except StartupLeaseError:
+        raise
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        raise StartupLeaseError("MANAGED_START_GENERATION_INVALID") from exc
+    if not isinstance(raw, dict) or set(raw) != {
+        "schema_version", "generation_id", "generation_record_sha256"
+    }:
+        raise StartupLeaseError("MANAGED_START_GENERATION_INVALID")
+    try:
+        UUID(str(raw["generation_id"]))
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise StartupLeaseError("MANAGED_START_GENERATION_INVALID") from exc
+    digest_value = raw.get("generation_record_sha256")
+    if raw.get("schema_version") != 1 or not _is_sha256(digest_value):
+        raise StartupLeaseError("MANAGED_START_GENERATION_INVALID")
+    return str(digest_value)
+
+
+def _read_consumed_lease(home: Path, record: RuntimeLifespanRecord) -> StartupLease:
+    pids = Path(home) / "pids"
+    path = pids / _lease_filename(record.lease_id, consumed=True)
+    try:
+        pids_details = pids.lstat()
+        details = path.lstat()
+        if (
+            pids.is_symlink()
+            or not stat.S_ISDIR(pids_details.st_mode)
+            or pids_details.st_uid != os.getuid()
+            or stat.S_IMODE(pids_details.st_mode) != 0o700
+            or path.is_symlink()
+            or not stat.S_ISREG(details.st_mode)
+            or details.st_uid != os.getuid()
+            or stat.S_IMODE(details.st_mode) != 0o600
+            or details.st_nlink != 1
+            or details.st_dev != pids_details.st_dev
+            or details.st_size > 64 * 1024
+        ):
+            raise StartupLeaseError("MANAGED_START_RECEIPT_INVALID")
+        raw = json.loads(
+            path.read_text(encoding="utf-8"),
+            object_pairs_hook=_duplicate_key_rejector,
+        )
+    except StartupLeaseError:
+        raise
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        raise StartupLeaseError("MANAGED_START_RECEIPT_INVALID") from exc
+    if not isinstance(raw, dict) or set(raw) != set(StartupLease.__dataclass_fields__):
+        raise StartupLeaseError("MANAGED_START_RECEIPT_INVALID")
+    try:
+        raw = dict(raw)
+        raw["identity"] = ManagedProcessIdentity(**raw["identity"])
+        raw["boot"] = BootIdentity(**raw["boot"])
+        lease = StartupLease(**raw)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise StartupLeaseError("MANAGED_START_RECEIPT_INVALID") from exc
+    if (
+        lease.lease_id != record.lease_id
+        or lease.identity != record.identity
+        or lease.storage_transaction_id != record.storage_transaction_id
+        or lease.boot != record.boot
+        or lease.generation_record_sha256 != record.generation_record_sha256
+        or _receipt_sha(lease) != record.lease_receipt_sha256
+        or (lease.pids_dev_u32, lease.pids_ino, lease.pids_uid, lease.pids_mode)
+        != (
+            pids_details.st_dev & 0xFFFFFFFF,
+            pids_details.st_ino,
+            pids_details.st_uid,
+            0o700,
+        )
+    ):
+        raise StartupLeaseError("MANAGED_START_RECEIPT_INVALID")
+    return lease
+
+
+def _live_identity_matches(identity: ManagedProcessIdentity, *, reader: Any = None) -> bool:
+    if reader is None:
+        reader = _read_kernel_process_identity
+    try:
+        observed = reader(identity.pid)
+    except Exception:
+        return False
+    return observed == identity
 
 
 def _fsync_directory(path: Path) -> None:
@@ -421,7 +625,7 @@ def publish_startup_lease(
     if not stat.S_ISDIR(details.st_mode) or details.st_uid != os.getuid() or stat.S_IMODE(details.st_mode) != 0o700:
         raise StartupLeaseError("STARTUP_LEASE_PIDS_UNSAFE")
     lease = StartupLease(
-        1, str(uuid4()), secrets.token_hex(16), identity, os.getpid(), str(time.monotonic_ns()),
+        1, str(uuid4()), secrets.token_hex(16), identity, os.getpid(), _launcher_identity(),
         details.st_dev & 0xFFFFFFFF, details.st_ino, details.st_uid, 0o700,
         storage_transaction_id, boot, generation_record_sha256,
         time.monotonic_ns() + int(ttl_seconds * 1_000_000_000),
@@ -439,6 +643,7 @@ def publish_startup_lease(
         os.fsync(fd)
     finally:
         os.close(fd)
+    os.fsync(pids_fd)
     return lease
 
 
@@ -462,19 +667,36 @@ def child_consume_startup_lease(*, control_fd: int, pids_fd: int, expected_trans
         if grant.get("type") != "START" or not isinstance(lease_id, str) or not isinstance(nonce, str):
             raise StartupLeaseError("STARTUP_LEASE_MALFORMED")
         filename = _lease_filename(lease_id)
+        consumed_filename = _lease_filename(lease_id, consumed=True)
         try:
             fd = os.open(filename, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=pids_fd)
             try:
-                data = os.read(fd, 64 * 1024)
+                details = os.fstat(fd)
+                if (
+                    not stat.S_ISREG(details.st_mode)
+                    or details.st_uid != os.getuid()
+                    or stat.S_IMODE(details.st_mode) != 0o600
+                    or details.st_nlink != 1
+                ):
+                    raise StartupLeaseError("STARTUP_LEASE_UNSAFE")
+                data = os.read(fd, 64 * 1024 + 1)
+                if len(data) > 64 * 1024:
+                    raise StartupLeaseError("STARTUP_LEASE_FRAME_TOO_LARGE")
             finally:
                 os.close(fd)
-            raw = json.loads(data.decode("utf-8"))
-            os.unlink(filename, dir_fd=pids_fd)
         except (FileNotFoundError, OSError) as exc:
             raise StartupLeaseError("STARTUP_LEASE_REPLAYED") from exc
+        try:
+            raw = json.loads(
+                data.decode("utf-8"), object_pairs_hook=_duplicate_key_rejector
+            )
+        except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+            raise StartupLeaseError("STARTUP_LEASE_MALFORMED") from exc
         if set(raw) != set(StartupLease.__dataclass_fields__):
             raise StartupLeaseError("STARTUP_LEASE_MALFORMED")
-        if raw.get("nonce") != nonce or raw.get("expires_at_monotonic_ns", 0) < time.monotonic_ns():
+        if raw.get("nonce") != nonce:
+            raise StartupLeaseError("STARTUP_LEASE_GRANT_INVALID")
+        if raw.get("expires_at_monotonic_ns", 0) < time.monotonic_ns():
             raise StartupLeaseError("STARTUP_LEASE_EXPIRED")
         details = os.fstat(pids_fd)
         if (details.st_dev & 0xFFFFFFFF, details.st_ino, details.st_uid) != (raw.get("pids_dev_u32"), raw.get("pids_ino"), raw.get("pids_uid")):
@@ -484,8 +706,22 @@ def child_consume_startup_lease(*, control_fd: int, pids_fd: int, expected_trans
         identity = ManagedProcessIdentity(**raw["identity"])
         boot = BootIdentity(**raw["boot"])
         lease = StartupLease(**{**raw, "identity": identity, "boot": boot})
+        if identity != _read_kernel_process_identity(os.getpid()):
+            raise StartupLeaseError("STARTUP_LEASE_PROCESS_MISMATCH")
+        if boot != _safe_boot_identity():
+            raise StartupLeaseError("STARTUP_LEASE_BOOT_MISMATCH")
+        launcher = _read_kernel_process_identity(lease.launcher_pid)
+        if launcher is None or launcher.start_time != lease.launcher_start_time:
+            raise StartupLeaseError("STARTUP_LEASE_LAUNCHER_MISMATCH")
         receipt = _receipt_sha(lease)
         context = ManagedStartContext(lease.lease_id, identity, lease.storage_transaction_id, boot, lease.generation_record_sha256, receipt)
+        try:
+            _rename_exclusive_at(pids_fd, filename, consumed_filename)
+            os.fsync(pids_fd)
+        except FileExistsError as exc:
+            raise StartupLeaseError("STARTUP_LEASE_REPLAYED") from exc
+        except OSError as exc:
+            raise StartupLeaseError("STARTUP_LEASE_CONSUME_FAILED") from exc
         _send_json(sock, {"type": "ACK", "lease_id": lease.lease_id, "receipt_sha256": receipt})
         return context
     finally:
@@ -505,6 +741,15 @@ def _require_managed_start_context(home: Path, storage_status: StorageStatus) ->
         raise StartupLeaseError("MANAGED_START_REQUIRED")
     if record.state != "READY":
         raise StartupLeaseError("MANAGED_START_NOT_READY")
+    if record.storage_transaction_id != storage_status.transaction_id:
+        raise StartupLeaseError("MANAGED_START_TRANSACTION_MISMATCH")
+    if record.boot != _safe_boot_identity():
+        raise StartupLeaseError("MANAGED_START_BOOT_MISMATCH")
+    if _read_selected_generation_digest(Path(home)) != record.generation_record_sha256:
+        raise StartupLeaseError("MANAGED_START_GENERATION_MISMATCH")
+    _read_consumed_lease(Path(home), record)
+    if not _live_identity_matches(record.identity):
+        raise StartupLeaseError("MANAGED_START_IDENTITY_MISMATCH")
     return ManagedStartContext(
         record.lease_id, record.identity, record.storage_transaction_id, record.boot,
         record.generation_record_sha256, record.lease_receipt_sha256,
@@ -520,8 +765,17 @@ def managed_runtime_is_ready_locked(lock_set: Any, *, home: Path, expected_stora
         return False
 
 
-def launch_managed_runtime(home: Path, *, lock_set: Any, lifecycle: Any, contract: Any, timeout_seconds: float = 5.0) -> ManagedStartReceipt:
-    raise StartupLeaseError("STARTUP_RUNTIME_NOT_WIRED")
+def launch_managed_runtime(home: Path, *, lock_set: Any, lifecycle: Any, contract: Any, timeout_seconds: float = 5.0, child_owner: Any = None) -> ManagedStartReceipt:
+    from managed_runtime import launch
+    return launch(home, lock_set=lock_set, lifecycle=lifecycle, contract=contract,
+                  timeout_seconds=timeout_seconds, child_owner=child_owner)
+
+
+def _launcher_identity() -> str:
+    identity = _read_kernel_process_identity(os.getpid())
+    if identity is None:
+        raise StartupLeaseError("STARTUP_LAUNCHER_IDENTITY_UNAVAILABLE")
+    return identity.start_time
 
 
 __all__ = [

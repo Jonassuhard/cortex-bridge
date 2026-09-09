@@ -14,8 +14,13 @@ from __future__ import annotations
 import json
 import sqlite3
 import time
+import threading
+from functools import wraps
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterable
+
+from . import continuity
 
 DEFAULT_DB_PATH = Path(__file__).resolve().parent.parent / "console" / "data" / "cortex.db"
 
@@ -245,10 +250,24 @@ class DuplicateRecord(StoreError):
     pass
 
 
+def _serialized(method):
+    """Hold the instance lock across the complete public operation."""
+    @wraps(method)
+    def locked(self, *args, **kwargs):
+        with self._access_lock:
+            return method(self, *args, **kwargs)
+    return locked
+
+
 class Store:
-    """SQLite-backed persistence. One Store per process is expected."""
+    """SQLite-backed persistence with serialized public connection access.
+
+    One Store per process is expected. Compound workflow decisions still need
+    their own transaction; this lock does not make separate calls atomic.
+    """
 
     def __init__(self, path: str | Path | None = None):
+        self._access_lock = threading.RLock()
         self.path = Path(path) if path else DEFAULT_DB_PATH
         if str(self.path) != ":memory:":
             self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -262,9 +281,11 @@ class Store:
         self._closed = False
 
     @property
+    @_serialized
     def closed(self) -> bool:
         return self._closed
 
+    @_serialized
     def close(self) -> None:
         if self._closed:
             return
@@ -338,6 +359,7 @@ class Store:
 
     # -- missions ---------------------------------------------------------------
 
+    @_serialized
     def create_mission(
         self,
         mission_id: str,
@@ -382,6 +404,7 @@ class Store:
             )
         return self.get_mission(mission_id)
 
+    @_serialized
     def record_runtime_truth(
         self,
         mission_id: str,
@@ -415,6 +438,7 @@ class Store:
                 raise StoreError(f"unknown mission {mission_id}")
         return self.get_mission(mission_id)
 
+    @_serialized
     def get_mission(self, mission_id: str) -> dict:
         row = self._conn.execute(
             "SELECT * FROM missions WHERE id = ?", (mission_id,)
@@ -426,6 +450,7 @@ class Store:
         data["release_eligible"] = bool(data.get("release_eligible", False))
         return data
 
+    @_serialized
     def transition(self, mission_id: str, new_state: str, *, pause_reason: str | None = None) -> str:
         """Transactional state transition with adjacency enforcement."""
         if new_state not in ALL_STATES:
@@ -447,6 +472,7 @@ class Store:
             )
         return new_state
 
+    @_serialized
     def resume(self, mission_id: str, target_state: str | None = None) -> str:
         """Resume explicitly, restoring the durable pre-pause state by default."""
         with self._conn:
@@ -470,6 +496,7 @@ class Store:
             )
         return restored_state
 
+    @_serialized
     def set_iteration(self, mission_id: str, iteration: int) -> None:
         with self._conn:
             self._conn.execute(
@@ -477,6 +504,7 @@ class Store:
                 (iteration, time.time(), mission_id),
             )
 
+    @_serialized
     def set_failure_counts(self, mission_id: str, counts: dict) -> None:
         with self._conn:
             self._conn.execute(
@@ -486,6 +514,7 @@ class Store:
 
     # -- duplicate / idempotency primitives (§14) ------------------------------
 
+    @_serialized
     def record_message(
         self,
         message_id: str,
@@ -504,12 +533,14 @@ class Store:
         except sqlite3.IntegrityError as exc:
             raise DuplicateRecord(f"fingerprint already recorded: {fingerprint}") from exc
 
+    @_serialized
     def has_fingerprint(self, fingerprint: str) -> bool:
         row = self._conn.execute(
             "SELECT 1 FROM chatgpt_messages WHERE fingerprint = ?", (fingerprint,)
         ).fetchone()
         return row is not None
 
+    @_serialized
     def record_decision(
         self,
         record_id: str,
@@ -541,6 +572,7 @@ class Store:
         except sqlite3.IntegrityError as exc:
             raise DuplicateRecord(f"action already recorded: {action_id}") from exc
 
+    @_serialized
     def seen_action_ids(self, mission_id: str) -> list[str]:
         rows = self._conn.execute(
             "SELECT action_id FROM orchestrator_decisions WHERE mission_id = ? AND valid = 1",
@@ -548,6 +580,7 @@ class Store:
         ).fetchall()
         return [r["action_id"] for r in rows]
 
+    @_serialized
     def record_report_send(
         self,
         event_id: str,
@@ -574,6 +607,7 @@ class Store:
             return False
         return True
 
+    @_serialized
     def has_report_key(self, idempotency_key: str) -> bool:
         row = self._conn.execute(
             "SELECT 1 FROM transport_events WHERE idempotency_key = ?",
@@ -583,6 +617,7 @@ class Store:
 
     # -- remaining evidence tables ---------------------------------------------
 
+    @_serialized
     def record_iteration(
         self,
         mission_id: str,
@@ -600,6 +635,7 @@ class Store:
             )
             return int(cur.lastrowid)
 
+    @_serialized
     def bind_conversation(
         self,
         binding_id: str,
@@ -628,6 +664,7 @@ class Store:
                 ),
             )
 
+    @_serialized
     def update_conversation_binding(
         self,
         mission_id: str,
@@ -659,6 +696,7 @@ class Store:
                 ),
             )
 
+    @_serialized
     def record_policy_decision(
         self,
         record_id: str,
@@ -687,6 +725,7 @@ class Store:
                 ),
             )
 
+    @_serialized
     def record_approval(
         self,
         record_id: str,
@@ -703,6 +742,7 @@ class Store:
                 (record_id, mission_id, action_id, tool, scope, 1 if approved else 0, time.time()),
             )
 
+    @_serialized
     def record_tool_execution(
         self,
         record_id: str,
@@ -733,6 +773,7 @@ class Store:
                 ),
             )
 
+    @_serialized
     def record_validation(
         self,
         record_id: str,
@@ -755,6 +796,7 @@ class Store:
                 ),
             )
 
+    @_serialized
     def record_transport_event(
         self,
         record_id: str,
@@ -769,6 +811,7 @@ class Store:
                 (record_id, mission_id, event_type, json.dumps(detail or {}), time.time()),
             )
 
+    @_serialized
     def record_artifact(
         self,
         record_id: str,
@@ -785,8 +828,147 @@ class Store:
                 (record_id, mission_id, action_id, name, path, sha256, time.time()),
             )
 
+    # -- durable effect primitives (no implicit schema upgrade) -----------------
+
+    @property
+    @_serialized
+    def schema_version(self) -> int:
+        """Actual SQLite user_version; zero means unversioned legacy storage."""
+        return int(self._conn.execute("PRAGMA user_version").fetchone()[0])
+
+    @contextmanager
+    def transaction_immediate(self):
+        """Exclusive operation for internal coordinators, never HTTP routes.
+
+        Keep the instance lock through commit/rollback, not just through
+        creation of the context-manager generator.
+        """
+        with self._access_lock:
+            if self._conn.in_transaction:
+                raise StoreError("STORE_TRANSACTION_ACTIVE")
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                yield self._conn
+                self._conn.commit()
+            except BaseException:
+                self._conn.rollback()
+                raise
+
+    @_serialized
+    def control_row(self) -> dict[str, Any]:
+        if self.schema_version != 3:
+            raise StoreError("EFFECT_SCHEMA_REQUIRED")
+        row = self._conn.execute("SELECT * FROM control_state WHERE singleton=1").fetchone()
+        if row is None:
+            raise StoreError("EFFECT_CONTROL_MISSING")
+        return dict(row)
+
+    @_serialized
+    def effect_rows(self, *, states: Iterable[str] = ()) -> list[dict[str, Any]]:
+        if self.schema_version != 3:
+            raise StoreError("EFFECT_SCHEMA_REQUIRED")
+        if isinstance(states, (str, bytes)):
+            raise StoreError("INVALID_EFFECT_STATES")
+        try:
+            selected = tuple(states)
+        except TypeError as error:
+            raise StoreError("INVALID_EFFECT_STATES") from error
+        if any(type(s) is not str or s not in ("intent", "active", "succeeded", "failed", "outcome_unclear") for s in selected):
+            raise StoreError("INVALID_EFFECT_STATES")
+        sql = "SELECT * FROM effects"
+        if selected:
+            sql += " WHERE state IN (" + ",".join("?" for _ in selected) + ")"
+        return [dict(row) for row in self._conn.execute(sql + " ORDER BY created_at,id", selected)]
+
+    # -- explicit continuity (single-owner Store; no dispatch authorization) -----
+
+    @contextmanager
+    def _context_transaction(self, *, write: bool = False):
+        if self._conn.in_transaction:
+            raise StoreError("CONTEXT_TRANSACTION_ACTIVE")
+        self._conn.execute("BEGIN IMMEDIATE" if write else "BEGIN")
+        try:
+            yield
+            self._conn.commit()
+        except BaseException:
+            self._conn.rollback()
+            raise
+
+    def _context_source_digest(self, mission_id: str) -> str:
+        data = {"mission": self.get_mission(mission_id)}
+        version = self.schema_version
+        data["schema_version"] = version
+        if version == 3:
+            data["control_state"] = self.control_row()
+            data["effects"] = self.rows("effects", mission_id, order_by="id")
+        for table in ("conversation_bindings", "iterations", "chatgpt_messages",
+                      "orchestrator_decisions", "policy_decisions", "approvals",
+                      "tool_executions", "validation_results", "transport_events", "artifacts"):
+            rows = self.rows(table, mission_id, order_by="id")
+            if table == "transport_events":
+                rows = [r for r in rows if r["event_type"] != continuity.EVENT_TYPE]
+            data[table] = rows
+        return continuity.digest(data)
+
+    @_serialized
+    def context_source_digest(self, mission_id: str) -> str:
+        """Consistent local evidence digest; not a filesystem reconciliation."""
+        with self._context_transaction():
+            return self._context_source_digest(mission_id)
+
+    @_serialized
+    def save_context_checkpoint(self, checkpoint_id: str, mission_id: str,
+                                context: dict, *, expected_source_digest: str) -> dict:
+        """Append context only while paused and bound to unchanged DB evidence.
+
+        Public Store operations are serialized through commit/rollback. This
+        does not freeze files, stop a worker or approve a provider change.
+        """
+        if type(checkpoint_id) is not str or not checkpoint_id.strip() or len(checkpoint_id) > 256:
+            raise StoreError("INVALID_CONTEXT_ID")
+        try:
+            context = continuity.validate_context(context)
+        except ValueError as error:
+            raise StoreError(str(error)) from error
+        with self._context_transaction(write=True):
+            mission = self.get_mission(mission_id)
+            if mission["state"] not in RESUMABLE_FROM:
+                raise StoreError("MISSION_NOT_PAUSED")
+            source = self._context_source_digest(mission_id)
+            if source != expected_source_digest:
+                raise StoreError("CONTEXT_SOURCE_CHANGED")
+            packet = continuity.envelope(mission_id, source, context)
+            encoded = continuity.canonical(packet)
+            previous = self._conn.execute("SELECT mission_id,event_type,detail_json FROM transport_events WHERE id=?", (checkpoint_id,)).fetchone()
+            if previous:
+                if tuple(previous) != (mission_id, continuity.EVENT_TYPE, encoded):
+                    raise StoreError("CONTEXT_ID_CONFLICT")
+                return packet
+            self._conn.execute(
+                "INSERT INTO transport_events (id,mission_id,event_type,detail_json,created_at) VALUES (?,?,?,?,?)",
+                (checkpoint_id, mission_id, continuity.EVENT_TYPE, encoded, time.time()),
+            )
+            return packet
+
+    @_serialized
+    def load_context_checkpoint(self, checkpoint_id: str, mission_id: str) -> dict:
+        """Verify packet integrity and DB freshness; never resume a mission."""
+        with self._context_transaction():
+            row = self._conn.execute(
+                "SELECT detail_json FROM transport_events WHERE id=? AND mission_id=? AND event_type=?",
+                (checkpoint_id, mission_id, continuity.EVENT_TYPE),
+            ).fetchone()
+            if row is None:
+                raise StoreError("CONTEXT_NOT_FOUND")
+            try:
+                packet = continuity.verify(json.loads(row[0]), mission_id)
+            except (ValueError, TypeError) as error:
+                raise StoreError("CONTEXT_INTEGRITY_ERROR") from error
+            return {**packet, "source_current": packet["source_digest"] == self._context_source_digest(mission_id)}
+
     # -- introspection (tests / UI) ----------------------------------------------
 
+    @_serialized
     def rows(self, table: str, mission_id: str | None = None, order_by: str | None = None) -> list[dict]:
         sql = f"SELECT * FROM {table}"
         params: tuple = ()
@@ -801,6 +983,7 @@ class Store:
                 row["release_eligible"] = bool(row.get("release_eligible", False))
         return rows
 
+    @_serialized
     def table_names(self) -> list[str]:
         rows = self._conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
@@ -808,6 +991,7 @@ class Store:
         ).fetchall()
         return [r["name"] for r in rows]
 
+    @_serialized
     def count(self, table: str, mission_id: str | None = None) -> int:
         if mission_id is None:
             row = self._conn.execute(f"SELECT COUNT(*) AS c FROM {table}").fetchone()

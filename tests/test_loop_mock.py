@@ -17,7 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from executor.tools import ToolExecutor  # noqa: E402
-from executor.policy import PolicyEngine  # noqa: E402
+from executor.policy import PolicyEngine, WRITE_AUTOMATIC  # noqa: E402
 from orchestration.loop import (  # noqa: E402
     DUPLICATE_RESPONSE_IGNORED,
     MissionLoop,
@@ -93,6 +93,41 @@ class LoopTestCase(unittest.IsolatedAsyncioTestCase):
             **kwargs,
         )
         return loop, mock
+
+    async def test_explicit_model_approval_is_required_in_automatic_mode(self):
+        loop, mock = self.make_loop([
+            execute("write_file", {"path": "unapproved.txt", "content": "must not exist"}, requiresApproval=True),
+            blocked(),
+        ], policy=PolicyEngine(self.ws, mode=WRITE_AUTOMATIC), approval_callback=None)
+        await loop.run()
+        self.assertFalse((self.ws / "unapproved.txt").exists())
+        self.assertEqual(reports_received(mock)[0]["status"], "DENIED")
+        self.assertEqual(self.store.count("tool_executions", self.mission_id), 0)
+        self.assertEqual(self.store.rows("policy_decisions", self.mission_id)[0]["requires_approval"], 1)
+
+    async def test_truthy_callback_is_not_an_approval_scope(self):
+        loop, mock = self.make_loop([
+            execute("write_file", {"path": "unapproved.txt", "content": "must not exist"}),
+            blocked(),
+        ], approval_callback=lambda decision, policy: {"approve": False})
+        await loop.run()
+        self.assertFalse((self.ws / "unapproved.txt").exists())
+        self.assertEqual(reports_received(mock)[0]["status"], "DENIED")
+        self.assertEqual(self.store.rows("approvals", self.mission_id)[0]["approved"], 0)
+
+    async def test_explicit_model_approval_can_be_granted_once(self):
+        observed = []
+        def approve(decision, policy):
+            observed.append(policy.requires_approval)
+            return "once"
+        loop, mock = self.make_loop([
+            execute("write_file", {"path": "approved.txt", "content": "approved"}, requiresApproval=True),
+            blocked(),
+        ], policy=PolicyEngine(self.ws, mode=WRITE_AUTOMATIC), approval_callback=approve)
+        await loop.run()
+        self.assertEqual(observed, [True])
+        self.assertEqual((self.ws / "approved.txt").read_text(), "approved")
+        self.assertEqual(self.store.rows("approvals", self.mission_id)[0]["approved"], 1)
 
     async def test_process_exit_nonzero_is_failed(self):
         (self.ws / "fail.py").write_text(

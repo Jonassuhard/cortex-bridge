@@ -2,6 +2,17 @@
 
 All notable changes are recorded here.
 
+## 0.6 development checkpoint — not released
+
+- Work in progress on immutable generation installation, native process
+  supervision, descriptor-bound workspaces, execution profiles and continuity.
+- The storage contract now requires journal-bound encrypted-image proof;
+  production native proof and full effect/terminal/recovery execution remain
+  incomplete. A committed journal alone is not runtime readiness.
+- Added targeted regression evidence and an explicit
+  [checkpoint matrix](docs/verification/v06-development-checkpoint-2026-09-10.md).
+- No 0.6 version bump, release tag or full-candidate acceptance claim.
+
 ## 0.5.4 - Unreleased
 
 ### Added

@@ -21,6 +21,19 @@ from console.chrome_extension import (  # noqa: E402
 )
 
 
+PAIR_CAPABILITIES = ["session_quiescence_receipt_v1"]
+
+
+def paired_message(token: str, *, epoch: str = "worker-epoch-aaaaaaaa") -> dict:
+    return {
+        "type": "pair",
+        "token": token,
+        "protocol_version": 3,
+        "worker_epoch": epoch,
+        "capabilities": PAIR_CAPABILITIES,
+    }
+
+
 class FakeConnection:
     def __init__(self) -> None:
         self.sent: list[dict] = []
@@ -46,7 +59,7 @@ class ChromeExtensionPairingTest(unittest.TestCase):
             {
                 "type": "pair",
                 "token": ticket.value,
-                "protocol_version": 1,
+                "protocol_version": 2,
             },
             connection,
         )
@@ -61,16 +74,12 @@ class ChromeExtensionPairingTest(unittest.TestCase):
                 "paired": False,
                 "pending_commands": 0,
                 "protocol_compatible": False,
-                "extension_protocol_version": 1,
-                "required_protocol_version": 2,
+                "extension_protocol_version": 2,
+                "required_protocol_version": 3,
             },
         )
         paired, code = manager.consume_pairing_message(
-            {
-                "type": "pair",
-                "token": ticket.value,
-                "protocol_version": 2,
-            },
+            paired_message(ticket.value),
             connection,
         )
         self.assertTrue(paired)
@@ -95,11 +104,7 @@ class ChromeExtensionPairingTest(unittest.TestCase):
         active_connection = FakeConnection()
         active_ticket = manager.issue_pairing_token()
         paired, code = manager.consume_pairing_message(
-            {
-                "type": "pair",
-                "token": active_ticket.value,
-                "protocol_version": 2,
-            },
+            paired_message(active_ticket.value),
             active_connection,
         )
         self.assertTrue(paired)
@@ -110,7 +115,7 @@ class ChromeExtensionPairingTest(unittest.TestCase):
             {
                 "type": "pair",
                 "token": replacement_ticket.value,
-                "protocol_version": 1,
+                "protocol_version": 2,
             },
             FakeConnection(),
         )
@@ -125,8 +130,40 @@ class ChromeExtensionPairingTest(unittest.TestCase):
                 "paired": True,
                 "pending_commands": 0,
                 "protocol_compatible": True,
-                "extension_protocol_version": 2,
-                "required_protocol_version": 2,
+                "extension_protocol_version": 3,
+                "required_protocol_version": 3,
+            },
+        )
+
+    def test_pairing_requires_the_v3_release_capability_and_epoch(self) -> None:
+        manager = ChromeExtensionManager()
+        ticket = manager.issue_pairing_token()
+
+        paired, code = manager.consume_pairing_message(
+            {
+                "type": "pair",
+                "token": ticket.value,
+                "protocol_version": 3,
+                "worker_epoch": "worker-epoch-aaaaaaaa",
+                "capabilities": [],
+            },
+            FakeConnection(),
+        )
+
+        self.assertFalse(paired)
+        self.assertEqual(code, "EXTENSION_PROTOCOL_MISMATCH")
+        paired, code = manager.consume_pairing_message(
+            paired_message(ticket.value),
+            FakeConnection(),
+        )
+        self.assertTrue(paired)
+        self.assertEqual(code, "PAIRED")
+        self.assertEqual(
+            manager.session_protocol_proof(),
+            {
+                "protocol_version": 3,
+                "worker_epoch": "worker-epoch-aaaaaaaa",
+                "capabilities": ("session_quiescence_receipt_v1",),
             },
         )
 

@@ -38,6 +38,7 @@ from cortex_paths import (
     migrate_legacy_state,
 )
 from storage_guard import check_required_storage
+from runtime_exclusion import exclusive_runtime
 from version import current_version
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -52,20 +53,20 @@ FRONTEND_FALLBACK = REPO_ROOT / "frontend" / "fallback"
 async def _application_lifespan(_: FastAPI):
     """Enforce required external storage for every ASGI server startup."""
     global _runtime_initialized
-    previous_umask: int | None = None
-    try:
-        storage_status = check_required_storage(RUNTIME_PATHS.home)
-        if storage_status != 0:
-            raise RuntimeError(
-                f"Required external storage guard denied startup with status {storage_status}."
-            )
+    storage_status = check_required_storage(RUNTIME_PATHS.home)
+    if storage_status != 0:
+        raise RuntimeError(
+            f"Required external storage guard denied startup with status {storage_status}."
+        )
+    _ensure_private_directory(RUNTIME_PATHS.home)
+    with exclusive_runtime(RUNTIME_PATHS.home):
         previous_umask = os.umask(0o077)
-        _initialize_runtime()
-        yield
-    finally:
-        close_mission_store()
-        _runtime_initialized = False
-        if previous_umask is not None:
+        try:
+            _initialize_runtime()
+            yield
+        finally:
+            close_mission_store()
+            _runtime_initialized = False
             os.umask(previous_umask)
 
 

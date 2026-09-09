@@ -32,11 +32,16 @@ import inspect
 import json
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Callable
 
-from executor.policy import PolicyDecision, PolicyEngine
+from executor.policy import (
+    PolicyDecision, PolicyEngine, SCOPE_ONCE, SCOPE_TOOL_FOR_MISSION,
+    SCOPE_ALL_WRITES_FOR_MISSION, WRITE_TOOLS,
+)
 from executor.tools import ToolDenied, ToolError, ToolExecutor
+from executor.workspace_handle import WorkspaceHandle
+from effect_gate import EffectGateConflict, canonical_digest
 
 from . import protocol
 from .protocol import DecisionError
@@ -217,13 +222,15 @@ def default_trace_validator(
     denied_approval_ids = {
         row["action_id"]
         for row in store.rows("approvals", mission_id, order_by="rowid")
-        if row.get("action_id") and row["approved"] == 0
+        if row.get("action_id") and (
+            row.get("decision") != "approved" if store.schema_version == 3 else row["approved"] == 0
+        )
     }
     unresolved_action_count = len(unresolved_actions) + len(denied_approval_ids)
 
     process_ok = True
     changed_files_ok = True
-    workspace = tools.workspace.resolve()
+    workspace = tools.workspace if isinstance(tools.workspace, WorkspaceHandle) else tools.workspace.resolve()
     for row in executions:
         try:
             result = json.loads(row["result_json"] or "{}")
@@ -244,6 +251,13 @@ def default_trace_validator(
             changed_files_ok = False
             continue
         for changed_path in changed:
+            if isinstance(workspace, WorkspaceHandle):
+                try:
+                    if not tools._file_exists_at_handle(changed_path)["exists"]:
+                        changed_files_ok = False
+                except (ToolError, OSError, RuntimeError):
+                    changed_files_ok = False
+                continue
             candidate = (workspace / changed_path).resolve()
             if (
                 candidate != workspace
@@ -300,6 +314,7 @@ class MissionLoop:
         mission_id: str,
         orchestrator,
         tools: ToolExecutor,
+        effect_gate=None,
         policy: PolicyEngine | None = None,
         approval_callback: Callable[[dict, PolicyDecision], Any] | None = None,
         action_validator: Callable[[dict, dict | None, ToolError | None], Any] | None = None,
@@ -309,6 +324,11 @@ class MissionLoop:
         conversation: dict | None = None,
         contract: str | None = None,
     ):
+        if store.schema_version == 3 and effect_gate is None:
+            raise ValueError("EFFECT_GATE_REQUIRED")
+        if effect_gate is not None and (store.schema_version != 3 or effect_gate.store is not store):
+            raise ValueError("EFFECT_GATE_STORE_MISMATCH")
+        self.effect_gate = effect_gate
         self.store = store
         self.budgets = budgets or Budgets()
         self.sm = StateMachine(store, mission_id, budgets=self.budgets, clock=clock)
@@ -556,8 +576,11 @@ class MissionLoop:
         tool = action["tool"]
         arguments = action.get("arguments", {})
         action_id = decision["actionId"]
+        effect_epoch = self.effect_gate.status().epoch if self.effect_gate is not None else None
 
         policy_decision = self.policy.evaluate(tool, arguments)
+        if policy_decision.allowed and decision["requiresApproval"]:
+            policy_decision = replace(policy_decision, requires_approval=True)
         self.store.record_policy_decision(
             str(uuid.uuid4()),
             self.mission_id,
@@ -591,20 +614,36 @@ class MissionLoop:
             return self._finalize_cycle(decision, report, success=False)
 
         if policy_decision.requires_approval:
-            self.sm.transition("WAITING_FOR_APPROVAL")
             scope = None
-            if self.approval_callback is not None:
-                scope = await _maybe_await(
-                    self.approval_callback(decision, policy_decision)
+            approval_error = APPROVAL_DENIED
+            if self.effect_gate is not None:
+                try:
+                    challenge = self.effect_gate.register_pending_approval(
+                        mission_id=self.mission_id, action_id=action_id,
+                        tool=tool, arguments=arguments, scope=SCOPE_ONCE)
+                    self.sm.transition("WAITING_FOR_APPROVAL")
+                    if self.approval_callback is not None:
+                        await _maybe_await(self.approval_callback(challenge, policy_decision))
+                    receipt = self.effect_gate.approval_receipt(
+                        mission_id=self.mission_id, action_id=action_id,
+                        epoch=challenge.epoch, arguments_digest=challenge.arguments_digest)
+                    scope = receipt.scope if receipt.approved else None
+                except EffectGateConflict as error:
+                    approval_error = error.code
+            else:
+                self.sm.transition("WAITING_FOR_APPROVAL")
+                if self.approval_callback is not None:
+                    scope = await _maybe_await(
+                        self.approval_callback(decision, policy_decision)
+                    )
+                if type(scope) is not str or scope not in (
+                    SCOPE_ONCE, SCOPE_TOOL_FOR_MISSION, SCOPE_ALL_WRITES_FOR_MISSION
+                ):
+                    scope = None
+                self.store.record_approval(
+                    str(uuid.uuid4()), self.mission_id, action_id, tool,
+                    scope if scope else "denied", bool(scope),
                 )
-            self.store.record_approval(
-                str(uuid.uuid4()),
-                self.mission_id,
-                action_id,
-                tool,
-                scope if isinstance(scope, str) else "denied",
-                bool(scope),
-            )
             if not scope:
                 report = protocol.build_report(
                     mission_id=self.mission_id,
@@ -613,14 +652,14 @@ class MissionLoop:
                     status="DENIED",
                     summary=f"approval denied for {tool}",
                     tool=tool,
-                    tool_result={"exitCode": 1, "stderr": APPROVAL_DENIED},
+                    tool_result={"exitCode": 1, "stderr": approval_error},
                     validation={
                         "passed": False,
                         "checks": [
-                            {"name": "approval", "passed": False, "evidence": APPROVAL_DENIED}
+                            {"name": "approval", "passed": False, "evidence": approval_error}
                         ],
                     },
-                    blockers=[APPROVAL_DENIED],
+                    blockers=[approval_error],
                 )
                 return self._finalize_cycle(decision, report, success=False)
 
@@ -629,7 +668,33 @@ class MissionLoop:
         result: dict | None = None
         tool_error: ToolError | None = None
         try:
-            result = await getattr(self.tools, tool)(**arguments)
+            method = getattr(self.tools, tool)
+            guarded = self.effect_gate is not None and tool in WRITE_TOOLS | {"git_status", "git_diff"}
+            if guarded:
+                if getattr(self.tools, "supports_durable_effects", False) is not True or "activation" not in inspect.signature(method).parameters:
+                    raise ToolDenied("EXECUTOR_EFFECT_GATE_REQUIRED", "Executor has no durable activation contract")
+                category = "process" if tool in {"run_process", "run_tests", "git_status", "git_diff"} else "filesystem"
+                try:
+                    activation = self.effect_gate.activate_mission_effect(
+                        mission_id=self.mission_id, action_id=action_id, epoch=effect_epoch,
+                        operation=tool, payload_digest=canonical_digest(tool, arguments),
+                        category=category, approval_required=policy_decision.requires_approval)
+                except EffectGateConflict as error:
+                    raise ToolDenied(error.code, "Durable execution authorization rejected") from error
+                try:
+                    result = await method(**arguments, activation=activation)
+                except BaseException:
+                    if any(row["id"] == activation.effect_id for row in self.store.effect_rows(states=("active",))):
+                        self.effect_gate.outcome_unclear(activation, code="EXECUTOR_INTERRUPTED", receipt={})
+                    raise
+                effect = next(row for row in self.store.effect_rows() if row["id"] == activation.effect_id)
+                if effect["state"] == "active":
+                    self.effect_gate.outcome_unclear(activation, code="EXECUTOR_RECEIPT_MISSING", receipt={})
+                    raise ToolError("EXECUTOR_RECEIPT_MISSING", "Executor returned without a durable terminal receipt")
+                if effect["state"] != "succeeded":
+                    raise ToolError(effect["error_code"] or "EXECUTOR_NOT_SUCCEEDED", "Durable effect did not succeed")
+            else:
+                result = await method(**arguments)
         except (ToolDenied, ToolError) as exc:
             tool_error = exc
         finished = time.time()

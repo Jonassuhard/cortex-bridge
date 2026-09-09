@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { demoPipeline, demoSettings } from "@/lib/demo";
+import { demoPipeline, demoRuntime, demoSettings } from "@/lib/demo";
 import { SettingsPanel } from "./SettingsPanel";
 
 function renderPanel() {
@@ -11,6 +11,7 @@ function renderPanel() {
       settings={demoSettings}
       ollamaModels={[]}
       chatgptModels={[]}
+      runtime={demoRuntime}
       runtimeExecution={demoPipeline.runtime_execution}
       saving={false}
       onClose={vi.fn<() => void>()}

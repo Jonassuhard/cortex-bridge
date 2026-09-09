@@ -3,7 +3,7 @@
   "target": "bootstrap/cortex-launch",
   "source": "native/macos/storage_bootstrap.swift",
   "configuration": "production",
-  "swiftc": ["-O", "-parse-as-library"],
+  "swiftc": ["-O", "-target", "arm64-apple-macosx14.0"],
   "frameworks": ["Foundation"],
   "test_routes": false,
   "environment": ["PATH=/usr/bin:/bin:/usr/sbin:/sbin", "LANG=C", "LC_ALL=C"]

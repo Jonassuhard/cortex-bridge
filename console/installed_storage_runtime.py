@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Self
 from uuid import UUID
 
-from native_helpers import attest_broker_executable, attest_mount_probe, load_native_helper_registry
+from native_helpers import attest_broker_executable, attest_mount_probe, NativeMountReader
 from storage_broker import (
     AttestedBootstrapHandle,
     AttestedBrokerExecutable,
@@ -20,7 +20,7 @@ from storage_broker import (
     StorageBrokerClient,
     StorageWorkflowLedger,
 )
-from storage_contract import StorageContract, probe_mount_fd
+from storage_contract import StorageContract
 from storage_lifecycle import StorageLifecycle, StoragePaths
 from storage_reconciliation import digest
 from storage_result import CheckResult, OperationResult
@@ -237,18 +237,14 @@ class InstalledStorageRuntime:
             home, lock_set, bootstrap_handle
         )
         generation_dir = home / "installed-generations" / str(bootstrap_handle.generation_id)
-        generation_record_path = generation_dir / "generation-record.json"
-        manifest_path = generation_dir / "owned-manifest.json"
+        # Consume exactly the bytes inspected through retained descriptors.
+        # Reopening a path here would break that attestation/content binding.
+        generation_bytes = attested_generation_bytes
+        manifest_bytes = attested_manifest_bytes
         try:
-            if generation_record_path.is_symlink() or manifest_path.is_symlink():
-                raise InstalledRuntimeError("installed generation contains a symlink")
-            generation_bytes = generation_record_path.read_bytes()
-            manifest_bytes = manifest_path.read_bytes()
-            if generation_bytes != attested_generation_bytes or manifest_bytes != attested_manifest_bytes:
-                raise InstalledRuntimeError("installed generation changed after attestation")
-            generation = json.loads(generation_bytes.decode("utf-8"))
-            manifest = load_native_helper_registry(manifest_path)
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError, InstalledRuntimeError) as exc:
+            generation = json.loads(generation_bytes.decode("utf-8"), object_pairs_hook=_reject_duplicate_keys)
+            manifest = json.loads(manifest_bytes.decode("utf-8"), object_pairs_hook=_reject_duplicate_keys)
+        except (UnicodeDecodeError, ValueError) as exc:
             raise InstalledRuntimeError("installed generation is missing or invalid") from exc
         if not isinstance(generation, dict) or generation.get("schema_version") != 1:
             raise InstalledRuntimeError("installed generation schema is invalid")
@@ -261,7 +257,8 @@ class InstalledStorageRuntime:
         manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
         if manifest_sha256 != bootstrap_handle.owned_manifest_sha256:
             raise InstalledRuntimeError("installed manifest digest mismatch")
-        if not isinstance(manifest, dict) or manifest.get("schema_version") != 1:
+        if (not isinstance(manifest, dict) or manifest.get("schema_version") != 1
+                or not isinstance(manifest.get("native_helpers"), dict)):
             raise InstalledRuntimeError("installed manifest schema is invalid")
         generation_manifest_sha256 = generation.get("owned_manifest_sha256")
         if generation_manifest_sha256 != manifest_sha256:
@@ -299,20 +296,20 @@ class InstalledStorageRuntime:
             quarantine=home / "private-quarantine",
         )
 
+        fd_probe = NativeMountReader(mount_probe)
+
         def _probe_path(path: Path) -> Any:
             descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0))
             try:
-                return probe_mount_fd(descriptor)
+                return fd_probe(descriptor)
             finally:
                 os.close(descriptor)
 
-        fd_probe = probe_mount_fd
         contract = StorageContract(
             home,
             environment=environment,
             broker=broker,
             fd_probe=fd_probe,
-            managed_runtime_probe=lambda lock_set, *, home, expected_storage_transaction_id: False,
         )
 
         def _status_operation(lock_set: Any) -> OperationResult:
@@ -334,7 +331,14 @@ class InstalledStorageRuntime:
         )
         return cls(home, generation, broker_executable, mount_probe, ledger, broker, fd_probe, paths, lifecycle, contract)
 
+    def start_locked(self, lock_set: Any, *, timeout_seconds: float = 5.0, child_owner: Any = None):
+        """Start the verified generation under this runtime's real storage contract."""
+        from startup_lease import launch_managed_runtime as start
+        return start(self.home, lock_set=lock_set, lifecycle=self.lifecycle,
+                     contract=self.contract, timeout_seconds=timeout_seconds, child_owner=child_owner)
+
     def close(self) -> None:
+        self.fd_probe.close()
         self.broker_executable.close()
         self.mount_probe_executable.close()
 
@@ -345,3 +349,83 @@ def launch_managed_runtime(*, home: Path, lock_set: Any, bootstrap_handle: Attes
 
 
 __all__ = ["InstalledStorageRuntime", "InstalledRuntimeError", "launch_managed_runtime"]
+
+
+def bootstrap_main() -> None:
+    """Consume native-owned descriptors and supervise only our unreaped child."""
+    import signal
+    import sys
+    import time
+    from storage_lock import open_storage_lock_set
+
+    arguments = sys.argv[2:]
+    if len(arguments) != 7:
+        raise InstalledRuntimeError("invalid native handoff arguments")
+    home = Path(arguments[0])
+    if str(home) != os.environ.get("CORTEX_HOME") or home != home.resolve(strict=True):
+        raise InstalledRuntimeError("native handoff home mismatch")
+    descriptors = tuple(int(value) for value in arguments[1:])
+    if len(set(descriptors)) != 6 or any(fd < 3 for fd in descriptors):
+        raise InstalledRuntimeError("invalid native handoff descriptors")
+    handle = runtime = receipt = None
+    requested_signal = [None]
+    old_handlers = {}
+    owned_children = []
+    try:
+        for fd in descriptors:
+            os.set_inheritable(fd, False)
+        install, selector_fd, generation_fd, record_fd, manifest_fd, interpreter_fd = descriptors
+        selector = json.loads(_read_fd_bytes(selector_fd), object_pairs_hook=_reject_duplicate_keys)
+        manifest_bytes = _read_fd_bytes(manifest_fd)
+        generation_id = UUID(selector["generation_id"])
+        details = os.fstat(install)
+        handle = AttestedBootstrapHandle(
+            home, install, details.st_dev & 0xffffffff, details.st_ino, details.st_uid,
+            stat.S_IMODE(details.st_mode), selector_fd, generation_fd, record_fd, manifest_fd,
+            interpreter_fd, generation_id,
+            digest("CORTEX-S3\x00GENERATION-SELECTOR\x00V1\x00", selector),
+            selector["generation_record_sha256"], hashlib.sha256(manifest_bytes).hexdigest(),
+        )
+        for signum in (signal.SIGINT, signal.SIGTERM):
+            old_handlers[signum] = signal.signal(signum, lambda number, frame: requested_signal.__setitem__(0, number))
+        with open_storage_lock_set(home, install_mode="shared", storage_mode="shared",
+                                   bootstrap_install=handle) as locks:
+            runtime = InstalledStorageRuntime.from_installed_home_locked(home, locks, handle)
+            receipt = runtime.start_locked(locks, timeout_seconds=30, child_owner=owned_children.append)
+        # The child has independent shared lifetime locks. Release admission and
+        # bootstrap descriptors before waiting, so status/control remain usable.
+        runtime.close()
+        runtime = None
+        handle.close()
+        handle = None
+        child, = owned_children
+        stop_deadline = None
+        while child.poll() is None:
+            # Only this owner reaps the child; no background reaper can free
+            # its PID between the liveness check and signal delivery.
+            if requested_signal[0] is not None:
+                child.send_signal(requested_signal[0])
+                requested_signal[0] = None
+                stop_deadline = time.monotonic() + 8
+            elif stop_deadline is not None and time.monotonic() >= stop_deadline:
+                child.kill()
+                stop_deadline = None
+            time.sleep(0.05)
+        raise SystemExit(child.returncode)
+    finally:
+        for child in owned_children:
+            if child.poll() is None:
+                child.kill()
+            child.wait(timeout=5)
+        if runtime is not None:
+            runtime.close()
+        if handle is not None:
+            handle.close()
+        elif receipt is None:
+            for fd in descriptors:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+        for signum, previous in old_handlers.items():
+            signal.signal(signum, previous)

@@ -13,6 +13,8 @@ const network = vi.hoisted(() => ({
   putJson: vi.fn<JsonMock>(),
 }));
 
+const CURRENT_EXTENSION_PROTOCOL_VERSION = 3;
+
 vi.mock("@/lib/api", async () => {
   const actual = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
   return { ...actual, api: network.api, postJson: network.postJson, putJson: network.putJson };
@@ -232,8 +234,8 @@ describe("CortexApp conversation integration", () => {
           paired,
           pending_commands: 0,
           protocol_compatible: paired,
-          extension_protocol_version: paired ? 2 : null,
-          required_protocol_version: 2,
+          extension_protocol_version: paired ? CURRENT_EXTENSION_PROTOCOL_VERSION : null,
+          required_protocol_version: CURRENT_EXTENSION_PROTOCOL_VERSION,
         });
       }
       return defaultApi(path);
@@ -284,8 +286,8 @@ describe("CortexApp conversation integration", () => {
           paired: true,
           pending_commands: 0,
           protocol_compatible: true,
-          extension_protocol_version: 2,
-          required_protocol_version: 2,
+          extension_protocol_version: CURRENT_EXTENSION_PROTOCOL_VERSION,
+          required_protocol_version: CURRENT_EXTENSION_PROTOCOL_VERSION,
         }), 9_500));
       }
       return defaultApi(path);
@@ -329,8 +331,8 @@ describe("CortexApp conversation integration", () => {
           paired: true,
           pending_commands: 0,
           protocol_compatible: true,
-          extension_protocol_version: 2,
-          required_protocol_version: 2,
+          extension_protocol_version: CURRENT_EXTENSION_PROTOCOL_VERSION,
+          required_protocol_version: CURRENT_EXTENSION_PROTOCOL_VERSION,
         }), 9_500));
       }
       return defaultApi(path);

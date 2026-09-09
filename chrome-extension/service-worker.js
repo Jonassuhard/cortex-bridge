@@ -6,12 +6,26 @@ import {
   restoreQuarantinedWriterTabs,
   routeCommand,
 } from "./service-worker-core.js";
-import { commandError, createPairMessage, isChatGPTUrl } from "./protocol.js";
+import {
+  commandError,
+  createPairMessage,
+  isChatGPTUrl,
+  SESSION_RECEIPT_CAPABILITY,
+} from "./protocol.js";
 
 const SOCKET_URL = "ws://127.0.0.1:8420/api/chrome-extension/ws";
 const RECONNECT_ALARM = "cortex-bridge-reconnect";
+function createWorkerEpoch() {
+  if (typeof globalThis.crypto?.randomUUID === "function") {
+    return globalThis.crypto.randomUUID();
+  }
+  // Chrome 116 supplies crypto.randomUUID(). This fallback only keeps the
+  // worker testable in minimal JS contexts; a restart still gets a new epoch.
+  return `fallback-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
 const context = {
   chrome,
+  workerEpoch: createWorkerEpoch(),
   cortexTab: null,
   sessionTabs: new Map(),
   reusableWriterTabs: new Set(),
@@ -53,7 +67,12 @@ function connect() {
   activeSocket.addEventListener("open", () => {
     if (socket !== activeSocket) return;
     startHeartbeat();
-    if (pendingPair) send(createPairMessage(pendingPair));
+    if (pendingPair) {
+      send(createPairMessage(pendingPair, {
+        workerEpoch: context.workerEpoch,
+        capabilities: [SESSION_RECEIPT_CAPABILITY],
+      }));
+    }
   });
   activeSocket.addEventListener("message", async (event) => {
     if (socket !== activeSocket) return;
@@ -145,7 +164,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   void ensureCortexTabGroup(chrome, context.cortexTab);
   pendingPair = message.token;
   connect();
-  if (send(createPairMessage(pendingPair))) {
+  if (send(createPairMessage(pendingPair, {
+    workerEpoch: context.workerEpoch,
+    capabilities: [SESSION_RECEIPT_CAPABILITY],
+  }))) {
     sendResponse({ ok: true, state: "pairing" });
   } else {
     sendResponse({ ok: true, state: "connecting" });

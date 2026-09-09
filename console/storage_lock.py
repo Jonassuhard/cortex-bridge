@@ -65,6 +65,7 @@ class StorageLockSet:
     marker_mode: Literal[384] = 0o600
     deadline_ns: int = 0
     active: bool = True
+    _install_adopted: bool = field(default=False, repr=False)
     _storage_lock: StorageLock | None = field(default=None, repr=False)
 
     def __iter__(self):
@@ -121,7 +122,7 @@ class StorageLockSet:
         if not self.active:
             return
         self.active = False
-        for fd in (self.admission_fd, self.storage_fd, self.install_fd):
+        for fd in (self.admission_fd, self.storage_fd):
             try:
                 fcntl.flock(fd, fcntl.LOCK_UN)
             finally:
@@ -129,6 +130,14 @@ class StorageLockSet:
                     os.close(fd)
                 except OSError:
                     pass
+        try:
+            if not self._install_adopted:
+                fcntl.flock(self.install_fd, fcntl.LOCK_UN)
+        finally:
+            try:
+                os.close(self.install_fd)
+            except OSError:
+                pass
         if self._storage_lock is not None:
             self._storage_lock._closed = True
 
@@ -317,6 +326,7 @@ def open_storage_lock_set(
     install_mode: LockMode,
     storage_mode: LockMode,
     timeout_seconds: float = 5.0,
+    bootstrap_install: Any | None = None,
 ) -> ContextManager[StorageLockSet]:
     """Acquire install → storage → admission under one common deadline."""
     home = Path(home).resolve(strict=True)
@@ -325,17 +335,69 @@ def open_storage_lock_set(
     timeout = _require_timeout(timeout_seconds)
     deadline = _deadline(timeout)
     install_fd: int | None = None
+    install_adopted = False
     storage_fd: int | None = None
     admission_fd: int | None = None
     try:
         try:
-            install_fd = open_lifecycle_lock(home / ".install.lock", deadline=deadline)
-            _acquire(install_fd, checked_install, deadline)
+            if bootstrap_install is None:
+                install_fd = open_lifecycle_lock(home / ".install.lock", deadline=deadline)
+                _acquire(install_fd, checked_install, deadline)
+            else:
+                if checked_install != "shared":
+                    raise StorageLockError("STORAGE_LOCK_MODE")
+                if (
+                    not getattr(bootstrap_install, "active", False)
+                    or Path(getattr(bootstrap_install, "home", "")).resolve(strict=False) != home
+                ):
+                    raise StorageLockError("STORAGE_LOCK_INACTIVE")
+                source_fd = getattr(bootstrap_install, "install_lock_fd", -1)
+                try:
+                    source_details = os.fstat(source_fd)
+                    path_details = os.stat(
+                        home / ".install.lock", follow_symlinks=False
+                    )
+                except OSError as exc:
+                    raise StorageLockError("STORAGE_LOCK_REPLACED") from exc
+                if (
+                    not stat.S_ISREG(source_details.st_mode)
+                    or not stat.S_ISREG(path_details.st_mode)
+                    or source_details.st_uid != os.getuid()
+                    or stat.S_IMODE(source_details.st_mode) != 0o600
+                    or source_details.st_nlink != 1
+                    or (
+                        source_details.st_dev,
+                        source_details.st_ino,
+                        source_details.st_uid,
+                    )
+                    != (
+                        path_details.st_dev,
+                        path_details.st_ino,
+                        path_details.st_uid,
+                    )
+                    or (
+                        source_details.st_dev & 0xFFFFFFFF,
+                        source_details.st_ino,
+                        source_details.st_uid,
+                        stat.S_IMODE(source_details.st_mode),
+                    )
+                    != (
+                        getattr(bootstrap_install, "install_lock_dev_u32", None),
+                        getattr(bootstrap_install, "install_lock_ino", None),
+                        getattr(bootstrap_install, "install_lock_uid", None),
+                        getattr(bootstrap_install, "install_lock_mode", None),
+                    )
+                ):
+                    raise StorageLockError("STORAGE_LOCK_REPLACED")
+                install_fd = os.dup(source_fd)
+                install_adopted = True
             storage_fd = open_lifecycle_lock(home / _LOCK_NAME, deadline=deadline)
             _acquire(storage_fd, checked_storage, deadline)
             admission_path = home / "storage-admission.lock"
             admission_fd = open_lifecycle_lock(admission_path, deadline=deadline)
             _acquire(admission_fd, "exclusive", deadline)
+        except StorageLockError:
+            raise
         except LifecycleLockTimeout as exc:
             raise StorageLockError("STORAGE_LOCK_TIMEOUT") from exc
         except RuntimeError as exc:
@@ -356,6 +418,7 @@ def open_storage_lock_set(
             admission_ino=admission_details.st_ino, admission_uid=admission_details.st_uid,
             install_mode=checked_install, storage_mode=checked_storage,
             deadline_ns=time.monotonic_ns() + int(timeout * 1_000_000_000),
+            _install_adopted=install_adopted,
         )
         install_fd = storage_fd = admission_fd = None
         try:
@@ -366,6 +429,7 @@ def open_storage_lock_set(
         for fd in (admission_fd, storage_fd, install_fd):
             if fd is not None:
                 try:
-                    fcntl.flock(fd, fcntl.LOCK_UN)
+                    if fd != install_fd or not install_adopted:
+                        fcntl.flock(fd, fcntl.LOCK_UN)
                 finally:
                     os.close(fd)

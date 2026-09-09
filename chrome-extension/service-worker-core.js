@@ -1,4 +1,8 @@
-import { ExtensionCommandError, isChatGPTUrl } from "./protocol.js";
+import {
+  ExtensionCommandError,
+  isChatGPTUrl,
+  SESSION_RECEIPT_CAPABILITY,
+} from "./protocol.js";
 
 export const HEARTBEAT_INTERVAL_MS = 20_000;
 let tabAllocationTail = Promise.resolve();
@@ -19,6 +23,7 @@ const DELIVERY_SENSITIVE_ACTIONS = new Set([
 ]);
 
 export const ALLOWED_COMMANDS = new Set([
+  "session_init",
   "open_chatgpt",
   "release_session",
   "focus_tab",
@@ -1487,7 +1492,160 @@ async function openForSessionUnlocked(
   };
 }
 
+function sessionCommandState(context, session) {
+  if (!(context.sessionCommandStates instanceof Map)) {
+    context.sessionCommandStates = new Map();
+  }
+  let state = context.sessionCommandStates.get(session);
+  if (!state) {
+    state = { phase: "active", inFlight: 0, idleWaiters: new Set() };
+    context.sessionCommandStates.set(session, state);
+  }
+  return state;
+}
+
+function freshSessionCommandState() {
+  return { phase: "active", inFlight: 0, idleWaiters: new Set() };
+}
+
+function receiptEpoch(context) {
+  if (typeof context.workerEpoch !== "string" || !context.workerEpoch) {
+    const randomUUID = globalThis.crypto?.randomUUID;
+    context.workerEpoch = typeof randomUUID === "function"
+      ? randomUUID.call(globalThis.crypto)
+      : `test-worker-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  }
+  return context.workerEpoch;
+}
+
+function newSessionEpoch(context) {
+  const randomUUID = globalThis.crypto?.randomUUID;
+  if (typeof randomUUID === "function") return randomUUID.call(globalThis.crypto);
+  context.sessionReceiptCounter = Number(context.sessionReceiptCounter || 0) + 1;
+  return `${receiptEpoch(context)}:session:${context.sessionReceiptCounter}`;
+}
+
+function releaseReceiptProof(context, session, payload) {
+  const state = sessionCommandState(context, session);
+  const sessionEpoch = typeof payload?.session_epoch === "string"
+    ? payload.session_epoch
+    : "";
+  const releaseRequestId = typeof payload?.release_request_id === "string"
+    ? payload.release_request_id
+    : "";
+  if (!state.sessionEpoch || sessionEpoch !== state.sessionEpoch || !releaseRequestId) {
+    throw new ExtensionCommandError(
+      "INVALID_RELEASE_RECEIPT",
+      "Chrome extension cannot attest this session release",
+    );
+  }
+  return { sessionEpoch, releaseRequestId };
+}
+
+function commandDeadlineMs(command) {
+  const timeoutMs = Number(command.timeout_ms);
+  const bounded = Number.isFinite(timeoutMs)
+    ? Math.max(1, Math.min(60_000, timeoutMs))
+    : 5_000;
+  return Date.now() + bounded;
+}
+
+function finishSessionCommand(state) {
+  state.inFlight -= 1;
+  if (state.inFlight !== 0) return;
+  for (const resolve of state.idleWaiters) resolve();
+  state.idleWaiters.clear();
+}
+
+async function waitForSessionQuiescence(state, deadlineMs) {
+  if (state.inFlight === 0) return;
+  const remaining = deadlineMs - Date.now();
+  if (remaining <= 0) {
+    throw new ExtensionCommandError(
+      "SESSION_QUIESCENCE_TIMEOUT",
+      "Cortex could not confirm that the session stopped before release",
+    );
+  }
+  await new Promise((resolve, reject) => {
+    let settled = false;
+    const settle = (callback) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      state.idleWaiters.delete(onIdle);
+      callback();
+    };
+    const onIdle = () => settle(resolve);
+    const timer = setTimeout(() => settle(() => reject(new ExtensionCommandError(
+      "SESSION_QUIESCENCE_TIMEOUT",
+      "Cortex could not confirm that the session stopped before release",
+    ))), remaining);
+    state.idleWaiters.add(onIdle);
+  });
+}
+
 export async function routeCommand(context, command) {
+  const { session, action } = command;
+  // Let the existing validator return the canonical errors for malformed
+  // envelopes before a per-session state is allocated.
+  if (!ALLOWED_COMMANDS.has(action) || !session || typeof session !== "string") {
+    return routeCommandUnchecked(context, command);
+  }
+  let state = sessionCommandState(context, session);
+  if (action === "session_init" && state.phase === "released") {
+    state = freshSessionCommandState();
+    context.sessionCommandStates.set(session, state);
+  }
+  if (action === "release_session") {
+    // Validate the generation before closing it. A delayed release from an
+    // older generation must not poison or detach the current binding.
+    releaseReceiptProof(context, session, command.payload);
+    if (state.phase === "released") {
+      throw new ExtensionCommandError(
+        "INVALID_RELEASE_RECEIPT",
+        "Chrome extension cannot release an already released session generation",
+      );
+    }
+    // This transition is synchronous: every command that arrives after it is
+    // refused, while commands already inside routeCommandUnchecked drain.
+    state.phase = "closing";
+    await waitForSessionQuiescence(state, commandDeadlineMs(command));
+    const result = await routeCommandUnchecked(context, command);
+    if (result?.released === true && result?.quiescent === true) {
+      state.phase = "released";
+    }
+    return result;
+  }
+  if (state.phase !== "active") {
+    throw new ExtensionCommandError(
+      "SESSION_RELEASING",
+      "Cortex session is awaiting a confirmed release",
+    );
+  }
+  if (action !== "session_init" && !state.sessionEpoch) {
+    throw new ExtensionCommandError(
+      "SESSION_NOT_INITIALIZED",
+      "Cortex refused a browser command before session initialization",
+    );
+  }
+  if (
+    action !== "session_init"
+    && command.payload?.session_epoch !== state.sessionEpoch
+  ) {
+    throw new ExtensionCommandError(
+      "SESSION_EPOCH_MISMATCH",
+      "Cortex refused a command from an obsolete session generation",
+    );
+  }
+  state.inFlight += 1;
+  try {
+    return await routeCommandUnchecked(context, command);
+  } finally {
+    finishSessionCommand(state);
+  }
+}
+
+async function routeCommandUnchecked(context, command) {
   const { session, action, payload = {} } = command;
   if (!ALLOWED_COMMANDS.has(action)) {
     throw new ExtensionCommandError(
@@ -1497,6 +1655,17 @@ export async function routeCommand(context, command) {
   }
   if (!session || typeof session !== "string") {
     throw new ExtensionCommandError("INVALID_SESSION", "A Cortex session ID is required");
+  }
+  if (action === "session_init") {
+    const state = sessionCommandState(context, session);
+    if (!state.sessionEpoch) state.sessionEpoch = newSessionEpoch(context);
+    return {
+      receipt_type: "session_init.v1",
+      capability: SESSION_RECEIPT_CAPABILITY,
+      session,
+      worker_epoch: receiptEpoch(context),
+      session_epoch: state.sessionEpoch,
+    };
   }
   if (action === "open_chatgpt") return openForSession(context, session);
   if (action === "send_text") {
@@ -1523,6 +1692,7 @@ export async function routeCommand(context, command) {
     );
   }
   if (action === "release_session") {
+    const { sessionEpoch, releaseRequestId } = releaseReceiptProof(context, session, payload);
     const tabId = context.sessionTabs.get(session);
     if (session.startsWith("cortex-conv-") && Number.isInteger(tabId)) {
       if (payload?.reusable === false) {
@@ -1540,7 +1710,14 @@ export async function routeCommand(context, command) {
     }
     context.sessionTabs.delete(session);
     return {
-      released: Number.isInteger(tabId),
+      receipt_type: "session_release.v1",
+      capability: SESSION_RECEIPT_CAPABILITY,
+      session,
+      worker_epoch: receiptEpoch(context),
+      session_epoch: sessionEpoch,
+      release_request_id: releaseRequestId,
+      released: true,
+      quiescent: true,
       tab_id: Number.isInteger(tabId) ? tabId : null,
     };
   }

@@ -1258,6 +1258,7 @@ export function CortexApp() {
         settings={settings}
         ollamaModels={ollamaModels}
         chatgptModels={chatgptModels}
+        runtime={runtime}
         runtimeExecution={pipeline.runtime_execution}
         saving={settingsSaving}
         onClose={() => setSettingsOpen(false)}

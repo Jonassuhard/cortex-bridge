@@ -3,7 +3,7 @@
   "target": "app/bin/cortex-storage-broker",
   "source": "native/macos/disk_image_keychain.swift",
   "configuration": "production",
-  "swiftc": ["-O", "-parse-as-library"],
+  "swiftc": ["-O", "-target", "arm64-apple-macosx14.0"],
   "frameworks": ["Foundation", "Security"],
   "test_routes": false,
   "environment": ["PATH=/usr/bin:/bin:/usr/sbin:/sbin", "LANG=C", "LC_ALL=C"]

@@ -3,17 +3,37 @@ import Foundation
 
 struct MountFacts: Codable {
     let schema_version: Int
-    let st_dev: Int64
-    let fsid: [Int32]
+    let st_dev_u32: UInt32
+    let fsid_u32: [UInt32]
     let flags: UInt64
     let filesystem_type: String
     let mount_from: String
     let mount_on: String
+    let volume_uuid: String
 }
 
 enum ProbeError: Error {
     case invalidInput
     case systemFailure
+}
+
+// Read only metadata for the already-held directory. No pathname is opened.
+func descriptorVolumeUUID(_ fd: Int32) throws -> String {
+    var attributes = attrlist()
+    attributes.bitmapcount = UInt16(ATTR_BIT_MAP_COUNT)
+    attributes.volattr = attrgroup_t(ATTR_VOL_INFO) | attrgroup_t(ATTR_VOL_UUID)
+    var buffer = [UInt8](repeating: 0, count: 20)
+    let result = buffer.withUnsafeMutableBytes {
+        fgetattrlist(fd, &attributes, $0.baseAddress, $0.count, 0)
+    }
+    guard result == 0 else { throw ProbeError.systemFailure }
+    let length = buffer.withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) }
+    guard length == 20, buffer[4...].contains(where: { $0 != 0 }) else {
+        throw ProbeError.systemFailure
+    }
+    return buffer.withUnsafeBufferPointer {
+        NSUUID(uuidBytes: $0.baseAddress!.advanced(by: 4)).uuidString.lowercased()
+    }
 }
 
 func stringFromFixedCString<T>(_ value: T) throws -> String {
@@ -50,12 +70,13 @@ func probe(fd: Int32) throws -> MountFacts {
 
     return try MountFacts(
         schema_version: 1,
-        st_dev: Int64(descriptorFacts.st_dev),
-        fsid: [mountFacts.f_fsid.val.0, mountFacts.f_fsid.val.1],
+        st_dev_u32: UInt32(bitPattern: descriptorFacts.st_dev),
+        fsid_u32: [UInt32(bitPattern: mountFacts.f_fsid.val.0), UInt32(bitPattern: mountFacts.f_fsid.val.1)],
         flags: UInt64(mountFacts.f_flags),
         filesystem_type: stringFromFixedCString(mountFacts.f_fstypename),
         mount_from: stringFromFixedCString(mountFacts.f_mntfromname),
-        mount_on: stringFromFixedCString(mountFacts.f_mntonname)
+        mount_on: stringFromFixedCString(mountFacts.f_mntonname),
+        volume_uuid: descriptorVolumeUUID(fd)
     )
 }
 
@@ -75,12 +96,13 @@ func descriptorArgument() -> Int32? {
 func writeJSON(_ facts: MountFacts) throws {
     let object: [String: Any] = [
         "schema_version": facts.schema_version,
-        "st_dev": NSNumber(value: facts.st_dev),
-        "fsid": facts.fsid.map { NSNumber(value: $0) },
+        "st_dev_u32": NSNumber(value: facts.st_dev_u32),
+        "fsid_u32": facts.fsid_u32.map { NSNumber(value: $0) },
         "flags": NSNumber(value: facts.flags),
         "filesystem_type": facts.filesystem_type,
         "mount_from": facts.mount_from,
         "mount_on": facts.mount_on,
+        "volume_uuid": facts.volume_uuid,
     ]
     var data = try JSONSerialization.data(withJSONObject: object, options: [])
     data.append(0x0A)

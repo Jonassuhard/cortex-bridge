@@ -15,6 +15,7 @@ from collections import defaultdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
@@ -297,6 +298,10 @@ class ChatRouteSessionIsolationTest(unittest.IsolatedAsyncioTestCase):
         chat_api._runs.clear()
         chat_api._view_transport = None
         chat_api._view_url = None
+        self.saved_view_cleanup_candidate = getattr(
+            chat_api, "_view_cleanup_candidate", None
+        )
+        chat_api._view_cleanup_candidate = None
         missions_api.optin_accepted = lambda: True
         self.finish = asyncio.Event()
         self.sessions: list[str | None] = []
@@ -354,6 +359,7 @@ class ChatRouteSessionIsolationTest(unittest.IsolatedAsyncioTestCase):
         chat_api._runs.update(self.saved_runs)
         chat_api._view_transport = None
         chat_api._view_url = None
+        chat_api._view_cleanup_candidate = self.saved_view_cleanup_candidate
         self.tmp.cleanup()
 
     async def test_two_chat_routes_use_writer_leases_view_is_separate_and_third_is_409(self) -> None:
@@ -493,6 +499,83 @@ class ChatRouteSessionIsolationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(snapshot["conversation_id"], "recovered-view")
         self.assertEqual(len(created), 2)
 
+    async def test_normal_switch_and_recovery_use_three_distinct_reader_lifecycles(self) -> None:
+        created: list[object] = []
+        cached_driver = None
+        events: list[str] = []
+
+        class CachedDriver:
+            def __init__(self, generation: int) -> None:
+                self.generation = generation
+                self.live = True
+
+            async def close(self) -> None:
+                events.append(f"close:{self.generation}")
+                self.live = False
+
+        class CachedTransport:
+            def __init__(self, driver: CachedDriver) -> None:
+                self.driver = driver
+                self.lock = None
+
+            async def select_conversation(self, url: str):
+                if not self.driver.live:
+                    raise RuntimeError("selected reader was already closed")
+                events.append(f"select:{self.driver.generation}")
+                self.lock = SimpleNamespace(url=url, identity=url.rsplit("/", 1)[-1])
+                return self.lock
+
+            async def snapshot(self, *, verify_lock: bool = True) -> dict:
+                del verify_lock
+                if not self.driver.live:
+                    raise RuntimeError("published reader was closed by its predecessor")
+                if self.driver.generation == 2:
+                    raise TransportError(CONVERSATION_MISMATCH, "recover this reader")
+                return {
+                    "url": self.lock.url,
+                    "conversation_id": self.lock.identity,
+                    "messages": [],
+                }
+
+            async def close(self) -> None:
+                await self.driver.close()
+
+        def cached_factory(session_id: str | None = None):
+            nonlocal cached_driver
+            self.assertEqual(session_id, chat_api.READ_ONLY_SESSION_ID)
+            if cached_driver is None or not cached_driver.live:
+                cached_driver = CachedDriver(len(created) + 1)
+            transport = CachedTransport(cached_driver)
+            created.append(transport)
+            events.append(f"factory:{cached_driver.generation}")
+            return transport
+
+        chat_api.ui_transport_factory = cached_factory
+
+        first = await chat_api.conversation_snapshot("https://chatgpt.com/c/first")
+        recovered = await chat_api.conversation_snapshot("https://chatgpt.com/c/recovered")
+
+        self.assertEqual(first["conversation_id"], "first")
+        self.assertEqual(recovered["conversation_id"], "recovered")
+        self.assertEqual(len(created), 3)
+        self.assertEqual(len({id(transport.driver) for transport in created}), 3)
+        self.assertEqual(
+            events,
+            [
+                "factory:1",
+                "select:1",
+                "close:1",
+                "factory:2",
+                "select:2",
+                "close:2",
+                "factory:3",
+                "select:3",
+            ],
+        )
+        self.assertFalse(created[0].driver.live)
+        self.assertFalse(created[1].driver.live)
+        self.assertTrue(created[2].driver.live)
+
     async def test_concurrent_snapshots_cannot_retarget_the_shared_view_session(self) -> None:
         snapshot_started = asyncio.Event()
         release_first = asyncio.Event()
@@ -541,6 +624,392 @@ class ChatRouteSessionIsolationTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result_a["conversation_id"], "view-a")
         self.assertEqual(result_b["conversation_id"], "view-b")
+
+    async def test_selection_and_read_share_one_eight_second_snapshot_budget(self) -> None:
+        class SlowViewTransport:
+            lock = None
+
+            async def select_conversation(self, url: str):
+                await asyncio.sleep(0.03)
+                self.lock = SimpleNamespace(url=url, identity="budget")
+                return self.lock
+
+            async def snapshot(self, *, verify_lock: bool = True) -> dict:
+                del verify_lock
+                await asyncio.sleep(0.03)
+                return {
+                    "url": self.lock.url,
+                    "conversation_id": self.lock.identity,
+                    "messages": [],
+                }
+
+            async def close(self) -> None:
+                return None
+
+        chat_api.ui_transport_factory = lambda _session_id=None: SlowViewTransport()
+        with mock.patch.object(
+            chat_api,
+            "TRANSPORT_SNAPSHOT_BUDGET_SECONDS",
+            0.05,
+            create=True,
+        ):
+            with self.assertRaises(HTTPException) as raised:
+                await chat_api.conversation_snapshot("https://chatgpt.com/c/budget")
+
+        self.assertEqual(raised.exception.status_code, 503)
+        self.assertIn("SNAPSHOT_ACQUISITION_TIMEOUT", str(raised.exception.detail))
+
+    async def test_timed_out_unpublished_view_candidate_is_closed_without_publication(self) -> None:
+        created: list[object] = []
+
+        class TimedOutCandidate:
+            def __init__(self) -> None:
+                self.close_calls = 0
+                self.selection_cancelled = False
+
+            async def select_conversation(self, _url: str):
+                try:
+                    await asyncio.sleep(1)
+                except asyncio.CancelledError:
+                    self.selection_cancelled = True
+                    raise
+
+            async def close(self) -> None:
+                self.close_calls += 1
+
+        def factory(_session_id=None):
+            candidate = TimedOutCandidate()
+            created.append(candidate)
+            return candidate
+
+        chat_api.ui_transport_factory = factory
+        with (
+            mock.patch.object(chat_api, "TRANSPORT_SNAPSHOT_BUDGET_SECONDS", 0.05),
+            mock.patch.object(
+                chat_api,
+                "SNAPSHOT_CANDIDATE_CLEANUP_RESERVE_SECONDS",
+                0.01,
+            ),
+        ):
+            with self.assertRaises(HTTPException) as raised:
+                await chat_api.conversation_snapshot("https://chatgpt.com/c/unpublished")
+
+        candidate = created[0]
+        self.assertIn("SNAPSHOT_ACQUISITION_TIMEOUT", str(raised.exception.detail))
+        self.assertTrue(candidate.selection_cancelled)
+        self.assertEqual(candidate.close_calls, 1)
+        self.assertIsNone(chat_api._view_transport)
+        self.assertIsNone(chat_api._view_url)
+
+    async def test_timed_out_candidate_close_is_cancelled_within_the_snapshot_budget(self) -> None:
+        created: list[object] = []
+
+        class SlowClosingCandidate:
+            def __init__(self) -> None:
+                self.selection_cancelled = False
+                self.close_started = False
+                self.close_cancelled = False
+                self.close_active = 0
+
+            async def select_conversation(self, _url: str):
+                try:
+                    await asyncio.sleep(1)
+                except asyncio.CancelledError:
+                    self.selection_cancelled = True
+                    raise
+
+            async def close(self) -> None:
+                self.close_started = True
+                self.close_active += 1
+                try:
+                    await asyncio.sleep(1)
+                except asyncio.CancelledError:
+                    self.close_cancelled = True
+                    raise
+                finally:
+                    self.close_active -= 1
+
+        def factory(_session_id=None):
+            candidate = SlowClosingCandidate()
+            created.append(candidate)
+            return candidate
+
+        chat_api.ui_transport_factory = factory
+        pending_before = {
+            task for task in asyncio.all_tasks()
+            if task is not asyncio.current_task() and not task.done()
+        }
+        started = asyncio.get_running_loop().time()
+        with (
+            mock.patch.object(chat_api, "TRANSPORT_SNAPSHOT_BUDGET_SECONDS", 0.02),
+            mock.patch.object(
+                chat_api,
+                "SNAPSHOT_CANDIDATE_CLEANUP_RESERVE_SECONDS",
+                0.005,
+                create=True,
+            ),
+        ):
+            with self.assertRaises(HTTPException) as raised:
+                await chat_api.conversation_snapshot("https://chatgpt.com/c/slow-close")
+        elapsed = asyncio.get_running_loop().time() - started
+
+        candidate = created[0]
+        self.assertLess(elapsed, 0.08)
+        self.assertIn("SNAPSHOT_ACQUISITION_TIMEOUT", str(raised.exception.detail))
+        self.assertTrue(candidate.selection_cancelled)
+        self.assertTrue(candidate.close_started)
+        self.assertTrue(candidate.close_cancelled)
+        self.assertEqual(candidate.close_active, 0)
+        self.assertIsNone(chat_api._view_transport)
+        self.assertIsNone(chat_api._view_url)
+        pending_after = {
+            task for task in asyncio.all_tasks()
+            if task is not asyncio.current_task() and not task.done()
+        }
+        self.assertEqual(pending_after - pending_before, set())
+
+    async def test_failed_candidate_close_is_retained_until_a_retry_is_confirmed(self) -> None:
+        created: list[object] = []
+
+        class RetriableClosingCandidate:
+            def __init__(self, *, ready: bool) -> None:
+                self.ready = ready
+                self.close_calls = 0
+                self.lock = None
+
+            async def select_conversation(self, url: str):
+                if not self.ready:
+                    await asyncio.sleep(1)
+                self.lock = SimpleNamespace(url=url, identity="reconciled")
+                return self.lock
+
+            async def snapshot(self, *, verify_lock: bool = True) -> dict:
+                del verify_lock
+                return {
+                    "url": self.lock.url,
+                    "conversation_id": self.lock.identity,
+                    "messages": [],
+                }
+
+            async def close(self) -> None:
+                self.close_calls += 1
+                if self.close_calls < 3:
+                    raise RuntimeError("release ACK unavailable")
+
+        def factory(_session_id=None):
+            candidate = RetriableClosingCandidate(ready=bool(created))
+            created.append(candidate)
+            return candidate
+
+        chat_api.ui_transport_factory = factory
+        patches = (
+            mock.patch.object(chat_api, "TRANSPORT_SNAPSHOT_BUDGET_SECONDS", 0.04),
+            mock.patch.object(
+                chat_api,
+                "SNAPSHOT_CANDIDATE_CLEANUP_RESERVE_SECONDS",
+                0.01,
+                create=True,
+            ),
+        )
+        with patches[0], patches[1]:
+            with self.assertRaises(HTTPException) as first:
+                await chat_api.conversation_snapshot("https://chatgpt.com/c/pending-close")
+            self.assertIn("candidate cleanup pending", str(first.exception.detail))
+            self.assertIsNotNone(chat_api._view_cleanup_candidate)
+            self.assertEqual(len(created), 1)
+
+            with self.assertRaises(HTTPException) as second:
+                await chat_api.conversation_snapshot("https://chatgpt.com/c/pending-close")
+            self.assertIn("candidate cleanup pending", str(second.exception.detail))
+            self.assertEqual(created[0].close_calls, 2)
+            self.assertEqual(len(created), 1)
+            self.assertIsNone(chat_api._view_transport)
+            self.assertIsNone(chat_api._view_url)
+
+            snapshot = await chat_api.conversation_snapshot(
+                "https://chatgpt.com/c/pending-close"
+            )
+
+        self.assertEqual(snapshot["conversation_id"], "reconciled")
+        self.assertEqual(created[0].close_calls, 3)
+        self.assertEqual(len(created), 2)
+        self.assertIsNone(chat_api._view_cleanup_candidate)
+
+    async def test_published_reader_cleanup_blocks_new_allocation_until_confirmed(self) -> None:
+        created: list[object] = []
+
+        class RetriablePublishedTransport:
+            def __init__(self, generation: int) -> None:
+                self.generation = generation
+                self.close_calls = 0
+                self.lock = None
+
+            async def select_conversation(self, url: str):
+                self.lock = SimpleNamespace(url=url, identity=url.rsplit("/", 1)[-1])
+                return self.lock
+
+            async def snapshot(self, *, verify_lock: bool = True) -> dict:
+                del verify_lock
+                return {
+                    "url": self.lock.url,
+                    "conversation_id": self.lock.identity,
+                    "messages": [],
+                }
+
+            async def close(self) -> None:
+                self.close_calls += 1
+                if self.generation == 1 and self.close_calls < 3:
+                    raise RuntimeError("release ACK unavailable")
+
+        def factory(_session_id=None):
+            transport = RetriablePublishedTransport(len(created) + 1)
+            created.append(transport)
+            return transport
+
+        chat_api.ui_transport_factory = factory
+        first = await chat_api.conversation_snapshot("https://chatgpt.com/c/first")
+        self.assertEqual(first["conversation_id"], "first")
+
+        with self.assertRaises(HTTPException):
+            await chat_api.conversation_snapshot("https://chatgpt.com/c/second")
+        self.assertEqual(len(created), 1)
+        self.assertIsNotNone(chat_api._view_cleanup_candidate)
+
+        with self.assertRaises(HTTPException):
+            await chat_api.conversation_snapshot("https://chatgpt.com/c/second")
+        self.assertEqual(len(created), 1)
+
+        second = await chat_api.conversation_snapshot("https://chatgpt.com/c/second")
+        self.assertEqual(second["conversation_id"], "second")
+        self.assertEqual(len(created), 2)
+        self.assertEqual(created[0].close_calls, 3)
+        self.assertIsNone(chat_api._view_cleanup_candidate)
+
+    async def test_candidate_selection_can_use_almost_the_full_snapshot_budget(self) -> None:
+        class SlowSuccessfulCandidate:
+            lock = None
+
+            async def select_conversation(self, url: str):
+                await asyncio.sleep(0.15)
+                self.lock = SimpleNamespace(url=url, identity="long-switch")
+                return self.lock
+
+            async def snapshot(self, *, verify_lock: bool = True) -> dict:
+                del verify_lock
+                return {
+                    "url": self.lock.url,
+                    "conversation_id": self.lock.identity,
+                    "messages": [],
+                }
+
+            async def close(self) -> None:
+                return None
+
+        chat_api.ui_transport_factory = lambda _session_id=None: SlowSuccessfulCandidate()
+        with (
+            mock.patch.object(chat_api, "TRANSPORT_SNAPSHOT_BUDGET_SECONDS", 0.16),
+            mock.patch.object(
+                chat_api,
+                "SNAPSHOT_CANDIDATE_CLEANUP_RESERVE_SECONDS",
+                0.002,
+                create=True,
+            ),
+        ):
+            snapshot = await chat_api.conversation_snapshot("https://chatgpt.com/c/long-switch")
+
+        self.assertEqual(snapshot["conversation_id"], "long-switch")
+
+    async def test_recovery_cannot_reset_the_snapshot_budget(self) -> None:
+        created: list[object] = []
+
+        class RecoveringViewTransport:
+            def __init__(self, *, stale: bool):
+                self.stale = stale
+                self.lock = None
+
+            async def select_conversation(self, url: str):
+                await asyncio.sleep(0.02)
+                self.lock = SimpleNamespace(url=url, identity="recovery")
+                return self.lock
+
+            async def snapshot(self, *, verify_lock: bool = True) -> dict:
+                del verify_lock
+                await asyncio.sleep(0.02)
+                if self.stale:
+                    raise TransportError(CONVERSATION_MISMATCH, "stale reader")
+                return {
+                    "url": self.lock.url,
+                    "conversation_id": self.lock.identity,
+                    "messages": [],
+                }
+
+            async def close(self) -> None:
+                return None
+
+        def factory(_session_id=None):
+            transport = RecoveringViewTransport(stale=not created)
+            created.append(transport)
+            return transport
+
+        chat_api.ui_transport_factory = factory
+        with (
+            mock.patch.object(
+                chat_api,
+                "TRANSPORT_SNAPSHOT_BUDGET_SECONDS",
+                0.07,
+                create=True,
+            ),
+            mock.patch.object(
+                chat_api,
+                "SNAPSHOT_CANDIDATE_CLEANUP_RESERVE_SECONDS",
+                0.01,
+            ),
+        ):
+            with self.assertRaises(HTTPException) as raised:
+                await chat_api.conversation_snapshot("https://chatgpt.com/c/recovery")
+
+        self.assertEqual(len(created), 2)
+        self.assertIn("SNAPSHOT_ACQUISITION_TIMEOUT", str(raised.exception.detail))
+
+    async def test_waiting_for_the_view_lock_consumes_the_same_budget_and_releases_it(self) -> None:
+        class ReadyViewTransport:
+            lock = None
+
+            async def select_conversation(self, url: str):
+                self.lock = SimpleNamespace(url=url, identity="lock")
+                return self.lock
+
+            async def snapshot(self, *, verify_lock: bool = True) -> dict:
+                del verify_lock
+                return {
+                    "url": self.lock.url,
+                    "conversation_id": self.lock.identity,
+                    "messages": [],
+                }
+
+            async def close(self) -> None:
+                return None
+
+        chat_api.ui_transport_factory = lambda _session_id=None: ReadyViewTransport()
+        lock = chat_api._view_operation_lock()
+        await lock.acquire()
+
+        async def release_after_deadline() -> None:
+            await asyncio.sleep(0.03)
+            lock.release()
+
+        release = asyncio.create_task(release_after_deadline())
+        with mock.patch.object(
+            chat_api,
+            "TRANSPORT_SNAPSHOT_BUDGET_SECONDS",
+            0.02,
+            create=True,
+        ):
+            with self.assertRaises(HTTPException) as raised:
+                await chat_api.conversation_snapshot("https://chatgpt.com/c/lock")
+        await release
+        self.assertFalse(lock.locked())
+        self.assertIn("SNAPSHOT_ACQUISITION_TIMEOUT", str(raised.exception.detail))
 
     async def test_invalid_settings_fail_run_and_release_exact_writer_capacity(self) -> None:
         invalid_settings = Path(self.tmp.name) / "invalid-settings.json"

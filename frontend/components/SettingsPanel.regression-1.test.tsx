@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { demoPipeline, demoSettings } from "@/lib/demo";
+import { demoPipeline, demoRuntime, demoSettings } from "@/lib/demo";
 import { SettingsPanel } from "./SettingsPanel";
 
 describe("SettingsPanel settings refresh", () => {
@@ -14,6 +14,7 @@ describe("SettingsPanel settings refresh", () => {
       open: true,
       ollamaModels: [],
       chatgptModels: [],
+      runtime: demoRuntime,
       runtimeExecution: demoPipeline.runtime_execution,
       saving: false,
       onClose: vi.fn<() => void>(),

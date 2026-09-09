@@ -25,12 +25,36 @@ const EXTENSION_ROOT = join(HERE, "..");
 
 test("pair envelopes attest the extension protocol generation", () => {
   assert.equal(typeof protocol.createPairMessage, "function");
-  assert.deepEqual(protocol.createPairMessage("pair-token"), {
+  assert.deepEqual(protocol.createPairMessage("pair-token", {
+    workerEpoch: "worker-epoch-a",
+    capabilities: ["session_quiescence_receipt_v1"],
+  }), {
     type: "pair",
     token: "pair-token",
-    protocol_version: 2,
+    protocol_version: 3,
+    worker_epoch: "worker-epoch-a",
+    capabilities: ["session_quiescence_receipt_v1"],
   });
 });
+
+async function initializeSession(context, session) {
+  return routeCommand(context, { session, action: "session_init", payload: {} });
+}
+
+function releasePayload(proof, releaseRequestId, extra = {}) {
+  return {
+    ...extra,
+    session_epoch: proof.session_epoch,
+    release_request_id: releaseRequestId,
+  };
+}
+
+function sessionPayload(proof, extra = {}) {
+  return {
+    ...extra,
+    session_epoch: proof.session_epoch,
+  };
+}
 
 async function getContentScriptState(messageNodes, action = "get_state") {
   const source = await readFile(join(EXTENSION_ROOT, "chatgpt-content.js"), "utf8");
@@ -1416,6 +1440,252 @@ test("routes only allowlisted structured commands", async () => {
   assert.equal(ALLOWED_COMMANDS.has("raw_evaluate"), false);
 });
 
+test("every Chrome command refuses an uninitialized session before Chrome access", async () => {
+  const chromeAccesses = [];
+  const chrome = new Proxy({}, {
+    get(_target, property) {
+      chromeAccesses.push(String(property));
+      throw new Error(`unexpected Chrome access through ${String(property)}`);
+    },
+  });
+  const payload = {
+    url: "https://chatgpt.com/c/preinit",
+    expected_url: "https://chatgpt.com/c/preinit",
+    text: "must not be sent",
+    name: "fixture.txt",
+    size: 1,
+    transfer_id: "preinit-transfer",
+    offset: 0,
+    data: "YQ==",
+    model: "GPT-5",
+  };
+  const guardedActions = [...ALLOWED_COMMANDS].filter(
+    (action) => action !== "session_init" && action !== "release_session",
+  );
+  const observed = [];
+
+  for (const action of guardedActions) {
+    const session = `preinit-${action}`;
+    const context = {
+      chrome,
+      cortexTab: { id: 31, windowId: 7, index: 0 },
+      sessionTabs: new Map([[session, 32]]),
+    };
+    try {
+      await routeCommand(context, { session, action, payload });
+      observed.push([action, "resolved"]);
+    } catch (error) {
+      observed.push([action, error?.code || error?.message || "unknown error"]);
+    }
+  }
+
+  assert.deepEqual(
+    observed,
+    guardedActions.map((action) => [action, "SESSION_NOT_INITIALIZED"]),
+  );
+  assert.deepEqual(chromeAccesses, []);
+});
+
+test("release before initialization keeps proof-first validation and never touches Chrome", async () => {
+  const chromeAccesses = [];
+  const context = {
+    chrome: new Proxy({}, {
+      get(_target, property) {
+        chromeAccesses.push(String(property));
+        throw new Error(`unexpected Chrome access through ${String(property)}`);
+      },
+    }),
+    cortexTab: { id: 31, windowId: 7, index: 0 },
+    sessionTabs: new Map([["cortex-view-preinit-release", 32]]),
+  };
+
+  await assert.rejects(
+    routeCommand(context, {
+      session: "cortex-view-preinit-release",
+      action: "release_session",
+      payload: {
+        session_epoch: "unattested-session-epoch",
+        release_request_id: "preinit-release",
+      },
+    }),
+    (error) => error.code === "INVALID_RELEASE_RECEIPT",
+  );
+
+  const state = context.sessionCommandStates.get("cortex-view-preinit-release");
+  assert.equal(state.phase, "active");
+  assert.equal(state.sessionEpoch, undefined);
+  assert.deepEqual(chromeAccesses, []);
+});
+
+test("concurrent initialization is idempotent for one active session generation", async () => {
+  const context = {
+    chrome: new Proxy({}, {
+      get(_target, property) {
+        throw new Error(`unexpected Chrome access through ${String(property)}`);
+      },
+    }),
+    cortexTab: { id: 31, windowId: 7, index: 0 },
+    workerEpoch: "worker-epoch-concurrent-init",
+    sessionTabs: new Map(),
+  };
+
+  const receipts = await Promise.all([
+    initializeSession(context, "cortex-view-concurrent-init"),
+    initializeSession(context, "cortex-view-concurrent-init"),
+    initializeSession(context, "cortex-view-concurrent-init"),
+  ]);
+
+  assert.equal(new Set(receipts.map((receipt) => receipt.session_epoch)).size, 1);
+  assert.equal(receipts.every((receipt) => (
+    receipt.worker_epoch === "worker-epoch-concurrent-init"
+    && receipt.session === "cortex-view-concurrent-init"
+  )), true);
+});
+
+test("an initialized session requires its epoch even for list_tabs", async () => {
+  const chrome = chromeWithTabs([
+    { id: 31, windowId: 7, index: 0, url: "http://127.0.0.1:8420/" },
+    { id: 32, windowId: 7, index: 1, url: "https://chatgpt.com/c/initialized" },
+  ]);
+  const session = "cortex-view-initialized-list";
+  const context = {
+    chrome: chrome.api,
+    cortexTab: { id: 31, windowId: 7, index: 0 },
+    sessionTabs: new Map([[session, 32]]),
+  };
+  const proof = await initializeSession(context, session);
+
+  await assert.rejects(
+    routeCommand(context, { session, action: "list_tabs", payload: {} }),
+    (error) => error.code === "SESSION_EPOCH_MISMATCH",
+  );
+  const listed = await routeCommand(context, {
+    session,
+    action: "list_tabs",
+    payload: sessionPayload(proof),
+  });
+
+  assert.deepEqual(listed, {
+    tabs: [{
+      session,
+      tab_id: 32,
+      window_id: 7,
+      url: "https://chatgpt.com/c/initialized",
+      active: false,
+    }],
+  });
+});
+
+test("a health-only generation releases without a tab and reopens on a fresh epoch", async () => {
+  const chrome = chromeWithTabs([
+    { id: 32, windowId: 7, index: 1, url: "https://chatgpt.com/c/existing" },
+  ]);
+  const session = "cortex-health-read-only";
+  const context = {
+    chrome: chrome.api,
+    cortexTab: { id: 31, windowId: 7, index: 0 },
+    workerEpoch: "worker-epoch-health-only",
+    sessionTabs: new Map([["cortex-conv-existing", 32]]),
+  };
+  const first = await initializeSession(context, session);
+
+  const listed = await routeCommand(context, {
+    session,
+    action: "list_tabs",
+    payload: sessionPayload(first),
+  });
+  assert.equal(listed.tabs.length, 1);
+  const released = await routeCommand(context, {
+    session,
+    action: "release_session",
+    payload: releasePayload(first, "release-health-only"),
+  });
+
+  assert.deepEqual(released, {
+    receipt_type: "session_release.v1",
+    capability: "session_quiescence_receipt_v1",
+    session,
+    worker_epoch: "worker-epoch-health-only",
+    session_epoch: first.session_epoch,
+    release_request_id: "release-health-only",
+    released: true,
+    quiescent: true,
+    tab_id: null,
+  });
+
+  const second = await initializeSession(context, session);
+  assert.notEqual(second.session_epoch, first.session_epoch);
+  await assert.rejects(
+    routeCommand(context, {
+      session,
+      action: "list_tabs",
+      payload: sessionPayload(first),
+    }),
+    (error) => error.code === "SESSION_EPOCH_MISMATCH",
+  );
+  assert.equal((await routeCommand(context, {
+    session,
+    action: "list_tabs",
+    payload: sessionPayload(second),
+  })).tabs.length, 1);
+});
+
+test("release waits for an in-flight health list before retiring its unbound generation", async () => {
+  const chrome = chromeWithTabs([
+    { id: 32, windowId: 7, index: 1, url: "https://chatgpt.com/c/existing" },
+  ]);
+  const originalGet = chrome.api.tabs.get;
+  let allowList;
+  const listAllowed = new Promise((resolve) => { allowList = resolve; });
+  let markListEntered;
+  const listEntered = new Promise((resolve) => { markListEntered = resolve; });
+  chrome.api.tabs.get = async (tabId) => {
+    markListEntered();
+    await listAllowed;
+    return originalGet(tabId);
+  };
+  const session = "cortex-health-in-flight";
+  const context = {
+    chrome: chrome.api,
+    cortexTab: { id: 31, windowId: 7, index: 0 },
+    sessionTabs: new Map([["cortex-conv-existing", 32]]),
+  };
+  const proof = await initializeSession(context, session);
+
+  const list = routeCommand(context, {
+    session,
+    action: "list_tabs",
+    payload: sessionPayload(proof),
+  });
+  await listEntered;
+  let releaseSettled = false;
+  const release = routeCommand(context, {
+    session,
+    action: "release_session",
+    payload: releasePayload(proof, "release-after-health-list"),
+    timeout_ms: 100,
+  }).then((result) => {
+    releaseSettled = true;
+    return result;
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(releaseSettled, false);
+  allowList();
+  assert.equal((await list).tabs.length, 1);
+  assert.deepEqual(await release, {
+    receipt_type: "session_release.v1",
+    capability: "session_quiescence_receipt_v1",
+    session,
+    worker_epoch: context.workerEpoch,
+    session_epoch: proof.session_epoch,
+    release_request_id: "release-after-health-list",
+    released: true,
+    quiescent: true,
+    tab_id: null,
+  });
+});
+
 test("gives each writer session a different ChatGPT tab", async () => {
   const chrome = chromeWithTabs([
     { id: 31, windowId: 7, index: 0, url: "http://127.0.0.1:8420/" },
@@ -1426,11 +1696,12 @@ test("gives each writer session a different ChatGPT tab", async () => {
     cortexTab: { id: 31, windowId: 7, index: 0 },
     sessionTabs: new Map([["cortex-conv-writer-a", 32]]),
   };
+  const proof = await initializeSession(context, "cortex-conv-writer-b");
 
   const opened = await routeCommand(context, {
     session: "cortex-conv-writer-b",
     action: "open_chatgpt",
-    payload: {},
+    payload: sessionPayload(proof),
   });
 
   assert.notEqual(opened.tab_id, 32);
@@ -1450,11 +1721,12 @@ test("a new writer never takes over an unrelated personal ChatGPT tab", async ()
     cortexTab: { id: 31, windowId: 7, index: 0 },
     sessionTabs: new Map(),
   };
+  const proof = await initializeSession(context, "cortex-conv-writer-new");
 
   const opened = await routeCommand(context, {
     session: "cortex-conv-writer-new",
     action: "open_chatgpt",
-    payload: {},
+    payload: sessionPayload(proof),
   });
 
   assert.notEqual(opened.tab_id, 32);
@@ -1474,22 +1746,411 @@ test("releasing a writer session makes its tab reusable without closing it", asy
     reusableWriterTabs: new Set(),
   };
 
+  const proof = await initializeSession(context, "cortex-conv-writer-a");
   const released = await routeCommand(context, {
     session: "cortex-conv-writer-a",
     action: "release_session",
-    payload: {},
+    payload: releasePayload(proof, "release-writer-a"),
   });
+  const nextProof = await initializeSession(context, "cortex-conv-writer-b");
   const opened = await routeCommand(context, {
     session: "cortex-conv-writer-b",
     action: "open_chatgpt",
-    payload: {},
+    payload: sessionPayload(nextProof),
   });
 
-  assert.deepEqual(released, { released: true, tab_id: 32 });
+  assert.equal(released.released, true);
+  assert.equal(released.quiescent, true);
+  assert.equal(released.tab_id, 32);
   assert.equal(context.sessionTabs.has("cortex-conv-writer-a"), false);
   assert.equal(opened.tab_id, 32);
   assert.equal(context.reusableWriterTabs.size, 0);
   assert.deepEqual(chrome.calls.create, []);
+});
+
+test("release receipt is bound to the negotiated worker and request", async () => {
+  const chrome = chromeWithTabs([
+    { id: 31, windowId: 7, index: 0, url: "http://127.0.0.1:8420/" },
+    { id: 32, windowId: 7, index: 1, url: "https://chatgpt.com/c/a" },
+  ]);
+  const context = {
+    chrome: chrome.api,
+    cortexTab: { id: 31, windowId: 7, index: 0 },
+    workerEpoch: "worker-epoch-a",
+    sessionTabs: new Map([["cortex-view-receipt", 32]]),
+  };
+
+  const initialized = await routeCommand(context, {
+    session: "cortex-view-receipt",
+    action: "session_init",
+    payload: {},
+  });
+  assert.deepEqual(initialized, {
+    receipt_type: "session_init.v1",
+    capability: "session_quiescence_receipt_v1",
+    session: "cortex-view-receipt",
+    worker_epoch: "worker-epoch-a",
+    session_epoch: initialized.session_epoch,
+  });
+  assert.match(initialized.session_epoch, /.+/);
+
+  await assert.rejects(
+    routeCommand(context, {
+      session: "cortex-view-receipt",
+      action: "release_session",
+      payload: { session_epoch: initialized.session_epoch },
+    }),
+    (error) => error.code === "INVALID_RELEASE_RECEIPT",
+  );
+  assert.equal(context.sessionTabs.get("cortex-view-receipt"), 32);
+
+  const receipt = await routeCommand(context, {
+    session: "cortex-view-receipt",
+    action: "release_session",
+    payload: releasePayload(initialized, "release-request-a"),
+  });
+  assert.deepEqual(receipt, {
+    receipt_type: "session_release.v1",
+    capability: "session_quiescence_receipt_v1",
+    session: "cortex-view-receipt",
+    worker_epoch: "worker-epoch-a",
+    session_epoch: initialized.session_epoch,
+    release_request_id: "release-request-a",
+    released: true,
+    quiescent: true,
+    tab_id: 32,
+  });
+});
+
+test("a confirmed release lets the same session id initialize a new epoch", async () => {
+  const chrome = chromeWithTabs([
+    { id: 31, windowId: 7, index: 0, url: "http://127.0.0.1:8420/" },
+    { id: 32, windowId: 7, index: 1, url: "https://chatgpt.com/c/a" },
+  ]);
+  const session = "cortex-view-read-only";
+  const context = {
+    chrome: chrome.api,
+    cortexTab: { id: 31, windowId: 7, index: 0 },
+    workerEpoch: "worker-epoch-reinitialize",
+    sessionTabs: new Map([[session, 32]]),
+  };
+
+  const first = await initializeSession(context, session);
+  const released = await routeCommand(context, {
+    session,
+    action: "release_session",
+    payload: releasePayload(first, "release-before-reinitialize"),
+  });
+  const [second, replayed] = await Promise.all([
+    initializeSession(context, session),
+    initializeSession(context, session),
+  ]);
+
+  assert.equal(released.released, true);
+  assert.equal(released.quiescent, true);
+  assert.equal(second.session, session);
+  assert.notEqual(second.session_epoch, first.session_epoch);
+  assert.equal(replayed.session_epoch, second.session_epoch);
+});
+
+test("a command carrying an obsolete session epoch is refused before browser action", async () => {
+  const chrome = chromeWithTabs([
+    { id: 31, windowId: 7, index: 0, url: "http://127.0.0.1:8420/" },
+    { id: 32, windowId: 7, index: 1, url: "https://chatgpt.com/c/a" },
+  ]);
+  const session = "cortex-view-read-only";
+  const context = {
+    chrome: chrome.api,
+    cortexTab: { id: 31, windowId: 7, index: 0 },
+    sessionTabs: new Map([[session, 32]]),
+  };
+  await initializeSession(context, session);
+
+  await assert.rejects(
+    routeCommand(context, {
+      session,
+      action: "focus_tab",
+      payload: { session_epoch: "obsolete-session-epoch" },
+    }),
+    (error) => error.code === "SESSION_EPOCH_MISMATCH",
+  );
+  assert.deepEqual(chrome.calls.update, []);
+});
+
+test("an obsolete release cannot poison the active session generation", async () => {
+  const chrome = chromeWithTabs([
+    { id: 31, windowId: 7, index: 0, url: "http://127.0.0.1:8420/" },
+    { id: 32, windowId: 7, index: 1, url: "https://chatgpt.com/c/a" },
+  ]);
+  const session = "cortex-view-read-only";
+  const context = {
+    chrome: chrome.api,
+    cortexTab: { id: 31, windowId: 7, index: 0 },
+    sessionTabs: new Map([[session, 32]]),
+  };
+  const current = await initializeSession(context, session);
+
+  await assert.rejects(
+    routeCommand(context, {
+      session,
+      action: "release_session",
+      payload: {
+        session_epoch: "obsolete-session-epoch",
+        release_request_id: "obsolete-release",
+      },
+    }),
+    (error) => error.code === "INVALID_RELEASE_RECEIPT",
+  );
+  const focused = await routeCommand(context, {
+    session,
+    action: "focus_tab",
+    payload: sessionPayload(current),
+  });
+
+  assert.equal(focused.tab_id, 32);
+});
+
+test("the same read-only session id completes three independent release cycles", async () => {
+  const chrome = chromeWithTabs([
+    { id: 31, windowId: 7, index: 0, url: "http://127.0.0.1:8420/" },
+    { id: 32, windowId: 7, index: 1, url: "https://chatgpt.com/c/a" },
+  ]);
+  const session = "cortex-view-read-only";
+  const context = {
+    chrome: chrome.api,
+    cortexTab: { id: 31, windowId: 7, index: 0 },
+    sessionTabs: new Map(),
+  };
+  const epochs = [];
+
+  for (let cycle = 1; cycle <= 3; cycle += 1) {
+    const proof = await initializeSession(context, session);
+    epochs.push(proof.session_epoch);
+    context.sessionTabs.set(session, 32);
+    await routeCommand(context, {
+      session,
+      action: "focus_tab",
+      payload: sessionPayload(proof),
+    });
+    const released = await routeCommand(context, {
+      session,
+      action: "release_session",
+      payload: releasePayload(proof, `release-cycle-${cycle}`),
+    });
+    assert.equal(released.released, true);
+    assert.equal(released.quiescent, true);
+  }
+
+  assert.equal(new Set(epochs).size, 3);
+  assert.equal(chrome.calls.update.length, 3);
+  assert.equal(context.sessionTabs.has(session), false);
+});
+
+test("a restarted worker refuses a release proof from the previous epoch", async () => {
+  const chrome = chromeWithTabs([
+    { id: 31, windowId: 7, index: 0, url: "http://127.0.0.1:8420/" },
+    { id: 32, windowId: 7, index: 1, url: "https://chatgpt.com/c/a" },
+  ]);
+  const previous = {
+    chrome: chrome.api,
+    cortexTab: { id: 31, windowId: 7, index: 0 },
+    workerEpoch: "worker-epoch-before-restart",
+    sessionTabs: new Map([["cortex-view-restarted", 32]]),
+  };
+  const proof = await routeCommand(previous, {
+    session: "cortex-view-restarted",
+    action: "session_init",
+    payload: {},
+  });
+  const restarted = {
+    chrome: chrome.api,
+    cortexTab: { id: 31, windowId: 7, index: 0 },
+    workerEpoch: "worker-epoch-after-restart",
+    sessionTabs: new Map(),
+  };
+  await assert.rejects(
+    routeCommand(restarted, {
+      session: "cortex-view-restarted",
+      action: "release_session",
+      payload: {
+        session_epoch: proof.session_epoch,
+        release_request_id: "release-request-restart",
+      },
+    }),
+    (error) => error.code === "INVALID_RELEASE_RECEIPT",
+  );
+});
+
+test("two sessions receive distinct receipts and release only their own binding", async () => {
+  const chrome = chromeWithTabs([
+    { id: 31, windowId: 7, index: 0, url: "http://127.0.0.1:8420/" },
+    { id: 32, windowId: 7, index: 1, url: "https://chatgpt.com/c/a" },
+    { id: 33, windowId: 7, index: 2, url: "https://chatgpt.com/c/b" },
+  ]);
+  const context = {
+    chrome: chrome.api,
+    cortexTab: { id: 31, windowId: 7, index: 0 },
+    workerEpoch: "worker-epoch-two-sessions",
+    sessionTabs: new Map([
+      ["cortex-view-a", 32],
+      ["cortex-view-b", 33],
+    ]),
+  };
+  const first = await initializeSession(context, "cortex-view-a");
+  const second = await initializeSession(context, "cortex-view-b");
+  assert.notEqual(first.session_epoch, second.session_epoch);
+
+  await routeCommand(context, {
+    session: "cortex-view-a",
+    action: "release_session",
+    payload: releasePayload(first, "release-session-a"),
+  });
+  assert.equal(context.sessionTabs.has("cortex-view-a"), false);
+  assert.equal(context.sessionTabs.get("cortex-view-b"), 33);
+  await assert.rejects(
+    routeCommand(context, {
+      session: "cortex-view-b",
+      action: "release_session",
+      payload: releasePayload(first, "replayed-session-a-proof"),
+    }),
+    (error) => error.code === "INVALID_RELEASE_RECEIPT",
+  );
+});
+
+test("release waits for an entered session navigation before acknowledging reuse", async () => {
+  const chrome = chromeWithTabs([
+    { id: 31, windowId: 7, index: 0, url: "http://127.0.0.1:8420/" },
+    { id: 32, windowId: 7, index: 1, url: "https://chatgpt.com/c/a" },
+  ]);
+  const originalUpdate = chrome.api.tabs.update;
+  let allowNavigation;
+  const navigationAllowed = new Promise((resolve) => {
+    allowNavigation = resolve;
+  });
+  let markNavigationEntered;
+  const navigationEntered = new Promise((resolve) => {
+    markNavigationEntered = resolve;
+  });
+  chrome.api.tabs.update = async (tabId, options) => {
+    if (tabId === 32 && options.url === "https://chatgpt.com/c/b") {
+      markNavigationEntered();
+      await navigationAllowed;
+    }
+    return originalUpdate(tabId, options);
+  };
+  const context = {
+    chrome: chrome.api,
+    cortexTab: { id: 31, windowId: 7, index: 0 },
+    sessionTabs: new Map([["cortex-view-read-only", 32]]),
+  };
+  const proof = await initializeSession(context, "cortex-view-read-only");
+
+  const select = routeCommand(context, {
+    session: "cortex-view-read-only",
+    action: "navigate",
+    payload: sessionPayload(proof, { url: "https://chatgpt.com/c/b" }),
+    timeout_ms: 100,
+  });
+  await navigationEntered;
+  let releaseAcknowledged = false;
+  const release = routeCommand(context, {
+    session: "cortex-view-read-only",
+    action: "release_session",
+    payload: releasePayload(proof, "release-wait"),
+    timeout_ms: 100,
+  }).then((result) => {
+    releaseAcknowledged = true;
+    return result;
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(releaseAcknowledged, false);
+  assert.equal(context.sessionTabs.get("cortex-view-read-only"), 32);
+
+  const otherProof = await initializeSession(context, "cortex-view-other");
+  const otherSession = await routeCommand(context, {
+    session: "cortex-view-other",
+    action: "list_tabs",
+    payload: sessionPayload(otherProof),
+    timeout_ms: 100,
+  });
+  assert.equal(otherSession.tabs.length, 1);
+
+  allowNavigation();
+  await select;
+  assert.equal((await release).released, true);
+  assert.equal(context.sessionTabs.has("cortex-view-read-only"), false);
+});
+
+test("release timeout retains a busy session until a later confirmed retry", async () => {
+  const chrome = chromeWithTabs([
+    { id: 31, windowId: 7, index: 0, url: "http://127.0.0.1:8420/" },
+    { id: 32, windowId: 7, index: 1, url: "https://chatgpt.com/c/a" },
+  ]);
+  const originalUpdate = chrome.api.tabs.update;
+  let allowNavigation;
+  const navigationAllowed = new Promise((resolve) => {
+    allowNavigation = resolve;
+  });
+  let markNavigationEntered;
+  const navigationEntered = new Promise((resolve) => {
+    markNavigationEntered = resolve;
+  });
+  chrome.api.tabs.update = async (tabId, options) => {
+    if (tabId === 32 && options.url === "https://chatgpt.com/c/b") {
+      markNavigationEntered();
+      await navigationAllowed;
+    }
+    return originalUpdate(tabId, options);
+  };
+  const context = {
+    chrome: chrome.api,
+    cortexTab: { id: 31, windowId: 7, index: 0 },
+    sessionTabs: new Map([["cortex-view-read-only", 32]]),
+  };
+  const proof = await initializeSession(context, "cortex-view-read-only");
+
+  const select = routeCommand(context, {
+    session: "cortex-view-read-only",
+    action: "navigate",
+    payload: sessionPayload(proof, { url: "https://chatgpt.com/c/b" }),
+    timeout_ms: 100,
+  });
+  await navigationEntered;
+  await assert.rejects(
+    routeCommand(context, {
+      session: "cortex-view-read-only",
+      action: "release_session",
+      payload: releasePayload(proof, "release-timeout"),
+      timeout_ms: 5,
+    }),
+    (error) => error.code === "SESSION_QUIESCENCE_TIMEOUT",
+  );
+  assert.equal(context.sessionTabs.get("cortex-view-read-only"), 32);
+  await assert.rejects(
+    routeCommand(context, {
+      session: "cortex-view-read-only",
+      action: "navigate",
+      payload: { url: "https://chatgpt.com/c/c" },
+      timeout_ms: 100,
+    }),
+    (error) => error.code === "SESSION_RELEASING",
+  );
+  await assert.rejects(
+    initializeSession(context, "cortex-view-read-only"),
+    (error) => error.code === "SESSION_RELEASING",
+  );
+
+  allowNavigation();
+  await select;
+  const retryReceipt = await routeCommand(context, {
+    session: "cortex-view-read-only",
+    action: "release_session",
+    payload: releasePayload(proof, "release-retry"),
+    timeout_ms: 100,
+  });
+  assert.equal(retryReceipt.released, true);
+  assert.equal(retryReceipt.quiescent, true);
 });
 
 test("releasing an uncertain writer quarantines its dirty tab from every session class", async () => {
@@ -1522,11 +2183,12 @@ test("releasing an uncertain writer quarantines its dirty tab from every session
       },
     },
   };
+  const proof = await initializeSession(context, "cortex-conv-dirty");
 
   await routeCommand(context, {
     session: "cortex-conv-dirty",
     action: "release_session",
-    payload: { reusable: false },
+    payload: releasePayload(proof, "release-quarantine", { reusable: false }),
   });
   const restartedContext = {
     chrome: chrome.api,
@@ -1543,10 +2205,11 @@ test("releasing an uncertain writer quarantines its dirty tab from every session
     "cortex-missions-read-only",
     "cortex-screenshot-read-only",
   ]) {
+    const openedProof = await initializeSession(restartedContext, session);
     opened.push(await routeCommand(restartedContext, {
       session,
       action: "open_chatgpt",
-      payload: {},
+      payload: sessionPayload(openedProof),
     }));
   }
 
@@ -1577,12 +2240,13 @@ test("an uncertain writer release is refused when its quarantine cannot be persi
     reusableWriterTabs: new Set(),
     quarantinedWriterTabs: new Set(),
   };
+  const proof = await initializeSession(context, "cortex-conv-dirty");
 
   await assert.rejects(
     routeCommand(context, {
       session: "cortex-conv-dirty",
       action: "release_session",
-      payload: { reusable: false },
+      payload: releasePayload(proof, "release-quarantine-failure", { reusable: false }),
     }),
     (error) => error.code === "QUARANTINE_PERSIST_FAILED",
   );
@@ -1613,11 +2277,12 @@ test("read-only allocation fails closed when durable quarantine cannot be restor
   };
 
   await restoreQuarantinedWriterTabs(context);
+  const proof = await initializeSession(context, "cortex-view-read-only");
   await assert.rejects(
     routeCommand(context, {
       session: "cortex-view-read-only",
       action: "open_chatgpt",
-      payload: {},
+      payload: sessionPayload(proof),
     }),
     (error) => error.code === "QUARANTINE_STATE_UNAVAILABLE",
   );
@@ -1635,11 +2300,12 @@ test("an unbound writer gets a dedicated tab before attempting ChatGPT SPA selec
     cortexTab: { id: 31, windowId: 7, index: 0 },
     sessionTabs: new Map(),
   };
+  const proof = await initializeSession(context, "cortex-conv-writer-spa");
 
   await routeCommand(context, {
     session: "cortex-conv-writer-spa",
     action: "spa_navigate",
-    payload: { url: "https://chatgpt.com/c/target" },
+    payload: sessionPayload(proof, { url: "https://chatgpt.com/c/target" }),
   });
 
   assert.notEqual(context.sessionTabs.get("cortex-conv-writer-spa"), 32);
@@ -1666,11 +2332,12 @@ test("navigation does not reload a tab already at the requested conversation", a
     cortexTab: { id: 31, windowId: 7, index: 0 },
     sessionTabs: new Map([["cortex-conv-writer-target", 32]]),
   };
+  const proof = await initializeSession(context, "cortex-conv-writer-target");
 
   await routeCommand(context, {
     session: "cortex-conv-writer-target",
     action: "navigate",
-    payload: { url: "https://chatgpt.com/c/target" },
+    payload: sessionPayload(proof, { url: "https://chatgpt.com/c/target" }),
   });
 
   assert.deepEqual(chrome.calls.update, [
@@ -1688,12 +2355,13 @@ test("an unbound writer still cannot send before conversation selection", async 
     cortexTab: { id: 31, windowId: 7, index: 0 },
     sessionTabs: new Map(),
   };
+  const proof = await initializeSession(context, "cortex-conv-writer-unselected");
 
   await assert.rejects(
     routeCommand(context, {
       session: "cortex-conv-writer-unselected",
       action: "send_text",
-      payload: { text: "must not be sent" },
+      payload: sessionPayload(proof, { text: "must not be sent" }),
     }),
     (error) => error.code === "TAB_UNAVAILABLE",
   );
@@ -1711,17 +2379,21 @@ test("concurrent writer allocation cannot bind two sessions to the same tab", as
     cortexTab: { id: 31, windowId: 7, index: 0 },
     sessionTabs: new Map(),
   };
+  const [proofA, proofB] = await Promise.all([
+    initializeSession(context, "cortex-conv-writer-concurrent-a"),
+    initializeSession(context, "cortex-conv-writer-concurrent-b"),
+  ]);
 
   const [writerA, writerB] = await Promise.all([
     routeCommand(context, {
       session: "cortex-conv-writer-concurrent-a",
       action: "open_chatgpt",
-      payload: {},
+      payload: sessionPayload(proofA),
     }),
     routeCommand(context, {
       session: "cortex-conv-writer-concurrent-b",
       action: "open_chatgpt",
-      payload: {},
+      payload: sessionPayload(proofB),
     }),
   ]);
 
@@ -1747,11 +2419,12 @@ test("read-only sessions share the primary tab but never claim a writer tab", as
       ["cortex-conv-writer-a", 33],
     ]),
   };
+  const proof = await initializeSession(context, "cortex-missions-read-only");
 
   const opened = await routeCommand(context, {
     session: "cortex-missions-read-only",
     action: "open_chatgpt",
-    payload: {},
+    payload: sessionPayload(proof),
   });
 
   assert.equal(opened.tab_id, 32);
@@ -1768,11 +2441,12 @@ test("a read-only page command automatically reuses the paired primary tab", asy
     cortexTab: { id: 31, windowId: 7, index: 0 },
     sessionTabs: new Map([["cortex-bridge-ui", 32]]),
   };
+  const proof = await initializeSession(context, "cortex-missions-read-only");
 
   const result = await routeCommand(context, {
     session: "cortex-missions-read-only",
     action: "probe",
-    payload: {},
+    payload: sessionPayload(proof),
   });
 
   assert.deepEqual(result, undefined);
@@ -1803,11 +2477,12 @@ test("probe reloads an existing ChatGPT tab whose content script became stale", 
     cortexTab: { id: 31, windowId: 7, index: 0 },
     sessionTabs: new Map([["cortex-bridge-ui", 32]]),
   };
+  const proof = await initializeSession(context, "cortex-bridge-ui");
 
   const result = await routeCommand(context, {
     session: "cortex-bridge-ui",
     action: "probe",
-    payload: {},
+    payload: sessionPayload(proof),
   });
 
   assert.equal(result.composer_present, true);
@@ -1829,12 +2504,13 @@ test("a writer send reports a missing content script as safe pre-delivery unavai
     cortexTab: { id: 31, windowId: 7, index: 0 },
     sessionTabs: new Map([["cortex-conv-writer", 32]]),
   };
+  const proof = await initializeSession(context, "cortex-conv-writer");
 
   await assert.rejects(
     routeCommand(context, {
       session: "cortex-conv-writer",
       action: "send_text",
-      payload: { text: "CORTEX-SAFE-RETRY" },
+      payload: sessionPayload(proof, { text: "CORTEX-SAFE-RETRY" }),
     }),
     (error) => error.code === "TAB_UNAVAILABLE",
   );
@@ -1855,12 +2531,13 @@ test("a closed preparation channel stays retryable because activation has not st
     cortexTab: { id: 31, windowId: 7, index: 0 },
     sessionTabs: new Map([["cortex-conv-writer", 32]]),
   };
+  const proof = await initializeSession(context, "cortex-conv-writer");
 
   await assert.rejects(
     routeCommand(context, {
       session: "cortex-conv-writer",
       action: "send_text",
-      payload: { text: "CORTEX-DO-NOT-RETRY" },
+      payload: sessionPayload(proof, { text: "CORTEX-DO-NOT-RETRY" }),
     }),
     (error) => (
       error.code === "TAB_UNAVAILABLE"
@@ -1891,12 +2568,13 @@ test("a transient missing composer is classified before delivery activation", as
     cortexTab: { id: 31, windowId: 7, index: 0 },
     sessionTabs: new Map([["cortex-conv-writer", 32]]),
   };
+  const proof = await initializeSession(context, "cortex-conv-writer");
 
   await assert.rejects(
     routeCommand(context, {
       session: "cortex-conv-writer",
       action: "send_text",
-      payload: { text: "CORTEX-PRE-DELIVERY-WAIT" },
+      payload: sessionPayload(proof, { text: "CORTEX-PRE-DELIVERY-WAIT" }),
     }),
     (error) => error.code === "PRE_DELIVERY_NOT_READY",
   );
@@ -1915,11 +2593,12 @@ test("a writer send prepares in the isolated script then activates ChatGPT in MA
     cortexTab: { id: 31, windowId: 7, index: 0 },
     sessionTabs: new Map([["cortex-conv-writer", 32]]),
   };
+  const proof = await initializeSession(context, "cortex-conv-writer");
 
   const result = await routeCommand(context, {
     session: "cortex-conv-writer",
     action: "send_text",
-    payload: { text: "CORTEX-MAIN-WORLD-ACTIVATION" },
+    payload: sessionPayload(proof, { text: "CORTEX-MAIN-WORLD-ACTIVATION" }),
   });
 
   assert.deepEqual(result, { ok: true });
@@ -1957,17 +2636,21 @@ test("concurrent writer sends serialize activation and refocus each exact tab", 
       ["cortex-conv-writer-b", 33],
     ]),
   };
+  const [proofA, proofB] = await Promise.all([
+    initializeSession(context, "cortex-conv-writer-a"),
+    initializeSession(context, "cortex-conv-writer-b"),
+  ]);
 
   const writerA = routeCommand(context, {
     session: "cortex-conv-writer-a",
     action: "send_text",
-    payload: { text: "CORTEX-CONCURRENT-SEND-A" },
+    payload: sessionPayload(proofA, { text: "CORTEX-CONCURRENT-SEND-A" }),
   });
   await new Promise((resolve) => setTimeout(resolve, 0));
   const writerB = routeCommand(context, {
     session: "cortex-conv-writer-b",
     action: "send_text",
-    payload: { text: "CORTEX-CONCURRENT-SEND-B" },
+    payload: sessionPayload(proofB, { text: "CORTEX-CONCURRENT-SEND-B" }),
   });
   await new Promise((resolve) => setTimeout(resolve, 0));
   const preparationsBeforeRelease = chrome.calls.sendMessage.filter(
@@ -2002,12 +2685,13 @@ test("an expired delivery command is refused before composer preparation", async
     cortexTab: { id: 31, windowId: 7, index: 0 },
     sessionTabs: new Map([["cortex-conv-expired", 32]]),
   };
+  const proof = await initializeSession(context, "cortex-conv-expired");
 
   await assert.rejects(
     routeCommand(context, {
       session: "cortex-conv-expired",
       action: "send_text",
-      payload: { text: "CORTEX-EXPIRED-SEND" },
+      payload: sessionPayload(proof, { text: "CORTEX-EXPIRED-SEND" }),
       timeout_ms: 1,
     }),
     (error) => error.code === "PRE_DELIVERY_NOT_READY",
@@ -2042,17 +2726,21 @@ test("a pre-delivery failure releases the next writer activation", async () => {
       ["cortex-conv-following", 33],
     ]),
   };
+  const [failingProof, followingProof] = await Promise.all([
+    initializeSession(context, "cortex-conv-failing"),
+    initializeSession(context, "cortex-conv-following"),
+  ]);
 
   const results = await Promise.allSettled([
     routeCommand(context, {
       session: "cortex-conv-failing",
       action: "send_text",
-      payload: { text: "CORTEX-PRE-DELIVERY-FAILURE" },
+      payload: sessionPayload(failingProof, { text: "CORTEX-PRE-DELIVERY-FAILURE" }),
     }),
     routeCommand(context, {
       session: "cortex-conv-following",
       action: "send_text",
-      payload: { text: "CORTEX-FOLLOWING-SEND" },
+      payload: sessionPayload(followingProof, { text: "CORTEX-FOLLOWING-SEND" }),
     }),
   ]);
 
@@ -2102,11 +2790,12 @@ test("a trusted send dispatches exactly one CDP mouse click then detaches", asyn
     cortexTab: { id: 31, windowId: 7, index: 0 },
     sessionTabs: new Map([["cortex-conv-writer", 32]]),
   };
+  const proof = await initializeSession(context, "cortex-conv-writer");
 
   const result = await routeCommand(context, {
     session: "cortex-conv-writer",
     action: "send_text",
-    payload: { text: "CORTEX-TRUSTED-SEND" },
+    payload: sessionPayload(proof, { text: "CORTEX-TRUSTED-SEND" }),
   });
 
   assert.deepEqual(result, { ok: true });
@@ -2169,11 +2858,12 @@ test("a long composer reflow refreshes the trusted point before mousePressed", a
     cortexTab: { id: 31, windowId: 7, index: 0 },
     sessionTabs: new Map([["cortex-conv-writer", 32]]),
   };
+  const proof = await initializeSession(context, "cortex-conv-writer");
 
   const result = await routeCommand(context, {
     session: "cortex-conv-writer",
     action: "send_text",
-    payload: { text: "CORTEX-LONG-CONTRACT-REFLOW" },
+    payload: sessionPayload(proof, { text: "CORTEX-LONG-CONTRACT-REFLOW" }),
   });
 
   assert.deepEqual(result, { ok: true });
@@ -2232,12 +2922,13 @@ test("a debugger attach failure is rejected before any delivery input", async ()
     cortexTab: { id: 31, windowId: 7, index: 0 },
     sessionTabs: new Map([["cortex-conv-writer", 32]]),
   };
+  const proof = await initializeSession(context, "cortex-conv-writer");
 
   await assert.rejects(
     routeCommand(context, {
       session: "cortex-conv-writer",
       action: "send_text",
-      payload: { text: "CORTEX-ATTACH-FAILS-SAFELY" },
+      payload: sessionPayload(proof, { text: "CORTEX-ATTACH-FAILS-SAFELY" }),
     }),
     (error) => error.code === "SEND_REJECTED",
   );
@@ -2289,12 +2980,13 @@ test("a failure after mousePressed is uncertain, detached, and never replayed", 
     sessionTabs: new Map([["cortex-conv-writer", 32]]),
     activationConfirmationTimeoutMs: 0,
   };
+  const proof = await initializeSession(context, "cortex-conv-writer");
 
   await assert.rejects(
     routeCommand(context, {
       session: "cortex-conv-writer",
       action: "send_text",
-      payload: { text: "CORTEX-NO-REPLAY-AFTER-PRESS" },
+      payload: sessionPayload(proof, { text: "CORTEX-NO-REPLAY-AFTER-PRESS" }),
     }),
     (error) => error.code === "DELIVERY_UNCERTAIN",
   );
@@ -2364,11 +3056,12 @@ test("a release-channel failure can prove delivery without replaying the click",
     cortexTab: { id: 31, windowId: 7, index: 0 },
     sessionTabs: new Map([["cortex-conv-writer", 32]]),
   };
+  const proof = await initializeSession(context, "cortex-conv-writer");
 
   const result = await routeCommand(context, {
     session: "cortex-conv-writer",
     action: "send_text",
-    payload: { text: "CORTEX-PROVED-AFTER-RELEASE-FAILURE" },
+    payload: sessionPayload(proof, { text: "CORTEX-PROVED-AFTER-RELEASE-FAILURE" }),
   });
 
   assert.deepEqual(result, { ok: true, confirmed_after_navigation: true });
@@ -2415,12 +3108,13 @@ test("trusted input revalidation refuses a point covered by another element", as
     cortexTab: { id: 31, windowId: 7, index: 0 },
     sessionTabs: new Map([["cortex-conv-writer", 32]]),
   };
+  const proof = await initializeSession(context, "cortex-conv-writer");
 
   await assert.rejects(
     routeCommand(context, {
       session: "cortex-conv-writer",
       action: "send_text",
-      payload: { text: "CORTEX-HIT-TEST" },
+      payload: sessionPayload(proof, { text: "CORTEX-HIT-TEST" }),
     }),
     (error) => error.code === "SEND_REJECTED",
   );
@@ -2478,11 +3172,12 @@ test("trusted input revalidation reacquires a transiently replaced send control"
     cortexTab: { id: 31, windowId: 7, index: 0 },
     sessionTabs: new Map([["cortex-conv-writer", 32]]),
   };
+  const proof = await initializeSession(context, "cortex-conv-writer");
 
   const result = await routeCommand(context, {
     session: "cortex-conv-writer",
     action: "send_text",
-    payload: { text: "CORTEX-TRANSIENT-SEND-CONTROL" },
+    payload: sessionPayload(proof, { text: "CORTEX-TRANSIENT-SEND-CONTROL" }),
     timeout_ms: 5_000,
   });
 
@@ -2541,12 +3236,13 @@ test("trusted input retry refuses a composer changed before trusted input", asyn
     cortexTab: { id: 31, windowId: 7, index: 0 },
     sessionTabs: new Map([["cortex-conv-writer", 32]]),
   };
+  const proof = await initializeSession(context, "cortex-conv-writer");
 
   await assert.rejects(
     routeCommand(context, {
       session: "cortex-conv-writer",
       action: "send_text",
-      payload: { text: "EXPECTED CORTEX REPORT" },
+      payload: sessionPayload(proof, { text: "EXPECTED CORTEX REPORT" }),
       timeout_ms: 5_000,
     }),
     (error) => error.code === "SEND_REJECTED"
@@ -2600,12 +3296,13 @@ test("trusted input revalidation refuses a conversation changed before mousePres
     cortexTab: { id: 31, windowId: 7, index: 0 },
     sessionTabs: new Map([["cortex-conv-writer", 32]]),
   };
+  const proof = await initializeSession(context, "cortex-conv-writer");
 
   await assert.rejects(
     routeCommand(context, {
       session: "cortex-conv-writer",
       action: "send_text",
-      payload: { text: "CORTEX-URL-REVALIDATION" },
+      payload: sessionPayload(proof, { text: "CORTEX-URL-REVALIDATION" }),
     }),
     (error) => error.code === "SEND_REJECTED",
   );
@@ -2656,11 +3353,12 @@ test("trusted input revalidation recognizes an exact file-tile aria-label", asyn
     cortexTab: { id: 31, windowId: 7, index: 0 },
     sessionTabs: new Map([["cortex-conv-writer", 32]]),
   };
+  const proof = await initializeSession(context, "cortex-conv-writer");
 
   const result = await routeCommand(context, {
     session: "cortex-conv-writer",
     action: "send_text",
-    payload: { text: "CORTEX-FILE-TILE-REVALIDATION" },
+    payload: sessionPayload(proof, { text: "CORTEX-FILE-TILE-REVALIDATION" }),
   });
 
   assert.deepEqual(result, { ok: true });
@@ -2698,15 +3396,16 @@ test("text with a file refuses any non-native activation before debugger input",
     cortexTab: { id: 31, windowId: 7, index: 0 },
     sessionTabs: new Map([["cortex-conv-writer", 32]]),
   };
+  const proof = await initializeSession(context, "cortex-conv-writer");
 
   await assert.rejects(
     routeCommand(context, {
       session: "cortex-conv-writer",
       action: "send_text",
-      payload: {
+      payload: sessionPayload(proof, {
         text: "CORTEX-FILE-NAME-REVALIDATION",
         name: "cortex-upload-proof.txt",
-      },
+      }),
     }),
     (error) => error.code === "SEND_REJECTED",
   );
@@ -2736,11 +3435,12 @@ test("MAIN-world preparation scopes the send control to the composer form", asyn
     cortexTab: { id: 31, windowId: 7, index: 0 },
     sessionTabs: new Map([["cortex-conv-writer", 32]]),
   };
+  const proof = await initializeSession(context, "cortex-conv-writer");
 
   const result = await routeCommand(context, {
     session: "cortex-conv-writer",
     action: "send_text",
-    payload: { text: "CORTEX-FORM-SCOPED-SEND" },
+    payload: sessionPayload(proof, { text: "CORTEX-FORM-SCOPED-SEND" }),
   });
 
   assert.deepEqual(result, { ok: true });
@@ -2775,15 +3475,16 @@ test("the exact ChatGPT file-tile is handed to the verified native activation", 
     cortexTab: { id: 31, windowId: 7, index: 0 },
     sessionTabs: new Map([["cortex-conv-writer", 32]]),
   };
+  const proof = await initializeSession(context, "cortex-conv-writer");
 
   const result = await routeCommand(context, {
     session: "cortex-conv-writer",
     action: "send_text",
-    payload: {
+    payload: sessionPayload(proof, {
       text: "CORTEX-FRENCH-ATTACHMENT-SEND",
       name: "cortex-upload-proof.txt",
       native_activation: true,
-    },
+    }),
   });
 
   assert.deepEqual(result, {
@@ -2849,15 +3550,16 @@ test("MAIN-world file-tile validation rejects prefix, extension and suffix colli
       sessionTabs: new Map([["cortex-conv-file-tile", 32]]),
       activationConfirmationTimeoutMs: 0,
     };
+    const proof = await initializeSession(context, "cortex-conv-file-tile");
 
     await assert.rejects(
       routeCommand(context, {
         session: "cortex-conv-file-tile",
         action: "send_bare",
-        payload: {
+        payload: sessionPayload(proof, {
           name: "cortex-upload-proof.txt",
           native_activation: true,
-        },
+        }),
       }),
       (error) => error.code === "SEND_REJECTED",
       attachmentAriaLabel,
@@ -2885,11 +3587,12 @@ test("MAIN-world preparation never invokes an untrusted DOM click", async () => 
     cortexTab: { id: 31, windowId: 7, index: 0 },
     sessionTabs: new Map([["cortex-conv-writer", 32]]),
   };
+  const proof = await initializeSession(context, "cortex-conv-writer");
 
   const result = await routeCommand(context, {
     session: "cortex-conv-writer",
     action: "send_text",
-    payload: { text: "CORTEX-FRENCH-ATTACHMENT-SEND" },
+    payload: sessionPayload(proof, { text: "CORTEX-FRENCH-ATTACHMENT-SEND" }),
   });
 
   assert.deepEqual(result, { ok: true });
@@ -2921,11 +3624,12 @@ test("a focus-driven React rerender cannot consume the trusted send activation",
     cortexTab: { id: 31, windowId: 7, index: 0 },
     sessionTabs: new Map([["cortex-conv-writer", 32]]),
   };
+  const proof = await initializeSession(context, "cortex-conv-writer");
 
   const result = await routeCommand(context, {
     session: "cortex-conv-writer",
     action: "send_text",
-    payload: { text: "CORTEX-FRENCH-ATTACHMENT-SEND" },
+    payload: sessionPayload(proof, { text: "CORTEX-FRENCH-ATTACHMENT-SEND" }),
   });
 
   assert.deepEqual(result, { ok: true });
@@ -2966,11 +3670,15 @@ test("an attachment-only send validates the named chip then requests native acti
     cortexTab: { id: 31, windowId: 7, index: 0 },
     sessionTabs: new Map([["cortex-conv-file-only", 32]]),
   };
+  const proof = await initializeSession(context, "cortex-conv-file-only");
 
   const result = await routeCommand(context, {
     session: "cortex-conv-file-only",
     action: "send_bare",
-    payload: { name: "cortex-upload-proof.txt", native_activation: true },
+    payload: sessionPayload(proof, {
+      name: "cortex-upload-proof.txt",
+      native_activation: true,
+    }),
   });
 
   assert.deepEqual(result, {
@@ -2982,10 +3690,10 @@ test("an attachment-only send validates the named chip then requests native acti
   });
   assert.equal(chrome.calls.sendMessage.length, 1);
   assert.equal(chrome.calls.sendMessage[0].message.action, "send_bare");
-  assert.deepEqual(chrome.calls.sendMessage[0].message.payload, {
+  assert.deepEqual(chrome.calls.sendMessage[0].message.payload, sessionPayload(proof, {
     name: "cortex-upload-proof.txt",
     native_activation: true,
-  });
+  }));
   assert.equal(chrome.calls.executeScript.length, 1);
   assert.equal(chrome.calls.executeScript[0].world, "MAIN");
   assert.deepEqual(chrome.calls.executeScript[0].args, [{
@@ -3024,12 +3732,13 @@ test("an attachment-only send refuses a different chip before any click", async 
     cortexTab: { id: 31, windowId: 7, index: 0 },
     sessionTabs: new Map([["cortex-conv-file-only", 32]]),
   };
+  const proof = await initializeSession(context, "cortex-conv-file-only");
 
   await assert.rejects(
     routeCommand(context, {
       session: "cortex-conv-file-only",
       action: "send_bare",
-      payload: { name: "cortex-upload-proof.txt" },
+      payload: sessionPayload(proof, { name: "cortex-upload-proof.txt" }),
     }),
     (error) => error.code === "SEND_REJECTED",
   );
@@ -3063,12 +3772,13 @@ test("an attachment-only send rejects a filename prefix collision before any cli
     cortexTab: { id: 31, windowId: 7, index: 0 },
     sessionTabs: new Map([["cortex-conv-file-only", 32]]),
   };
+  const proof = await initializeSession(context, "cortex-conv-file-only");
 
   await assert.rejects(
     routeCommand(context, {
       session: "cortex-conv-file-only",
       action: "send_bare",
-      payload: { name: "cortex-upload-proof.txt" },
+      payload: sessionPayload(proof, { name: "cortex-upload-proof.txt" }),
     }),
     (error) => error.code === "SEND_REJECTED",
   );
@@ -3104,11 +3814,15 @@ test("an attachment-only native preparation activates the tab exactly once", asy
     cortexTab: { id: 31, windowId: 7, index: 0 },
     sessionTabs: new Map([["cortex-conv-file-only", 32]]),
   };
+  const proof = await initializeSession(context, "cortex-conv-file-only");
 
   const result = await routeCommand(context, {
     session: "cortex-conv-file-only",
     action: "send_bare",
-    payload: { name: "cortex-upload-proof.txt", native_activation: true },
+    payload: sessionPayload(proof, {
+      name: "cortex-upload-proof.txt",
+      native_activation: true,
+    }),
   });
 
   assert.equal(result.native_activation, true);
@@ -3168,11 +3882,15 @@ test("native attachment preparation returns the exact pre-send user baseline", a
     sessionTabs: new Map([["cortex-conv-file-only", 32]]),
     activationConfirmationTimeoutMs: 0,
   };
+  const proof = await initializeSession(context, "cortex-conv-file-only");
 
   const result = await routeCommand(context, {
     session: "cortex-conv-file-only",
     action: "send_bare",
-    payload: { name: "cortex-upload-proof.txt", native_activation: true },
+    payload: sessionPayload(proof, {
+      name: "cortex-upload-proof.txt",
+      native_activation: true,
+    }),
   });
   assert.equal(result.native_activation, true);
   assert.deepEqual(result.before_user_message_ids, ["old-exact"]);
@@ -3219,12 +3937,13 @@ test("attachment preparation without a native request never reaches debugger inp
     cortexTab: { id: 31, windowId: 7, index: 0 },
     sessionTabs: new Map([["cortex-conv-file-only", 32]]),
   };
+  const proof = await initializeSession(context, "cortex-conv-file-only");
 
   await assert.rejects(
     routeCommand(context, {
       session: "cortex-conv-file-only",
       action: "send_bare",
-      payload: { name: "cortex-upload-proof.txt" },
+      payload: sessionPayload(proof, { name: "cortex-upload-proof.txt" }),
     }),
     (error) => error.code === "SEND_REJECTED",
   );
@@ -3277,10 +3996,11 @@ test("post-activation attachment proof is case, diacritic and ASCII-suffix stric
       sessionTabs: new Map([["cortex-conv-file-proof", 32]]),
       activationConfirmationTimeoutMs: 0,
     };
+    const proof = await initializeSession(context, "cortex-conv-file-proof");
     return routeCommand(context, {
       session: "cortex-conv-file-proof",
       action: "send_bare",
-      payload: { name: expectedName },
+      payload: sessionPayload(proof, { name: expectedName }),
     });
   };
 
@@ -3318,12 +4038,13 @@ test("a lost MAIN-world preflight is rejected before delivery", async () => {
     sessionTabs: new Map([["cortex-conv-writer", 32]]),
     activationConfirmationTimeoutMs: 0,
   };
+  const proof = await initializeSession(context, "cortex-conv-writer");
 
   await assert.rejects(
     routeCommand(context, {
       session: "cortex-conv-writer",
       action: "send_text",
-      payload: { text: "CORTEX-DO-NOT-RETRY-ACTIVATION" },
+      payload: sessionPayload(proof, { text: "CORTEX-DO-NOT-RETRY-ACTIVATION" }),
     }),
     (error) => error.code === "SEND_REJECTED",
   );
@@ -3348,12 +4069,13 @@ test("an empty MAIN-world preflight result is rejected before delivery", async (
     sessionTabs: new Map([["cortex-conv-writer", 32]]),
     activationConfirmationTimeoutMs: 0,
   };
+  const proof = await initializeSession(context, "cortex-conv-writer");
 
   await assert.rejects(
     routeCommand(context, {
       session: "cortex-conv-writer",
       action: "send_text",
-      payload: { text: "CORTEX-EMPTY-PREFLIGHT" },
+      payload: sessionPayload(proof, { text: "CORTEX-EMPTY-PREFLIGHT" }),
     }),
     (error) => error.code === "SEND_REJECTED",
   );
@@ -3377,12 +4099,13 @@ test("a missing MAIN-world preflight receiver is rejected before delivery", asyn
     sessionTabs: new Map([["cortex-conv-writer", 32]]),
     activationConfirmationTimeoutMs: 0,
   };
+  const proof = await initializeSession(context, "cortex-conv-writer");
 
   await assert.rejects(
     routeCommand(context, {
       session: "cortex-conv-writer",
       action: "send_text",
-      payload: { text: "CORTEX-MISSING-RECEIVER-NO-REPLAY" },
+      payload: sessionPayload(proof, { text: "CORTEX-MISSING-RECEIVER-NO-REPLAY" }),
     }),
     (error) => error.code === "SEND_REJECTED",
   );
@@ -3417,11 +4140,12 @@ test("a new-chat navigation confirms the click from the visible user marker", as
     cortexTab: { id: 31, windowId: 7, index: 0 },
     sessionTabs: new Map([["cortex-conv-writer", 32]]),
   };
+  const proof = await initializeSession(context, "cortex-conv-writer");
 
   const result = await routeCommand(context, {
     session: "cortex-conv-writer",
     action: "send_text",
-    payload: { text: "CORTEX-NAVIGATION-CONFIRMED" },
+    payload: sessionPayload(proof, { text: "CORTEX-NAVIGATION-CONFIRMED" }),
   });
 
   assert.deepEqual(result, { ok: true, confirmed_after_navigation: true });
@@ -3465,11 +4189,12 @@ test("a new-chat navigation confirms a new short exact user message", async () =
     cortexTab: { id: 31, windowId: 7, index: 0 },
     sessionTabs: new Map([["cortex-conv-writer", 32]]),
   };
+  const proof = await initializeSession(context, "cortex-conv-writer");
 
   const result = await routeCommand(context, {
     session: "cortex-conv-writer",
     action: "send_text",
-    payload: { text: "ok" },
+    payload: sessionPayload(proof, { text: "ok" }),
   });
 
   assert.deepEqual(result, { ok: true, confirmed_after_navigation: true });
@@ -3513,12 +4238,13 @@ test("a stale short user message cannot confirm a new-chat navigation", async ()
     sessionTabs: new Map([["cortex-conv-writer", 32]]),
     activationConfirmationTimeoutMs: 0,
   };
+  const proof = await initializeSession(context, "cortex-conv-writer");
 
   await assert.rejects(
     routeCommand(context, {
       session: "cortex-conv-writer",
       action: "send_text",
-      payload: { text: "ok" },
+      payload: sessionPayload(proof, { text: "ok" }),
     }),
     (error) => error.code === "DELIVERY_UNCERTAIN",
   );
@@ -3539,11 +4265,12 @@ test("navigation replaces a stale closed session tab", async () => {
     cortexTab: { id: 31, windowId: 7, index: 0 },
     sessionTabs: new Map([["cortex-view-read-only", 999]]),
   };
+  const proof = await initializeSession(context, "cortex-view-read-only");
 
   const result = await routeCommand(context, {
     session: "cortex-view-read-only",
     action: "navigate",
-    payload: { url: "https://chatgpt.com/c/recovered-view" },
+    payload: sessionPayload(proof, { url: "https://chatgpt.com/c/recovered-view" }),
   });
 
   assert.equal(result.tab_id, 32);
@@ -3575,11 +4302,12 @@ test("navigation returns once Chrome accepts the target without requiring URL vi
     cortexTab: { id: 31, windowId: 7, index: 0 },
     sessionTabs: new Map([["cortex-conv-navigation", 32]]),
   };
+  const proof = await initializeSession(context, "cortex-conv-navigation");
 
   const result = await routeCommand(context, {
     session: "cortex-conv-navigation",
     action: "navigate",
-    payload: { url: "https://chatgpt.com/" },
+    payload: sessionPayload(proof, { url: "https://chatgpt.com/" }),
   });
 
   assert.equal(result.url, "https://chatgpt.com/");
@@ -3599,12 +4327,13 @@ test("a screenshot requires a recent explicit extension-action capture", async (
     sessionTabs: new Map([["cortex-conv-screenshot", 32]]),
     pendingCapture: null,
   };
+  const proof = await initializeSession(context, "cortex-conv-screenshot");
 
   await assert.rejects(
     routeCommand(context, {
       session: "cortex-conv-screenshot",
       action: "capture_screenshot",
-      payload: {},
+      payload: sessionPayload(proof),
     }),
     (error) => error.code === "SCREENSHOT_PERMISSION_REQUIRED",
   );
@@ -3626,11 +4355,12 @@ test("a matching action-authorized screenshot is consumed exactly once", async (
       captured_at: Date.now(),
     },
   };
+  const proof = await initializeSession(context, "cortex-conv-screenshot");
 
   const result = await routeCommand(context, {
     session: "cortex-conv-screenshot",
     action: "capture_screenshot",
-    payload: {},
+    payload: sessionPayload(proof),
   });
 
   assert.equal(result.tab_id, 32);
@@ -3654,12 +4384,13 @@ test("an action-authorized screenshot must belong to the exact bound tab", async
       captured_at: Date.now(),
     },
   };
+  const proof = await initializeSession(context, "cortex-conv-screenshot");
 
   await assert.rejects(
     routeCommand(context, {
       session: "cortex-conv-screenshot",
       action: "capture_screenshot",
-      payload: {},
+      payload: sessionPayload(proof),
     }),
     (error) => error.code === "SCREENSHOT_TARGET_MISMATCH",
   );
@@ -3677,12 +4408,15 @@ test("a screenshot refuses a selected tab that no longer matches its expected UR
     sessionTabs: new Map([["cortex-conv-screenshot", 32]]),
     pendingCapture: null,
   };
+  const proof = await initializeSession(context, "cortex-conv-screenshot");
 
   await assert.rejects(
     routeCommand(context, {
       session: "cortex-conv-screenshot",
       action: "capture_screenshot",
-      payload: { expected_url: "https://chatgpt.com/c/screenshot-proof" },
+      payload: sessionPayload(proof, {
+        expected_url: "https://chatgpt.com/c/screenshot-proof",
+      }),
     }),
     (error) => error.code === "SCREENSHOT_TARGET_MISMATCH",
   );
@@ -3720,12 +4454,13 @@ test("a screenshot is discarded when its ChatGPT route changes during capture", 
     sessionTabs: new Map([["cortex-conv-screenshot", 32]]),
     pendingCapture: null,
   };
+  const proof = await initializeSession(context, "cortex-conv-screenshot");
 
   await assert.rejects(
     routeCommand(context, {
       session: "cortex-conv-screenshot",
       action: "capture_screenshot",
-      payload: { expected_url: expectedUrl },
+      payload: sessionPayload(proof, { expected_url: expectedUrl }),
     }),
     (error) => error.code === "SCREENSHOT_TARGET_MISMATCH",
   );
@@ -3772,11 +4507,12 @@ test("a screenshot falls back to a CDP capture without any icon click", async ()
     sessionTabs: new Map([["cortex-conv-screenshot", 32]]),
     pendingCapture: null,
   };
+  const proof = await initializeSession(context, "cortex-conv-screenshot");
 
   const result = await routeCommand(context, {
     session: "cortex-conv-screenshot",
     action: "capture_screenshot",
-    payload: {},
+    payload: sessionPayload(proof),
   });
 
   assert.equal(result.tab_id, 32);
@@ -3829,12 +4565,13 @@ test("a private CDP capture restores the page mask when capture fails", async ()
     sessionTabs: new Map([["cortex-conv-screenshot", 32]]),
     pendingCapture: null,
   };
+  const proof = await initializeSession(context, "cortex-conv-screenshot");
 
   await assert.rejects(
     routeCommand(context, {
       session: "cortex-conv-screenshot",
       action: "capture_screenshot",
-      payload: {},
+      payload: sessionPayload(proof),
     }),
     (error) => error.code === "SCREENSHOT_CAPTURE_FAILED",
   );
@@ -3886,12 +4623,13 @@ test("a private capture discards pixels if exact mask restoration cannot be atte
     sessionTabs: new Map([["cortex-conv-screenshot", 32]]),
     pendingCapture: null,
   };
+  const proof = await initializeSession(context, "cortex-conv-screenshot");
 
   await assert.rejects(
     routeCommand(context, {
       session: "cortex-conv-screenshot",
       action: "capture_screenshot",
-      payload: {},
+      payload: sessionPayload(proof),
     }),
     (error) => error.code === "SCREENSHOT_PRIVACY_RESTORE_FAILED",
   );
@@ -4032,12 +4770,13 @@ test("a failed privacy mask prevents every CDP capture attempt", async () => {
     sessionTabs: new Map([["cortex-conv-screenshot", 32]]),
     pendingCapture: null,
   };
+  const proof = await initializeSession(context, "cortex-conv-screenshot");
 
   await assert.rejects(
     routeCommand(context, {
       session: "cortex-conv-screenshot",
       action: "capture_screenshot",
-      payload: {},
+      payload: sessionPayload(proof),
     }),
     (error) => error.code === "SCREENSHOT_PRIVACY_MASK_FAILED",
   );
@@ -4110,17 +4849,21 @@ test("trusted send and screenshot serialize their debugger session on one tab", 
     ]),
     pendingCapture: null,
   };
+  const [sendProof, captureProof] = await Promise.all([
+    initializeSession(context, "cortex-conv-writer"),
+    initializeSession(context, "cortex-conv-screenshot"),
+  ]);
 
   const sendPromise = routeCommand(context, {
     session: "cortex-conv-writer",
     action: "send_text",
-    payload: { text: "CORTEX-SERIALIZED-DEBUGGER" },
+    payload: sessionPayload(sendProof, { text: "CORTEX-SERIALIZED-DEBUGGER" }),
   });
   await sawPress;
   const capturePromise = routeCommand(context, {
     session: "cortex-conv-screenshot",
     action: "capture_screenshot",
-    payload: {},
+    payload: sessionPayload(captureProof),
   });
   await Promise.resolve();
   await Promise.resolve();
@@ -4172,11 +4915,12 @@ test("a stale action capture is discarded before the CDP fallback runs", async (
       captured_at: Date.now() - 120_000,
     },
   };
+  const proof = await initializeSession(context, "cortex-conv-screenshot");
 
   const result = await routeCommand(context, {
     session: "cortex-conv-screenshot",
     action: "capture_screenshot",
-    payload: {},
+    payload: sessionPayload(proof),
   });
 
   assert.equal(result.data_url, "data:image/png;base64,ZnJlc2gtY2FwdHVyZQ==");
@@ -4202,12 +4946,13 @@ test("a debugger attach failure is reported as a capture failure", async () => {
     sessionTabs: new Map([["cortex-conv-screenshot", 32]]),
     pendingCapture: null,
   };
+  const proof = await initializeSession(context, "cortex-conv-screenshot");
 
   await assert.rejects(
     routeCommand(context, {
       session: "cortex-conv-screenshot",
       action: "capture_screenshot",
-      payload: {},
+      payload: sessionPayload(proof),
     }),
     (error) => error.code === "SCREENSHOT_CAPTURE_FAILED",
   );

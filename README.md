@@ -4,107 +4,69 @@
 [![Version](https://img.shields.io/badge/version-0.5.4-blue.svg)](CHANGELOG.md)
 [![Platform](https://img.shields.io/badge/platform-macOS-lightgrey.svg)](INSTALL.md)
 
-![Cortex Bridge — use free ChatGPT as a local coding agent](docs/media/hero-banner.png)
+**Keep your project moving between ChatGPT and a controlled local execution workflow.**
 
-**Use a ChatGPT web conversation as a local coding agent, without an OpenAI
-API key.** Edit files, run commands, and review diffs on your Mac while the
-model selected in ChatGPT does the reasoning. No OpenAI API billing, no cloud
-executor, and no API token metering. Just your ChatGPT account, your Chrome,
-and your files.
+Cortex Bridge is an opt-in technical preview that connects a classic ChatGPT
+conversation in your existing Chrome profile to local execution. The default
+policy requests approval before writes and commands; trusted-workspace
+automatic writes require a deliberate opt-in.
 
-Cortex Bridge is a **ChatGPT web coding bridge**: your ordinary ChatGPT web
-chat plans the changes and a local executor applies them to your workspace.
-The default policy asks for explicit approval before writes and commands; an
-owner may deliberately enable automatic writes for a trusted workspace in
-settings. The model and usage limits are whatever ChatGPT exposes to the
-account at that time; Cortex does not promise or select a particular model
-version.
+## Version 0.6: in development, not released
+
+**Development checkpoint:** native encrypted-storage execution is incomplete.
+Do not treat this branch as a validated 0.6 upgrade. See the
+[checkpoint evidence and known blockers](docs/verification/v06-development-checkpoint-2026-09-10.md).
+
+The 0.6 direction primarily serves people who already have ChatGPT Pro and
+want to keep ChatGPT as their planning and review environment while choosing
+a separate execution harness and model. An existing subscription is not a
+promise of unlimited access or of any particular model being available.
+
+Cortex does not reset quotas or bypass provider limits. Continuing after a
+Codex limit depends on the other selected services actually remaining
+available. Equivalent quality to Codex with GPT-6 Astra has **not** been
+demonstrated.
+
+| Area | Current development status | Remaining acceptance |
+|---|---|---|
+| ChatGPT connection | Existing Chrome extension transport | Full 0.6 live connection, conversation and attachment suite |
+| Executor selection | Capability and transition validation implemented | Fresh discovery, adapter dispatch and user-interface integration |
+| Context continuity | Explicit context checkpoint persistence implemented | File reconciliation and real cross-harness resume |
+| Freebuff | Separate native CLI experiments completed | No production Cortex adapter enabled by those experiments |
+| First-use experience | Existing installer and guide | Observed first mission in under ten minutes |
+| Windows | Not part of current live acceptance | Owner-deferred platform verification |
+
+The existing application version and historical screenshots below are **not
+evidence of a finished 0.6**. The implementation scope is tracked in the
+[0.6 product specification](docs/superpowers/specs/2026-09-09-v06-product.md).
+
+## Three separate choices
+
+- **ChatGPT model and reflection:** the planning/review configuration actually
+  exposed to the connected account; unsupported choices must remain unavailable.
+- **Execution harness:** the environment managing tools, sessions and permissions.
+- **Executor model:** the model doing the delegated work inside that harness.
+
+These are the target 0.6 controls, not three interchangeable names for the
+same setting. No model or provider should change silently.
+
+## What Cortex does not promise
+
+- A fully offline ChatGPT workflow: the web conversation requires connectivity.
+- Free or unlimited third-party services, fixed cooldowns or automatic session renewal.
+- Access to secrets as a feature; project data must remain scoped and reviewed
+  before transmission to another provider.
+- A model's completion message as proof of success: inspect actual outputs
+  and test results.
+- Blanket superiority over other coding agents. Comparative claims need
+  current sources and reproducible, task-matched measurements.
+
+Browser interface changes can break the transport. Read the opt-in warning
+below before enabling it. The Chrome extension path does not require an
+OpenAI API key; a different optional executor may have its own connection,
+cost and data-use requirements.
 
 Created and maintained by [Jonas Suhard](https://github.com/Jonassuhard).
-Project background and verified case study:
-[jonassuhard.com/projets/cortex-bridge](https://jonassuhard.com/projets/cortex-bridge).
-
-### Why use Cortex Bridge instead of…
-
-| Tool | Typical setup | Cortex Bridge approach |
-|------|---------------|------------------------|
-| **Codex CLI** | Supported OpenAI account or API configuration | Uses the signed-in ChatGPT web session, without an API key |
-| **Claude Code** | Supported Anthropic account or API configuration | Uses ChatGPT web instead of an Anthropic API |
-| **Cline / Aider** | Bring an API provider or local model | Uses the model exposed in the ChatGPT conversation |
-| **GitHub Copilot** | GitHub account and an eligible plan | Uses the existing ChatGPT web account |
-| **Ollama + Cline** | Local model runtime and suitable hardware | No local model or GPU is required |
-
-**The trade-off:** Cortex Bridge reads and writes the ChatGPT web interface
-through a Chrome extension. DOM changes can temporarily break selectors, and
-this conflicts with OpenAI's Terms of Use (see below). In exchange, Cortex
-keeps API billing out of the path and records auditable execution decisions.
-
-### How it compares to other free coding agents
-
-| Solution | LLM backend | Free? | Edits local files? | Human-in-the-loop? |
-|----------|-------------|-------|--------------------|---------------------|
-| **Cortex Bridge** | Model currently exposed in ChatGPT web | Can use a free ChatGPT account | Yes | Approval by default; configurable per trusted workspace |
-| Cline + Gemini | User-selected Gemini model | Free tiers may be available | Yes | Optional |
-| OpenCode | Provider selected by the user | Free options may be available | Yes | Optional |
-| Aider + Ollama | Local model selected by the user | Yes | Yes | Optional |
-| Freebuff | Freebuff-managed model catalog | Check current Freebuff terms | Yes | Terminal-based |
-
-**Cortex Bridge's distinction:** it connects the model already available in a
-standard ChatGPT web conversation to local file access with explicit approval
-by default and an auditable opt-in automatic-write policy for trusted
-workspaces. External model names, tiers, and limits can change independently
-of Cortex Bridge.
-
-### What Cortex Bridge does that ChatGPT and Codex don't
-
-ChatGPT, Codex, and Cortex Bridge all use OpenAI models under the hood.
-But they give you very different levels of control over your own machine.
-
-| Capability | **ChatGPT (free web)** | **Codex (CLI / desktop)** | **Cortex Bridge** |
-|------------|----------------------|--------------------------|-------------------|
-| **LLM** | GPT-5.6 Luna | GPT-5.6 Terra/Sol (plan-gated) | GPT-5.6 Luna (via ChatGPT web) |
-| **Edits your local files** | ❌ No — sandbox only | ✅ Yes (sandbox clone or local) | ✅ Yes — direct local filesystem |
-| **Runs shell commands** | ❌ No | ✅ Yes | ✅ Yes (after your approval) |
-| **Reads your real project** | ❌ Upload manually | ✅ Git clone or local folder | ✅ Direct folder access |
-| **Sees your .env / node_modules** | ❌ No | ❌ Sandbox clone doesn't have them | ✅ Real project, real state |
-| **Human approval for writes** | N/A | ❌ Auto-applies | ✅ Default; trusted-workspace opt-in available |
-| **Audit trail per change** | ❌ | ❌ Only git history | ✅ Every action timestamped |
-| **Works offline** | ❌ | ❌ (cloud sandbox) | ✅ Local executor |
-| **Cost** | Free | $20–200/mo or API token | Free |
-| **ToS risk** | None (official) | None (official) | ⚠️ Browser automation (see below) |
-
-**The bottom line:** ChatGPT is a chatbot that can't touch your files.
-Codex is an agent that can, but costs money and runs in a sandbox.
-Cortex Bridge gives you agent-like local control, for free, with approval by
-default and an auditable trusted-workspace opt-in — at the cost of a ToS gray
-area.
-
-### How it compares to similar projects (ChatGPT web → local agent)
-
-A handful of open-source projects share the same idea: use the free ChatGPT
-web interface as a coding agent. Here is how Cortex Bridge stacks up.
-
-| Project | Approach | GUI? | Agent loop? | Human approval? | Security model | Status |
-|---------|----------|------|-------------|-----------------|---------------|--------|
-| **Cortex Bridge** | Chrome Extension + FastAPI | ✅ React GUI | ✅ Mission protocol | ✅ Default; configurable | Tokens, loopback, allowlist | Technical preview (v0.5.x) |
-| [chatgpt-browser-agent](https://github.com/abdallhMoukdad/chatgpt-browser-agent) | Puppeteer browser daemon | ❌ CLI + MCP only | ✅ `agent.js` (RUN/FILE blocks) | ⚠️ Optional (`--auto`) | None | ✅ Active |
-| [headless-chatgpt](https://github.com/HalilCan/headless-chatgpt) | Puppeteer API emulator | ❌ REST API only | ❌ Prompt → response only | ❌ No execution layer | None | ❌ Dormant |
-| [codex-chatgpt-control](https://github.com/adamallcock/codex-chatgpt-control) | SDK for Codex → ChatGPT delegation | ❌ SDK (Node/Python) | ❌ Delegates to Codex | ⚠️ Via Codex | Via Codex bridge | ✅ Alpha |
-| [DevSpace](https://github.com/waishnav/devspace) | MCP server (official protocol) | ❌ ChatGPT UI | ❌ Tool-based | ✅ ChatGPT prompts you | MCP + owner password | ✅ Active (v1.0) |
-
-> **DevSpace uses ChatGPT's official Developer Mode — which requires ChatGPT
-> Plus ($20/mo). All other projects in this table work with a free ChatGPT
-> account by automating the consumer web interface.**
-
-**Cortex Bridge is the only project in this category that offers:** a graphical
-console, approval-first execution with an auditable trusted-workspace opt-in,
-a security model with token pairing and command allowlisting, and two-writer
-conversation isolation — all with a free ChatGPT account.
-
-Cortex Bridge links a real ChatGPT conversation in Google Chrome to a reviewed
-executor on your Mac. Chat messages remain ordinary ChatGPT messages. Local
-execution starts only after a separate preflight shows the workspace,
-capabilities, approvals, and limits.
 
 > **Release status:** opt-in technical preview. Cortex Bridge is **not
 > affiliated with, endorsed, or authorized by OpenAI**. The consumer-site

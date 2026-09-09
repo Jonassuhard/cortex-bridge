@@ -873,6 +873,42 @@ else:
     EXECUTION_MODE, LIVE_CAPABILITY = ExecutionMode("fake", False), None
 
 
+class ProductionStorageBrokerBuildTests(unittest.TestCase):
+    def test_production_build_profile_compiles_the_broker_entrypoint(self):
+        profile = json.loads(
+            (ROOT / "native/build-profiles/storage-broker-v1.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(
+            profile["swiftc"],
+            ["-O", "-target", "arm64-apple-macosx14.0"],
+        )
+        with tempfile.TemporaryDirectory() as td:
+            temporary = Path(td)
+            binary = temporary / "cortex-storage-broker"
+            command = ["xcrun", "swiftc", *profile["swiftc"], str(SOURCE)]
+            for framework in profile["frameworks"]:
+                command.extend(["-framework", framework])
+            command.extend(["-o", str(binary)])
+            environment = {
+                **os.environ,
+                "CLANG_MODULE_CACHE_PATH": str(temporary / "clang-cache"),
+                "SWIFT_MODULECACHE_PATH": str(temporary / "swift-cache"),
+            }
+
+            completed = subprocess.run(
+                command, capture_output=True, text=True, check=False,
+                timeout=COMMAND_TIMEOUT_SECONDS, env=environment,
+            )
+
+            self.assertEqual(
+                completed.returncode, 0,
+                f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}",
+            )
+            self.assertTrue(binary.is_file())
+
+
 class DiskImageKeychainHelperTests(unittest.TestCase):
     """The helper owns the secret and exposes only non-secret observations."""
 

@@ -446,6 +446,20 @@ class SelectionDeadlineTest(unittest.IsolatedAsyncioTestCase):
     async def test_get_light_state_shares_the_absolute_deadline(self):
         await self._assert_bounded(_DeadlineDriver(light_delay=1.0))
 
+    async def test_snapshot_read_honors_the_callers_absolute_deadline(self):
+        from transport.chatgpt_web.adapter import SELECTION_TIMEOUT
+
+        driver = _DeadlineDriver()
+        driver.requires_content_stability = False
+        transport = self._transport(driver, budget=1.0)
+        await transport.select_conversation("https://chatgpt.com/c/conv-a")
+        driver.state_delay = 1.0
+
+        with self.assertRaises(TransportError) as raised:
+            await transport.snapshot(deadline=time.monotonic() + 0.08)
+
+        self.assertEqual(raised.exception.code, SELECTION_TIMEOUT)
+
     async def test_late_selection_a_cannot_replace_completed_selection_b(self):
         from transport.chatgpt_web.adapter import SELECTION_SUPERSEDED
 

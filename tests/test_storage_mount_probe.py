@@ -2,11 +2,13 @@
 """Native contract tests for the descriptor-only storage mount probe."""
 
 import json
+import ctypes
 import os
 from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from uuid import UUID
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -73,18 +75,35 @@ class StorageMountProbeTests(unittest.TestCase):
                     set(payload),
                     {
                         "schema_version",
-                        "st_dev",
-                        "fsid",
+                        "st_dev_u32",
+                        "fsid_u32",
                         "flags",
                         "filesystem_type",
                         "mount_from",
                         "mount_on",
+                        "volume_uuid",
                     },
                 )
                 self.assertEqual(payload["schema_version"], 1)
-                self.assertEqual(payload["st_dev"], os.fstat(directory_fd).st_dev)
-                self.assertEqual(len(payload["fsid"]), 2)
-                self.assertTrue(all(isinstance(value, int) for value in payload["fsid"]))
+                # Independent OS observation, not an expected value copied from
+                # the executable or from environment configuration.
+                class Attributes(ctypes.Structure):
+                    _fields_ = [("bitmapcount", ctypes.c_uint16), ("reserved", ctypes.c_uint16),
+                                ("common", ctypes.c_uint32), ("volume", ctypes.c_uint32),
+                                ("directory", ctypes.c_uint32), ("file", ctypes.c_uint32),
+                                ("fork", ctypes.c_uint32)]
+                attributes = Attributes(5, 0, 0, 0x80040000, 0, 0, 0)
+                buffer = ctypes.create_string_buffer(20)
+                function = ctypes.CDLL(None, use_errno=True).fgetattrlist
+                function.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_ulong]
+                function.restype = ctypes.c_int
+                self.assertEqual(function(directory_fd, ctypes.byref(attributes), buffer, 20, 0), 0)
+                self.assertEqual(int.from_bytes(buffer.raw[:4], "little"), 20)
+                self.assertEqual(payload["volume_uuid"], str(UUID(bytes=buffer.raw[4:20])))
+                self.assertNotEqual(payload["volume_uuid"], str(UUID(int=0)))
+                self.assertEqual(payload["st_dev_u32"], os.fstat(directory_fd).st_dev & 0xffffffff)
+                self.assertEqual(len(payload["fsid_u32"]), 2)
+                self.assertTrue(all(type(value) is int and 0 <= value <= 0xffffffff for value in payload["fsid_u32"]))
                 self.assertIsInstance(payload["flags"], int)
                 self.assertGreaterEqual(payload["flags"], 0)
                 ownership_ignored = bool(payload["flags"] & MNT_IGNORE_OWNERS)

@@ -40,6 +40,8 @@ PNG = b"\x89PNG\r\n\x1a\n" + b"cortex-test-png"
 class FakeManager:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str, dict, float]] = []
+        self.worker_epoch = "worker-epoch-a"
+        self.session_epoch = "session-epoch-a"
         self.responses: dict[str, object] = {
             "open_chatgpt": {
                 "tab_id": 42,
@@ -101,7 +103,8 @@ class FakeManager:
             },
             "list_models": {"selected": "GPT-5", "models": ["GPT-5"]},
             "select_model": {"selected": "GPT-5"},
-            "release_session": {"released": True, "tab_id": 42},
+            "session_init": self._session_init,
+            "release_session": self._release_receipt,
             "close_tab": {"closed": True},
             "navigate": {"tab_id": 42, "url": "https://chatgpt.com/c/abc"},
         }
@@ -115,6 +118,45 @@ class FakeManager:
     def public_status(self) -> dict:
         return dict(self.status)
 
+    def session_protocol_proof(self) -> dict:
+        return {
+            "protocol_version": 3,
+            "worker_epoch": self.worker_epoch,
+            "capabilities": ["session_quiescence_receipt_v1"],
+        }
+
+    def _session_init(self, session: str, _action: str, _payload: dict, _timeout: float):
+        return {
+            "receipt_type": "session_init.v1",
+            "capability": "session_quiescence_receipt_v1",
+            "session": session,
+            "worker_epoch": self.worker_epoch,
+            "session_epoch": self.session_epoch,
+        }
+
+    def _release_receipt(self, session: str, _action: str, payload: dict, _timeout: float):
+        listed = self.responses.get("list_tabs")
+        tabs = listed.get("tabs", []) if isinstance(listed, dict) else []
+        tab_id = next(
+            (
+                tab.get("tab_id")
+                for tab in tabs
+                if isinstance(tab, dict) and tab.get("session") == session
+            ),
+            None,
+        )
+        return {
+            "receipt_type": "session_release.v1",
+            "capability": "session_quiescence_receipt_v1",
+            "session": session,
+            "worker_epoch": self.worker_epoch,
+            "session_epoch": self.session_epoch,
+            "release_request_id": payload.get("release_request_id"),
+            "released": True,
+            "quiescent": True,
+            "tab_id": tab_id,
+        }
+
     async def command(self, session: str, action: str, payload: dict, timeout: float):
         self.calls.append((session, action, payload, timeout))
         response = self.responses[action]
@@ -122,6 +164,8 @@ class FakeManager:
             response = response.pop(0)
         if isinstance(response, Exception):
             raise response
+        if callable(response):
+            response = response(session, action, payload, timeout)
         return response
 
 
@@ -223,6 +267,14 @@ class ChromeExtensionDriverContractTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(health["connected"])
         self.assertEqual(health["driver"], "chrome_extension")
         self.assertEqual(health["tabs"], 1)
+        self.assertEqual(
+            [call[1] for call in self.manager.calls],
+            ["session_init", "list_tabs"],
+        )
+        self.assertEqual(
+            self.manager.calls[-1][2],
+            {"session_epoch": "session-epoch-a"},
+        )
 
         self.manager.status.update(
             state="disconnected", extension_connected=False, paired=False
@@ -230,6 +282,54 @@ class ChromeExtensionDriverContractTest(unittest.IsolatedAsyncioTestCase):
         disconnected = await self.driver.health()
         self.assertFalse(disconnected["connected"])
         self.assertEqual(disconnected["tabs"], 0)
+
+    async def test_health_only_session_closes_with_an_attested_unbound_release(self) -> None:
+        driver = ChromeExtensionBrowserDriver(
+            session="health-only-session",
+            manager=self.manager,
+            allowed_root=self.root,
+        )
+
+        health = await driver.health()
+        await driver.close()
+
+        self.assertTrue(health["connected"])
+        self.assertEqual(
+            [call[1] for call in self.manager.calls],
+            ["session_init", "list_tabs", "release_session"],
+        )
+        release = self.manager.calls[-1]
+        self.assertEqual(release[2]["session_epoch"], "session-epoch-a")
+        self.assertRegex(release[2]["release_request_id"], r"\A[0-9a-f]{32}\Z")
+        self.assertTrue(driver._release_confirmed)
+        self.assertFalse(driver._release_pending)
+
+    async def test_closed_driver_health_never_initializes_a_new_session_generation(self) -> None:
+        await self.driver.close()
+        self.assertEqual(self.manager.calls, [])
+
+        health = await self.driver.health()
+
+        self.assertFalse(health["connected"])
+        self.assertEqual(self.manager.calls, [])
+        with self.assertRaises(TabClosedError):
+            await self.driver.list_tabs()
+        self.assertEqual(self.manager.calls, [])
+
+    async def test_release_pending_driver_health_never_issues_another_browser_command(self) -> None:
+        await self.driver._command("probe")
+        self.manager.responses["release_session"] = RuntimeError("release unavailable")
+        with self.assertRaisesRegex(RuntimeError, "release unavailable"):
+            await self.driver.close()
+        calls_before_health = list(self.manager.calls)
+
+        health = await self.driver.health()
+
+        self.assertFalse(health["connected"])
+        self.assertEqual(self.manager.calls, calls_before_health)
+        with self.assertRaises(TabClosedError):
+            await self.driver.list_tabs()
+        self.assertEqual(self.manager.calls, calls_before_health)
 
     async def test_open_login_opens_and_probes_the_bound_tab(self) -> None:
         result = await self.driver.open_login()
@@ -239,7 +339,19 @@ class ChromeExtensionDriverContractTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["probe"]["composer_present"])
         self.assertEqual(
             [call[1] for call in self.manager.calls],
-            ["open_chatgpt", "probe"],
+            ["session_init", "open_chatgpt", "probe"],
+        )
+
+    async def test_browser_commands_carry_the_attested_session_epoch(self) -> None:
+        await self.driver.navigate("https://chatgpt.com/c/abc")
+
+        navigate = next(call for call in self.manager.calls if call[1] == "navigate")
+        self.assertEqual(
+            navigate[2],
+            {
+                "url": "https://chatgpt.com/c/abc",
+                "session_epoch": "session-epoch-a",
+            },
         )
 
     async def test_open_login_waits_until_the_reloaded_chatgpt_composer_is_ready(self) -> None:
@@ -265,7 +377,7 @@ class ChromeExtensionDriverContractTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["probe"]["composer_present"])
         self.assertEqual(
             [call[1] for call in self.manager.calls],
-            ["open_chatgpt", "probe", "probe"],
+            ["session_init", "open_chatgpt", "probe", "probe"],
         )
 
     async def test_open_login_uses_one_eight_second_budget_and_reports_an_open_loading_tab(self) -> None:
@@ -283,6 +395,8 @@ class ChromeExtensionDriverContractTest(unittest.IsolatedAsyncioTestCase):
                 timeout: float,
             ):
                 self.calls.append((session, action, payload, timeout))
+                if action == "session_init":
+                    return self._session_init(session, action, payload, timeout)
                 if action == "open_chatgpt":
                     now[0] += 3.0
                     return self.responses[action]
@@ -305,7 +419,7 @@ class ChromeExtensionDriverContractTest(unittest.IsolatedAsyncioTestCase):
 
         result = await open_connection_with_driver(driver)
 
-        open_call, probe_call = manager.calls
+        _init_call, open_call, probe_call = manager.calls
         self.assertEqual([open_call[1], probe_call[1]], ["open_chatgpt", "probe"])
         self.assertGreater(open_call[3], 7.9)
         self.assertLessEqual(open_call[3], 8.0)
@@ -325,8 +439,14 @@ class ChromeExtensionDriverContractTest(unittest.IsolatedAsyncioTestCase):
         await self.driver.press_stop()
 
         calls = {action: payload for _, action, payload, _ in self.manager.calls}
-        self.assertEqual(calls["navigate"], {"url": "https://chatgpt.com/c/abc"})
-        self.assertEqual(calls["send_text"], {"text": "hello"})
+        self.assertEqual(calls["navigate"], {
+            "url": "https://chatgpt.com/c/abc",
+            "session_epoch": "session-epoch-a",
+        })
+        self.assertEqual(calls["send_text"], {
+            "text": "hello",
+            "session_epoch": "session-epoch-a",
+        })
 
     async def test_spa_navigation_falls_back_to_full_navigation_when_target_is_absent(self) -> None:
         self.manager.responses["spa_navigate"] = {"handled": False}
@@ -342,7 +462,7 @@ class ChromeExtensionDriverContractTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.driver.target_url, "https://chatgpt.com/c/target")
         self.assertEqual(
             [call[1] for call in self.manager.calls],
-            ["spa_navigate", "navigate"],
+            ["session_init", "spa_navigate", "navigate"],
         )
 
     async def test_send_waits_for_a_proven_missing_content_script_before_delivery(self) -> None:
@@ -422,10 +542,14 @@ class ChromeExtensionDriverContractTest(unittest.IsolatedAsyncioTestCase):
         await self.driver.await_attachment()
 
         actions = [call[1] for call in self.manager.calls]
-        self.assertEqual(actions[0], "attachment_begin")
+        self.assertEqual(actions[0], "session_init")
+        self.assertEqual(actions[1], "attachment_begin")
         self.assertEqual(actions[-1], "await_attachment")
         self.assertGreater(actions.count("attachment_chunk"), 1)
-        self.assertEqual(self.manager.calls[-1][2], {"name": "small.txt"})
+        self.assertEqual(self.manager.calls[-1][2], {
+            "name": "small.txt",
+            "session_epoch": "session-epoch-a",
+        })
         wire = repr(self.manager.calls)
         self.assertNotIn(str(staged), wire)
 
@@ -442,7 +566,10 @@ class ChromeExtensionDriverContractTest(unittest.IsolatedAsyncioTestCase):
 
         begin = next(call for call in self.manager.calls if call[1] == "attachment_begin")
         self.assertEqual(begin[2]["name"], "report.txt")
-        self.assertEqual(self.manager.calls[-1][2], {"name": "report.txt"})
+        self.assertEqual(self.manager.calls[-1][2], {
+            "name": "report.txt",
+            "session_epoch": "session-epoch-a",
+        })
 
     async def test_attachment_only_send_retains_and_passes_the_confirmed_filename(self) -> None:
         staged = self.root / "cortex-attachment-1234-report.txt"
@@ -477,7 +604,11 @@ class ChromeExtensionDriverContractTest(unittest.IsolatedAsyncioTestCase):
         bare = next(call for call in self.manager.calls if call[1] == "send_bare")
         self.assertEqual(
             bare[2],
-            {"name": "report.txt", "native_activation": True},
+            {
+                "name": "report.txt",
+                "native_activation": True,
+                "session_epoch": "session-epoch-a",
+            },
         )
 
     async def test_text_attachment_send_passes_and_consumes_the_confirmed_filename(self) -> None:
@@ -521,9 +652,13 @@ class ChromeExtensionDriverContractTest(unittest.IsolatedAsyncioTestCase):
                 "text": "Inspect the synthetic report.",
                 "name": "report.txt",
                 "native_activation": True,
+                "session_epoch": "session-epoch-a",
             },
         )
-        self.assertEqual(sends[1][2], {"text": "Next plain message."})
+        self.assertEqual(sends[1][2], {
+            "text": "Next plain message.",
+            "session_epoch": "session-epoch-a",
+        })
 
     async def test_text_attachment_native_activation_receives_only_normalized_text_hash(self) -> None:
         native_calls: list[tuple[str, str, str]] = []
@@ -585,6 +720,7 @@ class ChromeExtensionDriverContractTest(unittest.IsolatedAsyncioTestCase):
                 "text": raw_prompt,
                 "name": "report (2024).txt",
                 "native_activation": True,
+                "session_epoch": "session-epoch-a",
             },
         )
 
@@ -889,9 +1025,13 @@ class ChromeExtensionDriverContractTest(unittest.IsolatedAsyncioTestCase):
                 "text": "Inspect the synthetic report.",
                 "name": "report.txt",
                 "native_activation": True,
+                "session_epoch": "session-epoch-a",
             },
         )
-        self.assertEqual(sends[1][2], {"text": "Next plain message."})
+        self.assertEqual(sends[1][2], {
+            "text": "Next plain message.",
+            "session_epoch": "session-epoch-a",
+        })
 
     async def test_attachment_only_send_refuses_an_unconfirmed_filename(self) -> None:
         staged = self.root / "cortex-attachment-1234-report.txt"
@@ -934,7 +1074,9 @@ class ChromeExtensionDriverContractTest(unittest.IsolatedAsyncioTestCase):
         release = [
             call for call in self.manager.calls if call[1] == "release_session"
         ][-1]
-        self.assertEqual(release[2], {"reusable": False})
+        self.assertFalse(release[2]["reusable"])
+        self.assertEqual(release[2]["session_epoch"], "session-epoch-a")
+        self.assertRegex(release[2]["release_request_id"], r"\A[0-9a-f]{32}\Z")
 
     async def test_upload_rejects_outside_and_oversized_files_before_sending(self) -> None:
         outside = Path(self.tmp.name).parent / "outside-cortex.txt"
@@ -965,7 +1107,10 @@ class ChromeExtensionDriverContractTest(unittest.IsolatedAsyncioTestCase):
         capture = [call for call in self.manager.calls if call[1] == "capture_screenshot"]
         self.assertEqual(
             capture[-1][2],
-            {"expected_url": "https://chatgpt.com/c/screenshot-proof"},
+            {
+                "expected_url": "https://chatgpt.com/c/screenshot-proof",
+                "session_epoch": "session-epoch-a",
+            },
         )
 
     async def test_screenshot_refuses_without_a_selected_target(self) -> None:
@@ -991,6 +1136,7 @@ class ChromeExtensionDriverContractTest(unittest.IsolatedAsyncioTestCase):
             await self.driver.probe()
 
     async def test_logical_close_releases_binding_without_closing_users_tab(self) -> None:
+        await self.driver._command("probe")
         await self.driver.close()
         await self.driver.close()
 
@@ -998,7 +1144,95 @@ class ChromeExtensionDriverContractTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(actions.count("release_session"), 1)
         self.assertNotIn("close_tab", [call[1] for call in self.manager.calls])
         release = next(call for call in self.manager.calls if call[1] == "release_session")
-        self.assertEqual(release[2], {"reusable": True})
+        self.assertTrue(release[2]["reusable"])
+        self.assertEqual(release[2]["session_epoch"], "session-epoch-a")
+        self.assertRegex(release[2]["release_request_id"], r"\A[0-9a-f]{32}\Z")
+
+    async def test_failed_release_is_retryable_until_the_extension_acknowledges_it(self) -> None:
+        await self.driver._command("probe")
+        self.manager.responses["release_session"] = [
+            RuntimeError("temporary extension failure"),
+            self.manager._release_receipt,
+        ]
+
+        with self.assertRaisesRegex(RuntimeError, "temporary extension failure"):
+            await self.driver.close()
+        await self.driver.close()
+
+        releases = [call for call in self.manager.calls if call[1] == "release_session"]
+        self.assertEqual(len(releases), 2)
+        self.assertTrue(self.driver._release_confirmed)
+
+    async def test_close_rejects_absent_malformed_or_negative_release_receipts(self) -> None:
+        await self.driver._command("probe")
+        invalid_receipts = (
+            None,
+            {"released": False, "tab_id": None},
+            {"receipt_type": "session_release.v1", "released": True},
+        )
+        for receipt in invalid_receipts:
+            with self.subTest(receipt=receipt):
+                driver = ChromeExtensionBrowserDriver(
+                    session=f"session-invalid-{len(self.manager.calls)}",
+                    manager=self.manager,
+                    allowed_root=self.root,
+                )
+                await driver._command("probe")
+                self.manager.responses["release_session"] = receipt
+                with self.assertRaises(DriverError) as caught:
+                    await driver.close()
+                self.assertEqual(caught.exception.code, "SESSION_RELEASE_PENDING")
+                self.assertTrue(driver._release_pending)
+                self.assertFalse(driver._release_confirmed)
+        self.manager.responses["release_session"] = self.manager._release_receipt
+
+    async def test_close_requires_a_current_pair_epoch_and_fresh_release_request(self) -> None:
+        await self.driver._command("probe")
+        self.manager.worker_epoch = "worker-epoch-after-restart"
+
+        with self.assertRaises(DriverError) as caught:
+            await self.driver.close()
+        self.assertEqual(caught.exception.code, "SESSION_RELEASE_PENDING")
+
+        self.assertTrue(self.driver._release_pending)
+        self.assertFalse(self.driver._release_confirmed)
+
+    async def test_close_rejects_a_replayed_release_receipt(self) -> None:
+        await self.driver._command("probe")
+        self.manager.responses["release_session"] = {
+            "receipt_type": "session_release.v1",
+            "capability": "session_quiescence_receipt_v1",
+            "session": "session-a",
+            "worker_epoch": "worker-epoch-a",
+            "session_epoch": "session-epoch-a",
+            "release_request_id": "stale-release-request",
+            "released": True,
+            "quiescent": True,
+            "tab_id": 42,
+        }
+
+        with self.assertRaises(DriverError) as caught:
+            await self.driver.close()
+        self.assertEqual(caught.exception.code, "SESSION_RELEASE_PENDING")
+
+        self.assertTrue(self.driver._release_pending)
+        self.assertFalse(self.driver._release_confirmed)
+
+    async def test_close_uses_the_remaining_snapshot_deadline_for_release(self) -> None:
+        now = [100.0]
+        driver = ChromeExtensionBrowserDriver(
+            session="cortex-view-read-only",
+            manager=self.manager,
+            allowed_root=self.root,
+            monotonic=lambda: now[0],
+        )
+        await driver._command("probe", timeout=1)
+
+        await ChatGPTWebTransport(driver).close(deadline=100.25)
+
+        release = [call for call in self.manager.calls if call[1] == "release_session"][-1]
+        self.assertEqual(release[3], 0.25)
+        self.assertTrue(driver._release_confirmed)
 
     async def test_failed_native_activation_never_returns_the_dirty_writer_to_pool(self) -> None:
         async def reject(_url: str, _name: str, expected_text_hash: str) -> None:
@@ -1032,7 +1266,8 @@ class ChromeExtensionDriverContractTest(unittest.IsolatedAsyncioTestCase):
         await driver.close()
 
         release = [call for call in self.manager.calls if call[1] == "release_session"][-1]
-        self.assertEqual(release[2], {"reusable": False})
+        self.assertFalse(release[2]["reusable"])
+        self.assertEqual(release[2]["session_epoch"], "session-epoch-a")
 
     async def test_structured_upload_failure_never_falls_back_to_raw_evaluation(self) -> None:
         from console.chrome_extension import BridgeProtocolError

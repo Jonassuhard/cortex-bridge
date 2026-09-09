@@ -213,6 +213,9 @@ function apiResponse(pathname: string, searchParams: URLSearchParams, method: st
   if (method === "GET" && pathname === "/api/onboarding") {
     return { completed: true, ready: true, checks: [] };
   }
+  if (method === "GET" && pathname === "/api/diagnostics/export") {
+    return { source: "fixture", generated_at: fixedTime };
+  }
 
   return { detail: `Unhandled local fixture route: ${method} ${pathname}` };
 }

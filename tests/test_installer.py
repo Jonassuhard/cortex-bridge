@@ -2890,6 +2890,31 @@ class InstallerTest(unittest.TestCase):
         self.assertEqual(permission["status"], "warning")
         self.assertEqual(permission["detail"], "not checked")
 
+    def test_doctor_identity_mismatch_does_not_prescribe_an_install_that_will_refuse(self):
+        self.approved_install()
+        helper_path = self.cortex_home / "bin" / "cortex-macos-ax-send"
+        preserved_owned = self.root / "previous-owned-helper"
+        helper_path.rename(preserved_owned)
+        helper_path.write_text("foreign helper", encoding="utf-8")
+        helper_path.chmod(0o700)
+
+        result = self.run_script("cortex.sh", "doctor", "--json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        helper = next(
+            check for check in payload["checks"] if check["id"] == "macos_ax_helper"
+        )
+        self.assertEqual(helper["status"], "fail")
+        self.assertEqual(helper["detail"], "owned binary identity mismatch")
+        self.assertNotIn("relance le plan approuvé", helper["hint"].casefold())
+        self.assertIn("préserve", helper["hint"].casefold())
+        self.assertIn("provenance", helper["hint"].casefold())
+
+        refused = self.run_script("install.sh", "--dry-run", "--json")
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertEqual(helper_path.read_text(encoding="utf-8"), "foreign helper")
+        self.assertTrue(preserved_owned.is_file())
+
     def test_doctor_refuses_helper_reached_through_symlinked_bin_directory(self):
         self.approved_install()
         installed_bin = self.cortex_home / "bin"

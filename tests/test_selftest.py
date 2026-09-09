@@ -12,6 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 CORTEX_SH = ROOT / "scripts" / "cortex.sh"
 VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+CURRENT_EXTENSION_PROTOCOL_VERSION = 3
 
 
 FAKE_CURL = """#!/usr/bin/env python3
@@ -65,8 +66,8 @@ def run_selftest(
             "paired": True,
             "pending_commands": 0,
             "protocol_compatible": True,
-            "extension_protocol_version": 2,
-            "required_protocol_version": 2,
+            "extension_protocol_version": CURRENT_EXTENSION_PROTOCOL_VERSION,
+            "required_protocol_version": CURRENT_EXTENSION_PROTOCOL_VERSION,
         },
         "/api/transport/probe": probe,
     }
@@ -226,7 +227,7 @@ class CortexSelftestProbeContractTest(unittest.TestCase):
                 "pending_commands": 0,
                 "protocol_compatible": False,
                 "extension_protocol_version": 1,
-                "required_protocol_version": 2,
+                "required_protocol_version": CURRENT_EXTENSION_PROTOCOL_VERSION,
             },
         )
 
@@ -244,7 +245,7 @@ class CortexSelftestProbeContractTest(unittest.TestCase):
                 "pending_commands": 0,
                 "protocol_compatible": None,
                 "extension_protocol_version": None,
-                "required_protocol_version": 2,
+                "required_protocol_version": CURRENT_EXTENSION_PROTOCOL_VERSION,
             },
         )
 
@@ -268,8 +269,8 @@ class CortexSelftestProbeContractTest(unittest.TestCase):
                         "paired": True,
                         "pending_commands": 0,
                         "protocol_compatible": True,
-                        "extension_protocol_version": 2,
-                        "required_protocol_version": 2,
+                        "extension_protocol_version": CURRENT_EXTENSION_PROTOCOL_VERSION,
+                        "required_protocol_version": CURRENT_EXTENSION_PROTOCOL_VERSION,
                     }
                 },
                 "réponse extension invalide",

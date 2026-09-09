@@ -4,7 +4,6 @@ import { useMemo, useState } from "react";
 import type { ConversationSummary } from "@/lib/types";
 import { groupConversations } from "@/lib/conversations";
 import {
-  ArchiveIcon,
   ChevronDownIcon,
   ClockIcon,
   InfoIcon,
@@ -134,7 +133,6 @@ export function ConversationSidebar({ conversations, selectedKey, loading, colla
         {groups.projects.map((group) => renderGroup(group.title, group.items))}
         {renderGroup("Récentes", groups.recent)}
       </nav>
-      <button className="archived-button"><ArchiveIcon size={16} /><span>Conversations archivées</span></button>
       <div className="sidebar-bottom">
         {onOpenGuide && <button className="settings-entry" onClick={onOpenGuide}><span className="settings-entry-icon"><InfoIcon /></span><span className="settings-entry-copy"><strong>Guide de démarrage</strong><small>Couplage, ChatGPT, première tâche</small></span><ChevronDownIcon size={15} /></button>}
         {onOpenHistory && <button className="history-entry" onClick={onOpenHistory}><span className="history-entry-icon"><ClockIcon /></span><span className="history-entry-copy"><strong>Historique</strong><small>Missions et exécutions passées</small></span><ChevronDownIcon size={15} /></button>}

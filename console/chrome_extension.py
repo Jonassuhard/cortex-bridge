@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import secrets
 import time
 import uuid
@@ -22,10 +23,13 @@ PAIRING_TTL_SECONDS = 60
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 10.0
 MAX_MESSAGE_BYTES = 2 * 1024 * 1024
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1"})
-EXTENSION_PROTOCOL_VERSION = 2
+EXTENSION_PROTOCOL_VERSION = 3
+SESSION_RECEIPT_CAPABILITY = "session_quiescence_receipt_v1"
+_WORKER_EPOCH = re.compile(r"\A[a-zA-Z0-9_-][a-zA-Z0-9_.:-]{15,127}\Z")
 
 ALLOWED_ACTIONS = frozenset(
     {
+        "session_init",
         "open_chatgpt",
         "release_session",
         "focus_tab",
@@ -86,6 +90,8 @@ class ChromeExtensionManager:
         self._send_lock = asyncio.Lock()
         self._extension_protocol_version: int | None = None
         self._protocol_compatible: bool | None = None
+        self._worker_epoch: str | None = None
+        self._extension_capabilities: frozenset[str] = frozenset()
 
     @property
     def pending_count(self) -> int:
@@ -149,7 +155,19 @@ class ChromeExtensionManager:
         )
         self._extension_seen = True
         self._last_seen_at = self._clock()
-        protocol_compatible = version == EXTENSION_PROTOCOL_VERSION
+        raw_epoch = message.get("worker_epoch")
+        worker_epoch = raw_epoch if isinstance(raw_epoch, str) and _WORKER_EPOCH.fullmatch(raw_epoch) else None
+        raw_capabilities = message.get("capabilities")
+        capabilities = (
+            frozenset(item for item in raw_capabilities if isinstance(item, str))
+            if isinstance(raw_capabilities, list)
+            else frozenset()
+        )
+        protocol_compatible = (
+            version == EXTENSION_PROTOCOL_VERSION
+            and worker_epoch is not None
+            and SESSION_RECEIPT_CAPABILITY in capabilities
+        )
         active_connection = self._connection
         if active_connection is None or active_connection is connection:
             self._extension_protocol_version = version
@@ -163,7 +181,28 @@ class ChromeExtensionManager:
         if paired:
             self._extension_protocol_version = version
             self._protocol_compatible = True
+            self._worker_epoch = worker_epoch
+            self._extension_capabilities = capabilities
         return paired, "PAIRED" if paired else "PAIRING_REJECTED"
+
+    def session_protocol_proof(self) -> dict[str, Any]:
+        """Return the live v3 pairing proof required before session commands."""
+        if (
+            self._connection is None
+            or self._protocol_compatible is not True
+            or self._extension_protocol_version != EXTENSION_PROTOCOL_VERSION
+            or self._worker_epoch is None
+            or SESSION_RECEIPT_CAPABILITY not in self._extension_capabilities
+        ):
+            raise BridgeProtocolError(
+                "EXTENSION_PROTOCOL_UNAVAILABLE",
+                "Chrome extension cannot attest the session-release protocol",
+            )
+        return {
+            "protocol_version": EXTENSION_PROTOCOL_VERSION,
+            "worker_epoch": self._worker_epoch,
+            "capabilities": tuple(sorted(self._extension_capabilities)),
+        }
 
     def public_status(self) -> dict[str, Any]:
         self._remove_expired_tickets()
@@ -286,6 +325,8 @@ class ChromeExtensionManager:
         self._paired_at = None
         self._extension_protocol_version = None
         self._protocol_compatible = None
+        self._worker_epoch = None
+        self._extension_capabilities = frozenset()
         for future in list(self._pending.values()):
             if not future.done():
                 future.set_exception(

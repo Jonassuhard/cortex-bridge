@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .tools import ProcessCapabilities, ToolDenied, check_command_allowed, detect_test_command
+from .workspace_handle import WorkspaceHandle, WorkspaceHandleClosed, WorkspaceIdentityChanged
 
 # §16 approval modes.
 READ_ONLY_AUTOMATIC = "read-only-automatic"
@@ -81,10 +82,17 @@ class PolicyEngine:
     _fallback_used: set[str] = field(default_factory=set)
 
     def __post_init__(self):
-        self.workspace = Path(self.workspace).resolve()
+        if isinstance(self.workspace, WorkspaceHandle):
+            self.workspace.revalidate()
+            if self.allowed_workspaces is not None and any(
+                not isinstance(w, WorkspaceHandle) for w in self.allowed_workspaces
+            ):
+                raise ValueError("HANDLE_ALLOWLIST_REQUIRED")
+        else:
+            self.workspace = Path(self.workspace).resolve()
         if self.allowed_workspaces is None:
             self.allowed_workspaces = [self.workspace]
-        else:
+        elif not isinstance(self.workspace, WorkspaceHandle):
             self.allowed_workspaces = [Path(w).resolve() for w in self.allowed_workspaces]
         if self.mode not in (READ_ONLY_AUTOMATIC, WRITE_WITH_APPROVALS, WRITE_AUTOMATIC):
             raise ValueError(f"unknown approval mode {self.mode!r}")
@@ -92,6 +100,13 @@ class PolicyEngine:
     # -- workspace allowlist ------------------------------------------------------
 
     def workspace_allowed(self) -> bool:
+        if isinstance(self.workspace, WorkspaceHandle):
+            try:
+                identity = self.workspace.revalidate()
+                return any(isinstance(w, WorkspaceHandle) and w.revalidate() == identity
+                           for w in self.allowed_workspaces)
+            except (WorkspaceHandleClosed, WorkspaceIdentityChanged, OSError):
+                return False
         return any(
             self.workspace == w or self.workspace in w.parents or w in self.workspace.parents
             for w in self.allowed_workspaces
@@ -132,13 +147,17 @@ class PolicyEngine:
         # Deterministic command restrictions for process tools (§15).
         if tool == "run_process":
             try:
-                check_command_allowed(list(arguments.get("argv") or []), self.workspace)
+                check_command_allowed(list(arguments.get("argv") or []), self.workspace,
+                                      cwd=arguments.get("cwd", "."))
             except ToolDenied as exc:
                 return PolicyDecision(False, False, tool, exc.message, exc.code)
         if tool == "run_tests":
             requested = arguments.get("argv")
             allowed = list(self.test_commands or [])
-            detected = detect_test_command(self.workspace)
+            try:
+                detected = detect_test_command(self.workspace, cwd=arguments.get("cwd", "."))
+            except ToolDenied as exc:
+                return PolicyDecision(False, False, tool, exc.message, exc.code)
             if detected is not None:
                 allowed.append(detected)
             if not allowed:

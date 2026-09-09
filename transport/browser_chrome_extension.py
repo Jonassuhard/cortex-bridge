@@ -61,6 +61,31 @@ CONTENT_SCRIPT_READ_ACTIONS = frozenset(
         "list_models",
     }
 )
+SESSION_RECEIPT_CAPABILITY = "session_quiescence_receipt_v1"
+SESSION_RECEIPT_ACTIONS = frozenset(
+    {
+        "open_chatgpt",
+        "focus_tab",
+        "navigate",
+        "list_tabs",
+        "close_tab",
+        "probe",
+        "get_state",
+        "get_light_state",
+        "spa_navigate",
+        "list_conversations",
+        "send_text",
+        "press_stop",
+        "attachment_begin",
+        "attachment_chunk",
+        "attachment_commit",
+        "await_attachment",
+        "send_bare",
+        "capture_screenshot",
+        "list_models",
+        "select_model",
+    }
+)
 
 
 def _coded_driver_error(code: str, message: str) -> DriverError:
@@ -315,6 +340,10 @@ class ChromeExtensionBrowserDriver:
         self.target_url: str | None = None
         self.selection_used_full_navigation = False
         self._closed = False
+        self._release_confirmed = False
+        self._release_pending = False
+        self._session_receipt: dict[str, str] | None = None
+        self._session_command_issued = False
         self._pending_attachment_name: str | None = None
         self._writer_reusable = True
 
@@ -329,9 +358,11 @@ class ChromeExtensionBrowserDriver:
         *,
         timeout: float = 10.0,
     ) -> Any:
-        if self._closed and action != "list_tabs":
+        if self._closed and action != "release_session":
             raise TabClosedError("Chrome extension driver session is closed")
         deadline = self._monotonic() + timeout
+        if action in SESSION_RECEIPT_ACTIONS:
+            await self._ensure_session_receipt(deadline)
         unavailable_failures = 0
         recovery_attempted = False
         write_ready_deadline: float | None = None
@@ -342,10 +373,19 @@ class ChromeExtensionBrowserDriver:
                     f"TAB_UNAVAILABLE: ChatGPT did not become ready within {timeout:g} seconds"
                 )
             try:
+                command_payload = dict(payload or {})
+                if action in SESSION_RECEIPT_ACTIONS:
+                    # This flips before the await: cancellation after a command
+                    # enters the bridge is uncertain and requires an attested
+                    # remote release rather than local disposal.
+                    self._session_command_issued = True
+                    command_payload["session_epoch"] = self._session_receipt[
+                        "session_epoch"
+                    ]
                 return await self.manager.command(
                     self.session,
                     action,
-                    payload or {},
+                    command_payload,
                     remaining,
                 )
             except Exception as exc:
@@ -413,6 +453,97 @@ class ChromeExtensionBrowserDriver:
                     raise error from exc
                 raise
 
+    def _session_protocol_proof(self) -> dict[str, Any]:
+        getter = getattr(self.manager, "session_protocol_proof", None)
+        if not callable(getter):
+            raise _coded_driver_error(
+                "SESSION_PROTOCOL_UNAVAILABLE",
+                "Chrome extension cannot attest the session-release protocol",
+            )
+        proof = getter()
+        if not isinstance(proof, dict):
+            raise _coded_driver_error(
+                "SESSION_PROTOCOL_UNAVAILABLE",
+                "Chrome extension returned an invalid session protocol proof",
+            )
+        worker_epoch = proof.get("worker_epoch")
+        capabilities = proof.get("capabilities")
+        if (
+            proof.get("protocol_version") != 3
+            or not isinstance(worker_epoch, str)
+            or not worker_epoch
+            or not isinstance(capabilities, (tuple, list, set, frozenset))
+            or SESSION_RECEIPT_CAPABILITY not in capabilities
+        ):
+            raise _coded_driver_error(
+                "SESSION_PROTOCOL_UNAVAILABLE",
+                "Chrome extension has not negotiated the required session-release protocol",
+            )
+        return {"worker_epoch": worker_epoch}
+
+    async def _ensure_session_receipt(self, deadline: float) -> None:
+        current = self._session_protocol_proof()
+        if self._session_receipt is not None:
+            if current["worker_epoch"] != self._session_receipt["worker_epoch"]:
+                raise _coded_driver_error(
+                    "SESSION_PROTOCOL_CHANGED",
+                    "Chrome extension restarted; the existing session release cannot be attested",
+                )
+            return
+        remaining = deadline - self._monotonic()
+        if remaining <= 0:
+            raise _coded_driver_error(
+                "SESSION_PROTOCOL_UNAVAILABLE",
+                "No time remains to negotiate the session-release protocol",
+            )
+        result = await self.manager.command(self.session, "session_init", {}, remaining)
+        if not isinstance(result, dict):
+            raise _coded_driver_error(
+                "SESSION_PROTOCOL_UNAVAILABLE",
+                "Chrome extension returned an invalid session initialization receipt",
+            )
+        session_epoch = result.get("session_epoch")
+        if (
+            result.get("receipt_type") != "session_init.v1"
+            or result.get("capability") != SESSION_RECEIPT_CAPABILITY
+            or result.get("session") != self.session
+            or result.get("worker_epoch") != current["worker_epoch"]
+            or not isinstance(session_epoch, str)
+            or not session_epoch
+        ):
+            raise _coded_driver_error(
+                "SESSION_PROTOCOL_UNAVAILABLE",
+                "Chrome extension could not attest the initialized session",
+            )
+        self._session_receipt = {
+            "worker_epoch": current["worker_epoch"],
+            "session_epoch": session_epoch,
+        }
+
+    def _validate_release_receipt(self, result: Any, release_request_id: str) -> None:
+        receipt = self._session_receipt
+        if receipt is None or not isinstance(result, dict):
+            raise _coded_driver_error(
+                "SESSION_RELEASE_PENDING",
+                "Chrome extension did not attest the session release",
+            )
+        current = self._session_protocol_proof()
+        if (
+            current["worker_epoch"] != receipt["worker_epoch"]
+            or result.get("receipt_type") != "session_release.v1"
+            or result.get("capability") != SESSION_RECEIPT_CAPABILITY
+            or result.get("session") != self.session
+            or result.get("worker_epoch") != receipt["worker_epoch"]
+            or result.get("session_epoch") != receipt["session_epoch"]
+            or result.get("release_request_id") != release_request_id
+            or result.get("released") is not True
+            or result.get("quiescent") is not True
+        ):
+            raise _coded_driver_error(
+                "SESSION_RELEASE_PENDING",
+                "Chrome extension did not attest the session release",
+            )
+
     async def _recover_read_session(self, deadline: float) -> None:
         remaining = deadline - self._monotonic()
         if remaining <= 0 or not self.target_url:
@@ -421,7 +552,10 @@ class ChromeExtensionBrowserDriver:
             await self.manager.command(
                 self.session,
                 "navigate",
-                {"url": self.target_url},
+                {
+                    "url": self.target_url,
+                    "session_epoch": self._session_receipt["session_epoch"],
+                },
                 remaining,
             )
         except Exception as exc:
@@ -883,21 +1017,56 @@ class ChromeExtensionBrowserDriver:
         await self._command("close_tab", timeout=10)
         self.target_url = None
 
-    async def close(self) -> None:
-        if self._closed:
+    async def close(self, *, deadline: float | None = None) -> None:
+        # Closed means no further browser action is permitted.  It does not
+        # mean the extension acknowledged release of this logical binding.
+        self._closed = True
+        self.target_url = None
+        if self._release_confirmed:
             return
+        if not self._session_command_issued:
+            # `session_init` is protocol-only. Without a browser command the
+            # driver owns no tab operation that needs a remote acknowledgement.
+            self._release_pending = False
+            self._release_confirmed = True
+            return
+        timeout = 5.0
+        if deadline is not None:
+            timeout = deadline - self._monotonic()
+            if timeout <= 0:
+                self._release_pending = True
+                raise _coded_driver_error(
+                    "SESSION_RELEASE_PENDING",
+                    "Chrome extension release was not confirmed before the snapshot deadline",
+                )
         try:
             # Release only Cortex's logical binding. The Chrome tab remains
             # open and can be reused by the next writer session; close_tab is
             # still reserved for an explicit user action.
-            await self._command(
+            if self._session_receipt is None:
+                raise _coded_driver_error(
+                    "SESSION_RELEASE_PENDING",
+                    "Chrome extension session proof is unavailable for release",
+                )
+            release_request_id = uuid.uuid4().hex
+            result = await self._command(
                 "release_session",
-                {"reusable": self._writer_reusable},
-                timeout=5,
+                {
+                    "reusable": self._writer_reusable,
+                    "session_epoch": self._session_receipt["session_epoch"],
+                    "release_request_id": release_request_id,
+                },
+                timeout=timeout,
             )
-        finally:
-            self._closed = True
-            self.target_url = None
+            self._validate_release_receipt(result, release_request_id)
+        except BaseException:
+            self._release_pending = True
+            raise
+        self._release_pending = False
+        self._release_confirmed = True
+
+    async def close_with_deadline(self, deadline: float) -> None:
+        await self.close(deadline=deadline)
 
     async def open_login(self) -> dict[str, Any]:
         deadline = self._monotonic() + OPEN_LOGIN_BUDGET_SECONDS
