@@ -9,6 +9,8 @@
 - Source candidate: 0.6.1 technical preview; not a provider-authorized or
   verified live/clean-install release. The machine-readable evidence manifest
   records the provider-terms boundary and unrun clean-install lifecycle.
+- The source is prepared for the `v0.6.1` technical-preview tag; this label does
+  not waive the provider-terms or clean-install gates.
 - Consult the current evidence report before asserting readiness.
 - Automated fixtures are not authenticated ChatGPT observations.
 - Mission execution is deterministic: ChatGPT model selection changes the planner,
