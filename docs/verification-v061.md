@@ -15,8 +15,8 @@ The candidate now includes the full-screen terminal slice described in
 | Check | Result | Evidence and limit |
 | --- | --- | --- |
 | Terminal/TUI focused slice | PASS, 81 tests | Textual headless smoke, CLI dispatch and PTY compatibility against synthetic HTTP fixtures |
-| Complete Python suite | PASS, 720 tests in 168.354 s | Local isolated fixtures; no signed-in ChatGPT delivery |
-| Frontend unit/runtime | PASS, 207 tests | Synthetic React/runtime data |
+| Complete Python suite | PASS, 723 tests in 170.490 s | Local isolated fixtures; no signed-in ChatGPT delivery |
+| Frontend unit/runtime | PASS, 207 unit + 36 runtime/privacy tests | Synthetic React/runtime data |
 | Frontend typecheck/lint/build | PASS | `corepack npm@11.18.0`, static Next.js build |
 | Frontend browser/a11y | PASS, 26 E2E + 4 accessibility; 1 optional guide skipped | Static synthetic export, no authenticated account |
 | TUI wheel packaging | PASS | Disposable wheel install imports `tui` and exposes version 0.6.1 |
@@ -48,7 +48,7 @@ acceptance report for the current result and remaining manual gates.
 | Browser fixtures | PASS, 26; 1 skipped | Responsive, keyboard, accessibility and UI states; optional gallery generation skipped |
 | Documentation diagrams | PASS | Three 32-frame, 1000×390 GIFs, static SVGs, visual inspection; controls/reduced motion at 375 and 1000 px |
 | npm security audit | PASS | Zero findings after the approved dependency update; previous six findings recorded below |
-| Release manifest | FAIL | No docs/verification/v0.6.1.json; validator exits 1 with invalid_json manifest |
+| Release manifest | PASS, blocked verdict | `docs/verification/v0.6.1.json` validates as `RELEASE_BLOCKED_BY_PROVIDER_TERMS`; clean install remains not run |
 | Static runtime layout | PASS | 4 checks from scripts/verify-runtime.py --json |
 | Public privacy | PASS | 408 files and 90 images after the rebuilt export; internal notes excluded |
 | Documentation links | PASS | 127 offline checks rerun; 48 external links checked in the preceding publication run |
@@ -124,9 +124,9 @@ cd frontend
 ../scripts/npmw audit --audit-level=high
 ```
 
-The canonical full release gate remains `scripts/test-all.sh`. This update
-does not reseal or rewrite any historical release manifest as current READY
-evidence. The existing backend suite emitted an unclosed-SQLite
+The canonical full release gate remains `scripts/test-all.sh`. The v0.6.1
+manifest is a truthful technical-preview record, not a READY claim. The
+existing backend suite emitted an unclosed-SQLite
 ResourceWarning; it was not counted as a passing security or cleanup check.
 
 ## Fresh live observation — 2026-09-10
