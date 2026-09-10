@@ -32,6 +32,8 @@ reported as executor-model diversity. Freebuff is not an integrated executor.
 | Cortex GUI opens | PASS | Real Chrome, candidate static UI and isolated backend |
 | Extension pairing | PASS, real replay | Candidate extension paired in the same Chrome window; backend reported protocol version 2 compatible |
 | GUI connection check | PASS, real replay | Classic `/c/...` ChatGPT tab exposed a composer; the probe returned no blocker |
+| Fresh Chrome pairing selftest | PASS, 2026-09-10 | After opening ChatGPT from Cortex, the real Chrome profile reported `paired`, the DOM probe found the composer, and the version check remained 0.6.1; no new message was sent in this check |
+| Conversation switch from Cortex | PASS, 2026-09-10 | Cortex switched the selected conversation and refreshed its visible message count; no direct ChatGPT typing was used |
 | GUI text delivery | PASS, one real check | Cortex sent `Réponds uniquement CORTEX-LIVE-01`; the UI showed pending, then confirmed delivery and `CORTEX-LIVE-01` in 9.6 s |
 | GUI screenshot delivery | PASS, one real check | The Cortex capture button produced run `8fb810edbea04d32b6889045563d319f`, state `COMPLETED`, attachment `cortex-screenshot-2a2313ca.png`; Cortex showed `Réponse terminée` and the bound ChatGPT tab exposed the new image message and its response |
 | GUI arbitrary file delivery | FAIL CLOSED, one real check | Cortex returned `PRE_DELIVERY_NOT_READY` because the ChatGPT composer was not clean and stable; no file was delivered and no success is claimed |

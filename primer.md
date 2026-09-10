@@ -64,6 +64,8 @@ runtime was then repaired through the manifest-scoped uninstall/reinstall path;
 its helper hash, Accessibilité check, backend start/status/API/stop cycle now
 pass as well. The candidate
 extension now pairs in the real Chrome window;
+the 2026-09-10 real-profile selftest reported `paired`, found a ChatGPT
+composer, and switched one conversation without sending a new message;
 one text message sent through Cortex was confirmed in 9.6 s and one screenshot
 transfer through the Cortex capture button completed as run
 `8fb810edbea04d32b6889045563d319f` with a 7.7 s observed UI latency. The
