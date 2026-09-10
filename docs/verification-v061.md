@@ -3,7 +3,16 @@
 Checked on 2026-09-10. **Not release-ready.** This document distinguishes
 source verification from installation, live provider acceptance and publication.
 
-## Current results
+Subsequent real-interface preflight and its failures are recorded separately in
+[live acceptance](live-acceptance-v061.md). Earlier green fixtures must not be
+interpreted as completed real missions.
+
+## Published source baseline (dd4ad55)
+
+These results describe the previous candidate, not the uncommitted live-test
+corrections. The initial live-session backend run failed three uninstall fixtures;
+after correction the fresh complete suite passes 710 tests. See the live
+acceptance report for the current result and remaining manual gates.
 
 | Check | Result | Scope |
 | --- | --- | --- |

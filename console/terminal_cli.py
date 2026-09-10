@@ -74,6 +74,15 @@ def managed_start(
         output("Démarrage indisponible : un checkout Cortex géré avec scripts/cortex.sh est requis.")
         return False
     environment = dict(os.environ)
+    # ``scripts/cortex`` may have selected the repository virtualenv for this
+    # terminal process, while ``scripts/cortex.sh`` normally prefers the
+    # runtime venv under ``CORTEX_HOME``.  Carry the interpreter that is
+    # already running the terminal into the lifecycle launcher so its
+    # dependency check and daemon use the same environment.  An explicit
+    # override remains authoritative for callers that intentionally select a
+    # different interpreter.
+    if not environment.get("PYTHON_BIN"):
+        environment["PYTHON_BIN"] = sys.executable
     environment["PORT"] = str(parsed.port or 80)
     try:
         result = process_run(

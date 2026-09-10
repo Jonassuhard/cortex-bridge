@@ -268,14 +268,28 @@ class TerminalCliUnitTests(unittest.TestCase):
 
         run = mock.Mock(return_value=subprocess.CompletedProcess([], 0))
         root = ROOT
-        started = terminal_cli.managed_start(
-            "http://127.0.0.1:18420", root=root, process_run=run,
-        )
+        with mock.patch.dict(os.environ, {}, clear=True):
+            started = terminal_cli.managed_start(
+                "http://127.0.0.1:18420", root=root, process_run=run,
+            )
         self.assertTrue(started)
         command, = run.call_args.args
         self.assertEqual([str(root / "scripts" / "cortex.sh"), "start"], command)
         self.assertFalse(run.call_args.kwargs.get("shell", False))
         self.assertEqual("18420", run.call_args.kwargs["env"]["PORT"])
+        self.assertEqual(sys.executable, run.call_args.kwargs["env"]["PYTHON_BIN"])
+
+    def test_managed_start_preserves_explicit_python_interpreter_override(self):
+        import terminal_cli
+
+        run = mock.Mock(return_value=subprocess.CompletedProcess([], 0))
+        with mock.patch.dict(os.environ, {"PYTHON_BIN": "/custom/cortex-python"}, clear=True):
+            started = terminal_cli.managed_start(
+                "http://127.0.0.1:18420", root=ROOT, process_run=run,
+            )
+
+        self.assertTrue(started)
+        self.assertEqual("/custom/cortex-python", run.call_args.kwargs["env"]["PYTHON_BIN"])
 
     def test_installed_wheel_has_no_direct_daemon_start_fallback(self):
         import terminal_cli

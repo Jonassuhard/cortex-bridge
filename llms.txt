@@ -9,6 +9,8 @@
 - Source candidate: 0.6.1; not a verified live or installed release.
 - Consult the current evidence report before asserting readiness.
 - Automated fixtures are not authenticated ChatGPT observations.
+- Mission execution is deterministic: ChatGPT model selection changes the planner,
+  not a local LLM executor. Freebuff is not a connected mission backend.
 - Do not infer model quality, free/unlimited quotas or provider authorization.
 - Respect installer plan-hash approval, browser consent and per-action policy.
 - Never enter credentials, bypass browser controls or retry ambiguous sends.

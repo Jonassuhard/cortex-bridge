@@ -5,6 +5,7 @@ import importlib
 import io
 import json
 import os
+import socket
 from contextlib import redirect_stdout
 import subprocess
 import sys
@@ -56,10 +57,24 @@ class InstallerTest(unittest.TestCase):
             **os.environ,
             "HOME": str(self.home),
             "CORTEX_HOME": str(self.cortex_home),
+            "PORT": self._free_loopback_port(),
             "PYTHON_BIN": sys.executable,
             "CORTEX_INSTALL_RUNNER": str(self.runner),
             "RUNNER_LOG": str(self.runner_log),
         }
+
+    @staticmethod
+    def _free_loopback_port() -> str:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.bind(("127.0.0.1", 0))
+            return str(probe.getsockname()[1])
+
+    def assert_script_ok(self, result: subprocess.CompletedProcess) -> None:
+        self.assertEqual(
+            result.returncode,
+            0,
+            f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}",
+        )
 
     def run_script(self, name: str, *args: str, env: dict[str, str] | None = None):
         return subprocess.run(
@@ -177,7 +192,7 @@ class InstallerTest(unittest.TestCase):
         applied = self.run_script(
             "uninstall.sh", "--approve-plan", plan["plan_hash"], "--json"
         )
-        self.assertEqual(applied.returncode, 0, applied.stderr)
+        self.assert_script_ok(applied)
         self.assertTrue((ROOT / "chrome-extension" / "manifest.json").is_file())
 
     def test_ui_rebuild_uses_the_repository_npm_wrapper(self):
@@ -654,7 +669,7 @@ class InstallerTest(unittest.TestCase):
             uninstall_plan["plan_hash"],
             "--json",
         )
-        self.assertEqual(removed.returncode, 0, removed.stderr)
+        self.assert_script_ok(removed)
 
         selected_python = self.root / "selected-python"
         selected_python.write_text(
@@ -856,7 +871,7 @@ class InstallerTest(unittest.TestCase):
         applied = self.run_script(
             "uninstall.sh", "--approve-plan", plan["plan_hash"], "--json"
         )
-        self.assertEqual(applied.returncode, 0, applied.stderr)
+        self.assert_script_ok(applied)
         self.assertTrue(foreign.is_file())
         self.assertTrue(foreign_tool.is_file())
         self.assertFalse((self.cortex_home / "bin" / "cortex-macos-ax-send").exists())

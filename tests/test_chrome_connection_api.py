@@ -83,6 +83,25 @@ class ChromeConnectionResultTest(unittest.TestCase):
         self.assertIn("termine la vérification", result["message"])
         self.assertNotIn("contour", result["message"].lower())
 
+    def test_ui_blocker_requires_manual_intervention_without_loading_spinner(self) -> None:
+        result = onboarding.connection_result_from_probe(
+            {
+                "ok": False,
+                "url": "https://chatgpt.com/c/abc",
+                "blocker": "ui_blocker",
+                "composer_present": True,
+                "failures": ["ui_blocker"],
+            },
+            opened={"tab_id": 42, "window_id": 7},
+        )
+
+        self.assertEqual(result["code"], "UI_BLOCKER")
+        self.assertEqual(result["state"], "manual_action")
+        self.assertEqual(result["title"], "Une fenêtre ChatGPT bloque la conversation")
+        self.assertIn("Ferme ou termine", result["message"])
+        self.assertIn("réessaie", result["message"])
+        self.assertTrue(result["recoverable"])
+
     def test_missing_composer_is_loading_not_connected(self) -> None:
         result = onboarding.connection_result_from_probe(
             {

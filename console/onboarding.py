@@ -143,6 +143,15 @@ def connection_result_from_probe(
             recoverable=True,
             **shared,
         )
+    if blocker == "ui_blocker" or "ui_blocker" in failures:
+        return _connection_result(
+            code="UI_BLOCKER",
+            state="manual_action",
+            title="Une fenêtre ChatGPT bloque la conversation",
+            message="Ferme ou termine l’écran ChatGPT qui bloque la conversation, puis réessaie.",
+            recoverable=True,
+            **shared,
+        )
     if probe.get("ok") is True and probe.get("composer_present") is True:
         return _connection_result(
             code="CONNECTED",

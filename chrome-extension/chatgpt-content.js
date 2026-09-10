@@ -383,9 +383,80 @@
     "button[aria-label*='Arrêter']",
   ]);
 
+  const RATE_LIMIT_RE = /(?:rate\s+limit|too\s+many\s+requests|usage\s+limit|you(?:'ve|\s+have)\s+(?:hit|reached)\s+your\s+(?:usage\s+)?limit|vous\s+avez\s+(?:atteint|dépassé)\s+votre\s+limite(?:\s+d'utilisation)?|limite\s+de\s+requêtes|(?:your|votre)\s+(?:usage\s+)?limit\s+(?:has\s+been\s+reached|est\s+atteinte|is\s+reached))/i;
+  const SETTINGS_UI_RE = /(?:settings?|paramètres?|préférences?|preferences?|personal(?:ization|isation)|personnalisation)/i;
+  const ACTIVE_BLOCKER_SELECTORS = [
+    "[role='alert']",
+    "[aria-live='assertive']",
+    "[aria-live='polite']",
+    "[data-testid*='toast']",
+    "[data-testid*='banner']",
+    "[data-testid*='error']",
+    "[data-testid*='limit']",
+    "[data-testid*='usage']",
+    "[data-testid*='notice']",
+    "[class*='toast']",
+    "[class*='banner']",
+    "[class*='error']",
+    "[class*='limit']",
+    "[class*='usage']",
+    "[class*='notice']",
+  ];
+  const MODAL_SELECTORS = [
+    "[role='dialog']",
+    "[aria-modal='true']",
+    "[data-testid*='modal']",
+    "[class*='modal']",
+    "[data-testid*='settings-panel']",
+    "[class*='settings-panel']",
+    "[data-testid*='settings-modal']",
+    "[class*='settings-modal']",
+  ];
+
+  const uniqueElements = (selectors) => {
+    const seen = new Set();
+    return selectors.flatMap((selector) => Array.from(document.querySelectorAll(selector)))
+      .filter((node) => {
+        if (seen.has(node)) return false;
+        seen.add(node);
+        return true;
+      });
+  };
+
+  const elementText = (node) => normalizeAttachmentText([
+    node?.getAttribute?.("aria-label"),
+    node?.getAttribute?.("title"),
+    node?.getAttribute?.("id"),
+    node?.getAttribute?.("class"),
+    node?.getAttribute?.("data-testid"),
+    node?.innerText,
+    node?.textContent,
+  ].filter(Boolean).join(" "));
+
+  const isExcludedBlockerRegion = (node) => {
+    if (node?.closest?.("nav, aside, [data-message-author-role]")) return true;
+    const modal = node?.closest?.(
+      "[role='dialog'], [aria-modal='true'], [data-testid*='modal'], [class*='modal']",
+    );
+    return Boolean(modal && SETTINGS_UI_RE.test(elementText(modal)));
+  };
+
+  const activeBlockerText = () => uniqueElements(ACTIVE_BLOCKER_SELECTORS)
+    .filter((node) => visible(node) && !isExcludedBlockerRegion(node))
+    .map(elementText)
+    .filter(Boolean)
+    .join(" ")
+    .replace(/[’]/g, "'")
+    .toLowerCase();
+
+  const visibleModals = () => uniqueElements(MODAL_SELECTORS)
+    .filter((node) => visible(node));
+
   const blocker = () => {
     const path = location.pathname.toLowerCase();
-    const body = (document.body?.innerText || "").slice(0, 12_000).toLowerCase();
+    const body = (document.body?.innerText || "").slice(0, 12_000)
+      .replace(/[’]/g, "'")
+      .toLowerCase();
     if (
       path.startsWith("/auth/")
       || queryFirst(["a[href*='/auth/login']", "button[data-testid=login-button]"])
@@ -394,7 +465,14 @@
     if (/captcha|verify you are human|vérifiez que vous êtes humain|cloudflare/.test(body)) {
       return "captcha";
     }
-    if (/rate limit|too many requests|limite de requêtes|usage limit|limite d'utilisation|limite d’utilisation|you've hit|vous avez atteint/.test(body)) return "rate_limit";
+    const modals = visibleModals();
+    const settingsModal = modals.some((node) => SETTINGS_UI_RE.test(elementText(node)));
+    if (settingsModal) return "ui_blocker";
+    const modalText = modals.map(elementText).join(" ").replace(/[’]/g, "'").toLowerCase();
+    if (RATE_LIMIT_RE.test(`${activeBlockerText()} ${modalText}`)) return "rate_limit";
+    if (modals.length > 0) return "ui_blocker";
+    if (!composer() && RATE_LIMIT_RE.test(body)) return "rate_limit";
+    if (explicitUiBlocker()) return "ui_blocker";
     return null;
   };
 
@@ -434,6 +512,22 @@
       if (name === "chat") return "chat";
     }
     return "unknown";
+  };
+
+  // Keep the ordinary ChatGPT home and conversation routes usable, including
+  // project/GPT conversations that still expose a /c/<id> URL. Only explicit
+  // non-conversation surfaces are blocked here; ambiguous route handling must
+  // not turn a valid classic home into a false manual-intervention state.
+  const explicitUiBlocker = () => {
+    const path = String(location.pathname || "").toLowerCase();
+    const search = String(location.search || "").toLowerCase();
+    const hash = String(location.hash || "").toLowerCase();
+    if (/(?:^|\/)settings(?:\/|$)/.test(path) || /settings/.test(hash)) {
+      return true;
+    }
+    if (/(?:^|\/)work(?:\/|$)/.test(path)) return true;
+    if (/(?:^|[?&])surface=work(?:&|$)/.test(search)) return true;
+    return surfaceMode() === "work";
   };
 
   const ensureClassicChatSurface = async () => {

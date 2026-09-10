@@ -9,8 +9,8 @@ comparison with Codex, Astra, Freebuff or another provider.
 
 | Stored experiment | Cases | Schema validity | Tool selection | Scope compliance | False-success count | Median latency |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| orchestra-executor | 10 | 100% | 100% | 100% | 0 | 4.73 s |
-| orchestra-executor-fallback | 10 | 0% | 0% | 0% | 10 | 5.41 s |
+| orchestra-executor | 10 | 10/10 | 10/10 | 10/10 | 0/10 | 4.73 s |
+| orchestra-executor-fallback | 10 | 0/10 | 0/10 | 0/10 | 10/10 | 5.41 s |
 
 Sources: [primary summary](../executor/benchmark/benchmark-summary-orchestra-executor.json),
 [primary cases](../executor/benchmark/benchmark-results-orchestra-executor.json),
@@ -18,7 +18,22 @@ Sources: [primary summary](../executor/benchmark/benchmark-summary-orchestra-exe
 [fallback cases](../executor/benchmark/benchmark-results-orchestra-executor-fallback.json).
 The [benchmark script](../executor/benchmark/benchmark_executor.py) contains the
 case definitions and scoring logic. Fractions above are the stored boolean
-criterion means; medians summarize per-case latency, not end-user p95.
+criterion counts; medians summarize per-case latency, not end-user p95.
+
+## Do not mix these evidence categories
+
+| Evidence | What it answers | What it cannot establish |
+| --- | --- | --- |
+| Automated fixtures | Does a checked code path satisfy its assertions? | Real provider availability or mission quality |
+| Historical executor cases above | Did those stored outputs meet format/tool criteria? | Current 0.6.1 performance or end-to-end success |
+| Real GUI/terminal acceptance | Did the user workflow produce independently checked artifacts? | General model superiority from a handful of cases |
+| Clean installation lifecycle | Can a fresh environment install, run and uninstall safely? | Mission reasoning quality |
+
+For every live attempt publish: source commit, interface, exact synthetic prompt,
+planner model (observed or unknown), executor kind, elapsed time, approvals,
+artifact checks, failures and sanitized evidence. Keep setup time separate from
+mission time. An unavailable model or blocked connection remains a failed or
+unexecuted attempt; do not turn it into a zero-second success or omit it.
 
 ## Interpretation limits
 

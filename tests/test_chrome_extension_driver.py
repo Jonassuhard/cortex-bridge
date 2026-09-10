@@ -268,6 +268,23 @@ class ChromeExtensionDriverContractTest(unittest.IsolatedAsyncioTestCase):
             ["open_chatgpt", "probe", "probe"],
         )
 
+    async def test_open_login_returns_a_ui_blocker_without_waiting_for_composer_timeout(self) -> None:
+        self.manager.responses["probe"] = {
+            "ok": False,
+            "url": "https://chatgpt.com/?no_universal_links=1#settings",
+            "blocker": "ui_blocker",
+            "composer_present": True,
+            "failures": ["ui_blocker"],
+        }
+
+        result = await self.driver.open_login()
+
+        self.assertEqual(result["probe"]["blocker"], "ui_blocker")
+        self.assertEqual(
+            [call[1] for call in self.manager.calls],
+            ["open_chatgpt", "probe"],
+        )
+
     async def test_open_login_uses_one_eight_second_budget_and_reports_an_open_loading_tab(self) -> None:
         from console.chrome_extension import BridgeProtocolError
         from console.onboarding import open_connection_with_driver

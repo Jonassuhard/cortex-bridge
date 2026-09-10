@@ -37,6 +37,7 @@ frontend/tsconfig.tsbuildinfo
 .worktrees/
 .superpowers/
 .gstack/
+.qa-live-v061/
 
 # Local coordination records: retained on disk, never public evidence.
 docs/LOCAL_SESSION_V061.md

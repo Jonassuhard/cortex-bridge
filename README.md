@@ -48,6 +48,20 @@ MIT-licensed, independent and not affiliated with OpenAI.
 - Chrome-extension transport; no OpenAI API key on this transport path.
 - A deterministic local executor; Ollama remains optional.
 
+### Which model does what?
+
+| Layer | Current mission behavior | Selection means |
+| --- | --- | --- |
+| ChatGPT planner | Produces structured actions in the linked web conversation | `/modele` selects a discovered ChatGPT model, not a local executor |
+| Local mission executor | Runs policy-approved tools deterministically | No executor LLM is selected on this mission path |
+| Ollama | Separate legacy task path and diagnostics | Its availability does not prove a mission used it |
+| Freebuff | Optional external installation/testing assistant | Not an integrated mission executor |
+
+Changing an executor setting does not change the deterministic mission engine.
+Do not interpret the decorative Luna/Terra/Sol/Astra project card as a list of
+connected executors. A model comparison requires recorded model identity for
+each actual run, not just a selected label.
+
 The terminal is a line-oriented interface, not a full-screen editor.
 Drafts do not survive terminal exit. Browser and file-upload support remain
 subject to the existing platform and transport limits.

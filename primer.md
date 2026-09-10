@@ -30,9 +30,18 @@
 - Local session details, if present, are retained in ignored docs/LOCAL_SESSION_V061.md.
 
 ## Next action
+Real-interface preflight is recorded in docs/live-acceptance-v061.md.
+The terminal startup interpreter bug is corrected locally; 73 terminal tests
+pass. GUI pairing works, but the selected ChatGPT Settings modal triggered a
+false-positive limitation. Detector and explicit Settings/Work corrections pass
+138 extension, 40 driver and 10 onboarding fixtures; independent review passes.
+Live replay requires the user to load/reload the candidate Chrome extension.
 Provide current, truthful installation and live release evidence
-before main integration. The development candidate has 707 backend tests,
-207 frontend unit tests, 36 runtime checks and 26 browser fixtures passing;
+before main integration. The initial full backend run had 708 tests and three
+uninstall failures caused by fixture port collision with the running QA app.
+After fixture isolation, the fresh complete suite passes 710 tests in 165.449 s.
+A SQLite ResourceWarning remains observed. These are not live acceptance. The prior
+frontend baseline had 207 unit tests, 36 runtime checks and 26 browser fixtures passing;
 npm audit now passes with zero findings; the release-manifest gate remains FAIL.
 See docs/verification-v061.md. Keep dependency changes in this candidate PR;
 do not merge while the remaining release gates are incomplete.

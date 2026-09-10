@@ -8,6 +8,8 @@
 <g class="node" data-step="0"><rect x="38" y="150" width="210" height="112" rx="12"/><text x="56" y="187" class="label">Preflight</text><text x="56" y="218" class="detail">Workspace and limits</text></g>
 <g class="node" data-step="1"><rect x="278" y="150" width="210" height="112" rx="12"/><text x="296" y="187" class="label">ChatGPT decision</text><text x="296" y="218" class="detail">Structured mission action</text></g>
 <g class="node" data-step="2"><rect x="518" y="150" width="210" height="112" rx="12"/><text x="536" y="187" class="label">Policy + approval</text><text x="536" y="218" class="detail">Current action, once scope</text></g>
-<g class="node" data-step="3"><rect x="758" y="150" width="210" height="112" rx="12"/><text x="776" y="187" class="label">Local workspace</text><text x="776" y="218" class="detail">Recorded result / error</text></g>
-<text x="38" y="351" class="foot">Results return to the mission history. A diagram is not proof of a live run.</text>
+<g class="node" data-step="3"><rect x="758" y="150" width="210" height="112" rx="12"/><text x="776" y="187" class="label">Local tools</text><text x="776" y="218" class="detail">Deterministic, not an LLM</text></g>
+<g class="edges"><path d="M863 262 V294 H383 V262"/></g>
+<text x="445" y="319" class="detail">Recorded result or error returns to the planner</text>
+<text x="38" y="361" class="foot">Planner model selection does not change the local tools. Diagram, not live-run evidence.</text>
 </svg>
