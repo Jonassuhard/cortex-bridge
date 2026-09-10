@@ -13,7 +13,7 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=.:console:tests .venv/bin/python -m unittes
   test_terminal_settings test_terminal_cli
 ```
 
-This terminal slice contains 81 tests, including actual subprocess PTY input,
+This terminal slice contains 82 tests, including actual subprocess PTY input,
 full-screen Textual smoke tests and output against synthetic fixtures, not a
 signed-in ChatGPT session.
 

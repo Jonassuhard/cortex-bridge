@@ -50,7 +50,7 @@ Open or update the candidate review, then rerun the blocked live gates only
 when a permitted provider-backed environment and a clean macOS installation
 are available. Do not claim a production-ready release before those gates have
 fresh evidence.
-The 81-test terminal/TUI slice and the 724-test Python suite pass; frontend 207
+The 82-test terminal/TUI slice and the 725-test Python suite pass; frontend 207
 unit tests, 36 runtime/privacy tests, typecheck, lint, build, 26 browser tests,
 4 accessibility tests and npm audit pass.
 The local `~/.local/bin/cortex` launcher points to this candidate only.

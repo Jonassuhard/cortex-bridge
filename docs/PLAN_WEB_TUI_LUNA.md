@@ -33,7 +33,7 @@ The coordinator has executed the first implementation slice in this candidate:
   old line client explicit. The TUI has side-by-side ChatGPT/executor state,
   bounded 50-item conversation list, background API workers, draft preservation,
   explicit send acknowledgement and a connect/retry action.
-- The focused terminal/TUI slice is 81 passing tests. The complete Python suite
+- The focused terminal/TUI slice is 82 passing tests. The complete Python suite
   is 720 passing tests. Frontend checks are 207 unit/runtime tests, typecheck,
   lint contract, and static build. These are fixture/local proofs, not signed-in
   ChatGPT delivery or a clean user installation.

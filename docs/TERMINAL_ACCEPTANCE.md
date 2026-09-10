@@ -6,8 +6,8 @@ No fixture result below proves live ChatGPT or an installed 0.6 release.
 | --- | --- | --- |
 | Loopback API boundary | Real temporary HTTP server, hostile URLs/paths, no redirects/proxy | PASS — Task1, 15 tests and independent re-review |
 | No duplicate send after ambiguity | One observed POST after timeout, explicit uncertainty | PASS — Task1 |
-| CORTEX startup / help / version | Actual CLI subprocess and PTY | PASS — fresh combined 81-test run, including PTY |
-| Full-screen TUI launch | Textual headless layout, draft/escape/new-chat and default dispatch tests | PASS — 81-test terminal/TUI slice; real Terminal.app visual inspection remains open |
+| CORTEX startup / help / version | Actual CLI subprocess and PTY | PASS — fresh combined 82-test run, including PTY |
+| Full-screen TUI launch | Textual headless layout, draft/escape/new-chat and default dispatch tests | PASS — 82-test terminal/TUI slice; real Terminal.app visual inspection remains open |
 | Shared conversation selection/history | Selected snapshot/messages and canonical URL adoption | PASS — selected snapshot, provisional refusal, invalid indices and PTY reading assertions; final re-review |
 | Two writing conversations / third refused | Actual backend writer registry exercised through client | PASS — isolated Task2 real-API test |
 | Exact messages and preserved drafts | Controller send/error tests | PASS — Task2 fix2, per-submission drafts and independent acknowledgements |

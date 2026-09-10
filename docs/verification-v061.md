@@ -14,9 +14,9 @@ The candidate now includes the full-screen terminal slice described in
 
 | Check | Result | Evidence and limit |
 | --- | --- | --- |
-| Terminal/TUI focused slice | PASS, 81 tests | Textual headless smoke, CLI dispatch and PTY compatibility against synthetic HTTP fixtures |
+| Terminal/TUI focused slice | PASS, 82 tests | Textual headless smoke, CLI dispatch and PTY compatibility against synthetic HTTP fixtures |
 | Real `cortex` launch and quit | PASS | Fresh isolated `CORTEX_HOME`; full-screen UI rendered, `Ctrl-Q` returned exit code 0 and left no owned backend process running |
-| Complete Python suite | PASS, 724 tests in 198.742 s after the synchronized PTY acceptance fix | Local isolated fixtures; no signed-in ChatGPT delivery |
+| Complete Python suite | PASS, 725 tests | Local isolated fixtures; no signed-in ChatGPT delivery |
 | Frontend unit/runtime | PASS, 207 unit + 36 runtime/privacy tests | Synthetic React/runtime data |
 | Frontend typecheck/lint/build | PASS | `corepack npm@11.18.0`, static Next.js build |
 | Frontend browser/a11y | PASS, 26 E2E + 4 accessibility; 1 optional guide skipped | Static synthetic export, no authenticated account |

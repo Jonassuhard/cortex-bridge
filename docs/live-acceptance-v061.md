@@ -23,7 +23,7 @@ reported as executor-model diversity. Freebuff is not an integrated executor.
 | Terminal full-screen quit | PASS, one real PTY check | `cortex` rendered the full-screen UI from a fresh isolated home; `Ctrl-Q` exited with code 0 after the normal Textual `None` return was normalized |
 | Terminal `/demarrer`, first attempt | FAIL | Launcher selected another Python; FastAPI import failed |
 | Terminal `/demarrer`, after correction | PASS | Same command in a restarted Cortex terminal started the isolated candidate on loopback |
-| Terminal regression suite | PASS | 73 tests in 10.815 s using the project virtualenv |
+| Terminal regression suite | PASS | 82 focused terminal/TUI tests using the project virtualenv |
 | Full backend suite, initial run | FAIL | 708 tests, three uninstall failures: fixture tests collided with the active QA listener |
 | Installer fixture correction | PASS | Tests now use an allocated loopback port; original three cases and all 37 installer tests pass while the QA app remains running; no production guard changed |
 | Full backend suite, after corrections | PASS | 710 tests in 165.449 s; includes terminal/driver/onboarding/installer tests, not additional independent cases |
