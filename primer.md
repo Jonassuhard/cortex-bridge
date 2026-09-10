@@ -1,8 +1,8 @@
 # Cortex Bridge project primer
 
 ## Source candidate
-- Version: 0.6.1. Technical preview; live pairing and one text round-trip pass,
-  but release evidence is still incomplete.
+- Version: 0.6.1. Technical preview; live pairing, text round-trip and one
+  screenshot transfer pass, but release evidence is still incomplete.
 - Public repository: linked from README.md.
 - Primary branch: main. Candidate branch: codex/v061-atelier.
 - See README.md, docs/verification-v061.md and CHANGELOG.md for current evidence.
@@ -46,11 +46,14 @@ build, 26 browser tests, 4 accessibility tests and npm audit pass.
 The local `~/.local/bin/cortex` launcher points to this candidate only.
 Real-interface preflight is recorded in docs/live-acceptance-v061.md.
 The terminal startup interpreter bug is corrected locally; focused terminal and
-TUI checks pass. The candidate extension now pairs in the real Chrome window and one text
-message sent through Cortex was confirmed in 9.6 s. The runtime still reports
-the local Ollama engine as a candidate, not a verified executor. A SQLite
-ResourceWarning remains observed. Live file/screenshot, mission, two-conversation
-isolation, clean-install, release-evidence and main-integration gates remain
-open. See
+TUI checks pass. The candidate extension now pairs in the real Chrome window;
+one text message sent through Cortex was confirmed in 9.6 s and one screenshot
+transfer through the Cortex capture button completed as run
+`8fb810edbea04d32b6889045563d319f` with a 7.7 s observed UI latency. The
+native helper correction is covered by nine focused driver checks and a Swift
+permission check. The runtime still reports the local Ollama engine as a
+candidate, not a verified executor. A SQLite ResourceWarning remains observed.
+Live arbitrary-file, mission, two-conversation isolation, clean-install,
+release-evidence and main-integration gates remain open. See
 docs/verification-v061.md and docs/PLAN_WEB_TUI_LUNA.md. Keep dependency changes
 in this candidate PR; do not merge while the remaining release gates are incomplete.

@@ -1117,6 +1117,38 @@ class ChromeExtensionFactoryTest(unittest.TestCase):
             source,
         )
 
+    def test_native_helper_allows_passive_image_groups_without_enabled_attribute(self) -> None:
+        source = (ROOT / "transport" / "macos_ax_send.swift").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("private func visibleAttachmentGroup(", source)
+        self.assertIn("ChatGPT's image tile is a passive AXGroup", source)
+        self.assertIn("visibleAttachmentGroup(snapshot: snapshot)", source)
+
+    def test_native_helper_scopes_controls_to_the_focused_chatgpt_web_area(self) -> None:
+        source = (ROOT / "transport" / "macos_ax_send.swift").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("kAXFocusedUIElementAttribute", source)
+        self.assertIn("private func focusedWebArea(_ app: AXUIElement)", source)
+        self.assertIn("insideFocusedWebArea", source)
+        self.assertIn("guard entry.insideFocusedWebArea else { continue }", source)
+        self.assertNotIn(
+            "guard let focusedContent = focusedWebArea(target.app)",
+            source,
+        )
+
+    def test_native_helper_treats_chatgpt_composer_labels_as_empty_placeholder(self) -> None:
+        source = (ROOT / "transport" / "macos_ax_send.swift").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn('"demander a chatgpt"', source)
+        self.assertIn('"discuter avec chatgpt"', source)
+        self.assertIn("knownEmptyComposerValue", source)
+
     def test_chrome_extension_is_the_default_product_transport(self) -> None:
         self.assertEqual(load_browser_settings({})["browser_transport"], "chrome_extension")
         driver = create_browser_driver(

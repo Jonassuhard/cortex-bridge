@@ -141,13 +141,27 @@ Using the candidate UI in the same Chrome profile as the signed-in ChatGPT tab:
   was entered through Cortex, remained visible as pending, then changed to
   confirmed delivery with the response `CORTEX-LIVE-01` and a measured 9.6 s
   response. This is a single real conversation check, not a provider benchmark.
+- Screenshot transfer: **PASS, one real check** — clicking Cortex's capture
+  button produced run `8fb810edbea04d32b6889045563d319f` with state
+  `COMPLETED` and attachment `cortex-screenshot-2a2313ca.png`. The UI showed
+  `Réponse terminée`; the bound ChatGPT tab exposed the new image message and
+  its response. The observed UI latency was 7.7 s. This is one signed-in
+  browser check, not a throughput benchmark.
 - Executor verification: **UNCLEAR** — the runtime reports an available
   Ollama candidate but no completed executor-backed mission, so the UI correctly
   keeps the executor unverified.
 
 The live observation does not authorize a READY verdict. It does not cover
-attachments, screenshots, two-conversation isolation in a signed-in browser,
+arbitrary file uploads, two-conversation isolation in a signed-in browser,
 third-conversation refusal, missions, or a clean-machine lifecycle.
+
+The screenshot gate required a focused macOS AX correction. ChatGPT exposes the
+French empty composer as an AX value (`Demander à ChatGPT`) rather than as a
+placeholder attribute; the native helper now recognizes only the known empty
+labels after normalizing accents. It also scopes controls to the focused
+ChatGPT web area and accepts the passive image group only when its frame is
+visible. The targeted driver tests (9) and Swift permission check pass. The
+earlier failed screenshot runs remain recorded in the live acceptance table.
 
 The fresh `./scripts/test-all.sh` gate also completed all functional, browser,
 runtime, privacy and link checks, then stopped at the release-evidence step with

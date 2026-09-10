@@ -30,11 +30,21 @@ reported as executor-model diversity. Freebuff is not an integrated executor.
 | Extension pairing | PASS, real replay | Candidate extension paired in the same Chrome window; backend reported protocol version 2 compatible |
 | GUI connection check | PASS, real replay | Classic `/c/...` ChatGPT tab exposed a composer; the probe returned no blocker |
 | GUI text delivery | PASS, one real check | Cortex sent `Réponds uniquement CORTEX-LIVE-01`; the UI showed pending, then confirmed delivery and `CORTEX-LIVE-01` in 9.6 s |
+| GUI screenshot delivery | PASS, one real check | The Cortex capture button produced run `8fb810edbea04d32b6889045563d319f`, state `COMPLETED`, attachment `cortex-screenshot-2a2313ca.png`; Cortex showed `Réponse terminée` and the bound ChatGPT tab exposed the new image message and its response |
 | Planner model discovery | UNCLEAR | Terminal showed only “current visible model”; no two model identities established |
 | Scenario G | UNCLEAR, not executed | Composer disabled during connection preflight |
 | Scenario T | UNCLEAR, not executed | No ready conversation or verified planner selection |
 | Freebuff participation | UNCLEAR, no mission test | GLM 5.3 Flash session opened; capability inquiry only, interrupted without running Cortex |
 | Fresh macOS installation | UNCLEAR, not executed | An isolated runtime on an existing Mac is not a fresh OS/account |
+
+The screenshot replay initially failed because the macOS AX helper interpreted
+ChatGPT's French empty-composer value (`Demander à ChatGPT`) as user text. The
+fix is deliberately narrow: native discovery stays scoped to the focused
+ChatGPT web area, the passive image group remains geometry/visibility checked,
+and only known localized empty-composer labels are treated as empty. The
+focused helper, factory/static checks (9 tests) and Swift permission check pass.
+The three earlier failed screenshot runs remain historical failures; they are
+not rewritten as passes.
 
 The earlier GUI rate-limit screenshot remains historical diagnostic evidence. It
 documents Cortex's message, not a verified provider quota. The later replay used
