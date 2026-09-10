@@ -4,7 +4,7 @@ import type { Page } from "@playwright/test";
 import { expect, test } from "./fixtures/app";
 
 const enabled = process.env.CORTEX_DOCS_GUIDE === "1";
-const outputRoot = fileURLToPath(new URL("../../docs/screenshots/v0.5.0/", import.meta.url));
+const outputRoot = fileURLToPath(new URL("../../docs/screenshots/v0.6.1/", import.meta.url));
 const allViewports = [
   { width: 375, height: 812 },
   { width: 768, height: 1024 },
@@ -32,15 +32,20 @@ async function expandNavigation(page: Page) {
   if (await expand.count()) await expand.evaluate((button: HTMLButtonElement) => button.click());
 }
 
-test("generate the synthetic v0.5 visual guide", async ({ appPage }) => {
+test("generate the synthetic v0.6.1 visual guide", async ({ appPage }) => {
   test.skip(!enabled, "Set CORTEX_DOCS_GUIDE=1 to regenerate committed guide media.");
   test.setTimeout(420_000);
 
   let showOnboarding = true;
   let holdResearch = false;
+  const releaseResearch = new Set<() => void>();
   await appPage.route("**/api/conversations/snapshot?*", async (route) => {
     if (holdResearch && decodeURIComponent(route.request().url()).includes("/c/research")) {
-      await new Promise((resolve) => setTimeout(resolve, 11_000));
+      await new Promise<void>((resolve) => {
+        const finish = () => { clearTimeout(timer); releaseResearch.delete(finish); resolve(); };
+        const timer = setTimeout(finish, 11_000);
+        releaseResearch.add(finish);
+      });
       await route.abort("timedout").catch(() => undefined);
       return;
     }
@@ -124,13 +129,13 @@ test("generate the synthetic v0.5 visual guide", async ({ appPage }) => {
     await reset();
     const composer = appPage.getByRole("textbox", { name: "Message à envoyer" });
     await composer.fill("Résumer les preuves synthétiques.");
-    await appPage.getByRole("button", { name: "Envoyer", exact: true }).click();
+    await appPage.getByRole("button", { name: "Envoyer à ChatGPT", exact: true }).click();
     await expect(appPage.getByText(/En attente locale|Envoi à ChatGPT/)).toBeVisible();
     await capture(appPage, viewport.width, "03-cycle-envoi");
 
     await reset();
     await composer.fill("Inspecter les fichiers de démonstration.");
-    await appPage.getByRole("button", { name: "Exécuter…" }).click();
+    await appPage.getByRole("button", { name: "Exécuter sur ce Mac…" }).click();
     await expect(appPage.getByRole("dialog", { name: "Vérifier l’exécution locale" })).toBeVisible();
     await capture(appPage, viewport.width, "04-preflight");
     await appPage.getByRole("button", { name: "Démarrer en lecture seule" }).click();
@@ -139,10 +144,10 @@ test("generate the synthetic v0.5 visual guide", async ({ appPage }) => {
 
     await reset();
     await composer.fill("Message synthétique A");
-    await appPage.getByRole("button", { name: "Envoyer", exact: true }).click();
+    await appPage.getByRole("button", { name: "Envoyer à ChatGPT", exact: true }).click();
     await appPage.getByRole("button", { name: /Local site prototype/ }).evaluate((button: HTMLButtonElement) => button.click());
     await composer.fill("Message synthétique B");
-    await appPage.getByRole("button", { name: "Envoyer", exact: true }).click();
+    await appPage.getByRole("button", { name: "Envoyer à ChatGPT", exact: true }).click();
     await expandNavigation(appPage);
     await capture(appPage, viewport.width, "06-deux-conversations");
 
@@ -159,15 +164,18 @@ test("generate the synthetic v0.5 visual guide", async ({ appPage }) => {
     holdResearch = true;
     await appPage.getByRole("button", { name: /Research/ }).evaluate((button: HTMLButtonElement) => button.click());
     await expect(appPage.getByRole("button", { name: "Recharger la conversation" })).toBeVisible({ timeout: 12_000 });
+    const reloadBox = await appPage.getByRole("button", { name: "Recharger la conversation" }).boundingBox();
+    expect(reloadBox!.x + reloadBox!.width).toBeLessThanOrEqual(viewport.width);
     await capture(appPage, viewport.width, "08-timeout");
     holdResearch = false;
+    for (const release of releaseResearch) release();
     await appPage.getByRole("button", { name: "Recharger la conversation" }).click();
-    await expect(appPage.locator(".message-assistant")).toBeVisible();
+    await expect(appPage.locator(".message-assistant")).toBeVisible({ timeout: 15_000 });
     await capture(appPage, viewport.width, "09-rechargement");
 
     await reset();
     await expandNavigation(appPage);
-    await appPage.locator(".settings-entry").evaluate((button: HTMLButtonElement) => button.click());
+    await appPage.getByRole("button", { name: /^Paramètres/ }).click();
     await expect(appPage.getByRole("dialog", { name: "Paramètres Cortex Bridge" })).toBeVisible();
     await appPage.locator(".settings-tabs button").nth(7).evaluate((button: HTMLButtonElement) => button.click());
     await expect(appPage.locator(".bridge-diagram")).toBeVisible();

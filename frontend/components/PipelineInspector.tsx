@@ -135,6 +135,8 @@ export function PipelineInspector({
         </div>
       </div>
 
+      <details className="inspector-diagnostics">
+      <summary>Diagnostics des composants · {pipeline.components.length}</summary>
       <div className="pipeline-component-grid">
         {pipeline.components.map((component) => (
           <div className={`pipeline-component tone-${stateTone(component.state)}`} key={component.id}>
@@ -151,6 +153,7 @@ export function PipelineInspector({
           </div>
         ))}
       </div>
+      </details>
 
       <section className="inspector-section">
         <div className="inspector-section-head">
@@ -201,7 +204,7 @@ export function PipelineInspector({
       <section className="inspector-section runtime-summary">
         <div className="inspector-section-head"><div><span className="panel-eyebrow">Système local</span><h3>Exécution locale</h3></div></div>
         <dl>
-          <div><dt>Disponibilité Ollama</dt><dd className={runtime.executor_available ? "good" : "danger"}>{runtime.executor_available ? "Disponible" : "Indisponible"}</dd></div>
+          <div><dt>Exécuteur disponible</dt><dd className={runtime.executor_available ? "good" : "danger"}>{runtime.executor_available ? "Oui" : "Non"}</dd></div>
           <div><dt>Modèle candidat</dt><dd>{runtime.primary.name}</dd></div>
           <div><dt>Exécuteur utilisé</dt><dd>{executorDisplay(pipeline.runtime_execution)}</dd></div>
           <div><dt>Modèle réellement utilisé</dt><dd>{pipeline.runtime_execution.executor_model_used || "Aucun"}</dd></div>

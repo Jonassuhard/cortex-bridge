@@ -5,6 +5,7 @@ import { useMemo } from "react";
 import type { MissionDetail, PipelineStatus } from "@/lib/types";
 import { formatDuration } from "@/lib/api";
 import { executionStateLabel } from "@/lib/runtimeTruth";
+import { TaskProgress } from "./TaskProgress";
 import {
   ActivityIcon,
   BrowserIcon,
@@ -24,15 +25,6 @@ interface ExecutionCardProps {
   onApprove: (scope: "once" | "tool" | "all-writes") => void;
   onReject: () => void;
 }
-
-const stageOrder = [
-  "Dépôt inspecté",
-  "Décision ChatGPT reçue",
-  "Action locale autorisée",
-  "Exécution en cours",
-  "Validation déterministe",
-  "Rapport renvoyé à ChatGPT",
-];
 
 function missionCardStateLabel(state?: string): string {
   if (state === "COMPLETED") return "Mission terminée";
@@ -63,13 +55,33 @@ function pauseReasonMessage(reason?: string | null): string | null {
   return reason;
 }
 
+function recordedObject(value: unknown): Record<string, unknown> | null {
+  try {
+    const parsed: unknown = JSON.parse(typeof value === "string" ? value : "null");
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null;
+  } catch { return null; }
+}
+
 export function ExecutionCard({ mission, pipeline, expanded, onToggle, onApprove, onReject }: ExecutionCardProps) {
   const active = mission?.mission;
-  const missionState = active?.state || pipeline.active_mission_state || "EXECUTING_LOCAL_ACTION";
+  const missionState = active?.state || pipeline.active_mission_state || "UNKNOWN";
   const terminal = ["COMPLETED", "BLOCKED", "FAILED", "CANCELLED"].includes(missionState);
   const completed = missionState === "COMPLETED";
   const terminalLabel = executionStateLabel(missionState);
   const waitingApproval = !!mission?.awaiting_approval;
+  const running = !terminal && !waitingApproval && !["UNKNOWN", "PAUSED", "PAUSED_RECOVERY_REQUIRED"].includes(missionState);
+  const policy = mission?.timeline.policy_decisions?.at(-1);
+  const pendingDecision = waitingApproval && policy?.action_id && Number(policy.requires_approval) === 1
+    ? mission?.timeline.orchestrator_decisions?.findLast((row) => row.action_id === policy.action_id && Number(row.valid) === 1)
+    : undefined;
+  const pendingAction = recordedObject(pendingDecision?.decision_json)?.action;
+  const action = pendingAction && typeof pendingAction === "object" ? pendingAction as Record<string, unknown> : null;
+  const args = action?.arguments && typeof action.arguments === "object" ? action.arguments as Record<string, unknown> : null;
+  const actionNames: Record<string, string> = { write_file: "Écrire un fichier", apply_patch: "Modifier un fichier", create_directory: "Créer un dossier", run_process: "Exécuter une commande", run_tests: "Lancer les tests" };
+  const diffs = (mission?.timeline.tool_executions || []).flatMap((row) => {
+    const result = recordedObject(row.result_json);
+    return result && typeof result.diff === "string" ? [{ id: String(row.id), path: String(result.path || row.tool || "résultat"), diff: result.diff }] : [];
+  });
 
   const evidence = useMemo(() => {
     if (!mission) return [];
@@ -85,11 +97,11 @@ export function ExecutionCard({ mission, pipeline, expanded, onToggle, onApprove
         const parsed = JSON.parse(String(row.decision_json || row.raw_json || "{}"));
         detail = parsed.action?.tool || parsed.state || detail;
       } catch {}
-      items.push({ icon: "shield", label: "Décision validée", detail, done: true });
+      items.push({ icon: "shield", label: Number(row.valid) === 1 ? "Décision validée" : "Décision non validée", detail, done: Number(row.valid) === 1 });
     }
     if ((rows.tool_executions || []).length) {
       const row = rows.tool_executions.at(-1) || {};
-      items.push({ icon: "terminal", label: "Action locale", detail: String(row.tool || "outil structuré"), done: row.exit_code !== null && row.exit_code !== undefined });
+      items.push({ icon: "terminal", label: "Action locale", detail: `${String(row.tool || "outil structuré")} · ${row.exit_code == null ? "résultat en attente" : `code ${row.exit_code}`}`, done: row.exit_code === 0 });
     }
     if ((rows.validation_results || []).length) {
       const row = rows.validation_results.at(-1) || {};
@@ -113,23 +125,27 @@ export function ExecutionCard({ mission, pipeline, expanded, onToggle, onApprove
     <article className={`execution-card ${waitingApproval ? "needs-approval" : ""} ${terminal ? "is-terminal" : ""}`}>
       <header className="execution-card-head">
         <div className="execution-card-title">
-          <span className={`execution-orb ${completed ? "is-done" : terminal ? "is-error" : ""}`} aria-hidden="true"><span /></span>
+          <span className={`execution-orb ${completed ? "is-done" : terminal ? "is-error" : !running ? "is-idle" : ""}`} aria-hidden="true"><span /></span>
           <div>
             <strong>{missionCardStateLabel(missionState)}</strong>
-            <small>{active?.objective || "Cortex Bridge exécute et vérifie l'action demandée."}</small>
+            <small>{active?.objective || "Objectif non disponible"}</small>
           </div>
         </div>
         <div className="execution-card-meta">
-          {!terminal && <span className="live-label"><span className="live-dot" /> actif</span>}
-          <span className="eta-chip"><ClockIcon size={13} /> {pipeline.latency?.total_iteration_ms ? `env. ${formatDuration(pipeline.latency.total_iteration_ms)}` : "estimation…"}</span>
+          {running && <span className="live-label"><span className="live-dot" /> actif</span>}
+          {pipeline.latency?.total_iteration_ms != null && <span className="eta-chip"><ClockIcon size={13} /> Dernière itération : {formatDuration(pipeline.latency.total_iteration_ms)}</span>}
           <button className="card-expand-button" onClick={onToggle} aria-label={expanded ? "Réduire le détail" : "Afficher le détail"}><ChevronDownIcon className={expanded ? "is-rotated" : ""} /></button>
         </div>
       </header>
 
-      <div className="execution-progress-row">
-        <div className="execution-progress-track"><span style={{ width: terminal ? "100%" : waitingApproval ? "48%" : "67%" }} /></div>
-        <span>{terminalLabel || (waitingApproval ? "En attente de validation humaine" : "Boucle autonome en cours")}</span>
-      </div>
+      <TaskProgress key={active?.id || "unknown"} kind="mission" state={waitingApproval ? "WAITING_FOR_APPROVAL" : missionState} startedAt={active?.created_at} />
+      {terminal && <section className="mission-summary" aria-label="Bilan de la mission">
+        <strong>Bilan · {terminalLabel || missionState}</strong>
+        <p>{(mission?.timeline.validation_results || []).filter((row) => Number(row.passed) === 1).length} validation réussie · {(mission?.timeline.validation_results || []).filter((row) => row.passed != null && Number(row.passed) === 0).length} en échec</p>
+        <p>{(mission?.timeline.tool_executions || []).length} action(s) enregistrée(s) · {(mission?.timeline.artifacts || []).length} artefact(s)</p>
+        {!(mission?.timeline.validation_results || []).length && <p>Aucune validation enregistrée : réussite non vérifiable ici.</p>}
+        {(mission?.timeline.validation_results || []).some((row) => row.passed != null && Number(row.passed) === 0) && <p className="warning-label">Au moins une validation a échoué. Consulte sa chronologie, même si la mission est terminée.</p>}
+      </section>}
 
       {(missionState === "PAUSED" || missionState === "PAUSED_RECOVERY_REQUIRED") && pauseReasonMessage(active?.pause_reason) && (
         <div className="inline-approval pause-reason-banner">
@@ -144,23 +160,29 @@ export function ExecutionCard({ mission, pipeline, expanded, onToggle, onApprove
         <div className="inline-approval">
           <div>
             <ShieldIcon size={18} />
-            <span><strong>Approbation requise</strong><small>L'action suivante peut modifier le workspace. Un point de restauration est conservé.</small></span>
+            <span><strong>Approbation requise</strong><small>L'action suivante peut modifier le projet. Consulte les preuves techniques avant d'approuver. Cette autorisation ne vaut que pour une action.</small></span>
           </div>
           <div className="inline-approval-actions">
             <button onClick={() => onApprove("once")} className="approve-button">Approuver une fois</button>
             <button onClick={onReject} className="reject-button">Refuser</button>
           </div>
+          <details className="approval-action" open>
+            <summary>Action soumise à approbation</summary>
+            {action && <div className="approval-readable">
+              <strong>{actionNames[String(action.tool)] || String(action.tool || "Action non précisée")}</strong>
+              <p aria-label="Cible de l’action">{typeof args?.path === "string" ? args.path : typeof args?.cwd === "string" ? args.cwd : active?.workspace || "Cible non précisée"}</p>
+              {Array.isArray(args?.argv) && <pre>{JSON.stringify(args.argv)}</pre>}
+              <p>L’autorisation ne vaut que pour cette action. Les paramètres exacts sont affichés ci-dessous.</p>
+            </div>}
+            {pendingAction ? <pre>{JSON.stringify(pendingAction, null, 2)}</pre> : <p>Détail de l'action non disponible. Vérifie les preuves avant de décider.</p>}
+          </details>
         </div>
       )}
 
       <div className="execution-steps">
-        {(evidence.length ? evidence : stageOrder.slice(0, 4).map((label, index) => ({
-          icon: index === 3 ? "terminal" : "check",
-          label,
-          detail: index < 2 ? "Étape enregistrée" : index === 2 ? "cortex.v1" : "Exécuteur déterministe",
-          done: index < 3,
-        }))).map((step, index) => (
-          <div className={`execution-step ${step.done ? "is-done" : index === evidence.length - 1 ? "is-current" : ""}`} key={`${step.label}-${index}`}>
+        {!evidence.length && <p className="execution-evidence-empty">Aucune preuve détaillée disponible pour cette mission.</p>}
+        {evidence.map((step, index) => (
+          <div className={`execution-step ${step.done ? "is-done" : running && index === evidence.length - 1 ? "is-current" : ""}`} key={`${step.label}-${index}`}>
             <span className="execution-step-icon">{step.done ? <CheckIcon size={13} /> : iconFor(step.icon)}</span>
             <span><strong>{step.label}</strong><small>{step.detail}</small></span>
           </div>
@@ -175,6 +197,22 @@ export function ExecutionCard({ mission, pipeline, expanded, onToggle, onApprove
             <div><span>Workspace</span><strong>{active?.workspace || "workspace actif"}</strong></div>
             <div><span>File d'attente</span><strong>{pipeline.queue_pending}</strong></div>
           </div>
+          <section className="mission-files" aria-label="Fichiers de la mission">
+            <h3>Fichiers et résultats enregistrés</h3>
+            {!(mission?.timeline.artifacts || []).length && <p>Aucun artefact enregistré.</p>}
+            {(mission?.timeline.artifacts || []).map((file, index) => (
+              <div className="mission-file" key={String(file.id || index)}>
+                <strong>{String(file.name || "Artefact")}</strong>
+                <code>{String(file.path || "Chemin non disponible")}</code>
+                {typeof file.sha256 === "string" && <small>SHA-256 : <code>{file.sha256}</code></small>}
+              </div>
+            ))}
+            {diffs.map((entry, index) => <details key={`${entry.id}-${index}`} className="mission-diff">
+              <summary>Diff enregistré · {entry.path}</summary>
+              <pre>{entry.diff}</pre>
+            </details>)}
+            {!diffs.length && <p>Aucun diff enregistré. Cortex ne reconstitue pas les modifications manquantes.</p>}
+          </section>
           <details>
             <summary><ActivityIcon size={14} /> Voir les preuves techniques</summary>
             <pre>{JSON.stringify(mission?.timeline || pipeline.events, null, 2)}</pre>

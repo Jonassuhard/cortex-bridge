@@ -1186,6 +1186,7 @@ export function CortexApp() {
       />
 
       <ChatWorkspace
+        notice={toast}
         conversationKey={conversationState.selectedKey}
         conversation={selectedConversation}
         messages={messages}
@@ -1287,7 +1288,6 @@ export function CortexApp() {
       )}
 
       {demoMode && <div className="demo-mode-badge">development_fixture · aucune preuve de release</div>}
-      {toast && <output className="app-toast">{toast}</output>}
     </main>
   );
 }

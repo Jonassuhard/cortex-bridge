@@ -1,0 +1,32 @@
+<!doctype html><html lang="fr"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Cortex — carte géométrique animée</title><style>
+:root{--panel:#10151b;--line:#29333b;--muted:#acb6c2}*{box-sizing:border-box}body{margin:0;background:#090c10;color:#eee;font:16px system-ui;padding:36px 20px}main{max-width:720px;margin:auto}h1{font-size:25px}p{color:var(--muted);line-height:1.6}button{background:#24354c;color:white;border:1px solid #52627a;border-radius:8px;min-height:44px;padding:10px 18px;font:inherit;cursor:pointer}button:focus-visible{outline:2px solid #91e4ff;outline-offset:3px}.controls{display:flex;flex-wrap:wrap;gap:10px;margin-top:24px}
+.cortex-project-card {
+  --celestial-ivory: #eee4cf; --celestial-shade: #b4ac9d; --celestial-mid: #d6cdbb;
+  --celestial-earth: #6aa9d5; --celestial-sun: #f2c36f; --celestial-galaxy: #b5a5e5;
+  --celestial-eye: #91e4ff; --celestial-ink: #29333b;
+  display: flex; align-items: center; gap: 20px; padding: 12px 24px;
+  margin-bottom: 24px; border: 1px solid var(--line); border-radius: 16px;
+  background: var(--panel); min-width: 0;
+}
+.cortex-celestial { display: block; width: 240px; max-width: 55%; flex: 0 1 240px; }
+.celestial-caption { min-width: 0; }
+.celestial-caption strong { display: block; font-size: 22px; line-height: 1.4; }
+.celestial-caption span, .celestial-caption p { display: block; font-size: 12px; color: var(--muted); line-height: 1.6; overflow-wrap: anywhere; }
+.celestial-caption p { margin: 8px 0 0; }
+.celestial-eyes { transform-box: fill-box; transform-origin: center; transform: scaleY(0); }
+[data-active="true"] .celestial-eyes { animation: cortex-awaken 700ms ease-out both; filter: drop-shadow(0 0 3px var(--celestial-eye)); }
+.celestial-motion { animation: cortex-astro-drift 8s ease-in-out infinite; animation-play-state: paused; }
+[data-astro="Terra"] .celestial-motion { animation-delay: -2s; }
+[data-astro="Sol"] .celestial-motion { animation-delay: -4s; }
+[data-astro="Astra"] .celestial-motion { animation-delay: -6s; }
+[data-busy="true"] .celestial-motion { animation-play-state: running; }
+@keyframes cortex-awaken { 0%, 15% { transform: scaleY(0); opacity: .3; } 100% { transform: scaleY(1); opacity: 1; } }
+@keyframes cortex-astro-drift { 0%, 100% { transform: translateY(0) rotate(-3deg); } 50% { transform: translateY(-4px) rotate(3deg); } }
+@media (max-width: 600px) {
+
+</style><main><h1>Cortex · version géométrique</h1><p>Démo visuelle isolée : aucun message envoyé, aucune tâche réelle lancée.</p><section class="cortex-project-card" aria-label="Carte projet Cortex" data-active="false" data-busy="false"><svg class="cortex-celestial" viewBox="0 0 400 240" aria-hidden="true" focusable="false"><g transform="translate(67 57)" data-astro="Luna"><g class="celestial-motion"><path fill="var(--celestial-ivory)" d="M10-27A28 28 0 1 0 26 18 29 29 0 0 1 10-27Z"></path></g></g><g transform="translate(332 58)" data-astro="Sol"><g class="celestial-motion"><circle r="20" fill="var(--celestial-sun)"></circle><path d="M0-37v8M0 29v8M-37 0h8M29 0h8M-26-26l6 6M20 20l6 6M26-26l-6 6M-20 20l-6 6" stroke="var(--celestial-sun)" stroke-width="5"></path></g></g><g transform="translate(67 178)" data-astro="Astra"><g class="celestial-motion"><g fill="var(--celestial-galaxy)"><path d="M0 0C-8-12-30-14-31 8C-39-18-8-38 18-22C5-26-3-14 0 0Z"></path><path transform="rotate(120)" d="M0 0C-8-12-30-14-31 8C-39-18-8-38 18-22C5-26-3-14 0 0Z"></path><path transform="rotate(240)" d="M0 0C-8-12-30-14-31 8C-39-18-8-38 18-22C5-26-3-14 0 0Z"></path></g><circle r="6" fill="var(--celestial-galaxy)"></circle></g></g><g transform="translate(332 178)" data-astro="Terra"><g class="celestial-motion"><circle r="31" fill="var(--celestial-earth)"></circle><path fill="var(--celestial-ivory)" d="M-19-22-6-27 2-18-4-8-15-8-9 3-15 7-23-5-28-8ZM2 0 18 4 22 13 12 26 5 28 2 14-5 7ZM17-25 26-16 28-5 19-7 11-17Z"></path></g></g><g class="celestial-head" transform="translate(-30 0) scale(1.15 1)"><path fill="var(--celestial-ivory)" d="M165 39 200 23 235 39 251 68 249 111 258 107 261 127 248 146 235 159 231 190 257 207 200 230 143 207 169 190 165 159 152 146 139 127 142 107 151 111 149 68Z"></path><path fill="var(--celestial-shade)" d="M165 39 149 68 152 126 176 151 166 106ZM235 39 249 68 248 126 224 151 234 106ZM169 167 200 188 231 167 231 190 200 230 169 190Z"></path><path fill="var(--celestial-mid)" d="M200 25 200 139 186 132 192 110 187 82 165 39ZM200 188 176 165 166 140 186 153 214 153 234 140 224 165Z"></path><path fill="var(--celestial-ink)" d="M162 86 174 78 188 85 190 91 174 85ZM238 86 226 78 212 85 210 91 226 85ZM188 133 200 137 212 133 205 142 195 142ZM183 157 197 152 203 152 217 157 201 156Z"></path><path class="celestial-lids" d="M164 102 188 104M212 104 236 102" fill="none" stroke="var(--celestial-ink)" stroke-width="3"></path><g class="celestial-eyes" fill="var(--celestial-eye)"><path d="M162 100 174 94 188 100 180 107 170 106Z"></path><path d="M238 100 226 94 212 100 220 107 230 106Z"></path></g></g></svg><div class="celestial-caption"><strong>Cortex</strong><span>En veille</span><p>Luna · Terra · Sol · Astra</p></div></section><div class="controls"><button id="activate">Activer la carte</button><button id="task" disabled>Démarrer la simulation</button><button id="sleep">Mettre en veille</button></div><p>Lune : Luna · Terre : Terra · Soleil : Sol · Galaxie : Astra.<br>Les symboles ne désignent pas les modèles réellement exécutés. Le réglage système de réduction des animations est respecté.</p></main><script>
+const card=document.querySelector('.cortex-project-card'),task=document.querySelector('#task'),caption=card.querySelector('.celestial-caption span');
+document.querySelector('#activate').onclick=()=>{card.dataset.active='false';void card.offsetWidth;card.dataset.active='true';task.disabled=false;caption.textContent=card.dataset.busy==='true'?'Simulation en cours':'Carte activée';};
+task.onclick=()=>{const busy=card.dataset.busy!=='true';card.dataset.busy=String(busy);task.textContent=busy?'Arrêter la simulation':'Démarrer la simulation';caption.textContent=busy?'Simulation en cours':'Carte activée';};
+document.querySelector('#sleep').onclick=()=>{card.dataset.active='false';card.dataset.busy='false';caption.textContent='En veille';task.disabled=true;task.textContent='Démarrer la simulation';};
+</script></html>

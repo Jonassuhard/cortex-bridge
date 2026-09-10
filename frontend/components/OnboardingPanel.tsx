@@ -3,6 +3,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { api, postJson } from "@/lib/api";
+import { useAccessibleDialog } from "@/hooks/useAccessibleDialog";
 import { AlertIcon, CheckIcon, RefreshIcon, XIcon } from "./Icons";
 
 interface OnboardingCheck {
@@ -57,9 +58,7 @@ export function OnboardingPanel({ onOpenSettings, onOpenChatGPTProfile, forceOpe
     if (forceOpen) void refresh();
   }, [forceOpen, refresh]);
 
-  if (!state || (!forceOpen && (state.completed || hidden))) return null;
-
-  const dismiss = async () => {
+  const dismiss = useCallback(async () => {
     if (forceOpen && onCloseGuide) {
       onCloseGuide();
       return;
@@ -70,7 +69,12 @@ export function OnboardingPanel({ onOpenSettings, onOpenChatGPTProfile, forceOpe
       // Dismissal persistence failing must not trap the user on the panel.
     }
     setHidden(true);
-  };
+  }, [forceOpen, onCloseGuide]);
+  const closeDialog = useCallback(() => { void dismiss(); }, [dismiss]);
+  const visible = !!state && (forceOpen || (!state.completed && !hidden));
+  const dialogRef = useAccessibleDialog<HTMLDivElement>({ open: visible, onClose: closeDialog });
+
+  if (!state || !visible) return null;
 
   const openBrowser = async () => {
     setOpeningBrowser(true);
@@ -107,14 +111,14 @@ export function OnboardingPanel({ onOpenSettings, onOpenChatGPTProfile, forceOpe
 
   return (
     // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role -- This styled overlay is controlled by React and does not use the native dialog lifecycle.
-    <div className="settings-overlay" role="dialog" aria-modal="true" aria-label="Bienvenue dans Cortex Bridge">
+    <div ref={dialogRef} className="settings-overlay" role="dialog" aria-modal="true" aria-label="Bienvenue dans Cortex Bridge">
       <div className="settings-backdrop" />
       <section className="settings-panel onboarding-panel">
         <header className="settings-head">
           <div>
             <span className="panel-eyebrow">Cortex Bridge</span>
             <h2>{forceOpen ? "Guide de démarrage" : "Bienvenue"}</h2>
-            <p>Trois gestes et tout fonctionne. ChatGPT planifie, tu valides, Cortex exécute sur ta machine.</p>
+            <p>Vérifie la connexion et ton projet. ChatGPT planifie, tu valides les actions sensibles, Cortex exécute sur ta machine.</p>
           </div>
           <button className="icon-button" onClick={() => void dismiss()} aria-label="Fermer l'assistant"><XIcon /></button>
         </header>

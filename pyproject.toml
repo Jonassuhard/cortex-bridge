@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cortex-bridge"
-version = "0.5.4"
+version = "0.6.1"
 description = "Local, consent-bound bridge between ChatGPT and a reviewed executor"
 requires-python = ">=3.11"
 dependencies = [
@@ -16,6 +16,7 @@ dependencies = [
 
 [project.scripts]
 cortex-console = "server:main"
+cortex = "terminal_cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "console", "executor" = "executor", "orchestration" = "orchestration", "transport" = "transport"}
@@ -31,6 +32,10 @@ py-modules = [
   "process_ownership",
   "server",
   "settings",
+  "terminal_app",
+  "terminal_cli",
+  "terminal_client",
+  "terminal_view",
   "version",
   "write_slots",
 ]

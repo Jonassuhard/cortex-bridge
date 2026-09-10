@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Cortex Bridge use cases</title>
+<style>
+:root{color-scheme:dark;font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#07090b;color:#f7f9fa}
+body{max-width:1080px;margin:0 auto;padding:32px 20px}h1{font-size:32px}p{max-width:75ch;line-height:1.6;color:#a3afb9}
+nav{display:flex;flex-wrap:wrap;gap:12px;margin:24px 0}button,a{color:inherit}button{font:inherit;background:#101419;border:1px solid #5f6a70;padding:12px 18px;border-radius:8px;cursor:pointer}
+button[aria-pressed=true]{border-color:#4f8cff}button:focus-visible,a:focus-visible{outline:3px solid #4f8cff;outline-offset:3px}
+.diagram-scroll{overflow-x:auto}object{display:block;width:100%;min-width:850px;height:auto;aspect-ratio:1000/390}#motion{margin-top:16px}small{display:block;color:#a3afb9;margin-top:20px}
+</style></head><body>
+<h1>Cortex Bridge, three use cases</h1>
+<p>These animated explanations describe the candidate architecture. They are not live telemetry, benchmark results or proof that a provider mission succeeded.</p>
+<nav aria-label="Use case"><button type="button" data-mode="chat" aria-pressed="true">Chat</button><button type="button" data-mode="mission" aria-pressed="false">Reviewed mission</button><button type="button" data-mode="interfaces" aria-pressed="false">GUI or terminal</button></nav>
+<div class="diagram-scroll" tabindex="0" aria-label="Workflow diagram; scroll horizontally on small screens"><object id="diagram" data="media/chat-flow.svg" type="image/svg+xml" aria-label="Chat workflow"></object></div>
+<button id="motion" type="button">Pause animation</button>
+<p id="description">Chat sends text to the selected conversation; it does not authorize local execution.</p>
+<small>Static alternatives: <a href="media/chat-flow.svg">chat</a>, <a href="media/mission-flow.svg">mission</a>, <a href="media/interfaces-flow.svg">interfaces</a>. <a href="architecture.md">Architecture</a> · <a href="verification-v061.md">Verification limits</a></small>
+<script>
+const diagram=document.querySelector('#diagram'),motion=document.querySelector('#motion');
+const preference=matchMedia('(prefers-reduced-motion: reduce)');
+let paused=preference.matches,mode='chat',step=0;
+const descriptions={chat:'Chat sends text to the selected conversation; it does not authorize local execution.',mission:'Preflight, structured decision, policy and approval precede workspace execution. Results return to the mission history.',interfaces:'Atelier and the terminal both connect directly to the same backend. They are alternatives, not successive execution stages.'};
+function draw(){const doc=diagram.contentDocument;if(!doc)return;doc.querySelectorAll('.node').forEach((node,i)=>node.classList.toggle('active',!paused&&(mode==='interfaces'?(step===0?i<2:step===1?i===2:i===3):i===step)));motion.textContent=paused?'Play animation':'Pause animation';}
+motion.addEventListener('click',()=>{paused=!paused;draw()});
+preference.addEventListener('change',event=>{paused=event.matches;draw()});
+document.querySelectorAll('[data-mode]').forEach(button=>button.addEventListener('click',()=>{mode=button.dataset.mode;step=0;diagram.data='media/'+mode+'-flow.svg';diagram.setAttribute('aria-label',button.textContent+' workflow');document.querySelector('#description').textContent=descriptions[mode];document.querySelectorAll('[data-mode]').forEach(item=>item.setAttribute('aria-pressed',String(item===button)))}));
+diagram.addEventListener('load',draw);
+setInterval(()=>{if(!paused){step=(step+1)%(mode==='interfaces'?3:4);draw()}},1000);
+draw();
+</script></body></html>

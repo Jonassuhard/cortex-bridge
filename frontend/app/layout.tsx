@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import "./atelier.css";
 
 export const metadata: Metadata = {
   title: "Cortex Bridge — Local orchestration client",

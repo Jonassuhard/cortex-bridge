@@ -2,7 +2,22 @@
 
 Public, best-effort roadmap. Dates are indicative; scope beats schedule.
 
-## v0.5.x — current (technical preview)
+## 0.6.1 candidate — implemented, release acceptance still open
+
+- [x] Atelier layout, task states and geometric project card.
+- [x] Optional CORTEX terminal sharing the backend, settings and mission policy.
+- [x] Selected conversation history, replies and explicit delivery acknowledgement.
+- [x] Scoped cancellation, preserved in-memory submissions and atomic terminal approvals.
+- [ ] Resolve current dependency findings and pass complete publication gates.
+- [ ] Validate a clean user installation and live provider workflow for these bytes.
+- [ ] Persist terminal drafts across restarts.
+- [ ] Native Windows validation and distribution.
+
+The historical roadmap below is retained for context. An implementation check
+does not mean the same feature has been validated live in 0.6.1. The public
+default branch was still 0.5.3 when this candidate's publication review began.
+
+## v0.5.x — historical technical preview
 
 - [x] v0.5.0 — release candidate: conversation-first French UI, execution
       preflight, two isolated writers, attachments, consent-bound installer,

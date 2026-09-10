@@ -7,6 +7,7 @@ import {
   ArchiveIcon,
   ChevronDownIcon,
   ClockIcon,
+  CollapseIcon,
   InfoIcon,
   MenuIcon,
   MessageIcon,
@@ -115,8 +116,8 @@ export function ConversationSidebar({ conversations, selectedKey, loading, colla
       <div className="sidebar-brand-row">
         <CortexLogo />
         <div className="sidebar-brand-actions">
-          <button className="icon-button" onClick={onRefresh} title="Actualiser les conversations" aria-label="Actualiser les conversations"><RefreshIcon className={loading ? "spin-slow" : ""} /></button>
-          <button className="icon-button" onClick={onCollapse} title="Réduire la barre latérale" aria-label="Réduire la barre latérale"><span className="collapse-glyph">—</span></button>
+          <button className="icon-button" onClick={onRefresh} title="Actualiser les conversations" aria-label="Actualiser les conversations" aria-busy={loading}><RefreshIcon busy={loading} /></button>
+          <button className="icon-button" onClick={onCollapse} title="Réduire la barre latérale" aria-label="Réduire la barre latérale"><CollapseIcon /></button>
         </div>
       </div>
       <div className="sidebar-primary-actions">

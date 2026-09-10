@@ -1,5 +1,6 @@
 # Exact public URLs are added only after they are verified from primary sources.
 http://127.0.0.1:8420
+http://127.0.0.1:18420
 http://127.0.0.1:8420/*
 http://127.0.0.1:8420/api/chrome-extension/status
 http://127.0.0.1:8420/api/transport/probe
@@ -31,6 +32,7 @@ https://github.com/waishnav/devspace
 https://img.shields.io/badge/license-MIT-green.svg
 https://img.shields.io/badge/platform-macOS-lightgrey.svg
 https://img.shields.io/badge/version-0.5.3-blue.svg
+https://img.shields.io/badge/candidate-0.6.1-blue.svg
 https://nodejs.org/en/download
 https://jonassuhard.com/
 https://jonassuhard.com/projets/cortex-bridge

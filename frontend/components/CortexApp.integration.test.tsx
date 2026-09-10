@@ -154,7 +154,7 @@ describe("CortexApp conversation integration", () => {
     await readyApp();
 
     await user.type(composer(), "message synthétique bloqué");
-    await user.click(screen.getByTitle("Envoyer"));
+    await user.click(screen.getByTitle("Envoyer à ChatGPT"));
 
     expect(await screen.findByRole("heading", { name: "Transport ChatGPT" })).toBeInTheDocument();
     expect(network.postJson.mock.calls.map(([path]) => path)).not.toContain("/api/chat/send");
@@ -500,7 +500,7 @@ describe("CortexApp conversation integration", () => {
     expect(screen.getByText("preuve.pdf")).toBeInTheDocument();
     Object.defineProperty(file, "size", { value: 2 * 1024 * 1024 + 1 });
 
-    await user.click(screen.getByTitle("Envoyer"));
+    await user.click(screen.getByTitle("Envoyer à ChatGPT"));
 
     expect(await screen.findByText(/limite.*2 Mo/i)).toBeInTheDocument();
     expect(composer()).toHaveValue("preuve conservée");
@@ -880,7 +880,7 @@ describe("CortexApp conversation integration", () => {
     await readyApp();
 
     await user.type(composer(), "A1");
-    await user.click(screen.getByTitle("Envoyer"));
+    await user.click(screen.getByTitle("Envoyer à ChatGPT"));
     await waitFor(() => expect(AppEventSource.instances).toHaveLength(1));
     const sourceA1 = AppEventSource.instances[0];
 
@@ -912,7 +912,7 @@ describe("CortexApp conversation integration", () => {
     await readyApp();
 
     await user.type(composer(), "A active");
-    await user.click(screen.getByTitle("Envoyer"));
+    await user.click(screen.getByTitle("Envoyer à ChatGPT"));
     const source = AppEventSource.instances[0];
     const stop = await screen.findByTitle("Arrêter la réponse");
 
@@ -944,7 +944,7 @@ describe("CortexApp conversation integration", () => {
     const rendered = await readyApp();
 
     await user.type(composer(), "A active");
-    await user.click(screen.getByTitle("Envoyer"));
+    await user.click(screen.getByTitle("Envoyer à ChatGPT"));
     await user.click(await screen.findByTitle("Arrêter la réponse"));
     rendered.unmount();
 
@@ -966,7 +966,7 @@ describe("CortexApp conversation integration", () => {
     await readyApp();
 
     await user.type(composer(), "A active");
-    await user.click(screen.getByTitle("Envoyer"));
+    await user.click(screen.getByTitle("Envoyer à ChatGPT"));
     const source = AppEventSource.instances[0];
     const stop = await screen.findByTitle("Arrêter la réponse");
 
@@ -1001,7 +1001,7 @@ describe("CortexApp conversation integration", () => {
     const rendered = await readyApp();
 
     await user.type(composer(), "A incertaine");
-    await user.click(screen.getByTitle("Envoyer"));
+    await user.click(screen.getByTitle("Envoyer à ChatGPT"));
     vi.useFakeTimers();
     act(() => AppEventSource.instances[0].fail());
     await act(async () => vi.advanceTimersByTimeAsync(2_000));
@@ -1051,7 +1051,7 @@ describe("CortexApp conversation integration", () => {
       }
     });
     vi.useFakeTimers();
-    fireEvent.click(screen.getByTitle("Envoyer"));
+    fireEvent.click(screen.getByTitle("Envoyer à ChatGPT"));
     await act(async () => {
       await Promise.resolve();
       expect(uploadSignal).toBeInstanceOf(AbortSignal);
@@ -1062,7 +1062,7 @@ describe("CortexApp conversation integration", () => {
     expect(composer()).toHaveValue("preuve exacte");
     expect(screen.getByText("preuve.txt")).toBeInTheDocument();
     expect(screen.getByText(/délai.*10 secondes/i)).toBeInTheDocument();
-    expect(screen.getByTitle("Envoyer")).not.toBeDisabled();
+    expect(screen.getByTitle("Envoyer à ChatGPT")).not.toBeDisabled();
     expect(uploadBody).toMatchObject({
       conversation_url: "https://chatgpt.com/c/a",
       text: "preuve exacte",
@@ -1140,7 +1140,7 @@ describe("CortexApp conversation integration", () => {
     const user = userEvent.setup();
     await readyApp();
     await user.type(composer(), "Mission A isolée");
-    await user.click(screen.getByRole("button", { name: "Exécuter…" }));
+    await user.click(screen.getByRole("button", { name: "Exécuter sur ce Mac…" }));
     await user.click(screen.getByRole("button", { name: "Démarrer en lecture seule" }));
     await screen.findByText("Mission A isolée");
     await user.click(screen.getByTitle("Détails du bridge (pipeline, logs, transport)"));
@@ -1193,7 +1193,7 @@ describe("CortexApp conversation integration", () => {
     await readyApp();
 
     await user.type(composer(), "message exact");
-    await user.click(screen.getByTitle("Envoyer"));
+    await user.click(screen.getByTitle("Envoyer à ChatGPT"));
     await waitFor(() => expect(AppEventSource.instances).toHaveLength(1));
 
     act(() => AppEventSource.instances[0].fail());
@@ -1255,12 +1255,12 @@ describe("CortexApp conversation integration", () => {
     await readyApp();
     await user.click(screen.getByRole("button", { name: /Nouvelle conversation/ }));
     await user.type(composer(), "Mission canonique");
-    await user.click(screen.getByRole("button", { name: "Exécuter…" }));
+    await user.click(screen.getByRole("button", { name: "Exécuter sur ce Mac…" }));
     await user.click(screen.getByRole("button", { name: "Démarrer en lecture seule" }));
     await screen.findByText("Mission terminée");
 
     await user.type(composer(), "suite");
-    await user.click(screen.getByTitle("Envoyer"));
+    await user.click(screen.getByTitle("Envoyer à ChatGPT"));
     await waitFor(() => {
       const call = network.postJson.mock.calls.find(([path]) => path === "/api/chat/send");
       expect(call?.[1]).toMatchObject({
@@ -1295,7 +1295,7 @@ describe("CortexApp conversation integration", () => {
     await readyApp();
 
     await user.type(composer(), "A1");
-    await user.click(screen.getByTitle("Envoyer"));
+    await user.click(screen.getByTitle("Envoyer à ChatGPT"));
     vi.useFakeTimers();
     act(() => AppEventSource.instances[0].fail());
     await act(async () => vi.advanceTimersByTimeAsync(2_000));
@@ -1307,7 +1307,7 @@ describe("CortexApp conversation integration", () => {
     await user.clear(composer());
     await user.type(composer(), "A2");
     expect(composer()).not.toBeDisabled();
-    expect(screen.getByTitle("Envoyer")).toBeDisabled();
+    expect(screen.getByTitle("Envoyer à ChatGPT")).toBeDisabled();
     fireEvent.keyDown(composer(), { key: "Enter" });
     expect(network.postJson.mock.calls.filter(([path]) => path === "/api/chat/send")).toHaveLength(1);
     expect(AppEventSource.instances).toHaveLength(1);
@@ -1355,7 +1355,7 @@ describe("CortexApp conversation integration", () => {
     await user.click(screen.getByRole("button", { name: /Nouvelle conversation/ }));
 
     await user.type(composer(), "premier");
-    await user.click(screen.getByTitle("Envoyer"));
+    await user.click(screen.getByTitle("Envoyer à ChatGPT"));
     vi.useFakeTimers();
     act(() => AppEventSource.instances.at(-1)?.fail());
     await act(async () => vi.advanceTimersByTimeAsync(2_000));
@@ -1365,7 +1365,7 @@ describe("CortexApp conversation integration", () => {
     await waitFor(() => expect(screen.queryByText("Livraison incertaine")).not.toBeInTheDocument());
 
     await user.type(composer(), "suite canonique");
-    await user.click(screen.getByTitle("Envoyer"));
+    await user.click(screen.getByTitle("Envoyer à ChatGPT"));
     await waitFor(() => {
       const sends = network.postJson.mock.calls.filter(([path]) => path === "/api/chat/send");
       expect(sends.at(-1)?.[1]).toMatchObject({
@@ -1388,10 +1388,10 @@ describe("CortexApp conversation integration", () => {
     await readyApp();
 
     await user.type(composer(), "A");
-    await user.click(screen.getByTitle("Envoyer"));
+    await user.click(screen.getByTitle("Envoyer à ChatGPT"));
     await user.click(screen.getByRole("button", { name: /Conversation B/ }));
     await user.type(composer(), "B");
-    await user.click(screen.getByTitle("Envoyer"));
+    await user.click(screen.getByTitle("Envoyer à ChatGPT"));
     await waitFor(() => expect(AppEventSource.instances).toHaveLength(2));
     const conversationsBefore = network.api.mock.calls.filter(([path]) => path === "/api/conversations").length;
 
@@ -1415,7 +1415,7 @@ describe("CortexApp conversation integration", () => {
     await screen.findByRole("heading", { name: "Conversation A" });
 
     await user.type(composer(), "A");
-    await user.click(screen.getByTitle("Envoyer"));
+    await user.click(screen.getByTitle("Envoyer à ChatGPT"));
     await waitFor(() => expect(AppEventSource.instances).toHaveLength(1));
     const conversationsBefore = network.api.mock.calls.filter(([path]) => path === "/api/conversations").length;
     act(() => AppEventSource.instances[0].emit({ seq: 1, ts: "now", type: "complete", payload: {} }));

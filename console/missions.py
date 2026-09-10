@@ -127,6 +127,7 @@ class MissionRuntime:
     transport: ChatGPTWebTransport | None = None
     approval_event: asyncio.Event = field(default_factory=asyncio.Event)
     approval_scope: str | None = None
+    pending_approval_action_id: str | None = None
     stopped: bool = False
     conversation_key: str | None = None
     lease: object | None = None
@@ -214,6 +215,8 @@ def _make_approval_callback(rt: MissionRuntime):
     async def callback(decision: dict, policy_decision) -> str | None:
         rt.approval_event.clear()
         rt.approval_scope = None
+        action_id = decision.get("actionId")
+        rt.pending_approval_action_id = action_id if isinstance(action_id, str) and action_id else None
         waiter = asyncio.create_task(rt.approval_event.wait())
         try:
             while not waiter.done():
@@ -221,20 +224,24 @@ def _make_approval_callback(rt: MissionRuntime):
                     waiter.cancel()
                     return None
                 await asyncio.sleep(0.2)
+            scope = rt.approval_scope
+            tool = (decision.get("action") or {}).get("tool")
+            # Returning SCOPE_ONCE authorizes the action currently waiting below;
+            # persisting it in PolicyEngine would incorrectly authorize the next
+            # action of the same tool as well. Only wider scopes survive this
+            # approval callback.
+            if scope and scope != SCOPE_ONCE and rt.policy is not None and tool:
+                try:
+                    rt.policy.approve(scope, tool=tool if scope != SCOPE_ALL_WRITES_FOR_MISSION else None)
+                except ValueError:
+                    pass
+            return scope
         except asyncio.CancelledError:
             return None
-        scope = rt.approval_scope
-        tool = (decision.get("action") or {}).get("tool")
-        # Returning SCOPE_ONCE authorizes the action currently waiting below;
-        # persisting it in PolicyEngine would incorrectly authorize the next
-        # action of the same tool as well. Only wider scopes survive this
-        # approval callback.
-        if scope and scope != SCOPE_ONCE and rt.policy is not None and tool:
-            try:
-                rt.policy.approve(scope, tool=tool if scope != SCOPE_ALL_WRITES_FOR_MISSION else None)
-            except ValueError:
-                pass
-        return scope
+        finally:
+            # The route checked the current ID before setting this event. Once
+            # the waiter leaves, this approval cannot be reused by a later action.
+            rt.pending_approval_action_id = None
 
     return callback
 
@@ -379,6 +386,7 @@ class MissionIn(BaseModel):
 class ApprovalIn(BaseModel):
     scope: str  # once | tool | all-writes
     approve: bool = True
+    expected_action_id: str | None = None
 
 
 class OptInIn(BaseModel):
@@ -1146,6 +1154,12 @@ async def get_mission(mission_id: str) -> dict:
         "timeline": timeline,
         "awaiting_approval": rt is not None and not rt.approval_event.is_set()
         and mission["state"] == "WAITING_FOR_APPROVAL",
+        "pending_approval_action_id": (
+            rt.pending_approval_action_id
+            if rt is not None and not rt.approval_event.is_set()
+            and mission["state"] == "WAITING_FOR_APPROVAL"
+            else None
+        ),
         "stopped": rt.stopped if rt else False,
     }
 
@@ -1346,6 +1360,11 @@ async def approve_mission(mission_id: str, body: ApprovalIn) -> dict:
     rt = _runtimes.get(mission_id)
     if rt is None or rt.approval_event.is_set():
         raise HTTPException(status_code=409, detail="no pending approval for this mission")
+    if (
+        body.expected_action_id is not None
+        and body.expected_action_id != rt.pending_approval_action_id
+    ):
+        raise HTTPException(status_code=409, detail="pending approval action changed or is unavailable")
     if body.approve:
         scope = _APPROVAL_SCOPE_MAP.get(body.scope)
         if scope is None:

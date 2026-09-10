@@ -14,6 +14,8 @@ import type {
 } from "@/lib/types";
 import { formatDuration, shortTime } from "@/lib/api";
 import { executorDisplay } from "@/lib/runtimeTruth";
+import { TaskProgress } from "./TaskProgress";
+import { CortexProjectCard } from "./CortexProjectCard";
 import {
   ActivityIcon,
   BrowserIcon,
@@ -45,6 +47,7 @@ export interface WorkspaceAvailability {
 }
 
 interface ChatWorkspaceProps {
+  notice?: string | null;
   conversationKey: ConversationKey | null;
   conversation: ConversationSummary | null;
   messages: ConversationMessage[];
@@ -217,7 +220,7 @@ function MessageActions({ text }: { text: string }) {
           window.setTimeout(() => setCopied(false), 1200);
         }}
       >
-        {copied ? <CheckIcon size={14} /> : <CopyIcon size={14} />}
+        {copied ? <CheckIcon size={14} confirmed /> : <CopyIcon size={14} />}
       </button>
       <button title="Plus d'actions"><MoreIcon size={15} /></button>
     </div>
@@ -237,7 +240,7 @@ function CodeBlock({ language, text }: { language?: string; text: string }) {
             window.setTimeout(() => setCopied(false), 1200);
           }}
         >
-          {copied ? <CheckIcon size={13} /> : <CopyIcon size={13} />}
+          {copied ? <CheckIcon size={13} confirmed /> : <CopyIcon size={13} />}
           {copied ? "Copié" : "Copier"}
         </button>
       </div>
@@ -330,6 +333,7 @@ function EmptyConversation({ onExample }: { onExample: (text: string) => void })
 }
 
 export function ChatWorkspace({
+  notice,
   conversationKey,
   conversation,
   messages,
@@ -424,7 +428,7 @@ export function ChatWorkspace({
           text: chatRun.response_text || "",
           created_at: chatRun.first_response_at || chatRun.created_at,
           latency_ms: chatRun.latency?.first_response_ms || undefined,
-          streaming: chatRun.state !== "COMPLETED",
+          streaming: ["WAITING_FOR_CHATGPT", "CHATGPT_STREAMING"].includes(chatRun.state),
         });
       }
     }
@@ -524,8 +528,9 @@ export function ChatWorkspace({
         <div className="chat-background-grid" aria-hidden="true" />
         <div className="chat-blue-signal" aria-hidden="true" />
         <div className="message-column">
+          <CortexProjectCard key={conversationKey || "standby"} active={!!conversationKey} chatState={chatRun?.state} missionState={activeMissionState} sending={sending} recoveryPending={recoveryPending} cancelPending={cancelPending} />
           {loadingMessages && visibleMessages.length === 0 && protocolMessages.length === 0 && (
-            <div className="message-loading-state"><span className="thinking-spinner" /><p>Synchronisation de « {title} »…</p></div>
+            <div className="message-loading-state" aria-busy="true"><span className="thinking-spinner" aria-hidden="true" /><output>Synchronisation de « {title} »…</output><div className="message-skeleton" aria-hidden="true"><i /><i /><i /></div></div>
           )}
           {!loadingMessages && visibleMessages.length === 0 && protocolMessages.length === 0 && (
             <EmptyConversation
@@ -628,6 +633,13 @@ export function ChatWorkspace({
       </div>
 
       <div className="composer-shell">
+        {notice && <output className="app-toast">{notice}</output>}
+        {(chatRun || sending || recoveryPending || cancelPending) && <TaskProgress
+          key={`${conversationKey}-${chatRun?.id || "pending"}`}
+          kind="chat"
+          state={cancelPending ? "CANCELLING" : recoveryPending ? "RECOVERING" : sending && !chatActive ? "PREPARING" : chatRun?.state || "PREPARING"}
+          startedAt={chatRun?.created_at}
+        />}
         <Composer
           key={conversationKey || "no-conversation"}
           value={draft}

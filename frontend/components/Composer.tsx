@@ -69,6 +69,7 @@ export function Composer({
 
   return (
     <div className={`composer-box ${executionBlocked ? "is-busy" : ""}`}>
+      <div className="composer-context"><FolderIcon size={16} /><span>Projet</span><strong title={workspaceLabel}>{workspaceLabel}</strong></div>
       <textarea
         aria-label="Message à envoyer"
         value={value}
@@ -76,7 +77,7 @@ export function Composer({
         onKeyDown={(event) => {
           if (event.key === "Enter" && !event.shiftKey && !event.metaKey) {
             event.preventDefault();
-            if (!empty && !executionBlocked) onSend();
+            if (!empty && !blocked && !executionBlocked) onSend();
           }
         }}
         placeholder="Écrire dans la conversation ChatGPT sélectionnée…"
@@ -123,7 +124,7 @@ export function Composer({
               aria-label="Capturer l'onglet ChatGPT et l'envoyer"
               title="Capturer l'onglet ChatGPT et l'envoyer"
               onClick={onScreenshot}
-              disabled={executionBlocked}
+              disabled={blocked || executionBlocked}
             >
               <BrowserIcon size={17} />
             </button>
@@ -143,7 +144,6 @@ export function Composer({
             </span>
           )}
           {attachmentError && <span role="alert" className="warning-label">{attachmentError}</span>}
-          <span className="workspace-pill"><FolderIcon size={13} /> {workspaceLabel}</span>
         </div>
         <div className="composer-right-actions">
           <span className="composer-shortcut">Entrée pour envoyer · ⇧ Entrée pour une ligne</span>
@@ -151,9 +151,9 @@ export function Composer({
             type="button"
             className="execution-preflight-button"
             onClick={onPrepareExecution}
-            disabled={empty || executionBlocked}
+            disabled={empty || blocked || executionBlocked}
           >
-            <SparkIcon size={15} /> Exécuter…
+            <SparkIcon size={15} /> Exécuter sur ce Mac…
           </button>
           {chatActive ? (
             <button
@@ -163,16 +163,16 @@ export function Composer({
               disabled={cancelPending}
               title="Arrêter la réponse"
               aria-label="Arrêter la réponse"
-            ><StopIcon size={17} /></button>
+            ><StopIcon size={17} /><span>{cancelPending ? "Arrêt demandé…" : "Arrêter la réponse"}</span></button>
           ) : (
             <button
               type="button"
               className="send-button"
               onClick={onSend}
-              disabled={empty || executionBlocked}
-              title="Envoyer"
-              aria-label="Envoyer"
-            ><SendIcon size={17} /></button>
+              disabled={empty || blocked || executionBlocked}
+              title="Envoyer à ChatGPT"
+              aria-label="Envoyer à ChatGPT"
+            ><SendIcon size={17} /><span>Envoyer à ChatGPT</span></button>
           )}
         </div>
       </div>

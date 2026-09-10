@@ -216,7 +216,15 @@ async def update_settings(body: SettingsIn) -> dict[str, Any]:
         load_browser_settings(body.model_dump())
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return save_settings(body.model_dump())
+    # Process capabilities are server-owned and intentionally absent from the
+    # public settings input.  Retain the current value on ordinary UI PUTs;
+    # otherwise Pydantic's omitted field silently resets a reviewed policy.
+    current = load_settings()
+    merged = {
+        **body.model_dump(),
+        "process_capabilities": current["process_capabilities"],
+    }
+    return save_settings(merged)
 
 
 @router.get("/models/ollama")

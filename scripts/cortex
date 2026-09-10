@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Source-checkout wrapper for the Cortex terminal package entry point.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [ -n "${PYTHON_BIN:-}" ]; then
+  PYTHON="$PYTHON_BIN"
+elif [ -x "$ROOT/.venv/bin/python" ]; then
+  PYTHON="$ROOT/.venv/bin/python"
+else
+  PYTHON="python3"
+fi
+
+case "${PYTHONPATH:-}" in
+  "$ROOT/console:$ROOT"|"$ROOT/console:$ROOT:"*) ;;
+  *) export PYTHONPATH="$ROOT/console:$ROOT${PYTHONPATH:+:$PYTHONPATH}" ;;
+esac
+exec "$PYTHON" "$ROOT/console/terminal_cli.py" "$@"

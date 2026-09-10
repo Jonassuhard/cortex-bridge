@@ -2,6 +2,26 @@
 
 All notable changes are recorded here.
 
+## 0.6.1 — development candidate, 2026-09-10
+
+- Atelier C/link logo, calm dark surfaces and larger interface text.
+- Project context above the composer; explicit ChatGPT send and local execution actions.
+- Composer occupies its own layout row, avoiding overlap with mission evidence.
+- Mobile onboarding layout corrected, focus contained and Escape supported.
+- Technical component diagnostics collapsed; executor availability labelled accurately.
+- Mission review shows recorded artifacts and diffs, and links approval detail to its policy action id.
+- Removed fabricated progress, fabricated completed evidence and unproven restoration copy.
+- Preserved preflight, one-action approval, scoped conversations and uncertain-delivery protections.
+- Synthetic desktop/tablet/mobile visual gallery in `docs/screenshots/v0.6.1/index.html`.
+- Optional CORTEX terminal sharing the existing backend: messages, history,
+  replies, scoped missions, settings, once-only approvals and cancellation.
+- Explicit delivery acknowledgement, isolated in-memory drafts, no ambiguous resend.
+- Corrected stale installer version assertions without changing installer behavior.
+- Updated usage diagrams, LLM index, historical benchmark context and candidate evidence.
+- Not validated against a signed-in production browser or a clean user installation.
+- Publication gates and dependency alerts are recorded in `docs/verification-v061.md`;
+  this entry is not a release-readiness assertion.
+
 ## 0.5.4 - 2026-08-27
 
 ### Added

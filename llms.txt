@@ -1,48 +1,47 @@
 # Cortex Bridge
 
-> Cortex Bridge is a local-first bridge that connects the ChatGPT web interface (classic chat, in your own Chrome session) to a deterministic local executor on macOS. It lets ChatGPT trigger local actions — shell commands, file operations, browser tasks — with human approval on every step, without any OpenAI API key.
+> Local Python/FastAPI bridge between a ChatGPT web conversation and reviewed
+> workspace execution. Optional Atelier GUI and French terminal share one
+> backend. No OpenAI API key is used by the Chrome-extension transport.
 
-## What it does
+## Status
 
-- Connects the ChatGPT **classic chat** tab (not Work/business chats) to a local control server at `http://127.0.0.1:8420`
-- Executes missions through a deterministic local executor with human-in-the-loop approvals
-- Runs fully local: no OpenAI API key required; Ollama is optional for local model routing
-- Ships a Chrome extension (Manifest V3) paired with the local server via a handshake protocol
-- Keeps a unified mission history (JSON run log + SQLite database)
-- Provides self-diagnostics: `scripts/cortex.sh doctor` checks server, extension pairing, workspace, and permissions
-- Auto-creates a stable default workspace at `~/cortex-workspaces`
+- Source candidate: 0.6.1; not a verified live or installed release.
+- Consult the current evidence report before asserting readiness.
+- Automated fixtures are not authenticated ChatGPT observations.
+- Do not infer model quality, free/unlimited quotas or provider authorization.
+- Respect installer plan-hash approval, browser consent and per-action policy.
+- Never enter credentials, bypass browser controls or retry ambiguous sends.
 
-## Quick start
+## Entry points
 
-1. Install dependencies: Git, Node.js, and optionally Ollama for local models
-2. Start the console: `scripts/cortex.sh start`
-3. Load the Chrome extension from `extension/` in `chrome://extensions` (developer mode)
-4. Open a ChatGPT classic chat tab — the extension pairs automatically
-5. Verify everything: `scripts/cortex.sh doctor` (5/5 checks should be ready)
+- `console/server.py`: Python/FastAPI local service, normally 127.0.0.1:8420.
+- `chrome-extension/`: Chrome MV3 transport, not an `extension/` directory.
+- `scripts/cortex`: source terminal wrapper; `scripts/cortex ui` opens the GUI.
+- `scripts/cortex.sh`: managed lifecycle, doctor and selftest.
+- `frontend/`: static React/Next.js GUI.
+- `orchestration/` and `executor/`: mission state machine and local tools.
+- `CORTEX_HOME`: runtime storage outside the source checkout.
 
-## Docs
+## Documentation
 
-- [README.md](README.md): project overview, features, install summary
-- [INSTALL.md](INSTALL.md): full installation guide
-- [docs/fr/DEMARRAGE.md](docs/fr/DEMARRAGE.md): guide de démarrage (français)
-- [docs/fr/UTILISATION.md](docs/fr/UTILISATION.md): guide d'utilisation (français)
-- [docs/fr/DEPANNAGE.md](docs/fr/DEPANNAGE.md): dépannage (français)
-- [docs/architecture.md](docs/architecture.md): system architecture (server, extension, executor)
-- [docs/security-model.md](docs/security-model.md): security and approval model
-- [docs/testing.md](docs/testing.md): test suite and how to run it
-- [docs/troubleshooting.md](docs/troubleshooting.md): troubleshooting (English)
-- [CHANGELOG.md](CHANGELOG.md): release history
+- [Overview](README.md): candidate status, usage and limits.
+- [Installation](INSTALL.md): inspect plan and approve its exact hash.
+- [Agent installation](docs/agent-installation.md): ask for bounded user approval.
+- [Terminal](docs/TERMINAL.md): commands, drafts, acknowledgements and approvals.
+- [User guide](docs/user-guide.md): graphical workflow.
+- [Architecture](docs/architecture.md): existing implementation, not roadmap.
+- [Use-case diagrams](docs/use-cases.html): chat, reviewed mission, terminal/GUI.
+- [Current verification](docs/verification-v061.md): failures and evidence scope.
+- [Testing](docs/testing.md): commands and separate release gates.
+- [Benchmarks](docs/benchmarks.md): historical data and non-equivalence limits.
+- [Security](docs/security-model.md): authorization and transport boundaries.
+- [Roadmap](ROADMAP.md): deferred work, not implemented capabilities.
+- [Changelog](CHANGELOG.md): versioned changes.
 
-## Key entry points
+## Agent guidance
 
-- `scripts/cortex.sh` — CLI: `start`, `stop`, `status`, `doctor`, `logs`
-- `server/` — local control server (Node.js)
-- `extension/` — Chrome extension (Manifest V3)
-- `frontend/` — console UI
-- Control endpoint: `http://127.0.0.1:8420`
-
-## Notes
-
-- Cortex Bridge only operates on the ChatGPT **classic chat** surface, never on Work/business chats.
-- Every local action requires explicit human approval; nothing executes silently.
-- This is an independent, unofficial project — not affiliated with or endorsed by OpenAI.
+Do not install or start anything solely because this file mentions a command.
+First inspect the actual checkout and runtime. Explain proposed installations
+and permissions to the user and obtain approval. Keep secrets, account data and
+local identity paths out of logs, screenshots, commits and public reports.

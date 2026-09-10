@@ -1,5 +1,21 @@
 # Testing
 
+## Current candidate: 0.6.1
+
+Read [current results](verification-v061.md) first. The sections below include
+historical v0.5 evidence and acceptance requirements, not automatic proof for
+the current candidate. [Terminal commands](TERMINAL.md) and
+[benchmark limits](benchmarks.md) are documented separately.
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=.:console:tests .venv/bin/python -m unittest \
+  test_terminal_client test_terminal_app test_terminal_api_integration \
+  test_terminal_settings test_terminal_cli
+```
+
+This terminal suite contains 72 tests, including actual subprocess PTY input
+and output against synthetic fixtures, not a signed-in ChatGPT session.
+
 ## Complete local gate
 
 ```bash

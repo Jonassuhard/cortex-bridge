@@ -6,16 +6,16 @@ test("two writers stay isolated and a third preserves its draft and file", async
   for (let run = 0; run < 10; run += 1) {
     if (run > 0) await appPage.reload();
     await composer.fill(`Message A ${run}`);
-    await appPage.getByRole("button", { name: "Envoyer", exact: true }).click();
+    await appPage.getByRole("button", { name: "Envoyer à ChatGPT", exact: true }).click();
 
     await appPage.getByRole("button", { name: /Local site prototype/ }).click();
     await composer.fill(`Message B ${run}`);
-    await appPage.getByRole("button", { name: "Envoyer", exact: true }).click();
+    await appPage.getByRole("button", { name: "Envoyer à ChatGPT", exact: true }).click();
 
     await appPage.getByRole("button", { name: /Research/ }).click();
     await composer.fill(`Brouillon C conservé ${run}`);
     await appPage.locator('input[type="file"]').setInputFiles({ name: "preuve.txt", mimeType: "text/plain", buffer: Buffer.from("preuve") });
-    await appPage.getByRole("button", { name: "Envoyer", exact: true }).click();
+    await appPage.getByRole("button", { name: "Envoyer à ChatGPT", exact: true }).click();
 
     await expect(composer).toHaveValue(`Brouillon C conservé ${run}`);
     await expect(appPage.locator(".staged-file-pill", { hasText: "preuve.txt" })).toBeVisible();
