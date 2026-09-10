@@ -15,7 +15,7 @@ The candidate now includes the full-screen terminal slice described in
 | Check | Result | Evidence and limit |
 | --- | --- | --- |
 | Terminal/TUI focused slice | PASS, 81 tests | Textual headless smoke, CLI dispatch and PTY compatibility against synthetic HTTP fixtures |
-| Complete Python suite | PASS, 723 tests in 170.490 s | Local isolated fixtures; no signed-in ChatGPT delivery |
+| Complete Python suite | PASS, 724 tests in 227.980 s on the pre-fix run; the PTY race is now covered by a synchronized acceptance test | Local isolated fixtures; no signed-in ChatGPT delivery |
 | Frontend unit/runtime | PASS, 207 unit + 36 runtime/privacy tests | Synthetic React/runtime data |
 | Frontend typecheck/lint/build | PASS | `corepack npm@11.18.0`, static Next.js build |
 | Frontend browser/a11y | PASS, 26 E2E + 4 accessibility; 1 optional guide skipped | Static synthetic export, no authenticated account |

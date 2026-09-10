@@ -9,7 +9,7 @@ CORTEX terminal. Both use the same local backend; neither adds a second engine.
 
 **Status: 0.6.1 technical-preview candidate, not a provider-authorized or
 verified live release.** The full-screen terminal smoke/CLI slice passes 81
-tests; the complete backend suite passes 723 tests. The frontend passes 207
+tests; the complete backend suite passes 724 tests. The frontend passes 207
 unit tests plus 36 runtime/privacy contracts, typecheck, lint and a static
 build. Browser fixtures pass 26 E2E tests (one optional guide test skipped) and
 4 accessibility checks. The release evidence manifest records the remaining
