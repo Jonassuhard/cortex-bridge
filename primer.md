@@ -1,8 +1,8 @@
 # Cortex Bridge project primer
 
 ## Source candidate
-- Version: 0.6.1. Technical preview; live pairing, text round-trip and one
-  screenshot transfer pass, but release evidence is still incomplete.
+- Version: 0.6.1. Technical preview; all offline release gates pass, while
+  provider terms and clean-install lifecycle remain explicit blockers.
 - Public repository: linked from README.md.
 - Primary branch: main. Candidate branch: codex/v061-atelier.
 - See README.md, docs/verification-v061.md and CHANGELOG.md for current evidence.
@@ -32,17 +32,18 @@
 ## Current publication work
 - All changes stay in the independent candidate; the original local checkout
   and installed runtime must not be modified.
-- User authorized commit/push and main integration if the gates permit it.
-- Local dependency upgrades/installations were approved and applied.
-- Primary-branch integration is blocked while dependency or verification gates fail.
+- Dependency upgrades/installations are applied and the complete local gate is green.
+- The candidate may be tagged as a technical preview; primary-branch integration
+  remains blocked while provider and clean-install gates are unavailable.
 - Public reports must not include personal paths, account details or private records.
 - Local session details, if present, are retained in ignored docs/LOCAL_SESSION_V061.md.
 
 ## Next action
-Run the release/installation gates against the current candidate, then request
-explicit publication approval. The 81-test terminal/TUI slice and the 720-test
-Python suite pass; frontend 207 unit tests, 33 runtime tests, typecheck, lint,
-build, 26 browser tests, 4 accessibility tests and npm audit pass.
+Seal the final evidence commit, push the candidate branch and technical-preview
+tag, then repair and republish the portfolio dependency baseline.
+The 81-test terminal/TUI slice and the 724-test Python suite pass; frontend 207
+unit tests, 36 runtime/privacy tests, typecheck, lint, build, 26 browser tests,
+4 accessibility tests and npm audit pass.
 The local `~/.local/bin/cortex` launcher points to this candidate only.
 Real-interface preflight is recorded in docs/live-acceptance-v061.md.
 The terminal startup interpreter bug is corrected locally; focused terminal and
