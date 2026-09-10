@@ -55,8 +55,9 @@ unit tests, 36 runtime/privacy tests, typecheck, lint, build, 26 browser tests,
 4 accessibility tests and npm audit pass.
 The local `~/.local/bin/cortex` launcher points to this candidate only.
 Real-interface preflight is recorded in docs/live-acceptance-v061.md.
-The terminal startup interpreter bug is corrected locally; focused terminal and
-TUI checks pass. The candidate extension now pairs in the real Chrome window;
+The terminal startup interpreter and full-screen quit paths are corrected; the
+focused terminal/TUI checks pass, and a fresh PTY launch now exits with code 0
+on `Ctrl-Q`. The candidate extension now pairs in the real Chrome window;
 one text message sent through Cortex was confirmed in 9.6 s and one screenshot
 transfer through the Cortex capture button completed as run
 `8fb810edbea04d32b6889045563d319f` with a 7.7 s observed UI latency. The

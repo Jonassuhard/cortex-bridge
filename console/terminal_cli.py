@@ -130,13 +130,16 @@ def main(
         except (ImportError, RuntimeError) as exc:
             print(f"Interface plein écran indisponible : {exc}\nRelance avec --plain pour le mode texte.", file=sys.stderr)
             return 1
-        return int(CortexTui(
+        result = CortexTui(
             client,
             open_ui=lambda: open_loopback_ui(
                 ui_url, platform=platform, process_run=process_run, browser_open=browser_open,
             ),
             start_backend=lambda: managed_start(client.base_url, process_run=process_run),
-        ).run())
+        ).run()
+        # Textual's ``App.run`` exits normally with ``None``.  Treat that as
+        # success instead of attempting ``int(None)`` after Ctrl-Q.
+        return 0 if result is None else int(result)
     if app_factory is None:
         from terminal_app import TerminalApp
 

@@ -291,6 +291,20 @@ class TerminalCliUnitTests(unittest.TestCase):
         self.assertTrue(callable(received["start_backend"]))
         self.assertFalse(received["offline"])
 
+    def test_full_screen_tui_quit_without_exit_value_is_success(self):
+        import terminal_cli
+        import tui
+
+        class FakeTui:
+            def __init__(self, _client, *, open_ui=None, start_backend=None, offline=False):
+                pass
+
+            def run(self):
+                return None
+
+        with mock.patch.object(tui, "CortexTui", FakeTui):
+            self.assertEqual(0, terminal_cli.main(["--url", "http://127.0.0.1:18420"]))
+
     def test_ui_validates_loopback_before_fixed_macos_open_argv(self):
         import terminal_cli
 
