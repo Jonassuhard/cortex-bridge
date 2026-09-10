@@ -401,7 +401,7 @@ private func ancestorChain(
     var current = element
     for _ in 0..<maximumDepth {
         guard let next = parent(current) else { break }
-        if chain.contains(where: { CFEqual($0, next) }) { break }
+        if chain.contains(where: { sameAXElement($0, next) }) { break }
         chain.append(next)
         current = next
     }
@@ -415,7 +415,7 @@ private func lowestCommonAncestor(
     let chains = elements.map { ancestorChain($0) }
     for candidate in ancestorChain(first) {
         if chains.dropFirst().allSatisfy({ chain in
-            chain.contains(where: { CFEqual($0, candidate) })
+            chain.contains(where: { sameAXElement($0, candidate) })
         }) {
             return candidate
         }
@@ -494,6 +494,18 @@ private func sameFrame(_ lhs: CGRect?, _ rhs: CGRect?) -> Bool {
         && abs(lhs.minY - rhs.minY) < 0.5
         && abs(lhs.width - rhs.width) < 0.5
         && abs(lhs.height - rhs.height) < 0.5
+}
+
+private func sameAXElement(_ lhs: AXUIElement, _ rhs: AXUIElement) -> Bool {
+    if CFEqual(lhs, rhs) { return true }
+    guard stringAttribute(lhs, kAXRoleAttribute as CFString)
+        == stringAttribute(rhs, kAXRoleAttribute as CFString) else {
+        return false
+    }
+    // Chromium can expose the same DOM ancestor through distinct AX proxy
+    // objects after a React attachment commit. Role + frame is the narrow
+    // fallback: it avoids treating unrelated controls as the same ancestor.
+    return sameFrame(frame(lhs), frame(rhs))
 }
 
 private func inspectTarget(
@@ -846,7 +858,7 @@ private func isExactTarget(_ inspection: TargetInspection) -> Bool {
 }
 
 private func sameWindow(_ lhs: AXUIElement, _ rhs: AXUIElement) -> Bool {
-    CFEqual(lhs, rhs)
+    sameAXElement(lhs, rhs)
 }
 
 private func scanCandidates(

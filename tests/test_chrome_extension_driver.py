@@ -1140,6 +1140,16 @@ class ChromeExtensionFactoryTest(unittest.TestCase):
             source,
         )
 
+    def test_native_helper_handles_distinct_ax_proxies_for_shared_ancestors(self) -> None:
+        source = (ROOT / "transport" / "macos_ax_send.swift").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("private func sameAXElement(", source)
+        self.assertIn("Role + frame is the narrow", source)
+        self.assertIn("chain.contains(where: { sameAXElement($0, candidate) })", source)
+        self.assertIn("sameAXElement(lhs, rhs)", source)
+
     def test_native_helper_treats_chatgpt_composer_labels_as_empty_placeholder(self) -> None:
         source = (ROOT / "transport" / "macos_ax_send.swift").read_text(
             encoding="utf-8"
