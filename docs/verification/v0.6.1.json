@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "release": "0.6.1",
-  "commit": "1fb082e42de336f1f4cdcbfe54a0f6ccccfab21b",
-  "generatedAt": "2026-09-10T14:52:32Z",
+  "commit": "60f41d5a004eae120868346f58cc9167da538d7d",
+  "generatedAt": "2026-09-10T16:49:19Z",
   "environment": {
     "os": "macOS 26.5.1 build 25F80, Apple silicon",
     "python": "3.13.12 (.venv)",
@@ -60,7 +60,7 @@
     "crashPoints": {
       "runs": 6,
       "passed": 6,
-      "sourceCommit": "1fb082e42de336f1f4cdcbfe54a0f6ccccfab21b",
+      "sourceCommit": "60f41d5a004eae120868346f58cc9167da538d7d",
       "command": ".venv/bin/python -m unittest -v tests.test_loop_mock.LoopTestCase.test_08_restart_recovery_requires_explicit_resume tests.test_missions_api.MissionsApiTestCase.test_08_restart_recovery_surfaced tests.test_playwright_driver.PlaywrightDriverTest.test_startup_failure_is_evicted_and_factory_recovers tests.test_transport_session_isolation.MissionPersistenceFailureTest.test_sqlite_update_failure_fails_mission_and_releases_exact_lease tests.test_transport_session_isolation.MissionRouteSessionIsolationTest.test_runtime_construction_failure_fails_creation_and_releases_lease tests.test_transport_session_isolation.MissionStopQuiescenceTest.test_cancel_keeps_slot_until_browser_and_background_task_quiesce",
       "evidenceArtifact": "docs/verification/v0.6.1-crash-points.txt",
       "points": [
@@ -172,7 +172,7 @@
     "scripts/verify-release-evidence.py": "60a162ab508fe6ef8b411b78524638857ffd5410ff1c2fbc5ac215a1ca1b9591",
     "tests/test_release_manifest.py": "fd9080e93bc9aa527ec17fc4554a7be20ad1fec2a7510bd92f74546b2aded004",
     "tests/test_chrome_extension_driver.py": "d0d3f3ea01585e117ff8e2eab5d1e67680ef0e6bd6f6da7109f2bfdca44fd5ef",
-    "docs/verification/v0.6.1-crash-points.txt": "a7f8acc55ac9628c8bd99a852dfb25fd676732817eeb17ef47534bc3f8f6ca5b"
+    "docs/verification/v0.6.1-crash-points.txt": "86ecd466ce90307b985eb9d7a6060ddab54e89fb36df4fc6440a4823703212f4"
   },
   "verdict": "RELEASE_BLOCKED_BY_PROVIDER_TERMS"
 }
