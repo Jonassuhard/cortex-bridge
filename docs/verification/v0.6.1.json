@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "release": "0.6.1",
-  "commit": "ffe9d65c1a67d0ba1ce44f967a0f3c2c82c72f4a",
-  "generatedAt": "2026-09-10T17:24:44Z",
+  "commit": "36af8901a98ebaae4b9820546535fbebc0daa6d5",
+  "generatedAt": "2026-09-10T17:26:01Z",
   "environment": {
     "os": "macOS 26.5.1 build 25F80, Apple silicon",
     "python": "3.13.12 (.venv)",
@@ -172,7 +172,7 @@
     "scripts/verify-release-evidence.py": "60a162ab508fe6ef8b411b78524638857ffd5410ff1c2fbc5ac215a1ca1b9591",
     "tests/test_release_manifest.py": "fd9080e93bc9aa527ec17fc4554a7be20ad1fec2a7510bd92f74546b2aded004",
     "tests/test_chrome_extension_driver.py": "d0d3f3ea01585e117ff8e2eab5d1e67680ef0e6bd6f6da7109f2bfdca44fd5ef",
-    "docs/verification/v0.6.1-crash-points.txt": "86ecd466ce90307b985eb9d7a6060ddab54e89fb36df4fc6440a4823703212f4"
+    "docs/verification/v0.6.1-crash-points.txt": "751ed3b326d1e3a8f028ef8bf9a1f54a67503d9d098351630e45ec87e03c5295"
   },
   "verdict": "RELEASE_BLOCKED_BY_PROVIDER_TERMS"
 }
