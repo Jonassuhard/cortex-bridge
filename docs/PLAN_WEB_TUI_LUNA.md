@@ -21,7 +21,7 @@ locked and packaged for the candidate. The execution status below distinguishes
 what is implemented from the remaining live gates.
 
 **Spec:** sections 1–5 of this document. Sections 6–11 are the implementation and
-acceptance plan. Authored 2026-09-10, inspected candidate commit `61bc43d`.
+acceptance plan. Authored 2026-09-10, inspected candidate commit `7219fe4`.
 
 ## Execution status — 2026-09-10
 
