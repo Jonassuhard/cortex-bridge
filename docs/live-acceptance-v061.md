@@ -27,7 +27,7 @@ reported as executor-model diversity. Freebuff is not an integrated executor.
 | Terminal regression suite | PASS | 82 focused terminal/TUI tests using the project virtualenv |
 | Full backend suite, initial run | FAIL | 708 tests, three uninstall failures: fixture tests collided with the active QA listener |
 | Installer fixture correction | PASS | Tests now use an allocated loopback port; original three cases and all 37 installer tests pass while the QA app remains running; no production guard changed |
-| Full backend suite, after corrections | PASS | 710 tests in 165.449 s; includes terminal/driver/onboarding/installer tests, not additional independent cases |
+| Full backend suite, after corrections | PASS | 725 tests in the final local run; includes terminal/driver/onboarding/installer tests, not additional independent cases |
 | Cortex GUI opens | PASS | Real Chrome, candidate static UI and isolated backend |
 | Extension pairing | PASS, real replay | Candidate extension paired in the same Chrome window; backend reported protocol version 2 compatible |
 | GUI connection check | PASS, real replay | Classic `/c/...` ChatGPT tab exposed a composer; the probe returned no blocker |
@@ -64,7 +64,9 @@ automation cannot access extension management in this environment. Loading or
 reloading the candidate extension requires a manual user action; no alternative
 automation path is used to bypass that restriction.
 
-Documentation checks: 128 link checks passed, including all 48 external URLs.
+Documentation checks: 132 offline link checks passed; 50 external URLs were
+intentionally skipped by the offline verifier and are not claimed as live
+reachable.
 The public-tree privacy scan passed on 417 files and 90 images. Gitleaks found
 no secrets in the current tracked diff or this new report. The mission diagram
 was regenerated and visually inspected; no new model benchmark was invented.
@@ -75,8 +77,9 @@ the manifest verdict remains `RELEASE_BLOCKED_BY_PROVIDER_TERMS` because live
 provider and clean-install evidence are not available.
 
 One worker run using system Python timed out in the PTY Ctrl-C test. A fresh
-project-virtualenv run passed all 12 CLI tests, followed by all 73 terminal
-tests. The earlier timeout is not erased or labelled pre-existing without proof.
+project-virtualenv run passed the focused terminal/TUI checks, including the
+real PTY path. The earlier timeout is not erased or labelled pre-existing
+without proof.
 
 ## Remaining release evidence
 

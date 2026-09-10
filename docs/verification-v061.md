@@ -53,7 +53,7 @@ current result and remaining manual gates.
 | Release manifest | PASS, blocked verdict | `docs/verification/v0.6.1.json` validates as `RELEASE_BLOCKED_BY_PROVIDER_TERMS`; clean install remains not run |
 | Static runtime layout | PASS | 4 checks from scripts/verify-runtime.py --json |
 | Public privacy | PASS | 408 files and 90 images after the rebuilt export; internal notes excluded |
-| Documentation links | PASS | 127 offline checks rerun; 48 external links checked in the preceding publication run |
+| Documentation links | PASS | 132 offline checks in the final run; 50 external URLs intentionally skipped by offline mode |
 | Secrets | PASS | Three unpublished ancestor commits and staged diff scanned with Gitleaks |
 | Live ChatGPT and provider mission | UNCLEAR | Not run for these bytes |
 | Clean user installation and native Windows | UNCLEAR | Not run |

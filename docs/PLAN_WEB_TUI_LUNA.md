@@ -58,7 +58,7 @@ any authorized publication to `main`.
 | Executor selection | `console/missions.py` rejects non-deterministic `executor_kind`; legacy primary/fallback fields are ignored | Real supported adapter integration; a selector alone is insufficient |
 | Freebuff | Installed local launcher delegates to a cached binary | Verify supported integration surface, license/source availability, cancellation and result protocol; do not claim source audit |
 | Connection | False quota, Settings/Work and startup fixes committed | Replay loaded extension against corrected backend; distinguish pairing from readiness |
-| Tests | Prior run: 710 Python, 138 extension; frontend baseline: 207 unit, 36 runtime, 26 browser + 1 skip | Re-run affected tests on new bytes; complete real user workflows |
+| Tests | Final local run: 725 Python, 138 extension; frontend: 207 unit, 36 runtime, 26 browser + 1 skip | Keep the local gates green; complete the remaining real user workflows |
 | Release | Missing 0.6.1 evidence manifest; no completed new multi-model missions | Clean macOS lifecycle, real evidence and main publication |
 
 The request is coherent, but contains three deliverables: usability, transport
