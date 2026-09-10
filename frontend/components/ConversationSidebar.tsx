@@ -50,6 +50,12 @@ function formatTimestamp(value?: string): string {
     .replace(/\.$/u, "");
 }
 
+function conversationCategory(conversation: ConversationSummary): string {
+  if (conversation.pinned) return "Épinglée";
+  if (conversation.project_id && conversation.project_title) return `Projet · ${conversation.project_title}`;
+  return "Récente";
+}
+
 function ConversationRow({ conversation, selectedKey, onSelect }: {
   conversation: ConversationSummary;
   selectedKey: string | null;
@@ -67,6 +73,7 @@ function ConversationRow({ conversation, selectedKey, onSelect }: {
         <span className="conversation-title-line"><strong>{conversation.title || "Conversation sans titre"}</strong><time dateTime={conversation.timestamp}>{formatTimestamp(conversation.timestamp)}</time></span>
         <span className="conversation-preview">{conversation.preview || "Ouvrir la conversation"}</span>
         <span className="conversation-subline">
+          <span className="conv-type">{conversationCategory(conversation)}</span>
           {conversation.sync_state === "stale" && <span className="conv-sync-state" title={conversation.sync_error || "Synchronisation en échec"}>Cache obsolète</span>}
           {typeof conversation.message_count === "number" && <span className="conv-count">{conversation.message_count} message{conversation.message_count > 1 ? "s" : ""}</span>}
         </span>

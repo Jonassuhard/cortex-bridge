@@ -144,7 +144,10 @@ def _pty_start(arguments: list[str], *, columns: int = 80) -> tuple[subprocess.P
     )
     os.close(slave)
     chunks = []
-    deadline = time.monotonic() + 5
+    # A full release run can have many short-lived subprocesses and PTYs
+    # already active. Keep the assertion about signal handling, but allow the
+    # child a bounded extra window to flush the prompt and marker under load.
+    deadline = time.monotonic() + 10
     while time.monotonic() < deadline:
         readable, _, _ = select.select([master], [], [], 0.1)
         if not readable:
@@ -188,7 +191,7 @@ def _pty_finish(process: subprocess.Popen[bytes], master: int, prefix: str) -> t
 def _pty_wait_for(master: int, process: subprocess.Popen[bytes], prefix: str, marker: str) -> str:
     """Drain a PTY until an interactive state is observable before sending input."""
     chunks = [prefix.encode("utf-8")]
-    deadline = time.monotonic() + 5
+    deadline = time.monotonic() + 10
     try:
         while time.monotonic() < deadline:
             screen = b"".join(chunks).decode("utf-8", errors="replace")

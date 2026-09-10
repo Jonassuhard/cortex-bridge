@@ -27,19 +27,19 @@ reported as executor-model diversity. Freebuff is not an integrated executor.
 | Installer fixture correction | PASS | Tests now use an allocated loopback port; original three cases and all 37 installer tests pass while the QA app remains running; no production guard changed |
 | Full backend suite, after corrections | PASS | 710 tests in 165.449 s; includes terminal/driver/onboarding/installer tests, not additional independent cases |
 | Cortex GUI opens | PASS | Real Chrome, candidate static UI and isolated backend |
-| Extension pairing | PASS, connection only | GUI changed to paired; this alone does not prove ChatGPT readiness |
-| GUI connection check | FAIL | Reported a rate limit while the selected tab had a Settings modal with generic usage-limit text |
+| Extension pairing | PASS, real replay | Candidate extension paired in the same Chrome window; backend reported protocol version 2 compatible |
+| GUI connection check | PASS, real replay | Classic `/c/...` ChatGPT tab exposed a composer; the probe returned no blocker |
+| GUI text delivery | PASS, one real check | Cortex sent `Réponds uniquement CORTEX-LIVE-01`; the UI showed pending, then confirmed delivery and `CORTEX-LIVE-01` in 9.6 s |
 | Planner model discovery | UNCLEAR | Terminal showed only “current visible model”; no two model identities established |
 | Scenario G | UNCLEAR, not executed | Composer disabled during connection preflight |
 | Scenario T | UNCLEAR, not executed | No ready conversation or verified planner selection |
 | Freebuff participation | UNCLEAR, no mission test | GLM 5.3 Flash session opened; capability inquiry only, interrupted without running Cortex |
 | Fresh macOS installation | UNCLEAR, not executed | An isolated runtime on an existing Mac is not a fresh OS/account |
 
-The GUI rate-limit screenshot was captured in the interactive session. It
-documents Cortex's message, not a verified provider quota. Read-only inspection
-of the selected ChatGPT page showed Settings open with ordinary usage-limit
-wording, explaining a possible false positive from the global text detector.
-No limit, challenge or login screen was bypassed, and no prompt was sent.
+The earlier GUI rate-limit screenshot remains historical diagnostic evidence. It
+documents Cortex's message, not a verified provider quota. The later replay used
+the classic conversation route after reloading the paired extension; no limit,
+challenge or login screen was bypassed.
 
 The first detector correction passed 135 extension fixtures and 10 onboarding
 tests. Independent review then found missing immediate handling of `ui_blocker`

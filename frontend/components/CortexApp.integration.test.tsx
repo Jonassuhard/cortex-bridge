@@ -1164,7 +1164,7 @@ describe("CortexApp conversation integration", () => {
     expect(screen.getAllByText("ChatGPT").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Exécuteur").length).toBeGreaterThan(0);
     expect(screen.getByTitle("Statut de la connexion ChatGPT")).toHaveTextContent("Connecté");
-    expect(screen.getByTitle("Statut de l'agent exécutif local")).toHaveTextContent("Disponible");
+    expect(screen.getByTitle("Statut de l'agent exécutif local")).toHaveTextContent("Candidat détecté");
 
     await user.click(screen.getByRole("button", { name: /Conversation A/ }));
     expect(inspector.getByText("Composant mission A")).toBeInTheDocument();

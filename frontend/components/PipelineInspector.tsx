@@ -204,7 +204,8 @@ export function PipelineInspector({
       <section className="inspector-section runtime-summary">
         <div className="inspector-section-head"><div><span className="panel-eyebrow">Système local</span><h3>Exécution locale</h3></div></div>
         <dl>
-          <div><dt>Exécuteur disponible</dt><dd className={runtime.executor_available ? "good" : "danger"}>{runtime.executor_available ? "Oui" : "Non"}</dd></div>
+          <div><dt>Candidat exécuteur détecté</dt><dd className={runtime.executor_available ? "good" : "danger"}>{runtime.executor_available ? "Oui" : "Non"}</dd></div>
+          <div><dt>Exécuteur vérifié</dt><dd className={runtime.executor_verified ? "good" : "danger"}>{runtime.executor_verified ? "Oui" : "Non — aucun run confirmé"}</dd></div>
           <div><dt>Modèle candidat</dt><dd>{runtime.primary.name}</dd></div>
           <div><dt>Exécuteur utilisé</dt><dd>{executorDisplay(pipeline.runtime_execution)}</dd></div>
           <div><dt>Modèle réellement utilisé</dt><dd>{pipeline.runtime_execution.executor_model_used || "Aucun"}</dd></div>

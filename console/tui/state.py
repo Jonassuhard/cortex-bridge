@@ -13,7 +13,7 @@ class TuiState:
     connection: str = "inconnu"
     executor: str = "inconnu"
     planner_label: str = "modèle ChatGPT actuel"
-    executor_label: str = "Outils locaux vérifiés"
+    executor_label: str = "Aucun exécuteur observé"
     workspace: str = "non sélectionné"
     conversation_url: str = "https://chatgpt.com"
     conversation_title: str = "Nouvelle conversation"

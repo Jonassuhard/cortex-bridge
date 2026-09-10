@@ -205,13 +205,33 @@ def _installed() -> bool:
     return (paths.home / "venv").is_dir() and _owned_manifest_path().is_file()
 
 
+def _runtime_lock_hash() -> str:
+    """Return the exact dependency lock hash recorded for managed runtimes."""
+    return _sha256_file(ROOT / "requirements.lock")
+
+
+def _runtime_needs_update() -> bool:
+    """Detect an older managed venv without importing from the host Python.
+
+    Older Cortex installs predate the Textual client and have no lock digest in
+    their ownership manifest.  Treat those installs as an owned, replaceable
+    runtime update instead of reporting ``already_installed`` while ``doctor``
+    correctly reports a missing dependency.
+    """
+    manifest = _load_owned_manifest()
+    if not manifest:
+        return False
+    return manifest.get("requirements_sha256") != _runtime_lock_hash()
+
+
 def build_install_plan(*, rebuild_ui: bool = False, ollama_model: str | None = None) -> dict[str, Any]:
     paths = build_paths()
     staging = paths.home / STAGING_NAME
     python = os.environ.get("PYTHON_BIN") or sys.executable
     commands: list[dict[str, Any]] = []
     human_pauses = _human_pauses()
-    if not _installed():
+    replacing_owned_venv = _installed() and _runtime_needs_update()
+    if not _installed() or replacing_owned_venv:
         staged_python = staging / "venv" / "bin" / "python"
         commands.extend([
             _command(
@@ -288,6 +308,7 @@ def build_install_plan(*, rebuild_ui: bool = False, ollama_model: str | None = N
         "target": str(paths.home),
         "chrome_extension_path": str((ROOT / "chrome-extension").resolve()),
         "commands": commands,
+        "replaces_owned_venv": replacing_owned_venv,
         "disk_bytes": sum(command["disk_bytes"] for command in commands),
         "human_pauses": human_pauses,
         "rollback": "Only the owned staging directory and manifest-listed resources may be removed.",
@@ -455,6 +476,7 @@ def _load_install_transaction(staging: Path, home: Path) -> dict[str, Any]:
         or payload.get("home") != str(home)
         or not isinstance(payload.get("plan_hash"), str)
         or not isinstance(payload.get("creates_venv"), bool)
+        or not isinstance(payload.get("replaces_venv", False), bool)
     ):
         raise RuntimeError("installer recovery journal is invalid")
     return payload
@@ -568,7 +590,26 @@ def _recover_interrupted_install(home: Path) -> None:
             rollback_slot.unlink()
             _fsync_directory(target.parent)
 
-    if transaction["creates_venv"]:
+    if transaction["creates_venv"] and transaction.get("replaces_venv"):
+        venv_state = transaction.get("venv")
+        target_venv = home / "venv"
+        backup = Path(str((venv_state or {}).get("backup", "")))
+        if (
+            not isinstance(venv_state, dict)
+            or venv_state.get("target") != str(target_venv)
+            or backup != staging / ".venv.previous"
+        ):
+            raise RuntimeError("installer recovery venv paths are invalid")
+        if backup.exists() or backup.is_symlink():
+            if backup.is_symlink() or not backup.is_dir():
+                raise RuntimeError("installer recovery venv backup is unsafe")
+            if target_venv.is_symlink() or (target_venv.exists() and not target_venv.is_dir()):
+                raise RuntimeError("installer recovery venv target is unsafe")
+            if target_venv.exists():
+                shutil.rmtree(target_venv)
+            os.replace(backup, target_venv)
+            _fsync_directory(home)
+    elif transaction["creates_venv"]:
         staged_venv = staging / "venv"
         target_venv = home / "venv"
         if not staged_venv.exists() and target_venv.exists():
@@ -611,10 +652,23 @@ def apply_install(plan: dict[str, Any], approved_hash: str) -> dict[str, Any]:
         creates_venv = any(
             command["id"] == "create_venv" for command in plan["commands"]
         )
+        replaces_venv = bool(plan.get("replaces_owned_venv")) and creates_venv
         staged_venv = staging / "venv"
         target_venv = paths.home / "venv"
+        venv_backup = staging / ".venv.previous"
         if creates_venv and (target_venv.exists() or target_venv.is_symlink()):
-            raise RuntimeError("target venv already exists and is not owned by this plan")
+            if not replaces_venv:
+                raise RuntimeError("target venv already exists and is not owned by this plan")
+            manifest = _load_owned_manifest()
+            resources = manifest.get("resources", []) if manifest else []
+            if (
+                not manifest
+                or manifest.get("owner") != "cortex-bridge"
+                or str(target_venv) not in resources
+                or target_venv.is_symlink()
+                or not target_venv.is_dir()
+            ):
+                raise RuntimeError("target venv is not an owned directory and cannot be replaced")
 
         install_dir = paths.home / "install"
         if install_dir.is_symlink() or (install_dir.exists() and not install_dir.is_dir()):
@@ -635,8 +689,14 @@ def apply_install(plan: dict[str, Any], approved_hash: str) -> dict[str, Any]:
             "home": str(paths.home),
             "plan_hash": approved_hash,
             "creates_venv": creates_venv,
+            "replaces_venv": replaces_venv,
             "helper": None,
         }
+        if replaces_venv:
+            transaction["venv"] = {
+                "target": str(target_venv),
+                "backup": str(venv_backup),
+            }
         if compile_command is not None:
             transaction["helper"] = {
                 "target": str(helper_target),
@@ -666,7 +726,7 @@ def apply_install(plan: dict[str, Any], approved_hash: str) -> dict[str, Any]:
             if creates_venv:
                 if staged_venv.is_symlink() or not staged_venv.is_dir():
                     raise RuntimeError("venv command did not produce the staged venv")
-                if target_venv.exists() or target_venv.is_symlink():
+                if (target_venv.exists() or target_venv.is_symlink()) and not replaces_venv:
                     raise RuntimeError("target venv appeared during installation")
 
             new_helper_hash: str | None = None
@@ -685,6 +745,11 @@ def apply_install(plan: dict[str, Any], approved_hash: str) -> dict[str, Any]:
                 _durable_json_write(staging / TRANSACTION_NAME, transaction)
 
             if creates_venv:
+                if replaces_venv:
+                    if venv_backup.exists() or venv_backup.is_symlink():
+                        raise RuntimeError("installer venv backup appeared during installation")
+                    os.replace(target_venv, venv_backup)
+                    _fsync_directory(staging)
                 os.replace(staged_venv, target_venv)
                 _fsync_directory(paths.home)
 
@@ -736,6 +801,7 @@ def apply_install(plan: dict[str, Any], approved_hash: str) -> dict[str, Any]:
                 "owner": "cortex-bridge",
                 "version": current_version(),
                 "plan_hash": approved_hash,
+                "requirements_sha256": _runtime_lock_hash(),
                 "resources": resources,
                 "chrome_extension_path": str((ROOT / "chrome-extension").resolve()),
             }

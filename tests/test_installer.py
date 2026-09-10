@@ -587,6 +587,48 @@ class InstallerTest(unittest.TestCase):
             first_calls,
         )
 
+    def test_reinstall_repairs_an_older_owned_runtime_without_silent_overwrite(self):
+        self.approved_install()
+        manifest_path = self.cortex_home / "install" / "owned.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest.pop("requirements_sha256")
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        old_venv_inode = (self.cortex_home / "venv").stat().st_ino
+
+        plan = self.dry_plan()
+        self.assertTrue(plan["replaces_owned_venv"])
+        self.assertEqual(
+            [command["id"] for command in plan["commands"] if command["id"] in {"create_venv", "install_python"}],
+            ["create_venv", "install_python"],
+        )
+        result = self.run_script(
+            "install.sh", "--approve-plan", plan["plan_hash"], "--json"
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotEqual((self.cortex_home / "venv").stat().st_ino, old_venv_inode)
+        repaired = json.loads(manifest_path.read_text(encoding="utf-8"))
+        self.assertEqual(repaired["requirements_sha256"], hashlib.sha256(
+            (ROOT / "requirements.lock").read_bytes()
+        ).hexdigest())
+        self.assertFalse((self.cortex_home / ".install-staging").exists())
+
+    def test_runtime_repair_refuses_a_venv_missing_from_owned_resources(self):
+        self.approved_install()
+        manifest_path = self.cortex_home / "install" / "owned.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest.pop("requirements_sha256")
+        manifest["resources"].remove(str(self.cortex_home.resolve() / "venv"))
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        plan = self.dry_plan()
+
+        result = self.run_script(
+            "install.sh", "--approve-plan", plan["plan_hash"], "--json"
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("owned directory", result.stdout)
+        self.assertTrue((self.cortex_home / "venv").is_dir())
+        self.assertFalse(self.runner_log.read_text(encoding="utf-8").count("create_venv") > 1)
+
     def test_interruption_rolls_back_only_staging(self):
         self.cortex_home.mkdir(parents=True)
         foreign = self.cortex_home / "keep-me.txt"

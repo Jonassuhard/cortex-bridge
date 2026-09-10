@@ -34,15 +34,18 @@ The coordinator has executed the first implementation slice in this candidate:
   bounded 50-item conversation list, background API workers, draft preservation,
   explicit send acknowledgement and a connect/retry action.
 - The focused terminal/TUI slice is 81 passing tests. The complete Python suite
-  is 718 passing tests. Frontend checks are 207 unit/runtime tests, typecheck,
+  is 720 passing tests. Frontend checks are 207 unit/runtime tests, typecheck,
   lint contract, and static build. These are fixture/local proofs, not signed-in
   ChatGPT delivery or a clean user installation.
 - No model-backed executor was invented: the TUI exposes the deterministic local
-  tools as the only verified executor until an adapter passes the contract.
+  tools as the only verified executor until an adapter passes the contract. A
+  healthy Ollama/model pair is a candidate signal only; the UI says so until a
+  real executor run records its model and kind.
 
-Open gates remain: fresh-shell global installation, live Chrome round-trip,
-real file/screenshot and mission runs, clean lifecycle on an isolated macOS
-home, and any authorized publication to `main`.
+The live Chrome pairing and one real text delivery now pass in the candidate
+profile. Open gates remain: fresh-shell installation on a clean home, real
+file/screenshot and mission runs, multi-conversation signed-in isolation, and
+any authorized publication to `main`.
 
 ## 1. Actual starting point and assessment
 

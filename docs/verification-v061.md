@@ -15,7 +15,7 @@ The candidate now includes the full-screen terminal slice described in
 | Check | Result | Evidence and limit |
 | --- | --- | --- |
 | Terminal/TUI focused slice | PASS, 81 tests | Textual headless smoke, CLI dispatch and PTY compatibility against synthetic HTTP fixtures |
-| Complete Python suite | PASS, 718 tests in 170.838 s | Local isolated fixtures; no signed-in ChatGPT delivery |
+| Complete Python suite | PASS, 720 tests in 168.354 s | Local isolated fixtures; no signed-in ChatGPT delivery |
 | Frontend unit/runtime | PASS, 207 tests | Synthetic React/runtime data |
 | Frontend typecheck/lint/build | PASS | `corepack npm@11.18.0`, static Next.js build |
 | Frontend browser/a11y | PASS, 26 E2E + 4 accessibility; 1 optional guide skipped | Static synthetic export, no authenticated account |
@@ -23,9 +23,11 @@ The candidate now includes the full-screen terminal slice described in
 | Global command convenience | PASS locally | `~/.local/bin/cortex` points to this candidate only; not a portable release installer |
 
 The TUI intentionally exposes deterministic local tools as the only verified
-executor. No model-backed or Freebuff adapter is claimed. Live Chrome round-trip,
-attachments, screenshot transfer, missions, clean installation lifecycle and
-main integration remain open gates.
+executor. No model-backed or Freebuff adapter is claimed. A healthy Ollama/model
+pair is shown as a candidate until a real run records the executor kind and
+model used. Live Chrome pairing and one text round-trip were observed after this
+table was written; attachments, screenshot transfer, missions, clean
+installation lifecycle and main integration remain open gates.
 
 ## Published source baseline (dd4ad55)
 
@@ -126,6 +128,31 @@ The canonical full release gate remains `scripts/test-all.sh`. This update
 does not reseal or rewrite any historical release manifest as current READY
 evidence. The existing backend suite emitted an unclosed-SQLite
 ResourceWarning; it was not counted as a passing security or cleanup check.
+
+## Fresh live observation — 2026-09-10
+
+Using the candidate UI in the same Chrome profile as the signed-in ChatGPT tab:
+
+- Extension WebSocket pairing: **PASS** — status returned `paired`, protocol
+  version 2 compatible with the backend, no pairing token exposed.
+- Classic ChatGPT readiness probe: **PASS** — the selected `chatgpt.com/c/...`
+  tab exposed a composer and no Settings/Work blocker.
+- Text delivery: **PASS** — the message `Réponds uniquement CORTEX-LIVE-01`
+  was entered through Cortex, remained visible as pending, then changed to
+  confirmed delivery with the response `CORTEX-LIVE-01` and a measured 9.6 s
+  response. This is a single real conversation check, not a provider benchmark.
+- Executor verification: **UNCLEAR** — the runtime reports an available
+  Ollama candidate but no completed executor-backed mission, so the UI correctly
+  keeps the executor unverified.
+
+The live observation does not authorize a READY verdict. It does not cover
+attachments, screenshots, two-conversation isolation in a signed-in browser,
+third-conversation refusal, missions, or a clean-machine lifecycle.
+
+The fresh `./scripts/test-all.sh` gate also completed all functional, browser,
+runtime, privacy and link checks, then stopped at the release-evidence step with
+`invalid_json manifest` because `docs/verification/v0.6.1.json` is intentionally
+absent. This is a release blocker, not a test failure to be hidden.
 
 ## Evidence not produced
 

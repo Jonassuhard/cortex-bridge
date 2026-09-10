@@ -391,10 +391,16 @@ export function CortexApp() {
               ? "waiting"
               : "disconnected"
         : pipelineState === "unknown" ? transportHealth : pipelineState,
-      agentState: runtime.executor_available ? "available" : "unavailable",
+      // A detected Ollama/model pair is only a candidate. Keep the rail
+      // honest until the backend has observed a real executor run.
+      agentState: runtime.executor_verified || ["deterministic", "ollama"].includes(runtime.executor_kind)
+        ? "available"
+        : runtime.executor_available
+          ? "degraded"
+          : "unavailable",
       transportLatencyMs: transportComponent?.latency_ms ?? null,
     };
-  }, [chatGPTConnection, pipeline, runtime.executor_available, transportHealth]);
+  }, [chatGPTConnection, pipeline, runtime.executor_available, runtime.executor_kind, runtime.executor_verified, transportHealth]);
 
   const notify = useCallback((message: string) => {
     setToast(message);

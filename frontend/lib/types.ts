@@ -180,6 +180,8 @@ export interface RuntimeStatus extends RuntimeTruth {
   storage_status: string;
   primary: RuntimeModel;
   executor_available: boolean;
+  /** Candidate availability is not proof that an executor has run. */
+  executor_verified?: boolean;
 }
 
 export interface TransportStatus {

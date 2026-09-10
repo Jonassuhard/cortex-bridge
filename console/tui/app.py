@@ -86,7 +86,7 @@ class CortexTui(App if App is not None else object):
         with Container(id="root"):
             with Horizontal(id="status"):
                 yield Static("ChatGPT\nÉtat inconnu", id="chat-status", classes="status status-wait", markup=False)
-                yield Static("Exécuteur\nOutils locaux vérifiés", id="executor-status", classes="status status-wait", markup=False)
+                yield Static("Exécuteur\nAucun exécuteur observé", id="executor-status", classes="status status-wait", markup=False)
             with Horizontal(id="body"):
                 with Vertical(id="sidebar"):
                     yield Label("CONVERSATIONS", classes="section-title", markup=False)
@@ -100,7 +100,7 @@ class CortexTui(App if App is not None else object):
                     yield TextArea(id="composer", language=None, show_line_numbers=False)
                     with Horizontal(id="toolbar"):
                         yield Select([("Modèle ChatGPT actuel", "current")], value="current", id="planner-select", allow_blank=False)
-                        yield Select([("Outils locaux vérifiés", "deterministic")], value="deterministic", id="executor-select", allow_blank=False)
+                        yield Select([("Mode déterministe · outils locaux", "deterministic")], value="deterministic", id="executor-select", allow_blank=False)
                         yield Button("Envoyer", id="send", variant="success")
                         yield Button("Connecter", id="connect")
         yield Footer()
@@ -137,7 +137,13 @@ class CortexTui(App if App is not None else object):
             self.state.connection = "indisponible"
             self.state.delivery = safe_text(payload["error"])
         status = payload.get("status") or {}
-        self.state.executor = "disponible" if status.get("executor_available") else "indisponible"
+        executor_kind = status.get("executor_kind")
+        if status.get("executor_verified") or executor_kind in {"deterministic", "ollama"}:
+            self.state.executor = "prêt"
+        elif status.get("executor_available"):
+            self.state.executor = "candidat détecté"
+        else:
+            self.state.executor = "indisponible"
         pipeline = payload.get("pipeline") or {}
         components = pipeline.get("components") or []
         transport = next((row for row in components if row.get("id") == "transport"), {})
@@ -167,7 +173,15 @@ class CortexTui(App if App is not None else object):
         view.clear()
         for index, row in enumerate(self.state.conversations[:50]):
             title = safe_text(row.get("title") or row.get("name") or "Sans titre")
-            view.mount(ListItem(Label(title, markup=False), id=f"conversation-{index}"))
+            if row.get("pinned"):
+                category = "Épinglée"
+            elif row.get("project_id") and row.get("project_title"):
+                category = f"Projet · {safe_text(row.get('project_title'))}"
+            else:
+                category = "Récente"
+            count = row.get("message_count")
+            count_label = f" · {count} messages" if isinstance(count, int) and count >= 0 else ""
+            view.mount(ListItem(Label(f"{title} · {category}{count_label}", markup=False), id=f"conversation-{index}"))
 
     def action_new_conversation(self) -> None:
         self.state.conversation_url = "https://chatgpt.com"
@@ -238,7 +252,7 @@ class CortexTui(App if App is not None else object):
             self.state.planner_label = str(event.value)
             self.state.delivery = "Modèle sélectionné pour les prochains messages"
         elif event.select.id == "executor-select" and event.value not in (Select.BLANK, None):
-            self.state.executor_label = str(event.value)
+            self.state.executor_label = "Mode déterministe · outils locaux" if event.value == "deterministic" else str(event.value)
             self.state.delivery = "Exécuteur vérifié sélectionné"
 
     def _submit_text(self) -> None:

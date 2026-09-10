@@ -25,6 +25,12 @@ The installer owns only its `CORTEX_HOME` resources. It never uses `sudo`,
 downloads an Ollama model unless that option is explicitly included in the
 reviewed plan, and never replaces a foreign process.
 
+On an existing managed installation, the plan compares the SHA-256 of
+`requirements.lock` with the ownership manifest. A stale owned runtime is
+recreated in staging, the previous virtualenv is kept as a rollback slot, and
+the manifest is updated only after the replacement is complete. A venv missing
+from the manifest is treated as foreign and is never overwritten.
+
 ## Launch
 
 In a checkout, the shortest command is:
@@ -47,8 +53,10 @@ scripts/cortex --plain
 
 The package declares a `cortex` entry point. A distribution installer may expose
 that entry point in a user-selected virtual environment; this repository does
-not modify `PATH` or silently install a global command. The local developer
-launcher is therefore the only command proven in this candidate.
+not modify `PATH` or silently install a global command. If a user-managed
+launcher is already present in `~/.local/bin`, a fresh shell can run `cortex`
+directly; verify it with `command -v cortex` and `cortex --version`. The
+repository launcher remains the portable checkout-local path.
 
 ## Chrome connection pause
 

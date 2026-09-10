@@ -69,6 +69,9 @@ describe("ConversationSidebar", () => {
     expect(screen.getByRole("heading", { name: "Atlas" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Récentes" })).toBeInTheDocument();
     expect(screen.getAllByText("Épinglée réelle")).toHaveLength(1);
+    expect(screen.getByText("Projet · Atlas")).toBeInTheDocument();
+    expect(screen.getAllByText("Récente réelle")).toHaveLength(1);
+    expect(screen.getAllByText("Récente")).toHaveLength(1);
     expect(screen.queryByText("Non synchronisé")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Nouvelle mission" })).not.toBeInTheDocument();
   });
