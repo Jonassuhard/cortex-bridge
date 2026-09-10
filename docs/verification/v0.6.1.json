@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "release": "0.6.1",
-  "commit": "6f44bd9774a8889aa8e21716627d64a547434f50",
-  "generatedAt": "2026-09-10T17:01:42Z",
+  "commit": "4b5dac8a6bed33f0f32dc6cc1e56560a80d4baef",
+  "generatedAt": "2026-09-10T17:06:53Z",
   "environment": {
     "os": "macOS 26.5.1 build 25F80, Apple silicon",
     "python": "3.13.12 (.venv)",
@@ -60,7 +60,7 @@
     "crashPoints": {
       "runs": 6,
       "passed": 6,
-      "sourceCommit": "6f44bd9774a8889aa8e21716627d64a547434f50",
+      "sourceCommit": "4b5dac8a6bed33f0f32dc6cc1e56560a80d4baef",
       "command": ".venv/bin/python -m unittest -v tests.test_loop_mock.LoopTestCase.test_08_restart_recovery_requires_explicit_resume tests.test_missions_api.MissionsApiTestCase.test_08_restart_recovery_surfaced tests.test_playwright_driver.PlaywrightDriverTest.test_startup_failure_is_evicted_and_factory_recovers tests.test_transport_session_isolation.MissionPersistenceFailureTest.test_sqlite_update_failure_fails_mission_and_releases_exact_lease tests.test_transport_session_isolation.MissionRouteSessionIsolationTest.test_runtime_construction_failure_fails_creation_and_releases_lease tests.test_transport_session_isolation.MissionStopQuiescenceTest.test_cancel_keeps_slot_until_browser_and_background_task_quiesce",
       "evidenceArtifact": "docs/verification/v0.6.1-crash-points.txt",
       "points": [
