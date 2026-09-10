@@ -38,9 +38,18 @@
 - Public reports must not include personal paths, account details or private records.
 - Local session details, if present, are retained in ignored docs/LOCAL_SESSION_V061.md.
 
+## Current verification state
+The final evidence commit is sealed and the candidate branch is pushed at
+`00492caa5ea3944c968437b959cf440ec12122fe`. The release-evidence validator and
+the complete local suite pass. The candidate is ready for review as a technical
+preview; `main` is intentionally not integrated while provider-backed and
+clean-install gates remain unresolved.
+
 ## Next action
-Seal the final evidence commit, push the candidate branch and technical-preview
-tag, then repair and republish the portfolio dependency baseline.
+Open or update the candidate review, then rerun the blocked live gates only
+when a permitted provider-backed environment and a clean macOS installation
+are available. Do not claim a production-ready release before those gates have
+fresh evidence.
 The 81-test terminal/TUI slice and the 724-test Python suite pass; frontend 207
 unit tests, 36 runtime/privacy tests, typecheck, lint, build, 26 browser tests,
 4 accessibility tests and npm audit pass.
@@ -54,7 +63,9 @@ transfer through the Cortex capture button completed as run
 native helper correction is covered by nine focused driver checks and a Swift
 permission check. The runtime still reports the local Ollama engine as a
 candidate, not a verified executor. A SQLite ResourceWarning remains observed.
-Live arbitrary-file, mission, two-conversation isolation, clean-install,
-release-evidence and main-integration gates remain open. See
+Live arbitrary-file, mission, two-conversation isolation, clean-install and
+main-integration gates remain open. The recent Cortex-only file attempt failed
+closed with `PRE_DELIVERY_NOT_READY` because the ChatGPT composer was not clean
+and stable; no file delivery is claimed. See
 docs/verification-v061.md and docs/PLAN_WEB_TUI_LUNA.md. Keep dependency changes
 in this candidate PR; do not merge while the remaining release gates are incomplete.
