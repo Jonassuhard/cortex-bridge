@@ -16,6 +16,7 @@ The candidate now includes the full-screen terminal slice described in
 | --- | --- | --- |
 | Terminal/TUI focused slice | PASS, 82 tests | Textual headless smoke, CLI dispatch and PTY compatibility against synthetic HTTP fixtures |
 | Real `cortex` launch and quit | PASS | Fresh isolated `CORTEX_HOME`; full-screen UI rendered, `Ctrl-Q` returned exit code 0 and left no owned backend process running |
+| Disposable install / doctor / uninstall | PASS | Fresh temporary `CORTEX_HOME`; approved hashed install, `doctor` returned `ok: true`, then uninstall removed only owned venv/helper/manifest. This is not a clean macOS account or VM. |
 | Complete Python suite | PASS, 725 tests | Local isolated fixtures; no signed-in ChatGPT delivery |
 | Frontend unit/runtime | PASS, 207 unit + 36 runtime/privacy tests | Synthetic React/runtime data |
 | Frontend typecheck/lint/build | PASS | `corepack npm@11.18.0`, static Next.js build |

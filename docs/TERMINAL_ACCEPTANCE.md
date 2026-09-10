@@ -16,7 +16,7 @@ No fixture result below proves live ChatGPT or an installed 0.6 release.
 | Shared settings without privilege reset | Real settings PUT regression + controller merge confirmation | PASS — Task2 settings/real API tests |
 | ChatGPT / executor honest states | Backend-shaped fixtures, unavailable state remains usable | PASS for covered fixture states; live availability UNCLEAR |
 | Chrome onboarding | Correct endpoint delegation; no silent consent or token output | PASS — consent/API and opening-failure tests; actual Chrome pairing UNCLEAR |
-| Packaged launcher | Temporary wheel entrypoint works outside checkout | PASS — disposable wheel inspection/import reported in Task3; no user installation |
+| Packaged launcher | Temporary wheel entrypoint works outside checkout | PASS — disposable wheel inspection/import and isolated install/doctor/uninstall lifecycle; no clean user installation |
 | Geometric UI card | Current browser demo + integrated screenshots, separate component review | PASS for targeted local review/observation; two minor followups recorded |
 | Live provider mission | Authorized real browser/executor run | UNCLEAR — outside current authorization |
 | Clean user installation | Separate explicit authorization and live validation | UNCLEAR — not performed in this task |

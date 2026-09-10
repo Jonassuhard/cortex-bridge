@@ -21,6 +21,7 @@ reported as executor-model diversity. Freebuff is not an integrated executor.
 | --- | --- | --- |
 | Terminal starts offline | PASS | CORTEX banner, unavailable backend message and interactive prompt |
 | Terminal full-screen quit | PASS, one real PTY check | `cortex` rendered the full-screen UI from a fresh isolated home; `Ctrl-Q` exited with code 0 after the normal Textual `None` return was normalized |
+| Disposable installation lifecycle | PASS, one isolated run | Hash-approved install, `doctor --json` with `ok: true`, and hash-approved uninstall in a temporary home; clean macOS account lifecycle remains unrun |
 | Terminal `/demarrer`, first attempt | FAIL | Launcher selected another Python; FastAPI import failed |
 | Terminal `/demarrer`, after correction | PASS | Same command in a restarted Cortex terminal started the isolated candidate on loopback |
 | Terminal regression suite | PASS | 82 focused terminal/TUI tests using the project virtualenv |
