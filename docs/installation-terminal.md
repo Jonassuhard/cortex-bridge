@@ -21,6 +21,11 @@ reviewed:
 ./scripts/cortex.sh doctor --json
 ```
 
+With `--json`, standard output contains exactly one JSON payload suitable for
+an installation agent; dependency progress and compiler logs are sent to
+standard error. Parse the payload before continuing and stop on a non-zero exit
+code.
+
 The installer owns only its `CORTEX_HOME` resources. It never uses `sudo`,
 downloads an Ollama model unless that option is explicitly included in the
 reviewed plan, and never replaces a foreign process.
