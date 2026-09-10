@@ -325,7 +325,10 @@ def _run_command(command: dict[str, Any]) -> None:
         argv = command["argv"]
         cwd = ROOT / "frontend" if command["id"] in {"npm_ci", "build_ui"} else ROOT
     environment = {**os.environ, **command.get("environment", {})}
-    subprocess.run(argv, cwd=cwd, env=environment, check=True)
+    # Keep machine-readable ``--json`` responses parseable.  Tool installers
+    # such as pip may emit progress to stdout; route that progress to stderr so
+    # the final installer payload remains the only stdout value.
+    subprocess.run(argv, cwd=cwd, env=environment, check=True, stdout=sys.stderr)
 
 
 def _fsync_directory(path: Path) -> None:

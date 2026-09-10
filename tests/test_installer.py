@@ -41,6 +41,7 @@ class InstallerTest(unittest.TestCase):
             "import json, os, pathlib, sys\n"
             "command=json.loads(sys.argv[1])\n"
             "with open(os.environ['RUNNER_LOG'], 'a', encoding='utf-8') as f: f.write(json.dumps(command, sort_keys=True)+'\\n')\n"
+            "if os.environ.get('PRINT_RUNNER_OUTPUT') == '1': print('runner progress')\n"
             "if os.environ.get('FAIL_STEP') == command['id']: raise SystemExit(9)\n"
             "if command['id'] == 'create_venv':\n"
             " p=pathlib.Path(command['argv'][-1]); (p/'bin').mkdir(parents=True, exist_ok=True); (p/'bin'/'python').write_text('fixture', encoding='utf-8')\n"
@@ -96,6 +97,18 @@ class InstallerTest(unittest.TestCase):
         result = self.run_script("install.sh", "--approve-plan", plan["plan_hash"], "--json")
         self.assertEqual(result.returncode, 0, result.stderr)
         return json.loads(result.stdout)
+
+    def test_json_install_output_keeps_command_logs_off_stdout(self):
+        plan = self.dry_plan()
+        environment = {**self.environment, "PRINT_RUNNER_OUTPUT": "1"}
+        result = self.run_script(
+            "install.sh", "--approve-plan", plan["plan_hash"], "--json", env=environment
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["status"], "installed")
+        self.assertIn("runner progress", result.stderr)
 
     def stage_interrupted_helper_transaction(
         self,
