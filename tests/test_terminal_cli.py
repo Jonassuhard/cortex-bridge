@@ -413,6 +413,11 @@ class TerminalCliPtyAcceptanceTests(unittest.TestCase):
     def test_pty_ctrl_c_leaves_the_interactive_prompt_usable(self):
         with _LoopbackFixture() as fixture:
             process, master, opening = _pty_start(["--url", fixture.base_url])
+            # The first painted prompt does not prove that input() has already
+            # resumed after the welcome screen. Complete one harmless command
+            # so SIGINT is delivered while the interactive read is active.
+            os.write(master, b"/aide\n")
+            opening = _pty_wait_for(master, process, opening, "/statut /conversations")
             process.send_signal(signal.SIGINT)
             opening = _pty_wait_for(master, process, opening, "Interrompu. Rien n’a été annulé.")
             os.write(master, b"/quitter\n")
