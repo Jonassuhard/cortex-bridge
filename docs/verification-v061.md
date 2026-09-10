@@ -25,16 +25,16 @@ The candidate now includes the full-screen terminal slice described in
 The TUI intentionally exposes deterministic local tools as the only verified
 executor. No model-backed or Freebuff adapter is claimed. A healthy Ollama/model
 pair is shown as a candidate until a real run records the executor kind and
-model used. Live Chrome pairing and one text round-trip were observed after this
-table was written; attachments, screenshot transfer, missions, clean
-installation lifecycle and main integration remain open gates.
+model used. Live Chrome pairing, one text round-trip and one screenshot transfer
+were observed after this table was written. Arbitrary file delivery, missions,
+clean installation lifecycle and main integration remain open gates.
 
-## Published source baseline (dd4ad55)
+## Historical source baseline (dd4ad55)
 
-These results describe the previous candidate, not the uncommitted live-test
-corrections. The initial live-session backend run failed three uninstall fixtures;
-after correction the fresh complete suite passes 710 tests. See the live
-acceptance report for the current result and remaining manual gates.
+The following block is retained for audit history only. It describes the older
+published candidate, not the final 0.6.1 candidate or its current evidence.
+Use the execution addendum above and `docs/live-acceptance-v061.md` for the
+current result and remaining manual gates.
 
 | Check | Result | Scope |
 | --- | --- | --- |

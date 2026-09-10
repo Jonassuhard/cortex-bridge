@@ -1,7 +1,7 @@
 # 0.6.1 real-interface acceptance
 
-Date: 2026-09-10. Base source: dd4ad55, followed by uncommitted startup and
-detector corrections. **Not release-ready. No completed multi-model mission.**
+Date: 2026-09-10. Scope: final 0.6.1 candidate branch and its paired Chrome
+preflight. **Not release-ready. No completed multi-model mission.**
 
 ## Fixed scenarios, not benchmark claims
 
@@ -31,6 +31,7 @@ reported as executor-model diversity. Freebuff is not an integrated executor.
 | GUI connection check | PASS, real replay | Classic `/c/...` ChatGPT tab exposed a composer; the probe returned no blocker |
 | GUI text delivery | PASS, one real check | Cortex sent `Réponds uniquement CORTEX-LIVE-01`; the UI showed pending, then confirmed delivery and `CORTEX-LIVE-01` in 9.6 s |
 | GUI screenshot delivery | PASS, one real check | The Cortex capture button produced run `8fb810edbea04d32b6889045563d319f`, state `COMPLETED`, attachment `cortex-screenshot-2a2313ca.png`; Cortex showed `Réponse terminée` and the bound ChatGPT tab exposed the new image message and its response |
+| GUI arbitrary file delivery | FAIL CLOSED, one real check | Cortex returned `PRE_DELIVERY_NOT_READY` because the ChatGPT composer was not clean and stable; no file was delivered and no success is claimed |
 | Planner model discovery | UNCLEAR | Terminal showed only “current visible model”; no two model identities established |
 | Scenario G | UNCLEAR, not executed | Composer disabled during connection preflight |
 | Scenario T | UNCLEAR, not executed | No ready conversation or verified planner selection |
@@ -62,13 +63,14 @@ reloading the candidate extension requires a manual user action; no alternative
 automation path is used to bypass that restriction.
 
 Documentation checks: 128 link checks passed, including all 48 external URLs.
-The public-tree privacy scan passed on 409 files and 90 images. Gitleaks found
+The public-tree privacy scan passed on 417 files and 90 images. Gitleaks found
 no secrets in the current tracked diff or this new report. The mission diagram
 was regenerated and visually inspected; no new model benchmark was invented.
 Independent read-only review accepted the final connection and installer
 corrections. A SQLite ResourceWarning appeared in the full passing run; no claim
-of warning-free execution is made. The release manifest validator still fails
-because the 0.6.1 live/installation evidence manifest is absent.
+of warning-free execution is made. The release manifest validator passes, while
+the manifest verdict remains `RELEASE_BLOCKED_BY_PROVIDER_TERMS` because live
+provider and clean-install evidence are not available.
 
 One worker run using system Python timed out in the PTY Ctrl-C test. A fresh
 project-virtualenv run passed all 12 CLI tests, followed by all 73 terminal
@@ -76,9 +78,9 @@ tests. The earlier timeout is not erased or labelled pre-existing without proof.
 
 ## Remaining release evidence
 
-Unresolved: replay the corrected extension in the actual browser, obtain a
-ready classic ChatGPT conversation, execute the scenarios with observed model
-identities and independently verified artifacts, complete live conversation
-isolation/attachment gates and the clean installation lifecycle, then seal
-evidence against the final source commit. Do not mark READY or merge on the
-basis of this preflight report.
+Unresolved: obtain fresh provider-authorized evidence for arbitrary files,
+conversation isolation and the third-writer refusal, execute the scenarios
+with observed model identities and independently verified artifacts, complete
+the clean installation lifecycle, then reseal evidence against the final
+source commit. Do not mark READY or merge on the basis of this preflight
+report.
