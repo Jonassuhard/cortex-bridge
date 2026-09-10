@@ -59,7 +59,10 @@ Real-interface preflight is recorded in docs/live-acceptance-v061.md.
 The terminal startup interpreter and full-screen quit paths are corrected; the
 focused terminal/TUI checks pass, and a fresh PTY launch now exits with code 0
 on `Ctrl-Q`. A disposable hash-approved install/doctor/uninstall lifecycle
-also passes; this is not evidence from a clean macOS account. The candidate
+also passes; this is not evidence from a clean macOS account. The installed
+runtime was then repaired through the manifest-scoped uninstall/reinstall path;
+its helper hash, Accessibilité check, backend start/status/API/stop cycle now
+pass as well. The candidate
 extension now pairs in the real Chrome window;
 one text message sent through Cortex was confirmed in 9.6 s and one screenshot
 transfer through the Cortex capture button completed as run
