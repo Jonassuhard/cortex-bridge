@@ -36,7 +36,7 @@
   },
   "dependencies": {
     "lucide-react": "1.43.0",
-    "next": "16.2.12",
+    "next": "16.3.4",
     "react": "19.2.4",
     "react-dom": "19.2.4"
   },
@@ -50,7 +50,7 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
-    "@vitest/coverage-v8": "4.1.10",
+    "@vitest/coverage-v8": "4.1.11",
     "axe-core": "4.12.1",
     "jsdom": "26.1.0",
     "oxlint": "1.75.0",
@@ -58,13 +58,13 @@
     "tsx": "4.20.6",
     "typescript": "^5",
     "vite": "6.4.3",
-    "vitest": "4.1.10"
+    "vitest": "4.1.11"
   },
   "overrides": {
     "nanoid": "3.3.18",
     "postcss": "8.5.23",
     "next": {
-      "sharp": "0.35.0"
+      "sharp": "0.35.4"
     }
   },
   "allowScripts": {

@@ -24,13 +24,15 @@
 - All changes stay in the independent candidate; the original local checkout
   and installed runtime must not be modified.
 - User authorized commit/push and main integration if the gates permit it.
-- Dependency upgrades/installations have been requested separately.
+- Local dependency upgrades/installations were approved and applied.
 - Primary-branch integration is blocked while dependency or verification gates fail.
 - Public reports must not include personal paths, account details or private records.
 - Local session details, if present, are retained in ignored docs/LOCAL_SESSION_V061.md.
 
 ## Next action
-Resolve the dependency audit and provide current, truthful release evidence
+Provide current, truthful installation and live release evidence
 before main integration. The development candidate has 707 backend tests,
 207 frontend unit tests, 36 runtime checks and 26 browser fixtures passing;
-audit and release-manifest gates remain FAIL. See docs/verification-v061.md.
+npm audit now passes with zero findings; the release-manifest gate remains FAIL.
+See docs/verification-v061.md. Keep dependency changes in this candidate PR;
+do not merge while the remaining release gates are incomplete.

@@ -12,15 +12,15 @@ source verification from installation, live provider acceptance and publication.
 | Chrome extension | PASS, 130 tests | Node fixtures, not the user's Chrome account |
 | Frontend unit | PASS, 207 tests | React component fixtures |
 | Runtime/privacy/optimizer | PASS, 36 tests | Includes the overlapping 33-test standard test command |
-| Typecheck and lint | PASS | Existing locked frontend environment |
+| Typecheck and lint | PASS | Updated locked frontend environment |
 | Static build | PASS | Next.js static export, not a deployment |
 | Browser fixtures | PASS, 26; 1 skipped | Responsive, keyboard, accessibility and UI states; optional gallery generation skipped |
 | Documentation diagrams | PASS | Three 32-frame, 1000×390 GIFs, static SVGs, visual inspection; controls/reduced motion at 375 and 1000 px |
-| npm security audit | FAIL | 4 moderate, 1 high, 1 critical |
+| npm security audit | PASS | Zero findings after the approved dependency update; previous six findings recorded below |
 | Release manifest | FAIL | No docs/verification/v0.6.1.json; validator exits 1 with invalid_json manifest |
 | Static runtime layout | PASS | 4 checks from scripts/verify-runtime.py --json |
-| Public privacy | PASS | 413 files and 90 images scanned; internal notes excluded |
-| Documentation links | PASS | 127 checked, including 48 external links |
+| Public privacy | PASS | 408 files and 90 images after the rebuilt export; internal notes excluded |
+| Documentation links | PASS | 127 offline checks rerun; 48 external links checked in the preceding publication run |
 | Secrets | PASS | Three unpublished ancestor commits and staged diff scanned with Gitleaks |
 | Live ChatGPT and provider mission | UNCLEAR | Not run for these bytes |
 | Clean user installation and native Windows | UNCLEAR | Not run |
@@ -44,18 +44,39 @@ overlapping counts or test durations into a product benchmark.
    text and stale activity selection. These were corrected before publication
    preparation and covered by the 72-test terminal suite.
 
-## Dependency findings
+## Dependency update and verification
 
-Audit command: `cd frontend && ../scripts/npmw audit --audit-level=high`.
-Locked environment: Next.js 16.2.12, Sharp 0.35.0, Vitest 4.1.10.
-Findings include Next.js, Sharp, Vitest/mocker/coverage and
-baseline-browser-mapping. The audit recommends newer releases outside some
-current pins. No forced audit fix, lowered severity threshold or claim that
-static export removes the findings is used.
+On 2026-09-10 the pre-update audit reproduced six findings: four moderate,
+one high and one critical. After explicit local installation approval:
 
-Dependency upgrades are awaiting separate installation approval. A successful
-static build does not turn this audit into PASS. Primary-branch integration
-must remain blocked while required gates fail.
+| Package | Before | After |
+| --- | --- | --- |
+| Next.js | 16.2.12 | 16.3.4 |
+| Sharp (Next override) | 0.35.0 | 0.35.4 |
+| Vitest and coverage-v8 | 4.1.10 | 4.1.11 |
+| baseline-browser-mapping | 2.10.37 | 2.11.21 |
+
+The lock was regenerated with pinned npm 11.18.0, then installed using
+`../scripts/npmw ci --ignore-scripts --no-fund`. A fresh
+`../scripts/npmw audit --audit-level=low` returned zero findings (exit 0).
+No force fix, audit suppression or lowered severity threshold was used.
+Original checkout and installed runtime were not modified.
+
+The first runtime test run failed on the old strict Sharp 0.35.0 assertion;
+the expected pin was updated to 0.35.4. Typecheck then identified Next's new
+required `operationCache` argument; the test passes `undefined` to preserve
+default behavior. All three image conversion and dimension assertions remain.
+The final 36 runtime tests and typecheck pass with that exact test change.
+
+The 207 unit tests, lint and static build were rerun against the new lock.
+Browser fixtures on the rebuilt static export: 26 passed in 29.5 s, one
+optional guide-generation test skipped; no authenticated account was used.
+Coverage command passed: statements 76.39%, branches 73.75%, functions 71.34%,
+lines 80.38% on the configured coverage scope. These are not whole-product
+coverage or live-provider results. Python and extension results above belong
+to the preceding publication run; those unchanged suites were not rerun for
+this frontend-only update. Primary-branch integration remains blocked by the
+missing release evidence and live/clean-install acceptance.
 
 ## Reproduce
 

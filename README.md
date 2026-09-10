@@ -9,7 +9,8 @@ CORTEX terminal. Both use the same local backend; neither adds a second engine.
 
 **Status: 0.6.1 development candidate, not a verified release.** The terminal
 passes its 72 isolated tests; the complete backend suite passes 707 tests.
-The dependency audit still reports six alerts. See [current evidence](docs/verification-v061.md).
+The updated npm lock passes its security audit with zero findings. Live acceptance
+and release evidence remain incomplete. See [current evidence](docs/verification-v061.md).
 Earlier release evidence does not validate this candidate.
 
 Created by [Jonas Suhard](https://github.com/Jonassuhard).

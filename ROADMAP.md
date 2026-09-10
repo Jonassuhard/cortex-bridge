@@ -8,7 +8,8 @@ Public, best-effort roadmap. Dates are indicative; scope beats schedule.
 - [x] Optional CORTEX terminal sharing the backend, settings and mission policy.
 - [x] Selected conversation history, replies and explicit delivery acknowledgement.
 - [x] Scoped cancellation, preserved in-memory submissions and atomic terminal approvals.
-- [ ] Resolve current dependency findings and pass complete publication gates.
+- [x] Resolve the six npm dependency findings in the 0.6.1 candidate lock.
+- [ ] Pass the remaining installation, live acceptance and release-evidence gates.
 - [ ] Validate a clean user installation and live provider workflow for these bytes.
 - [ ] Persist terminal drafts across restarts.
 - [ ] Native Windows validation and distribution.

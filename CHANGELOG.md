@@ -18,6 +18,9 @@ All notable changes are recorded here.
 - Explicit delivery acknowledgement, isolated in-memory drafts, no ambiguous resend.
 - Corrected stale installer version assertions without changing installer behavior.
 - Updated usage diagrams, LLM index, historical benchmark context and candidate evidence.
+- Updated Next.js to 16.3.4, Sharp to 0.35.4, Vitest/coverage to 4.1.11
+  and baseline-browser-mapping to 2.11.21; npm audit reports zero findings.
+- Retained strict image-optimizer tests with the patched Sharp pin and updated Next API signature.
 - Not validated against a signed-in production browser or a clean user installation.
 - Publication gates and dependency alerts are recorded in `docs/verification-v061.md`;
   this entry is not a release-readiness assertion.

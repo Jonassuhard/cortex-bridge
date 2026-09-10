@@ -19,7 +19,9 @@ No fixture result below proves live ChatGPT or an installed 0.6 release.
 | Geometric UI card | Current browser demo + integrated screenshots, separate component review | PASS for targeted local review/observation; two minor followups recorded |
 | Live provider mission | Authorized real browser/executor run | UNCLEAR — outside current authorization |
 | Clean user installation | Separate explicit authorization and live validation | UNCLEAR — not performed in this task |
-| Branch publication / main integration | User-authorized, conditional on relevant checks | Branch publication authorized; main integration remains blocked by audit and release-evidence gates |
+| Branch publication / main integration | User-authorized, conditional on relevant checks | Candidate published in draft PR 16; main integration remains blocked by release-evidence and live-acceptance gates |
 
 ## Scope controls
-Original repository/runtime remains untouched. All new code stays uncommitted in the independent candidate. Existing UI changes are preserved. Documented dependency alerts are not reclassified as fixed.
+Original repository/runtime remains untouched. Work stays in the independent candidate.
+The local dependency update was separately approved; its fresh npm audit has zero
+findings. See `verification-v061.md` for the measured scope and remaining gates.
