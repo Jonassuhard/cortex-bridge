@@ -2,9 +2,11 @@
 
 ## Optional terminal (0.6.1 candidate)
 
-`scripts/cortex` starts a line-oriented terminal; `scripts/cortex ui` opens
-the Atelier GUI. Both talk to the same FastAPI backend. Terminal modules live
-in `console/terminal_*.py`; no second database or executor is introduced.
+`scripts/cortex` starts the Textual full-screen terminal; `scripts/cortex --plain`
+selects the line-oriented compatibility client; `scripts/cortex ui` opens the
+Atelier GUI. All three talk to the same FastAPI backend. Terminal modules live
+in `console/terminal_*.py` and `console/tui/`; no second database or executor is
+introduced.
 The source wrapper does not install a global command.
 
 Chat sends preserve unconfirmed submissions in memory. Following a run reads

@@ -7,10 +7,11 @@ Use a ChatGPT web conversation as the reasoning side of a local, reviewed
 execution workflow. Choose the Atelier graphical interface or the optional
 CORTEX terminal. Both use the same local backend; neither adds a second engine.
 
-**Status: 0.6.1 development candidate, not a verified release.** The terminal
-passes its 72 isolated tests; the complete backend suite passes 707 tests.
-The updated npm lock passes its security audit with zero findings. Live acceptance
-and release evidence remain incomplete. See [current evidence](docs/verification-v061.md).
+**Status: 0.6.1 development candidate, not a verified release.** The full-screen
+terminal smoke/CLI slice passes 81 tests; the complete backend suite passes 718
+tests. The frontend passes 207 unit/runtime tests, typecheck, lint and a static
+build. Live acceptance and release evidence remain incomplete. See
+[current evidence](docs/verification-v061.md).
 Earlier release evidence does not validate this candidate.
 
 Created by [Jonas Suhard](https://github.com/Jonassuhard).
@@ -39,8 +40,10 @@ MIT-licensed, independent and not affiliated with OpenAI.
 
 - Atelier conversation layout, collapsible diagnostics and clearer task states.
 - Geometric project card, action icons and reduced-motion behavior.
-- Optional French terminal with a CORTEX banner, conversation history, replies,
-  delivery acknowledgement, missions, settings and scoped cancellation.
+- Optional French full-screen terminal with a CORTEX header, side-by-side
+  ChatGPT/executor status, conversation history, replies, delivery acknowledgement
+  and explicit controls. `--plain` keeps the line-oriented fallback for small or
+  incompatible terminals.
 - Up to 50 listed conversations; the backend enforces two active writing leases.
 - No automatic resend when delivery is uncertain.
 - In-memory terminal drafts, isolated by submission and conversation.
@@ -62,7 +65,7 @@ Do not interpret the decorative Luna/Terra/Sol/Astra project card as a list of
 connected executors. A model comparison requires recorded model identity for
 each actual run, not just a selected label.
 
-The terminal is a line-oriented interface, not a full-screen editor.
+The full-screen terminal is a client of the same local API, not a second engine.
 Drafts do not survive terminal exit. Browser and file-upload support remain
 subject to the existing platform and transport limits.
 
@@ -72,12 +75,14 @@ subject to the existing platform and transport limits.
 scripts/cortex --help
 scripts/cortex --version
 scripts/cortex
+scripts/cortex --plain
 scripts/cortex ui
 ```
 
 The source wrapper uses the existing Python environment. It does not install a
-global command or alter PATH. Inside the terminal, use `/aide`, `/conversations`,
-`/ouvrir 1`, `/historique`, `/suivre` and `/quitter`.
+global command or alter PATH. The default is the full-screen TUI; `--plain` is
+the explicit line-oriented fallback. Inside the fallback, use `/aide`,
+`/conversations`, `/ouvrir 1`, `/historique`, `/suivre` and `/quitter`.
 `/demarrer` delegates to the managed checkout launcher; it is not an installer.
 
 Read the [terminal guide](docs/TERMINAL.md) for connection, missions, approval
@@ -106,6 +111,7 @@ steps. File sending additionally requires the documented macOS Accessibility
 helper and permission.
 
 - [Full installation](INSTALL.md)
+- [Terminal installation](docs/installation-terminal.md)
 - [Agent-assisted installation and approval](docs/agent-installation.md)
 - [Optional Freebuff-assisted installation](docs/freebuff-installation.md)
 - [User guide](docs/user-guide.md)

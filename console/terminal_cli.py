@@ -21,6 +21,10 @@ def _parser() -> argparse.ArgumentParser:
         description="Terminal Cortex pour le backend local loopback.",
     )
     parser.add_argument("--url", default=_DEFAULT_URL, metavar="URL", help="URL loopback du backend Cortex")
+    parser.add_argument(
+        "--plain", action="store_true",
+        help="utiliser le client texte de secours au lieu de l’interface plein écran",
+    )
     parser.add_argument("--version", action="version", version=_version())
     parser.add_argument("command", nargs="?", choices=("ui",), help="ui : ouvrir l'interface Cortex")
     return parser
@@ -120,6 +124,19 @@ def main(
         return 0 if open_loopback_ui(
             ui_url, platform=platform, process_run=process_run, browser_open=browser_open,
         ) else 1
+    if app_factory is None and not arguments.plain:
+        try:
+            from tui import CortexTui
+        except (ImportError, RuntimeError) as exc:
+            print(f"Interface plein écran indisponible : {exc}\nRelance avec --plain pour le mode texte.", file=sys.stderr)
+            return 1
+        return int(CortexTui(
+            client,
+            open_ui=lambda: open_loopback_ui(
+                ui_url, platform=platform, process_run=process_run, browser_open=browser_open,
+            ),
+            start_backend=lambda: managed_start(client.base_url, process_run=process_run),
+        ).run())
     if app_factory is None:
         from terminal_app import TerminalApp
 

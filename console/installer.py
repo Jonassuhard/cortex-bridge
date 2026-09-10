@@ -983,7 +983,7 @@ def _native_helper_doctor_checks() -> tuple[list[dict[str, Any]], bool]:
 
 
 def _runtime_dependencies_doctor_check() -> dict[str, Any]:
-    dependencies = ("fastapi", "uvicorn", "playwright", "websockets")
+    dependencies = ("fastapi", "uvicorn", "playwright", "websockets", "textual")
     python = os.environ.get("PYTHON_BIN") or sys.executable
     probe = (
         "import importlib,json\n"

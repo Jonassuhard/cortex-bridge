@@ -1,7 +1,7 @@
 # Cortex terminal
 
-The terminal is an optional French-language interface to the existing local
-Cortex backend. It does not create another execution engine or database.
+The terminal is an optional French-language full-screen interface to the existing
+local Cortex backend. It does not create another execution engine or database.
 Chrome and the backend are not started without an explicit command.
 
 From an existing managed Cortex checkout:
@@ -10,14 +10,19 @@ From an existing managed Cortex checkout:
 scripts/cortex --help
 scripts/cortex --version
 scripts/cortex
+scripts/cortex --plain
 scripts/cortex ui
 ```
 
-The source wrapper uses the checkout's existing Python environment. No global
-`cortex` command or PATH change is installed by this work. The package defines
-that entry point for a future explicitly approved installation.
+The source wrapper uses the checkout's existing Python environment. The default
+opens the Textual full-screen client. `--plain` selects the compatibility
+prompt for terminals that cannot render the TUI. No global `cortex` command or
+PATH change is installed by this worktree; the package entry point is defined
+for an explicitly approved installation.
 
-`scripts/cortex` shows the CORTEX banner and interactive prompt.
+`scripts/cortex` shows the CORTEX header, ChatGPT/executor status cards,
+conversation list and composer. The full-screen client keeps network requests
+in background workers so typing remains responsive.
 `scripts/cortex ui` opens the same local URL in Google Chrome on macOS, or
 the default browser on other platforms. It uses fixed arguments without a
 shell. Neither command sends a ChatGPT message.

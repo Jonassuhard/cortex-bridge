@@ -251,7 +251,7 @@ class CortexScriptOwnershipTest(unittest.TestCase):
             python_wrapper.write_text(
                 "#!/bin/sh\n"
                 f"printf '%s\\n' \"$*\" >> {str(python_calls)!r}\n"
-                "if [ \"$1\" = -c ] && [ \"$2\" = \"import fastapi,uvicorn,playwright,websockets\" ]; then exit 0; fi\n"
+                "if [ \"$1\" = -c ] && [ \"$2\" = \"import fastapi,uvicorn,playwright,websockets,textual\" ]; then exit 0; fi\n"
                 f"if [ \"$1\" = server.py ]; then exec {sys.executable!r} "
                 f"{str(fake_server)!r}; fi\n"
                 "if [ \"$1\" = -c ] && [ \"$2\" = \"import secrets; print(secrets.token_urlsafe(32))\" ]; then\n"
@@ -320,7 +320,7 @@ class CortexScriptOwnershipTest(unittest.TestCase):
                     "shared-blocked",
                 )
                 self.assertIn(
-                    "import fastapi,uvicorn,playwright,websockets",
+                    "import fastapi,uvicorn,playwright,websockets,textual",
                     python_calls.read_text(encoding="utf-8"),
                 )
             finally:
@@ -354,7 +354,7 @@ class CortexScriptOwnershipTest(unittest.TestCase):
         python_wrapper = root / "python"
         python_wrapper.write_text(
             "#!/bin/sh\n"
-            "if [ \"$1\" = -c ] && [ \"$2\" = \"import fastapi,uvicorn,playwright,websockets\" ]; then exit 0; fi\n"
+            "if [ \"$1\" = -c ] && [ \"$2\" = \"import fastapi,uvicorn,playwright,websockets,textual\" ]; then exit 0; fi\n"
             f"exec {sys.executable!r} \"$@\"\n",
             encoding="utf-8",
         )
@@ -416,7 +416,7 @@ class CortexScriptOwnershipTest(unittest.TestCase):
             python_wrapper = root_path / "python"
             python_wrapper.write_text(
                 "#!/bin/sh\n"
-                "if [ \"$1\" = -c ] && [ \"$2\" = \"import fastapi,uvicorn,playwright,websockets\" ]; then exit 0; fi\n"
+                "if [ \"$1\" = -c ] && [ \"$2\" = \"import fastapi,uvicorn,playwright,websockets,textual\" ]; then exit 0; fi\n"
                 "case \"$1:$2\" in\n"
                 f" */process_ownership.py:with-shared-lock) exec {sys.executable!r} \"$@\";;\n"
                 " */process_ownership.py:status) printf '%s\\n' '{\"state\":\"unknown\",\"pid\":null,\"listener_pids\":[],\"reason\":\"listener probe timed out\"}'; exit 0;;\n"

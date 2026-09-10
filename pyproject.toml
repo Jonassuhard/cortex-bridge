@@ -12,6 +12,7 @@ dependencies = [
   "uvicorn==0.51.0",
   "websockets==17.0",
   "playwright==1.61.0",
+  "textual==8.2.8",
 ]
 
 [project.scripts]
@@ -45,6 +46,7 @@ packages = [
   "transport",
   "transport.browser_playwright",
   "transport.chatgpt_web",
+  "tui",
 ]
 
 [tool.setuptools.package-data]

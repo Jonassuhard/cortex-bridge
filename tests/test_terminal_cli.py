@@ -101,7 +101,7 @@ def _pty_run(arguments: list[str], input_bytes: bytes, *, columns: int = 80) -> 
         "LINES": "24",
     }
     process = subprocess.Popen(
-        [str(ROOT / "scripts" / "cortex"), *arguments],
+        [str(ROOT / "scripts" / "cortex"), "--plain", *arguments],
         cwd=ROOT,
         env=environment,
         stdin=slave,
@@ -137,7 +137,7 @@ def _pty_run(arguments: list[str], input_bytes: bytes, *, columns: int = 80) -> 
 def _pty_start(arguments: list[str], *, columns: int = 80) -> tuple[subprocess.Popen[bytes], int, str]:
     master, slave = pty.openpty()
     process = subprocess.Popen(
-        [str(ROOT / "scripts" / "cortex"), *arguments],
+        [str(ROOT / "scripts" / "cortex"), "--plain", *arguments],
         cwd=ROOT,
         env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "COLUMNS": str(columns), "LINES": "24"},
         stdin=slave, stdout=slave, stderr=slave, close_fds=True,
@@ -185,6 +185,35 @@ def _pty_finish(process: subprocess.Popen[bytes], master: int, prefix: str) -> t
             process.wait(timeout=5)
 
 
+def _pty_wait_for(master: int, process: subprocess.Popen[bytes], prefix: str, marker: str) -> str:
+    """Drain a PTY until an interactive state is observable before sending input."""
+    chunks = [prefix.encode("utf-8")]
+    deadline = time.monotonic() + 5
+    try:
+        while time.monotonic() < deadline:
+            screen = b"".join(chunks).decode("utf-8", errors="replace")
+            if marker in screen:
+                return screen
+            readable, _, _ = select.select([master], [], [], 0.1)
+            if not readable:
+                if process.poll() is not None:
+                    break
+                continue
+            try:
+                chunk = os.read(master, 4096)
+            except OSError:
+                break
+            if not chunk:
+                break
+            chunks.append(chunk)
+        raise AssertionError(f"PTY marker did not arrive: {marker!r}")
+    except BaseException:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
+        raise
+
+
 class TerminalCliUnitTests(unittest.TestCase):
     def test_help_and_version_are_offline(self):
         for argument, expected in (("--help", "usage:"), ("--version", "0.6.1")):
@@ -215,6 +244,49 @@ class TerminalCliUnitTests(unittest.TestCase):
         self.assertEqual("http://127.0.0.1:18420", received["client"].base_url)
         self.assertTrue(callable(received["open_ui"]))
         self.assertTrue(callable(received["start_backend"]))
+
+    def test_plain_flag_keeps_legacy_text_client_explicit(self):
+        import terminal_cli
+
+        received = {}
+
+        class App:
+            def __init__(self, client, input_fn=input, output=None, open_ui=None, start_backend=None):
+                received["client"] = client
+
+            def run(self):
+                return 0
+
+        self.assertEqual(
+            0,
+            terminal_cli.main(["--plain", "--url", "http://127.0.0.1:18420"], app_factory=App),
+        )
+        self.assertEqual("http://127.0.0.1:18420", received["client"].base_url)
+
+    def test_default_without_factory_dispatches_to_full_screen_tui(self):
+        import terminal_cli
+        import tui
+
+        received = {}
+
+        class FakeTui:
+            def __init__(self, client, *, open_ui=None, start_backend=None, offline=False):
+                received.update({
+                    "client": client,
+                    "open_ui": open_ui,
+                    "start_backend": start_backend,
+                    "offline": offline,
+                })
+
+            def run(self):
+                return 13
+
+        with mock.patch.object(tui, "CortexTui", FakeTui):
+            self.assertEqual(13, terminal_cli.main(["--url", "http://127.0.0.1:18420"]))
+        self.assertEqual("http://127.0.0.1:18420", received["client"].base_url)
+        self.assertTrue(callable(received["open_ui"]))
+        self.assertTrue(callable(received["start_backend"]))
+        self.assertFalse(received["offline"])
 
     def test_ui_validates_loopback_before_fixed_macos_open_argv(self):
         import terminal_cli
@@ -339,7 +411,7 @@ class TerminalCliPtyAcceptanceTests(unittest.TestCase):
         with _LoopbackFixture() as fixture:
             process, master, opening = _pty_start(["--url", fixture.base_url])
             process.send_signal(signal.SIGINT)
-            time.sleep(0.05)
+            opening = _pty_wait_for(master, process, opening, "Interrompu. Rien n’a été annulé.")
             os.write(master, b"/quitter\n")
             status, screen = _pty_finish(process, master, opening)
 

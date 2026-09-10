@@ -41,5 +41,7 @@ https://openai.com/policies/eu-terms-of-use/
 https://openai.com/policies/terms-of-use/
 https://playwright.dev/python/docs/browsers
 https://support.apple.com/guide/mac-help/allow-accessibility-apps-to-access-your-mac-mh43185/mac
+https://textual.textualize.io/guide/testing/
+https://textual.textualize.io/guide/workers/
 https://www.google.com/chrome/
 https://www.python.org/downloads/macos/

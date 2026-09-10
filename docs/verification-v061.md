@@ -7,6 +7,26 @@ Subsequent real-interface preflight and its failures are recorded separately in
 [live acceptance](live-acceptance-v061.md). Earlier green fixtures must not be
 interpreted as completed real missions.
 
+## Current execution addendum (2026-09-10)
+
+The candidate now includes the full-screen terminal slice described in
+`docs/PLAN_WEB_TUI_LUNA.md`:
+
+| Check | Result | Evidence and limit |
+| --- | --- | --- |
+| Terminal/TUI focused slice | PASS, 81 tests | Textual headless smoke, CLI dispatch and PTY compatibility against synthetic HTTP fixtures |
+| Complete Python suite | PASS, 718 tests in 170.838 s | Local isolated fixtures; no signed-in ChatGPT delivery |
+| Frontend unit/runtime | PASS, 207 tests | Synthetic React/runtime data |
+| Frontend typecheck/lint/build | PASS | `corepack npm@11.18.0`, static Next.js build |
+| Frontend browser/a11y | PASS, 26 E2E + 4 accessibility; 1 optional guide skipped | Static synthetic export, no authenticated account |
+| TUI wheel packaging | PASS | Disposable wheel install imports `tui` and exposes version 0.6.1 |
+| Global command convenience | PASS locally | `~/.local/bin/cortex` points to this candidate only; not a portable release installer |
+
+The TUI intentionally exposes deterministic local tools as the only verified
+executor. No model-backed or Freebuff adapter is claimed. Live Chrome round-trip,
+attachments, screenshot transfer, missions, clean installation lifecycle and
+main integration remain open gates.
+
 ## Published source baseline (dd4ad55)
 
 These results describe the previous candidate, not the uncommitted live-test

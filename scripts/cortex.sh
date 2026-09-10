@@ -93,7 +93,7 @@ case "$COMMAND" in
       exit 1
     fi
     trap 'rmdir "$START_LOCK" 2>/dev/null || true' EXIT
-    if ! "$PYTHON" -c 'import fastapi,uvicorn,playwright,websockets'; then
+    if ! "$PYTHON" -c 'import fastapi,uvicorn,playwright,websockets,textual'; then
       echo "Cortex Bridge runtime dependencies are incomplete. Re-run the approved installer plan." >&2
       exit 1
     fi
