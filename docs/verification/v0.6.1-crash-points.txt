@@ -1,6 +1,6 @@
 Cortex Bridge v0.6.1 crash/recovery evidence
 
-Source commit: pending final source seal
+Source commit: 4cd79359a6dfc5b5ba1a0f90b82029b261f0eed7
 Command:
   .venv/bin/python -m unittest -v \
     tests.test_loop_mock.LoopTestCase.test_08_restart_recovery_requires_explicit_resume \
