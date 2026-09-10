@@ -41,7 +41,8 @@
 ## Current verification state
 The final evidence is sealed and the candidate branch is pushed with the
 remote matching the local source. The release-evidence validator and the
-complete local suite pass. The candidate is ready for review as a technical
+complete local suite pass; the documentation counts were refreshed against
+that final run on 2026-09-10. The candidate is ready for review as a technical
 preview; `main` is intentionally not integrated while provider-backed and
 clean-install gates remain unresolved.
 
