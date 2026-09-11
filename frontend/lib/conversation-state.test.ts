@@ -51,6 +51,7 @@ const mission = (id: string): MissionDetail => ({
   },
   timeline: {},
   awaiting_approval: false,
+  pending_approval_action_id: null,
   stopped: false,
 });
 

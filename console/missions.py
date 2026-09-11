@@ -43,6 +43,11 @@ from executor.policy import (  # noqa: E402
 )
 from executor.tools import ToolExecutor  # noqa: E402
 from orchestration.loop import MissionLoop, MockReply  # noqa: E402
+from orchestration.context import (  # noqa: E402
+    ContextPacketError,
+    render_context_packet,
+    validate_context_packet as validate_context_packet_payload,
+)
 from orchestration.runner import (  # noqa: E402
     ModeARunner,
     OptInRequired,
@@ -134,6 +139,9 @@ class MissionRuntime:
     lease_release_ready: bool = True
     quiescence_task: asyncio.Task | None = None
     transport_closed: bool = False
+    # Ephemeral supervisor context. It is intentionally not persisted as raw
+    # transcript/file content; a process restart must receive a fresh packet.
+    context_packet: str | None = None
 
 
 _runtimes: dict[str, MissionRuntime] = {}
@@ -233,8 +241,12 @@ def _make_approval_callback(rt: MissionRuntime):
             if scope and scope != SCOPE_ONCE and rt.policy is not None and tool:
                 try:
                     rt.policy.approve(scope, tool=tool if scope != SCOPE_ALL_WRITES_FOR_MISSION else None)
-                except ValueError:
-                    pass
+                except ValueError as exc:
+                    # A broader scope is durable authorization.  If it cannot
+                    # be persisted, fail closed instead of silently continuing
+                    # with an approval that the policy engine did not record.
+                    rt.approval_scope = None
+                    raise RuntimeError("approval scope could not be persisted") from exc
             return scope
         except asyncio.CancelledError:
             return None
@@ -370,6 +382,17 @@ class MissionIn(BaseModel):
     executor_kind: str = "deterministic"
     attachment_tokens: list[str] = []
     mission_id: str = ""  # optional client-supplied UUID (idempotent submission)
+    context_packet: dict[str, object] | None = None
+
+    @field_validator("context_packet")
+    @classmethod
+    def validate_context_packet(cls, packet: dict[str, object] | None):
+        if packet is None:
+            return None
+        try:
+            return validate_context_packet_payload(packet)
+        except ContextPacketError as exc:
+            raise ValueError(str(exc)) from exc
 
     @field_validator("attachment_tokens")
     @classmethod
@@ -386,7 +409,7 @@ class MissionIn(BaseModel):
 class ApprovalIn(BaseModel):
     scope: str  # once | tool | all-writes
     approve: bool = True
-    expected_action_id: str | None = None
+    expected_action_id: str
 
 
 class OptInIn(BaseModel):
@@ -477,11 +500,13 @@ async def _run_mission_task(rt: MissionRuntime, objective: str, body: MissionIn)
                 objective,
                 new_conversation_url=body.conversation_url,
                 mission_id=rt.mission_id,
+                context_packet=rt.context_packet,
             )
         return await runner.run_mission(
             objective,
             conversation_url=body.conversation_url,
             mission_id=rt.mission_id,
+            context_packet=rt.context_packet,
         )
 
     runner_task = asyncio.create_task(run())
@@ -718,7 +743,10 @@ async def _resume_mission_task(rt: MissionRuntime) -> None:
         # Nothing provably sent (e.g. crash before the contract send).
         mission = store.get_mission(rt.mission_id)
         loop._pending = render_contract(
-            mission["objective"], rt.mission_id, str(rt._tools.workspace)  # type: ignore[attr-defined]
+            mission["objective"],
+            rt.mission_id,
+            str(rt._tools.workspace),  # type: ignore[attr-defined]
+            context_packet=rt.context_packet,
         )
     else:
         loop._pending = None  # contract+reports delivered → await ChatGPT
@@ -952,6 +980,11 @@ async def create_mission(body: MissionIn) -> dict:
             None, None,
             body.max_iterations, body.max_duration_minutes * 60, body.allow_processes,
             lease=lease,
+        )
+        rt.context_packet = (
+            render_context_packet(body.context_packet)
+            if body.context_packet is not None
+            else None
         )
     except Exception as exc:
         try:
@@ -1360,10 +1393,7 @@ async def approve_mission(mission_id: str, body: ApprovalIn) -> dict:
     rt = _runtimes.get(mission_id)
     if rt is None or rt.approval_event.is_set():
         raise HTTPException(status_code=409, detail="no pending approval for this mission")
-    if (
-        body.expected_action_id is not None
-        and body.expected_action_id != rt.pending_approval_action_id
-    ):
+    if body.expected_action_id != rt.pending_approval_action_id:
         raise HTTPException(status_code=409, detail="pending approval action changed or is unavailable")
     if body.approve:
         scope = _APPROVAL_SCOPE_MAP.get(body.scope)

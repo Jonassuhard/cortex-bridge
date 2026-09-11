@@ -360,6 +360,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .toolbar-right { justify-content: flex-end; }
 .toolbar-icon-button { width: 37px; height: 37px; color: var(--muted); }
 .toolbar-icon-button.is-active { color: var(--blue-light); background: var(--blue-soft); border-color: rgba(96,165,250,.2); }
+.toolbar-detail-button { display: inline-flex; align-items: center; gap: 7px; min-height: 34px; padding: 0 10px; color: var(--muted); border: 1px solid var(--line); border-radius: 9px; background: rgba(15,20,25,.72); cursor: pointer; font: inherit; font-size: 12px; transition: color .18s ease, border-color .18s ease, background .18s ease; }
+.toolbar-detail-button:hover, .toolbar-detail-button:focus-visible, .toolbar-detail-button.is-active { color: var(--text); border-color: var(--blue); background: rgba(31,58,103,.34); outline: none; }
 .conversation-title-block { min-width: 0; }
 .conversation-title-block > div { display: flex; align-items: center; gap: 5px; min-width: 0; }
 .conversation-title-block h1 { margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #fff; font-size: 15px; letter-spacing: -.015em; font-weight: 620; }
@@ -444,6 +446,33 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .mission-protocol-entry header { min-height: 32px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 10px; color: var(--muted); border-bottom: 1px solid var(--line); font: 8px var(--font-mono); }
 .mission-protocol-entry header strong { color: #aebbc4; font-weight: 600; }
 .mission-protocol-entry pre { max-height: 260px; margin: 0; padding: 11px; overflow: auto; color: #aebbc4; font: 8px/1.55 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.context-request-card { width: calc(100% - 40px); margin: 12px 0 18px 40px; padding: 14px; border: 1px solid rgba(96,165,250,.36); border-radius: 14px; background: linear-gradient(145deg, rgba(17,31,48,.92), rgba(8,13,18,.9)); box-shadow: var(--shadow-soft); }
+.context-request-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.context-request-head > div { min-width: 0; }
+.context-request-kicker { display: inline-flex; align-items: center; gap: 6px; color: #93c5fd; font: 9px var(--font-mono); text-transform: uppercase; letter-spacing: .08em; }
+.context-request-head h2 { margin: 7px 0 4px; color: #f2f7fa; font-size: 14px; font-weight: 650; }
+.context-request-head p { margin: 0; color: #b8c6d0; font-size: 11px; line-height: 1.5; }
+.context-request-id { flex: 0 0 auto; max-width: 150px; overflow: hidden; color: #7f91a2; font: 8px var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
+.context-request-safety { margin: 12px 0 10px; padding: 8px 10px; color: #b7d8c4; border: 1px solid rgba(74,222,128,.2); border-radius: 8px; background: rgba(34,197,94,.06); font-size: 10px; }
+.context-request-items { display: grid; gap: 8px; }
+.context-request-item { display: grid; grid-template-columns: 28px minmax(0,1fr) auto; align-items: center; gap: 10px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: rgba(5,8,11,.68); }
+.context-request-item.is-sent { border-color: rgba(74,222,128,.3); }
+.context-request-item.is-rejected, .context-request-item.is-failed { border-color: rgba(248,113,113,.26); }
+.context-request-item-icon { width: 27px; height: 27px; display: grid; place-items: center; color: #9ec8f5; border: 1px solid rgba(96,165,250,.25); border-radius: 8px; background: rgba(96,165,250,.08); }
+.context-request-item-main { min-width: 0; }
+.context-request-item-title { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.context-request-item-title strong { color: #dfe8ee; font-size: 10px; }
+.context-request-item-title code { min-width: 0; overflow: hidden; color: #8fa4b6; font: 9px var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
+.context-request-item-main p { margin: 3px 0; color: #a9b8c2; font-size: 9px; line-height: 1.45; }
+.context-request-item-main small { color: #7f91a2; font: 8px var(--font-mono); }
+.context-request-item.is-sent .context-request-item-main small { color: #86efac; }
+.context-request-item.is-rejected .context-request-item-main small, .context-request-item.is-failed .context-request-item-main small { color: #fca5a5; }
+.context-request-item-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.context-request-item-actions button { min-width: 74px; padding: 7px 9px; color: #061018; border: 1px solid #7db5e9; border-radius: 7px; background: #b9dcff; font-size: 9px; font-weight: 650; cursor: pointer; }
+.context-request-item-actions button:hover:not(:disabled) { background: #d6ebff; }
+.context-request-item-actions button:disabled { opacity: .48; cursor: not-allowed; }
+.context-request-item-actions .context-request-reject { color: #b6c2cb; border-color: var(--line); background: transparent; }
+.context-request-item-actions .context-request-reject:hover:not(:disabled) { color: #f0b5b5; border-color: rgba(248,113,113,.34); background: rgba(248,113,113,.06); }
 .empty-conversation { min-height: 65vh; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 38px 20px; }
 .empty-orb { width: 58px; height: 58px; display: grid; place-items: center; color: #dbeafe; border-radius: 18px; background: linear-gradient(145deg, rgba(37,99,235,.35), rgba(8,13,16,.8)); border: 1px solid rgba(96,165,250,.22); box-shadow: 0 0 80px rgba(37,99,235,.16); }
 .empty-conversation h1 { margin: 18px 0 10px; font-size: clamp(24px, 3vw, 38px); letter-spacing: -.04em; line-height: 1.05; }
@@ -777,6 +806,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .message-assistant, .message-cortex { gap: 8px; }
   .assistant-avatar { width: 25px; height: 25px; }
   .composer-shell { width: calc(100% - 16px); padding-bottom: 7px; }
+  .context-request-card { width: calc(100% - 16px); margin-left: 8px; }
+  .context-request-item { grid-template-columns: 26px minmax(0,1fr); }
+  .context-request-item-actions { grid-column: 2; justify-content: flex-start; }
   .composer-shortcut, .composer-footer > span { display: none; }
   .execution-detail-grid { grid-template-columns: 1fr 1fr; }
   .inline-approval { align-items: flex-start; flex-direction: column; }

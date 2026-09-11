@@ -11,6 +11,7 @@ import {
   type ConversationState,
 } from "@/lib/conversation-state";
 import type { ChatRun, ConversationSummary, CortexSettings, ExecutionPreflight } from "@/lib/types";
+import type { ContextRequest, ContextRequestItem } from "@/lib/contextRequest";
 import { ChatWorkspace } from "./ChatWorkspace";
 
 const summary = (key: string): ConversationSummary => ({
@@ -35,6 +36,8 @@ function ControlledWorkspace({
   onReloadConversation = () => undefined,
   onChatSend = () => undefined,
   onMissionStart = () => undefined,
+  onContextApprove = async () => true,
+  onContextReject = () => undefined,
   settings = demoSettings,
   transportLatencyMs = 128,
 }: {
@@ -45,6 +48,8 @@ function ControlledWorkspace({
   onReloadConversation?: (key: string) => void;
   onChatSend?: (key: string, text: string) => void;
   onMissionStart?: (key: string, text: string, preflight: ExecutionPreflight) => void;
+  onContextApprove?: (key: string, request: ContextRequest, item: ContextRequestItem) => Promise<boolean>;
+  onContextReject?: (key: string, item: ContextRequestItem) => void;
   settings?: CortexSettings;
   transportLatencyMs?: number | null;
 }) {
@@ -122,6 +127,8 @@ function ControlledWorkspace({
         }}
         onSendAttachment={(key) => send(key)}
         onSendScreenshot={(key) => send(key, false)}
+        onApproveContextItem={onContextApprove}
+        onRejectContextItem={onContextReject}
         onStartMission={(key, text, preflight) => {
           onMissionStart(key, text, preflight);
           return send(key);
@@ -196,6 +203,36 @@ function stateWithMissionProtocol(includeMission = true): ConversationState {
     key: "a",
     missionId: demoMissionDetail.mission.id,
     mission: demoMissionDetail,
+  });
+}
+
+function stateWithContextRequest(): ConversationState {
+  let state = createConversationState([summary("a")], "a");
+  state = conversationReducer(state, { type: "SWITCH_STARTED", key: "a", epoch: 1 });
+  return conversationReducer(state, {
+    type: "SNAPSHOT_RECEIVED",
+    key: "a",
+    epoch: 1,
+    snapshot: {
+      url: "https://chatgpt.com/c/a",
+      conversation_id: "a",
+      title: "Demande de contexte",
+      blocker: null,
+      composer_present: true,
+      send_button_present: true,
+      stop_button_present: false,
+      streaming: false,
+      messages: [{
+        id: "context-request",
+        role: "assistant",
+        text: `Je peux continuer dès que tu valides.\n\n\`\`\`cortex-context-request\n${JSON.stringify({
+          protocol: "cortex-context-request.v1",
+          requestId: "ctx-card-1",
+          summary: "Lire un fichier pour vérifier la correction",
+          items: [{ id: "file-1", kind: "file", reason: "Comparer le résultat", path: "reports/result.txt" }],
+        })}\n\`\`\``,
+      }],
+    },
   });
 }
 
@@ -382,6 +419,27 @@ describe("ChatWorkspace controlled composer", () => {
     expect(screen.getByRole("button", { name: "Voir le protocole (2 échanges techniques)" })).toBeInTheDocument();
     expect(screen.queryByText(/You are the cloud orchestrator for Cortex Bridge/)).not.toBeInTheDocument();
     expect(screen.queryByText(/cortex-decision/)).not.toBeInTheDocument();
+  });
+
+  it("shows an explicit per-item context approval and confirms the local action", async () => {
+    const approve = vi.fn<(key: string, request: ContextRequest, item: ContextRequestItem) => Promise<boolean>>().mockResolvedValue(true);
+    const user = userEvent.setup();
+    render(<ControlledWorkspace initialState={stateWithContextRequest()} onContextApprove={approve} />);
+
+    expect(screen.getByRole("heading", { name: "ChatGPT demande du contexte" })).toBeInTheDocument();
+    expect(screen.getByText("reports/result.txt")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Autoriser" }));
+    await waitFor(() => expect(approve).toHaveBeenCalledWith(
+      "a",
+      expect.objectContaining({ requestId: "ctx-card-1" }),
+      expect.objectContaining({ kind: "file", path: "reports/result.txt" }),
+    ));
+    expect(screen.getByText("Envoyé")).toBeInTheDocument();
+  });
+
+  it("labels the technical inspector control instead of hiding it behind an icon", () => {
+    render(<ControlledWorkspace />);
+    expect(screen.getByRole("button", { name: "Afficher les détails techniques" })).toHaveAttribute("aria-expanded", "false");
   });
 
   it("keeps mission protocol out of the conversation until the user asks for it", () => {

@@ -23,6 +23,7 @@ from orchestration.loop import (  # noqa: E402
     MissionLoop,
     MockOrchestrator,
     MockReply,
+    contract_message,
     default_trace_validator,
 )
 from orchestration.state import (  # noqa: E402
@@ -93,6 +94,11 @@ class LoopTestCase(unittest.IsolatedAsyncioTestCase):
             **kwargs,
         )
         return loop, mock
+
+    def test_contract_never_discloses_local_workspace(self):
+        contract = contract_message("objective", "mission-1", "/Users/jonas/private")
+        self.assertIn("Workspace: <authorized-workspace>", contract)
+        self.assertNotIn("/Users/jonas/private", contract)
 
     async def test_process_exit_nonzero_is_failed(self):
         (self.ws / "fail.py").write_text(

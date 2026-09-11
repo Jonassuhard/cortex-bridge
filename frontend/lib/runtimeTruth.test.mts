@@ -5,6 +5,7 @@ import test from "node:test";
 import vm from "node:vm";
 
 import * as runtimeTruthModule from "./runtimeTruth.ts";
+import * as contextRequestModule from "./contextRequest.ts";
 import * as iconsModule from "../components/Icons.tsx";
 const {
   createUnavailableClientState,
@@ -41,6 +42,7 @@ function loadTsxExport(path: URL, exportName: string): React.ComponentType<Recor
   const localRequire = (specifier: string): unknown => {
     if (specifier === "react" || specifier === "react/jsx-runtime") return require(specifier);
     if (specifier === "@/lib/runtimeTruth") return runtimeTruthModule;
+    if (specifier === "@/lib/contextRequest") return contextRequestModule;
     if (specifier === "@/lib/api") {
       return {
         formatDuration: (value: number) => `${value} ms`,

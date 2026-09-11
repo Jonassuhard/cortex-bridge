@@ -32,6 +32,7 @@ import type {
   TransportProbeStatus,
   TransportCapabilities,
 } from "@/lib/types";
+import type { ContextRequest, ContextRequestItem } from "@/lib/contextRequest";
 import {
   attachmentSizeError,
   normalizeTransportCapabilities,
@@ -980,6 +981,41 @@ export function CortexApp() {
     }
   }
 
+  async function approveContextItem(key: ConversationKey, request: ContextRequest, item: ContextRequestItem): Promise<boolean> {
+    const conversation = conversationForKey(key);
+    if (!conversation) return false;
+    if (!transport.opt_in_accepted && !demoMode) {
+      notify("Active d'abord le transport expérimental dans les paramètres.");
+      openSettings("transport");
+      return false;
+    }
+    if (!beginExecution(key)) return false;
+    try {
+      const run = await runInitialRequest(key, (signal) => postJson<ChatRun>("/api/chat/approve-context", {
+        conversation_url: conversation.url,
+        workspace: settings.default_workspace,
+        request_id: request.requestId,
+        item_id: item.id,
+        item: {
+          id: item.id,
+          kind: item.kind,
+          reason: item.reason,
+          path: item.path,
+          target: item.target,
+          url: item.url,
+        },
+        new_conversation: isProvisional(key, conversation),
+      }, { signal }));
+      chatStreams.subscribe(key, run, { submittedDraft: run.text, submittedAttachment: null });
+      notify(`Contexte autorisé : ${item.kind}. Confirmation ChatGPT en cours.`);
+      return true;
+    } catch (error) {
+      if (error instanceof InitialRequestInterruptedError) return false;
+      requestFailed(key, error, "Impossible d'envoyer le contexte autorisé.");
+      return false;
+    }
+  }
+
   async function startMission(
     key: ConversationKey,
     text: string,
@@ -1088,11 +1124,20 @@ export function CortexApp() {
     }
   }
 
-  async function approve(key: ConversationKey, scope: "once" | "tool" | "all-writes") {
+  async function approve(key: ConversationKey, scope: "once" | "tool" | "all-writes", actionId: string) {
     const missionId = conversationState.entries[key]?.missionId;
+    const pendingActionId = conversationState.entries[key]?.mission?.pending_approval_action_id;
     if (!missionId) return;
+    if (!pendingActionId || pendingActionId !== actionId) {
+      notify("Approbation impossible : l'action en attente n'est plus disponible.");
+      return;
+    }
     try {
-      await postJson(`/api/missions/${missionId}/approve`, { scope, approve: true });
+      await postJson(`/api/missions/${missionId}/approve`, {
+        scope,
+        approve: true,
+        expected_action_id: actionId,
+      });
       notify("Action approuvée.");
       await refreshMissionFor(key, missionId);
     } catch (error) {
@@ -1102,9 +1147,18 @@ export function CortexApp() {
 
   async function reject(key: ConversationKey) {
     const missionId = conversationState.entries[key]?.missionId;
+    const pendingActionId = conversationState.entries[key]?.mission?.pending_approval_action_id;
     if (!missionId) return;
+    if (!pendingActionId) {
+      notify("Refus impossible : l'action en attente n'est plus disponible.");
+      return;
+    }
     try {
-      await postJson(`/api/missions/${missionId}/approve`, { scope: "once", approve: false });
+      await postJson(`/api/missions/${missionId}/approve`, {
+        scope: "once",
+        approve: false,
+        expected_action_id: pendingActionId,
+      });
       notify("Action refusée et rapportée à ChatGPT.");
       await refreshMissionFor(key, missionId);
     } catch (error) {
@@ -1226,6 +1280,8 @@ export function CortexApp() {
         onSendChat={sendChat}
         onSendAttachment={sendAttachment}
         onSendScreenshot={sendScreenshot}
+        onApproveContextItem={approveContextItem}
+        onRejectContextItem={(key, item) => notify(`Contexte refusé : ${item.kind}.`)}
         onStartMission={startMission}
         onCancelChat={(key) => void cancelChat(key)}
         onRetryChatRecovery={(key) => void retryChatRecovery(key)}
@@ -1234,7 +1290,7 @@ export function CortexApp() {
         onPauseMission={(key) => void missionAction(key, "pause")}
         onResumeMission={(key) => void missionAction(key, "resume")}
         onCancelMission={(key) => void missionAction(key, "cancel")}
-        onApprove={(key, scope) => void approve(key, scope)}
+        onApprove={(key, scope, actionId) => void approve(key, scope, actionId)}
         onReject={(key) => void reject(key)}
       />
 

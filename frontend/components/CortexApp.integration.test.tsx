@@ -774,6 +774,7 @@ describe("CortexApp conversation integration", () => {
       },
       timeline: {},
       awaiting_approval: false,
+      pending_approval_action_id: null,
       stopped: false,
     } as MissionDetail;
     const projected = projectPipelineForConversation(pipeline, missionA, "conversation-b");
@@ -817,6 +818,7 @@ describe("CortexApp conversation integration", () => {
       },
       timeline: {},
       awaiting_approval: false,
+      pending_approval_action_id: null,
       stopped: false,
     } as MissionDetail;
 
@@ -1091,6 +1093,7 @@ describe("CortexApp conversation integration", () => {
       },
       timeline: {},
       awaiting_approval: false,
+      pending_approval_action_id: null,
       stopped: false,
     };
     network.api.mockImplementation((path: string) => {
@@ -1143,7 +1146,7 @@ describe("CortexApp conversation integration", () => {
     await user.click(screen.getByRole("button", { name: "Exécuter sur ce Mac…" }));
     await user.click(screen.getByRole("button", { name: "Démarrer en lecture seule" }));
     await screen.findByText("Mission A isolée");
-    await user.click(screen.getByTitle("Détails du bridge (pipeline, logs, transport)"));
+    await user.click(screen.getByRole("button", { name: "Afficher les détails techniques" }));
     const inspector = within(screen.getByLabelText("État du pipeline"));
     expect(inspector.getByText("Composant mission A")).toBeInTheDocument();
     expect(inspector.getByText("Événement mission A")).toBeInTheDocument();
@@ -1240,6 +1243,7 @@ describe("CortexApp conversation integration", () => {
         }],
       },
       awaiting_approval: false,
+      pending_approval_action_id: null,
       stopped: false,
     };
     network.api.mockImplementation((path: string) => {

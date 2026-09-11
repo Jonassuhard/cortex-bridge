@@ -18,6 +18,7 @@ only after the user accepts EXPERIMENTAL_TRANSPORT_WARNING). Default off.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -34,6 +35,7 @@ from transport.chatgpt_web.adapter import (
     ChatGPTWebTransport,
     TransportError,
 )
+from .context import render_supervisor_prompt
 
 EXPERIMENTAL_TRANSPORT_NOT_ACCEPTED = "EXPERIMENTAL_TRANSPORT_NOT_ACCEPTED"
 
@@ -53,7 +55,7 @@ You adapt the next action based on the report.
 You terminate only when all global acceptance criteria are satisfied.
 
 Mission ID: {mission_id}
-Workspace: {workspace}
+Workspace: <authorized-workspace>
 
 Objective:
 {objective}
@@ -91,6 +93,9 @@ Rules:
 
 Tool argument schemas (unknown argument names are rejected):
 {tool_schemas}
+
+Context packet:
+{context_packet}
 """
 
 
@@ -98,14 +103,34 @@ class OptInRequired(Exception):
     """§6: experimental transport used without explicit user acceptance."""
 
 
-def render_contract(objective: str, mission_id: str, workspace: str) -> str:
+def render_contract(
+    objective: str,
+    mission_id: str,
+    workspace: str,
+    *,
+    context_packet: str | None = None,
+) -> str:
     return ORCHESTRATOR_CONTRACT_TEMPLATE.format(
         mission_id=mission_id,
         workspace=workspace,
         objective=objective,
         tools=ALLOWED_TOOLS_CSV,
         tool_schemas=_tool_schema_summary(),
+        context_packet=(
+            context_packet.strip()
+            if isinstance(context_packet, str) and context_packet.strip()
+            else "(no context packet supplied; request bounded read-only context when needed)"
+        ),
     )
+
+
+def render_desktop_supervisor_prompt(
+    packet: Mapping[str, object],
+    decision_contract: str,
+) -> str:
+    """Expose the pure desktop-supervisor formatter at the runner boundary."""
+
+    return render_supervisor_prompt(packet, decision_contract)
 
 
 def _tool_schema_summary() -> str:
@@ -196,6 +221,7 @@ class ModeARunner:
         conversation_url: str | None = None,
         new_conversation_url: str | None = None,
         mission_id: str | None = None,
+        context_packet: str | None = None,
     ) -> dict:
         """End-to-end Mode A. Exactly one of conversation_url (existing
         /c/<id>) or new_conversation_url (fresh chat surface) is required."""
@@ -258,7 +284,12 @@ class ModeARunner:
                     if lock
                     else {"url": new_conversation_url, "title": None, "target_id": None}
                 ),
-                contract=render_contract(objective, mission_id, str(self.tools.workspace)),
+                contract=render_contract(
+                    objective,
+                    mission_id,
+                    str(self.tools.workspace),
+                    context_packet=context_packet,
+                ),
             )
             return self._persist_runtime_truth(
                 mission_id, await loop.run(max_cycles=self.max_cycles)

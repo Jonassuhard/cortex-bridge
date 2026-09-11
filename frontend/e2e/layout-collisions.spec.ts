@@ -49,7 +49,7 @@ for (const width of [375, 768, 1024, 1440]) {
     const groups = [".conversation-toolbar", ".toolbar-left", ".conversation-title-block > div", ".status-rail", ".status-pill", ".composer-right-actions", ".composer-right-actions > button"];
     expect(await collisions(appPage, groups)).toEqual([]);
     expect(await clippedLabels(appPage, ".conversation-title-block h1, .conversation-title-block p")).toEqual([]);
-    await appPage.getByRole("button", { name: /Détails du bridge/ }).click();
+    await appPage.getByRole("button", { name: /Afficher les détails techniques/ }).click();
     await settleLayout(appPage);
     expect(await collisions(appPage, [...groups, ".pipeline-head", ".pipeline-component"])).toEqual([]);
     expect(await clippedLabels(appPage, ".conversation-title-block h1, .conversation-title-block p")).toEqual([]);

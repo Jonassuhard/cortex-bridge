@@ -215,6 +215,24 @@ class MissionsApiTestCase(unittest.TestCase):
         payload.update(overrides)
         return self.post("/api/missions", payload)
 
+    def pending_action_id(self):
+        _, detail = self.get(f"/api/missions/{self.mission_id}")
+        self.assertTrue(detail["awaiting_approval"])
+        action_id = detail["pending_approval_action_id"]
+        self.assertIsInstance(action_id, str)
+        self.assertTrue(action_id)
+        return action_id
+
+    def approve_pending(self, *, approve=True, scope="once"):
+        return self.post(
+            f"/api/missions/{self.mission_id}/approve",
+            {
+                "scope": scope,
+                "approve": approve,
+                "expected_action_id": self.pending_action_id(),
+            },
+        )
+
     # -- tests ---------------------------------------------------------------
 
     def test_01_optin_gate_403(self):
@@ -264,8 +282,7 @@ class MissionsApiTestCase(unittest.TestCase):
         d = self.wait_state(self.mission_id, "WAITING_FOR_APPROVAL",
                             extra=lambda d: d["awaiting_approval"])
         self.assertTrue(d["awaiting_approval"])
-        status, _ = self.post(f"/api/missions/{self.mission_id}/approve",
-                              {"scope": "once", "approve": True})
+        status, _ = self.approve_pending()
         self.assertEqual(status, 200)
         d = self.wait_terminal(self.mission_id)
         self.assertEqual(d["mission"]["state"], "COMPLETED")
@@ -285,14 +302,37 @@ class MissionsApiTestCase(unittest.TestCase):
         self.assertEqual(status, 201, body)
         self.wait_state(self.mission_id, "WAITING_FOR_APPROVAL",
                         extra=lambda d: d["awaiting_approval"])
-        status, _ = self.post(f"/api/missions/{self.mission_id}/approve",
-                              {"scope": "once", "approve": False})
+        status, _ = self.approve_pending(approve=False)
         self.assertEqual(status, 200)
         d = self.wait_terminal(self.mission_id)
         self.assertEqual(d["mission"]["state"], "BLOCKED")
         self.assertFalse((self.ws / "b.txt").exists())  # rejected → never written
         approvals = missions_api.get_store().rows("approvals", self.mission_id)
         self.assertEqual(approvals[0]["approved"], 0)
+
+    def test_04a_approval_requires_the_visible_action_identity(self):
+        self.optin()
+        status, body = self.start_mission([
+            decision_reply(self.mission_id, 1, "EXECUTE", tool="write_file",
+                           arguments={"path": "identity.txt", "content": "ok"},
+                           criteria=["identity.txt written"]),
+            decision_reply(self.mission_id, 2, "COMPLETE",
+                           criteria=["identity.txt exists"], terminal=True),
+        ], "Create identity.txt.", approval_policy="workspace-write-with-approvals")
+        self.assertEqual(status, 201, body)
+        self.wait_state(self.mission_id, "WAITING_FOR_APPROVAL",
+                        extra=lambda d: d["awaiting_approval"])
+
+        status, refused = self.post(f"/api/missions/{self.mission_id}/approve",
+                                    {"scope": "once", "approve": True})
+        self.assertEqual(status, 422)
+        self.assertIn("expected_action_id", refused["detail"][0]["loc"])
+        self.assertEqual(self.get(f"/api/missions/{self.mission_id}")[1]["mission"]["state"],
+                         "WAITING_FOR_APPROVAL")
+
+        status, _ = self.approve_pending()
+        self.assertEqual(status, 200)
+        self.assertEqual(self.wait_terminal(self.mission_id)["mission"]["state"], "COMPLETED")
 
     def test_04b_empty_complete_fails_closed(self):
         self.optin()
@@ -361,7 +401,8 @@ class MissionsApiTestCase(unittest.TestCase):
         self.assertEqual(paused["mission"]["paused_from_state"], "WAITING_FOR_APPROVAL")
 
         status, refused = self.post(f"/api/missions/{self.mission_id}/approve",
-                                    {"scope": "once", "approve": True})
+                                    {"scope": "once", "approve": True,
+                                     "expected_action_id": "paused-action"})
         self.assertEqual(status, 409)
         self.assertIn("Aucune approbation applicable", refused["detail"])
 
@@ -371,8 +412,7 @@ class MissionsApiTestCase(unittest.TestCase):
         self.wait_state(self.mission_id, "WAITING_FOR_APPROVAL",
                         extra=lambda d: d["awaiting_approval"])
 
-        status, _ = self.post(f"/api/missions/{self.mission_id}/approve",
-                              {"scope": "once", "approve": True})
+        status, _ = self.approve_pending()
         self.assertEqual(status, 200)
         terminal = self.wait_terminal(self.mission_id)
         self.assertEqual(terminal["mission"]["state"], "COMPLETED")
@@ -404,8 +444,7 @@ class MissionsApiTestCase(unittest.TestCase):
         runtime._tools.write_file = blocked_write_file
         self.addCleanup(release_action.set)
 
-        status, _ = self.post(f"/api/missions/{self.mission_id}/approve",
-                              {"scope": "once", "approve": True})
+        status, _ = self.approve_pending()
         self.assertEqual(status, 200)
         self.wait_state(self.mission_id, "EXECUTING_LOCAL_ACTION")
 

@@ -343,6 +343,7 @@ export interface MissionDetail {
   mission: MissionSummary;
   timeline: Record<string, TimelineRow[]>;
   awaiting_approval: boolean;
+  pending_approval_action_id: string | null;
   stopped: boolean;
 }
 

@@ -7,13 +7,12 @@ Use a ChatGPT web conversation as the reasoning side of a local, reviewed
 execution workflow. Choose the Atelier graphical interface or the optional
 CORTEX terminal. Both use the same local backend; neither adds a second engine.
 
-**Status: 0.6.1 technical-preview candidate, not a provider-authorized or
-verified live release.** The full-screen terminal smoke/CLI slice passes 82
-tests; the complete backend suite passes 725 tests. The frontend passes 207
-unit tests plus 36 runtime/privacy contracts, typecheck, lint and a static
-build. Browser fixtures pass 26 E2E tests (one optional guide test skipped) and
-4 accessibility checks. The release evidence manifest records the remaining
-provider-terms and clean-install boundaries; see [current evidence](docs/verification-v061.md).
+**Status: 0.6.1 technical-preview candidate with the 0.6.2 simple-harness
+workstream, not a provider-authorized or verified live release.** The current
+local run passes 739 backend tests and 214 frontend unit tests, plus TypeScript,
+lint and a production build. Historical browser and runtime gates remain
+documented separately; see [current evidence](docs/verification-v061.md) and
+the [simple-harness verification](docs/verification/v0.6.2-simple-harness.md).
 Earlier release evidence does not validate this candidate.
 
 Created by [Jonas Suhard](https://github.com/Jonassuhard).
@@ -50,6 +49,10 @@ MIT-licensed, independent and not affiliated with OpenAI.
 - No automatic resend when delivery is uncertain.
 - In-memory terminal drafts, isolated by submission and conversation.
 - Once-only terminal approvals bound to the backend's pending action identity.
+- Bounded `cortex-context-request.v1` proposals for files, screenshots and links;
+  each item is approved separately and duplicate approvals are idempotent.
+- A pure desktop-supervisor prompt/report formatter that keeps the ChatGPT
+  attachment capability explicit instead of pretending that a file was sent.
 - Chrome-extension transport; no OpenAI API key on this transport path.
 - A deterministic local executor; Ollama remains optional.
 

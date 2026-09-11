@@ -227,7 +227,8 @@ class ModeARunnerTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertIn("```cortex-report", contract)
         self.assertIn(mission_id, contract)
         self.assertIn("objective text", contract)
-        self.assertIn("/some/workspace", contract)
+        self.assertIn("Workspace: <authorized-workspace>", contract)
+        self.assertNotIn("/some/workspace", contract)
         self.assertIn("run_process", contract)  # allowed tools enumerated
         self.assertIn("Recorded local execution evidence", contract)
 
