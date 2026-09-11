@@ -37,17 +37,18 @@
 - All changes stay in the independent candidate; the original local checkout
   and installed runtime must not be modified.
 - Dependency upgrades/installations are applied and the complete local gate is green.
-- The candidate may be tagged as a technical preview; primary-branch integration
-  remains blocked while provider and clean-install gates are unavailable.
+- The candidate commit `cf1dac81d018a3b8a3b2acf1dd3d9e726bbb17ec` is now pushed
+  to the public `codex/v061-atelier` branch. `main` remains unchanged.
+- Primary-branch integration remains blocked while provider and clean-install
+  gates are unavailable.
 - Public reports must not include personal paths, account details or private records.
 - Local session details, if present, are retained in ignored docs/LOCAL_SESSION_V061.md.
 
 ## Current verification state
-The last sealed commit is pushed at `821fddd` on `codex/v061-atelier`; the
-working tree now contains uncommitted context-proposal hardening and related
-test updates. ChatGPT Pro reviewed the sanitized production archive plus
-`orchestration/runner.py` and returned READY on the listed invariants, based
-on static inspection only.
+The sealed commit `cf1dac81d018a3b8a3b2acf1dd3d9e726bbb17ec` is pushed on
+`codex/v061-atelier`; the working tree is clean. ChatGPT Pro reviewed the
+sanitized production archive plus `orchestration/runner.py` and returned READY
+on the listed invariants, based on static inspection only.
 The candidate remains a technical preview; `main` is intentionally not
 integrated while provider-backed and clean-install gates remain unresolved.
 
@@ -106,9 +107,8 @@ Context approvals now also reject unknown item fields with Pydantic
 `extra="forbid"`; the regression is covered by `tests/test_context_approval.py`.
 
 ## Next action
-- Reconcile the current diff into a deliberate commit after reviewing the
-  remaining user-owned UI/docs changes; do not push or merge without explicit
-  authorization.
+- Run the remaining live/provider-backed acceptance gates in a fresh macOS
+  environment; do not merge into `main` until those gates have evidence.
 - npm scripts remain blocked by the local npm `11.11.1` versus repository
   requirement `11.18.0`; direct installed binaries were used for frontend
   verification without changing dependencies.
