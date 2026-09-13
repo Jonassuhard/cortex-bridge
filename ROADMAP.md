@@ -2,7 +2,23 @@
 
 Public, best-effort roadmap. Dates are indicative; scope beats schedule.
 
-## v0.5.x — current (technical preview)
+## 0.6.1 candidate — implemented, release acceptance still open
+
+- [x] Atelier layout, task states and geometric project card.
+- [x] Optional CORTEX terminal sharing the backend, settings and mission policy.
+- [x] Selected conversation history, replies and explicit delivery acknowledgement.
+- [x] Scoped cancellation, preserved in-memory submissions and atomic terminal approvals.
+- [x] Resolve the six npm dependency findings in the 0.6.1 candidate lock.
+- [ ] Pass the remaining installation, live acceptance and release-evidence gates.
+- [ ] Validate a clean user installation and live provider workflow for these bytes.
+- [ ] Persist terminal drafts across restarts.
+- [ ] Native Windows validation and distribution.
+
+The historical roadmap below is retained for context. An implementation check
+does not mean the same feature has been validated live in 0.6.1. The public
+default branch was still 0.5.3 when this candidate's publication review began.
+
+## v0.5.x — historical technical preview
 
 - [x] v0.5.0 — release candidate: conversation-first French UI, execution
       preflight, two isolated writers, attachments, consent-bound installer,
@@ -11,15 +27,18 @@ Public, best-effort roadmap. Dates are indicative; scope beats schedule.
       capture, contractual-risk opt-in control.
 - [x] v0.5.2 — one-command onboarding, French guides, unified mission
       history, clear paused/limit states, stable default workspace.
-- [ ] v0.5.3 (2026-08-25 candidate): release QA in progress, with native
-      macOS attachment activation,
-      optional Freebuff installation guidance, fail-closed private screenshot
-      masking, deterministic mission-preflight truth and stricter release
-      evidence validation. Owner-authorized technical observations now cover
-      the live Chrome pairing, one and two conversations, third-writer refusal,
-      file and private screenshot delivery, and three accepted disposable
-      mini-sites. Publication still requires the final clean source commit,
-      v0.5.3 evidence manifest, review and explicit push/tag approval.
+- [x] v0.5.3 (2026-08-25): release QA closed, with native macOS attachment
+      activation, optional Freebuff installation guidance, fail-closed private
+      screenshot masking, deterministic mission-preflight truth and stricter
+      release evidence validation. Live gates verified: third-writer refusal
+      with staged file, conversation switch < 10 s, timeout recovery, public
+      tree checks. Tag pushed, evidence manifest sealed.
+- [x] v0.5.4 (2026-08-27): one-command launch (`scripts/cortex.sh go`, also
+      behind the double-clickable `Cortex Bridge.command`), automatic
+      extension pairing on console load, a shared **Cortex Bridge** Chrome tab
+      group for the console and ChatGPT tabs, an on-demand 3-step startup
+      guide in the sidebar, self-heal reconnect alarm (30 s), and
+      `cortex.sh selftest` for self-diagnostic.
 - [x] Real-production-extension live capture E2E (2026-08-22: production
       debugger/CDP capture, PNG upload, canonical new-chat lock and visible
       response; stale-paint and attachment-lock regressions fixed first).

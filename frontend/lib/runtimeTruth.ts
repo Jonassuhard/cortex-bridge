@@ -346,7 +346,7 @@ export function statusPresentation(state?: string): StatusPresentation {
     return { connected: false, label: "Inactif", tone: "unknown" };
   }
   if (state === "degraded") {
-    return { connected: false, label: "Dégradé", tone: "unknown" };
+    return { connected: false, label: "Candidat détecté", tone: "unknown" };
   }
   if (state === "unavailable" || state === "failed" || state === "error" || state === "disconnected" || state === "blocked") {
     return { connected: false, label: "Indisponible", tone: "offline" };

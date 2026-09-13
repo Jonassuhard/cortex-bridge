@@ -67,6 +67,10 @@ STALLED_STATES = ("PAUSED", "PAUSED_RECOVERY_REQUIRED")
 
 def contract_message(objective: str, mission_id: str, workspace: str) -> str:
     """The §9 orchestrator contract sent as the first transport message."""
+    # The local path is an implementation detail.  The orchestrator only needs
+    # the fact that a server-authorized workspace exists; including the path
+    # would leak the user's filesystem layout into the remote conversation.
+    del workspace
     return (
         "You are the cloud orchestrator for Cortex Bridge.\n\n"
         "You analyze the global objective.\n"
@@ -76,7 +80,7 @@ def contract_message(objective: str, mission_id: str, workspace: str) -> str:
         "You adapt the next action based on the report.\n"
         "You terminate only when all global acceptance criteria are satisfied.\n\n"
         f"Mission ID: {mission_id}\n"
-        f"Workspace: {workspace}\n\n"
+        "Workspace: <authorized-workspace>\n\n"
         f"Objective:\n{objective}\n\n"
         "Answer with exactly one fenced block and no other structured payload:\n"
         "```cortex-decision\n{...valid cortex.v1 JSON...}\n```"

@@ -375,6 +375,16 @@ class CrossRouteLeakRegressionTest(unittest.IsolatedAsyncioTestCase):
         missions_api.optin_accepted = lambda: True
 
     async def asyncTearDown(self) -> None:
+        # Finish only this fixture's work before restoring the shared globals.
+        tasks = [run.task for run in chat_api._runs.values() if run.task is not None]
+        tasks += [rt.task for rt in missions_api._runtimes.values() if rt.task is not None]
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        if missions_api._store is not None:
+            missions_api._store.close()
         write_slots._registry = self.saved_registry
         chat_api.ui_transport_factory = self.saved_chat_factory
         chat_api.CHAT_RUNS_FILE = self.saved_chat_runs_file

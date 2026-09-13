@@ -5,6 +5,8 @@ import test from "node:test";
 import vm from "node:vm";
 
 import * as runtimeTruthModule from "./runtimeTruth.ts";
+import * as contextRequestModule from "./contextRequest.ts";
+import * as iconsModule from "../components/Icons.tsx";
 const {
   createUnavailableClientState,
   executorDisplay,
@@ -40,6 +42,7 @@ function loadTsxExport(path: URL, exportName: string): React.ComponentType<Recor
   const localRequire = (specifier: string): unknown => {
     if (specifier === "react" || specifier === "react/jsx-runtime") return require(specifier);
     if (specifier === "@/lib/runtimeTruth") return runtimeTruthModule;
+    if (specifier === "@/lib/contextRequest") return contextRequestModule;
     if (specifier === "@/lib/api") {
       return {
         formatDuration: (value: number) => `${value} ms`,
@@ -55,7 +58,10 @@ function loadTsxExport(path: URL, exportName: string): React.ComponentType<Recor
         }),
       };
     }
-    if (specifier === "./Icons" || specifier === "./CortexLogo") return iconModules;
+    if (specifier === "./Icons") return iconsModule;
+    if (specifier === "./CortexLogo") return iconModules;
+    if (specifier === "./TaskProgress") return { TaskProgress: loadTsxExport(new URL("../components/TaskProgress.tsx", import.meta.url), "TaskProgress") };
+    if (specifier === "./CortexProjectCard") return { CortexProjectCard: loadTsxExport(new URL("../components/CortexProjectCard.tsx", import.meta.url), "CortexProjectCard") };
     if (specifier === "./Composer" || specifier === "./ExecutionPreflightDialog") {
       return new Proxy({}, {
         get: (_target, property) => {

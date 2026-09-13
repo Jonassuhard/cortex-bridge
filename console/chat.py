@@ -12,17 +12,18 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 import missions as missions_api
 import write_slots
@@ -161,6 +162,27 @@ class ChatScreenshotIn(BaseModel):
     new_conversation: bool = False
 
 
+class ContextApprovalItemIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    kind: Literal["file", "screenshot", "link"]
+    reason: str
+    path: str | None = None
+    target: str | None = None
+    url: str | None = None
+
+
+class ContextApprovalIn(BaseModel):
+    conversation_url: str
+    workspace: str
+    request_id: str
+    item_id: str
+    item: ContextApprovalItemIn
+    text: str = ""
+    new_conversation: bool = False
+
+
 class ChatCancelIn(BaseModel):
     reason: str = "USER_CANCEL"
 
@@ -176,6 +198,28 @@ _view_url: str | None = None
 _view_mutex = asyncio.Lock()
 _view_operation_mutex: asyncio.Lock | None = None
 _view_operation_loop: asyncio.AbstractEventLoop | None = None
+_context_approval_registry: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+# Requests are populated only from assistant messages observed through the
+# server-side ChatGPT transport.  The client may approve an observed item, but
+# it cannot mint a request/item identity by posting directly to the endpoint.
+_observed_context_registry: dict[tuple[str, str, str], dict[str, Any]] = {}
+_context_approval_mutex: asyncio.Lock | None = None
+_context_approval_loop: asyncio.AbstractEventLoop | None = None
+
+_CONTEXT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+_CONTEXT_REQUEST_FENCE_RE = re.compile(
+    r"```cortex-context-request(?:\.v1)?[ \t]*\r?\n([\s\S]*?)```",
+    re.IGNORECASE,
+)
+_CONTEXT_PROTOCOL = "cortex-context-request.v1"
+_CONTEXT_MAX_ITEMS = 10
+_CONTEXT_MAX_REASON_CHARS = 500
+_CONTEXT_MAX_SUMMARY_CHARS = 600
+
+
+def _context_conversation_key(url: str) -> str:
+    """Use one stable identity for ChatGPT URLs with/without a trailing slash."""
+    return url.rstrip("/")
 
 
 def _view_operation_lock() -> asyncio.Lock:
@@ -186,6 +230,172 @@ def _view_operation_lock() -> asyncio.Lock:
         _view_operation_mutex = asyncio.Lock()
         _view_operation_loop = loop
     return _view_operation_mutex
+
+
+def _context_approval_lock() -> asyncio.Lock:
+    """Return the idempotency lock for the current event loop."""
+    global _context_approval_mutex, _context_approval_loop
+    loop = asyncio.get_running_loop()
+    if _context_approval_mutex is None or _context_approval_loop is not loop:
+        _context_approval_mutex = asyncio.Lock()
+        _context_approval_loop = loop
+    return _context_approval_mutex
+
+
+def _validate_context_identity(value: str, field: str) -> str:
+    if not isinstance(value, str) or not _CONTEXT_ID_RE.fullmatch(value):
+        raise HTTPException(
+            status_code=422,
+            detail=f"{field} must be a bounded token (letters, numbers, '.', '_' ':' or '-')",
+        )
+    return value
+
+
+def _authorized_context_workspace() -> Path:
+    """Return the canonical workspace selected in the persisted settings.
+
+    Context approvals must be rooted at the server-selected workspace, not at
+    an arbitrary path supplied by a browser client.  Missing or invalid
+    settings fail closed.
+    """
+    default = Path.home() / "cortex-workspaces"
+    try:
+        raw = json.loads(RUNTIME_PATHS.settings.read_text(encoding="utf-8"))
+        configured = raw.get("default_workspace") if isinstance(raw, dict) else None
+        if isinstance(configured, str) and configured.strip():
+            default = Path(configured).expanduser()
+    except (OSError, json.JSONDecodeError):
+        pass
+    try:
+        root = default.resolve(strict=True)
+    except (OSError, RuntimeError):
+        raise HTTPException(status_code=503, detail="authorized workspace is unavailable")
+    if not root.is_dir():
+        raise HTTPException(status_code=503, detail="authorized workspace is not a directory")
+    return root
+
+
+def _context_item_payload(item: dict[str, Any]) -> dict[str, Any] | None:
+    """Normalize one assistant-proposed context item for provenance checks."""
+    if not isinstance(item, dict):
+        return None
+    item_id = item.get("id")
+    reason = item.get("reason")
+    kind = item.get("kind")
+    if (
+        not isinstance(item_id, str)
+        or not _CONTEXT_ID_RE.fullmatch(item_id.strip())
+        or not isinstance(reason, str)
+        or not reason.strip()
+        or len(reason.strip()) > _CONTEXT_MAX_REASON_CHARS
+        or kind not in {"file", "screenshot", "link"}
+    ):
+        return None
+    result: dict[str, Any] = {
+        "id": item_id.strip(),
+        "kind": kind,
+        "reason": reason.strip(),
+    }
+    if kind == "file":
+        path = item.get("path")
+        if not isinstance(path, str) or not path.strip():
+            return None
+        candidate = Path(path.strip())
+        if candidate.is_absolute() or "\x00" in path or ".." in candidate.parts:
+            return None
+        result["path"] = path.strip()
+    elif kind == "screenshot":
+        target = item.get("target")
+        if not isinstance(target, str) or target.strip() not in {
+            "current_chatgpt",
+            "current_conversation",
+        }:
+            return None
+        result["target"] = target.strip()
+    else:
+        target = item.get("url")
+        if not isinstance(target, str) or not re.match(r"^https?://[^\s]+$", target.strip(), re.IGNORECASE):
+            return None
+        result["url"] = target.strip()
+    return result
+
+
+def _context_payload_candidates(message: dict[str, Any]) -> list[dict[str, Any]]:
+    """Read valid proposal payloads from one assistant message only."""
+    if message.get("role") != "assistant":
+        return []
+    candidates: list[str] = []
+    text = message.get("text")
+    if isinstance(text, str):
+        candidates.extend(match.group(1).strip() for match in _CONTEXT_REQUEST_FENCE_RE.finditer(text))
+    for block in message.get("code_blocks") or []:
+        if not isinstance(block, dict):
+            continue
+        lang = str(block.get("lang") or "").strip().lower()
+        if lang in {"cortex-context-request", _CONTEXT_PROTOCOL} and isinstance(block.get("text"), str):
+            candidates.append(str(block["text"]).strip())
+    # Duplicate serialization (text + code_blocks) is ambiguous and must not
+    # register a request that cannot be tied to one exact representation.
+    if len(candidates) != 1 or not candidates[0]:
+        return []
+    try:
+        payload = json.loads(candidates[0])
+    except (TypeError, json.JSONDecodeError):
+        return []
+    if not isinstance(payload, dict) or payload.get("protocol") != _CONTEXT_PROTOCOL:
+        return []
+    request_id = payload.get("requestId")
+    summary = payload.get("summary")
+    items = payload.get("items")
+    if (
+        not isinstance(request_id, str)
+        or not _CONTEXT_ID_RE.fullmatch(request_id.strip())
+        or not isinstance(summary, str)
+        or not summary.strip()
+        or len(summary.strip()) > _CONTEXT_MAX_SUMMARY_CHARS
+        or not isinstance(items, list)
+        or not 0 < len(items) <= _CONTEXT_MAX_ITEMS
+    ):
+        return []
+    normalized = [_context_item_payload(item) for item in items]
+    if any(item is None for item in normalized):
+        return []
+    item_values = [item for item in normalized if item is not None]
+    if len({item["id"] for item in item_values}) != len(item_values):
+        return []
+    return [{"request_id": request_id.strip(), "item": item} for item in item_values]
+
+
+def _register_observed_context_requests(
+    conversation_url: str,
+    messages: list[dict[str, Any]],
+    *,
+    workspace: Path | None = None,
+) -> None:
+    """Record assistant proposals observed by the trusted read transport."""
+    candidates_by_message = [
+        (message, _context_payload_candidates(message)) for message in messages
+    ]
+    if not any(candidates for _, candidates in candidates_by_message):
+        return
+    try:
+        root = (workspace or _authorized_context_workspace()).resolve(strict=True)
+    except HTTPException:
+        # Preserve the visible ChatGPT response, but do not create an approval
+        # record when the authorized workspace cannot be resolved.
+        return
+    for message, candidates in candidates_by_message:
+        for candidate in candidates:
+            key = (
+                _context_conversation_key(conversation_url),
+                candidate["request_id"],
+                candidate["item"]["id"],
+            )
+            _observed_context_registry[key] = {
+                "workspace": str(root),
+                "item": candidate["item"],
+                "message_id": message.get("id"),
+            }
 
 
 def _make_transport(session_id: str) -> ChatGPTWebTransport:
@@ -432,11 +642,30 @@ async def _run_chat(run: ChatRunRuntime) -> None:
                     "code_blocks": update.get("code_blocks", []),
                     "images": update.get("images", []),
                 })
+                if not streaming:
+                    _register_observed_context_requests(
+                        run.canonical_url or run.conversation_url,
+                        [{
+                            "id": update.get("id"),
+                            "role": "assistant",
+                            "text": text,
+                            "code_blocks": update.get("code_blocks", []),
+                        }],
+                    )
 
         final = await transport.stream_response(on_update)
         if run.cancelled:
             raise TransportError(GENERATION_CANCELLED, "cancelled during response")
         run.response_text = str(final.get("text") or "")
+        _register_observed_context_requests(
+            run.canonical_url or run.conversation_url,
+            [{
+                "id": final.get("id"),
+                "role": "assistant",
+                "text": run.response_text,
+                "code_blocks": final.get("code_blocks", []),
+            }],
+        )
         run.completed_at = _now()
         run.latency["total_ms"] = _monotonic_ms(started)
         _set_state(run, "COMPLETED")
@@ -520,6 +749,7 @@ async def conversation_snapshot(url: str = Query(..., min_length=1), light: int 
         state = await transport.snapshot(
             verify_lock=clean_url.rstrip("/") != "https://chatgpt.com"
         )
+        _register_observed_context_requests(clean_url, state.get("messages") or [])
         # Do not expose protocol reconstruction or any browser-level secret.
         return {
             "url": state.get("url", clean_url),
@@ -727,6 +957,143 @@ async def send_with_attachment(body: ChatSendAttachmentIn) -> dict[str, Any]:
         except Exception:
             pass
         raise
+
+
+def _workspace_context_file(workspace: str, relative_path: str | None) -> Path:
+    """Resolve a context proposal without allowing an escape from workspace."""
+    if not isinstance(workspace, str) or not workspace.strip():
+        raise HTTPException(status_code=422, detail="workspace must not be empty")
+    if not isinstance(relative_path, str) or not relative_path.strip():
+        raise HTTPException(status_code=422, detail="context file path is required")
+    candidate_input = Path(relative_path.strip())
+    if candidate_input.is_absolute() or "\x00" in relative_path or ".." in candidate_input.parts:
+        raise HTTPException(status_code=422, detail="context file path must stay relative to workspace")
+    try:
+        root = Path(workspace).expanduser().resolve(strict=True)
+    except (OSError, RuntimeError):
+        raise HTTPException(status_code=422, detail="workspace does not exist")
+    if not root.is_dir():
+        raise HTTPException(status_code=422, detail="workspace must be a directory")
+    try:
+        resolved = (root / candidate_input).resolve(strict=True)
+        resolved.relative_to(root)
+    except (OSError, RuntimeError, ValueError):
+        raise HTTPException(status_code=422, detail="context file path escapes workspace")
+    if not resolved.is_file():
+        raise HTTPException(status_code=422, detail="context file must be a regular file")
+    return resolved
+
+
+@router.post("/chat/approve-context", status_code=202)
+async def approve_context(body: ContextApprovalIn) -> dict[str, Any]:
+    """Send one user-approved context item to the selected ChatGPT conversation.
+
+    The endpoint is intentionally separate from the marker parser: seeing a
+    request in an assistant message never sends anything. A caller must make
+    this explicit approval request for each item.
+    """
+    request_id = _validate_context_identity(body.request_id, "context request_id")
+    item_id = _validate_context_identity(body.item_id, "context item_id")
+    if body.item.id != item_id:
+        raise HTTPException(status_code=422, detail="context item_id does not match item.id")
+    reason = body.item.reason.strip()
+    if not reason or len(reason) > 500:
+        raise HTTPException(status_code=422, detail="context reason must be 1–500 characters")
+    url = _validate_chatgpt_url(body.conversation_url)
+    try:
+        requested_workspace = Path(body.workspace).expanduser().resolve(strict=True)
+    except (OSError, RuntimeError):
+        raise HTTPException(status_code=422, detail="workspace does not exist")
+    if not requested_workspace.is_dir():
+        raise HTTPException(status_code=422, detail="workspace must be a directory")
+    validated_file_path: Path | None = None
+    validated_link: str | None = None
+    if body.item.kind == "file":
+        # Keep malformed/traversal input a local 422 even when the caller has
+        # not yet presented a server-observed request identity.
+        validated_file_path = _workspace_context_file(body.workspace, body.item.path)
+    elif body.item.kind == "link":
+        validated_link = (body.item.url or "").strip()
+        if not re.match(r"^https?://[^\s]+$", validated_link, re.IGNORECASE):
+            raise HTTPException(status_code=422, detail="context link must use http(s)")
+    else:
+        target = (body.item.target or "").strip()
+        if target not in {"current_chatgpt", "current_conversation"}:
+            raise HTTPException(status_code=422, detail="unsupported screenshot target")
+    observed = _observed_context_registry.get(
+        (_context_conversation_key(url), request_id, item_id)
+    )
+    if observed is None:
+        raise HTTPException(
+            status_code=409,
+            detail="context request was not observed in the selected ChatGPT conversation",
+        )
+    if requested_workspace != Path(str(observed["workspace"])):
+        raise HTTPException(
+            status_code=409,
+            detail="context approval workspace does not match the authorized workspace",
+        )
+    observed_item = observed.get("item")
+    submitted_item = body.item.model_dump(exclude_none=True)
+    if not isinstance(observed_item, dict) or any(
+        observed_item.get(key) != submitted_item.get(key)
+        for key in ("id", "kind", "reason", "path", "target", "url")
+        if observed_item.get(key) is not None or submitted_item.get(key) is not None
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="context approval item does not match the observed ChatGPT request",
+        )
+    context_note = body.text.strip()
+    note = f"Contexte autorisé par l'utilisateur ({reason})"
+    if context_note:
+        note = f"{context_note}\n{note}"
+    workspace_key = str(requested_workspace)
+    approval_key = (url, workspace_key, request_id, item_id)
+
+    async with _context_approval_lock():
+        previous = _context_approval_registry.get(approval_key)
+        if previous is not None:
+            duplicate = dict(previous)
+            duplicate["idempotent"] = True
+            return duplicate
+
+        if body.item.kind == "file":
+            path = validated_file_path
+            if path is None:  # defensive; the branch above always initializes it
+                raise HTTPException(status_code=422, detail="context file path is required")
+            result = await send_with_attachment(ChatSendAttachmentIn(
+                conversation_url=url,
+                text=note,
+                path=str(path),
+                image=False,
+                name=path.name,
+                new_conversation=body.new_conversation,
+            ))
+        elif body.item.kind == "link":
+            target = validated_link
+            if target is None:  # defensive; the branch above always initializes it
+                raise HTTPException(status_code=422, detail="context link must use http(s)")
+            result = await send_chat(ChatSendIn(
+                conversation_url=url,
+                text=f"{note}\nLien demandé : {target}",
+                new_conversation=body.new_conversation,
+            ))
+        else:
+            result = await send_screenshot(ChatScreenshotIn(
+                conversation_url=url,
+                text=note,
+                new_conversation=body.new_conversation,
+            ))
+
+        response = dict(result) if isinstance(result, dict) else {"result": result}
+        response.update({
+            "context_request_id": request_id,
+            "context_item_id": item_id,
+            "idempotent": False,
+        })
+        _context_approval_registry[approval_key] = dict(response)
+        return response
 
 
 @router.post("/chat/send-screenshot", status_code=202)

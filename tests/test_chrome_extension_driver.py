@@ -268,6 +268,23 @@ class ChromeExtensionDriverContractTest(unittest.IsolatedAsyncioTestCase):
             ["open_chatgpt", "probe", "probe"],
         )
 
+    async def test_open_login_returns_a_ui_blocker_without_waiting_for_composer_timeout(self) -> None:
+        self.manager.responses["probe"] = {
+            "ok": False,
+            "url": "https://chatgpt.com/?no_universal_links=1#settings",
+            "blocker": "ui_blocker",
+            "composer_present": True,
+            "failures": ["ui_blocker"],
+        }
+
+        result = await self.driver.open_login()
+
+        self.assertEqual(result["probe"]["blocker"], "ui_blocker")
+        self.assertEqual(
+            [call[1] for call in self.manager.calls],
+            ["open_chatgpt", "probe"],
+        )
+
     async def test_open_login_uses_one_eight_second_budget_and_reports_an_open_loading_tab(self) -> None:
         from console.chrome_extension import BridgeProtocolError
         from console.onboarding import open_connection_with_driver
@@ -1099,6 +1116,48 @@ class ChromeExtensionFactoryTest(unittest.TestCase):
             "attachmentButtons.isEmpty ? attachmentGroups : attachmentButtons",
             source,
         )
+
+    def test_native_helper_allows_passive_image_groups_without_enabled_attribute(self) -> None:
+        source = (ROOT / "transport" / "macos_ax_send.swift").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("private func visibleAttachmentGroup(", source)
+        self.assertIn("ChatGPT's image tile is a passive AXGroup", source)
+        self.assertIn("visibleAttachmentGroup(snapshot: snapshot)", source)
+
+    def test_native_helper_scopes_controls_to_the_focused_chatgpt_web_area(self) -> None:
+        source = (ROOT / "transport" / "macos_ax_send.swift").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("kAXFocusedUIElementAttribute", source)
+        self.assertIn("private func focusedWebArea(_ app: AXUIElement)", source)
+        self.assertIn("insideFocusedWebArea", source)
+        self.assertIn("guard entry.insideFocusedWebArea else { continue }", source)
+        self.assertNotIn(
+            "guard let focusedContent = focusedWebArea(target.app)",
+            source,
+        )
+
+    def test_native_helper_handles_distinct_ax_proxies_for_shared_ancestors(self) -> None:
+        source = (ROOT / "transport" / "macos_ax_send.swift").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("private func sameAXElement(", source)
+        self.assertIn("Role + frame is the narrow", source)
+        self.assertIn("chain.contains(where: { sameAXElement($0, candidate) })", source)
+        self.assertIn("sameAXElement(lhs, rhs)", source)
+
+    def test_native_helper_treats_chatgpt_composer_labels_as_empty_placeholder(self) -> None:
+        source = (ROOT / "transport" / "macos_ax_send.swift").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn('"demander a chatgpt"', source)
+        self.assertIn('"discuter avec chatgpt"', source)
+        self.assertIn("knownEmptyComposerValue", source)
 
     def test_chrome_extension_is_the_default_product_transport(self) -> None:
         self.assertEqual(load_browser_settings({})["browser_transport"], "chrome_extension")

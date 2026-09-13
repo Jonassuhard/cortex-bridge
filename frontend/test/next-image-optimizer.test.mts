@@ -12,11 +12,11 @@ const inputHeight = 48;
 const outputWidth = 24;
 
 test("Next image optimizer uses the reviewed Sharp release across formats", async (t) => {
-  const sharp = getSharp(null);
+  const sharp = getSharp(null, undefined);
   assert.equal(
     sharp.versions.sharp,
-    "0.35.0",
-    "Next must resolve the Sharp release that fixes GHSA-f88m-g3jw-g9cj",
+    "0.35.4",
+    "Next must resolve the reviewed Sharp release fixing GHSA-rgj7-g3m4-5g8c",
   );
 
   const pixels = Buffer.alloc(inputWidth * inputHeight * 3);

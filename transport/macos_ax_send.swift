@@ -376,6 +376,23 @@ private func visibleEnabledButton(
     }
 }
 
+private func visibleAttachmentGroup(
+    snapshot: ElementSnapshot
+) -> Bool? {
+    guard let groupFrame = snapshot.frame,
+          groupFrame.width > 0,
+          groupFrame.height > 0 else {
+        return false
+    }
+    if snapshot.hiddenReadable, snapshot.hidden == true {
+        return false
+    }
+    // ChatGPT's image tile is a passive AXGroup and may legitimately omit
+    // AXEnabled/AXHidden values. Its frame plus the focused web-area scope
+    // are the visibility contract; the send control remains strictly gated.
+    return true
+}
+
 private func ancestorChain(
     _ element: AXUIElement,
     maximumDepth: Int = 16
@@ -384,7 +401,7 @@ private func ancestorChain(
     var current = element
     for _ in 0..<maximumDepth {
         guard let next = parent(current) else { break }
-        if chain.contains(where: { CFEqual($0, next) }) { break }
+        if chain.contains(where: { sameAXElement($0, next) }) { break }
         chain.append(next)
         current = next
     }
@@ -398,7 +415,7 @@ private func lowestCommonAncestor(
     let chains = elements.map { ancestorChain($0) }
     for candidate in ancestorChain(first) {
         if chains.dropFirst().allSatisfy({ chain in
-            chain.contains(where: { CFEqual($0, candidate) })
+            chain.contains(where: { sameAXElement($0, candidate) })
         }) {
             return candidate
         }
@@ -445,6 +462,7 @@ private struct TraversalEntry {
     let element: AXUIElement
     let insideWebArea: Bool
     let insideToolbar: Bool
+    let insideFocusedWebArea: Bool
 }
 
 private func applicationWindows(_ app: AXUIElement) -> [AXUIElement]? {
@@ -454,8 +472,45 @@ private func applicationWindows(_ app: AXUIElement) -> [AXUIElement]? {
     return raw as? [AXUIElement]
 }
 
+private func focusedWebArea(_ app: AXUIElement) -> AXUIElement? {
+    guard let raw = attribute(app, kAXFocusedUIElementAttribute as CFString),
+          CFGetTypeID(raw) == AXUIElementGetTypeID() else {
+        return nil
+    }
+    var current = raw as! AXUIElement
+    for _ in 0..<24 {
+        if stringAttribute(current, kAXRoleAttribute as CFString) == "AXWebArea" {
+            return current
+        }
+        guard let next = parent(current) else { break }
+        current = next
+    }
+    return nil
+}
+
+private func sameFrame(_ lhs: CGRect?, _ rhs: CGRect?) -> Bool {
+    guard let lhs, let rhs else { return false }
+    return abs(lhs.minX - rhs.minX) < 0.5
+        && abs(lhs.minY - rhs.minY) < 0.5
+        && abs(lhs.width - rhs.width) < 0.5
+        && abs(lhs.height - rhs.height) < 0.5
+}
+
+private func sameAXElement(_ lhs: AXUIElement, _ rhs: AXUIElement) -> Bool {
+    if CFEqual(lhs, rhs) { return true }
+    guard stringAttribute(lhs, kAXRoleAttribute as CFString)
+        == stringAttribute(rhs, kAXRoleAttribute as CFString) else {
+        return false
+    }
+    // Chromium can expose the same DOM ancestor through distinct AX proxy
+    // objects after a React attachment commit. Role + frame is the narrow
+    // fallback: it avoids treating unrelated controls as the same ancestor.
+    return sameFrame(frame(lhs), frame(rhs))
+}
+
 private func inspectTarget(
     window: AXUIElement,
+    focusedContent: AXUIElement?,
     expectedURL: String,
     expectedName: String,
     expectedTextSHA256: String,
@@ -464,7 +519,8 @@ private func inspectTarget(
     var queue = [TraversalEntry(
         element: window,
         insideWebArea: false,
-        insideToolbar: false
+        insideToolbar: false,
+        insideFocusedWebArea: false
     )]
     var cursor = 0
     var visited = 0
@@ -476,6 +532,7 @@ private func inspectTarget(
     var addressFieldCount = 0
     var textAreaCount = 0
     var buttonCount = 0
+    let focusedContentFrame = focusedContent.flatMap(frame)
     var composerElements: [AXUIElement] = []
     var attachmentButtons: [AXUIElement] = []
     var attachmentGroups: [AXUIElement] = []
@@ -527,11 +584,17 @@ private func inspectTarget(
         let descendantsAreInsideWebArea = entry.insideWebArea || role == "AXWebArea"
         let descendantsAreInsideToolbar = entry.insideToolbar
             || role == (kAXToolbarRole as String)
+        let isFocusedContentRoot = role == "AXWebArea"
+            && (focusedContent.map { CFEqual($0, element) } == true
+                || sameFrame(frame(element), focusedContentFrame))
+        let descendantsAreInsideFocusedWebArea = entry.insideFocusedWebArea
+            || isFocusedContentRoot
         queue.append(contentsOf: tree.children.map {
             TraversalEntry(
                 element: $0,
                 insideWebArea: descendantsAreInsideWebArea,
-                insideToolbar: descendantsAreInsideToolbar
+                insideToolbar: descendantsAreInsideToolbar,
+                insideFocusedWebArea: descendantsAreInsideFocusedWebArea
             )
         })
 
@@ -576,6 +639,7 @@ private func inspectTarget(
             }
         }
         if role == (kAXTextAreaRole as String) {
+            guard entry.insideFocusedWebArea else { continue }
             guard let snapshot = elementSnapshot(element) else {
                 scanCompleted = false
                 break
@@ -592,9 +656,19 @@ private func inspectTarget(
             textAreaCount += 1
             let value = normalizedText(snapshot.value)
             let placeholder = normalizedText(snapshot.placeholder)
-            let placeholderRepresentsEmpty = snapshot.placeholderReadable
-                && !placeholder.isEmpty
-                && value == placeholder
+            let normalizedValue = value.folding(
+                options: [.diacriticInsensitive, .caseInsensitive],
+                locale: .current
+            ).lowercased()
+            let knownEmptyComposerValue = [
+                "demander a chatgpt",
+                "discuter avec chatgpt",
+            ].contains(normalizedValue)
+            let placeholderRepresentsEmpty = (
+                snapshot.placeholderReadable
+                    && !placeholder.isEmpty
+                    && value == placeholder
+            ) || knownEmptyComposerValue
             let effectiveValue = value.isEmpty || placeholderRepresentsEmpty
                 ? ""
                 : value
@@ -603,6 +677,7 @@ private func inspectTarget(
             if matches { composerElements.append(element) }
         }
         if role == (kAXButtonRole as String) {
+            guard entry.insideFocusedWebArea else { continue }
             buttonCount += 1
             let labelRead = controlLabel(element)
             let rawText: String
@@ -649,6 +724,7 @@ private func inspectTarget(
             }
         }
         if role == (kAXGroupRole as String), entry.insideWebArea {
+            guard entry.insideFocusedWebArea else { continue }
             let labelRead = controlLabel(element)
             let rawText: String
             switch labelRead {
@@ -664,14 +740,12 @@ private func inspectTarget(
                 continue
             }
             guard let snapshot = elementSnapshot(element),
-                  let isVisibleEnabledGroup = visibleEnabledElement(
-                    snapshot: snapshot
-                  ) else {
+                  let isVisibleGroup = visibleAttachmentGroup(snapshot: snapshot) else {
                 scanCompleted = false
                 break
             }
             snapshotCount += 1
-            if isVisibleEnabledGroup {
+            if isVisibleGroup {
                 attachmentGroups.append(element)
             }
         }
@@ -784,7 +858,7 @@ private func isExactTarget(_ inspection: TargetInspection) -> Bool {
 }
 
 private func sameWindow(_ lhs: AXUIElement, _ rhs: AXUIElement) -> Bool {
-    CFEqual(lhs, rhs)
+    sameAXElement(lhs, rhs)
 }
 
 private func scanCandidates(
@@ -808,8 +882,10 @@ private func scanCandidates(
             break
         }
         for window in windows {
+            let focusedContent = focusedWebArea(target.app)
             let inspection = inspectTarget(
                 window: window,
+                focusedContent: focusedContent,
                 expectedURL: expectedURL,
                 expectedName: expectedName,
                 expectedTextSHA256: expectedTextSHA256,

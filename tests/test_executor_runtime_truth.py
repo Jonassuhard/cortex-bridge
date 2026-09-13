@@ -342,6 +342,10 @@ class ExecutorRuntimeTruthTestCase(unittest.IsolatedAsyncioTestCase):
     async def test_tasks_expose_model_only_after_successful_executor_call(self) -> None:
         original_store_file = server.STORE_FILE
         original_pipeline_store_file = settings_api.TASK_STORE_FILE
+        original_get_store = settings_api.missions_api.get_store
+        pipeline_store = Store(self.workspace / "pipeline.sqlite3")
+        self.addCleanup(pipeline_store.close)
+        settings_api.missions_api.get_store = lambda: pipeline_store
         original_iterations = list(server._iterations)
         server.STORE_FILE = self.workspace / "iterations.json"
         settings_api.TASK_STORE_FILE = server.STORE_FILE
@@ -384,6 +388,7 @@ class ExecutorRuntimeTruthTestCase(unittest.IsolatedAsyncioTestCase):
         async def restore_server() -> None:
             server.STORE_FILE = original_store_file
             settings_api.TASK_STORE_FILE = original_pipeline_store_file
+            settings_api.missions_api.get_store = original_get_store
             server._iterations[:] = original_iterations
             server_local_executor.detect_mode = original_detect_mode
             server_local_executor._chat_sync = original_chat

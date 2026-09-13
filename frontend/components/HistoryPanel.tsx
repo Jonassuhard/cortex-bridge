@@ -1,7 +1,7 @@
 "use client";
 /* eslint-disable react/no-unescaped-entities */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { MissionDetail, MissionSummary } from "@/lib/types";
 import { api } from "@/lib/api";
 import { executionStateLabel } from "@/lib/runtimeTruth";
@@ -60,6 +60,10 @@ export function HistoryPanel({ open, onClose }: HistoryPanelProps) {
   const [error, setError] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<MissionDetail | null>(null);
+  const [query, setQuery] = useState("");
+  const [stateFilter, setStateFilter] = useState("");
+  const [detailError, setDetailError] = useState<string | null>(null);
+  const detailEpoch = useRef(0);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -79,6 +83,8 @@ export function HistoryPanel({ open, onClose }: HistoryPanelProps) {
   }, [open, refresh]);
 
   const toggle = async (id: string) => {
+    const epoch = ++detailEpoch.current;
+    setDetailError(null);
     if (expandedId === id) {
       setExpandedId(null);
       setDetail(null);
@@ -87,15 +93,21 @@ export function HistoryPanel({ open, onClose }: HistoryPanelProps) {
     setExpandedId(id);
     setDetail(null);
     try {
-      setDetail(await api<MissionDetail>(`/api/missions/${id}`));
+      const result = await api<MissionDetail>(`/api/missions/${id}`);
+      if (detailEpoch.current === epoch) setDetail(result);
     } catch {
-      setDetail(null);
+      if (detailEpoch.current === epoch) {
+        setDetail(null);
+        setDetailError("Impossible de charger le détail. Ferme puis rouvre cette mission pour réessayer.");
+      }
     }
   };
 
   if (!open) return null;
 
   const detailLines = legacyDetailLines(detail);
+  const visibleMissions = missions.filter((mission) => (!stateFilter || mission.state === stateFilter)
+    && `${mission.objective} ${mission.workspace}`.toLocaleLowerCase("fr").includes(query.toLocaleLowerCase("fr")));
   const timeline = detail?.timeline || {};
   const counts: { label: string; value: number }[] = detail && !detail.mission.legacy
     ? [
@@ -123,12 +135,20 @@ export function HistoryPanel({ open, onClose }: HistoryPanelProps) {
           </div>
         </header>
         <div className="history-content">
+          <div className="history-filters">
+            <input type="search" aria-label="Rechercher une mission ou un projet" placeholder="Mission ou chemin du projet…" value={query} onChange={(event) => setQuery(event.target.value)} />
+            <select aria-label="Filtrer par état" value={stateFilter} onChange={(event) => setStateFilter(event.target.value)}>
+              <option value="">Tous les états</option>
+              {[...new Set(missions.map((mission) => mission.state))].sort().map((state) => <option key={state} value={state}>{executionStateLabel(state) || state}</option>)}
+            </select>
+          </div>
           {loading && <p className="history-empty">Chargement…</p>}
           {error && <p className="history-empty">{error}</p>}
           {!loading && !error && missions.length === 0 && (
             <p className="history-empty">Aucune mission pour l'instant. Lance une mission depuis une conversation pour la voir ici.</p>
           )}
-          {!loading && missions.map((mission) => (
+          {!loading && !error && missions.length > 0 && !visibleMissions.length && <p className="history-empty">Aucune mission ne correspond aux filtres.</p>}
+          {!loading && visibleMissions.map((mission) => (
             <article key={mission.id} className={`history-row ${expandedId === mission.id ? "is-expanded" : ""}`}>
               <button className="history-row-main" onClick={() => void toggle(mission.id)} aria-expanded={expandedId === mission.id}>
                 <span className={`history-state ${stateChipClass(mission.state)}`}>{executionStateLabel(mission.state)}</span>
@@ -144,7 +164,8 @@ export function HistoryPanel({ open, onClose }: HistoryPanelProps) {
               </button>
               {expandedId === mission.id && (
                 <div className="history-detail">
-                  {!detail && <p className="history-empty">Chargement du détail…</p>}
+                  {!detail && !detailError && <output className="history-empty">Chargement du détail…</output>}
+                  {detailError && <p role="alert">{detailError}</p>}
                   {detail && detailLines.map((line) => (
                     <p key={line.label}><strong>{line.label} :</strong> {line.value}</p>
                   ))}

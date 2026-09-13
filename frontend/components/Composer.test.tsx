@@ -26,6 +26,22 @@ function renderComposer(overrides: Partial<React.ComponentProps<typeof Composer>
 }
 
 describe("Composer", () => {
+  it("blocks all dispatch paths when the composer is blocked independently of execution", async () => {
+    const props = renderComposer({ blocked: true, executionBlocked: false });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /Envoyer/ }));
+    await user.click(screen.getByRole("button", { name: /Exécuter/ }));
+    expect(props.onSend).not.toHaveBeenCalled();
+    expect(props.onPrepareExecution).not.toHaveBeenCalled();
+  });
+
+  it("makes the message destination visible and sends without starting local work", async () => {
+    const props = renderComposer();
+    await userEvent.setup().click(screen.getByRole("button", { name: "Envoyer à ChatGPT" }));
+    expect(props.onSend).toHaveBeenCalledTimes(1);
+    expect(props.onPrepareExecution).not.toHaveBeenCalled();
+  });
+
   it("maps Enter only to ChatGPT send", async () => {
     const props = renderComposer();
     await userEvent.setup().type(screen.getByRole("textbox", { name: "Message à envoyer" }), "{enter}");
@@ -42,7 +58,7 @@ describe("Composer", () => {
 
   it("opens execution review without sending", async () => {
     const props = renderComposer();
-    await userEvent.setup().click(screen.getByRole("button", { name: "Exécuter…" }));
+    await userEvent.setup().click(screen.getByRole("button", { name: "Exécuter sur ce Mac…" }));
     expect(props.onPrepareExecution).toHaveBeenCalledTimes(1);
     expect(props.onSend).not.toHaveBeenCalled();
   });

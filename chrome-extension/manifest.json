@@ -2,13 +2,15 @@
   "manifest_version": 3,
   "name": "Cortex Bridge",
   "description": "Connects the local Cortex Bridge application to ChatGPT tabs selected by the user.",
-  "version": "0.5.3",
+  "version": "0.6.5",
   "minimum_chrome_version": "116",
   "permissions": [
     "activeTab",
+    "alarms",
     "debugger",
     "scripting",
-    "storage"
+    "storage",
+    "tabGroups"
   ],
   "host_permissions": [
     "http://127.0.0.1:8420/*",
@@ -23,13 +25,21 @@
   },
   "content_scripts": [
     {
-      "matches": ["http://127.0.0.1:8420/*"],
-      "js": ["cortex-content.js"],
+      "matches": [
+        "http://127.0.0.1:8420/*"
+      ],
+      "js": [
+        "cortex-content.js"
+      ],
       "run_at": "document_start"
     },
     {
-      "matches": ["https://chatgpt.com/*"],
-      "js": ["chatgpt-content.js"],
+      "matches": [
+        "https://chatgpt.com/*"
+      ],
+      "js": [
+        "chatgpt-content.js"
+      ],
       "run_at": "document_idle"
     }
   ],

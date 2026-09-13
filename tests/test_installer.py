@@ -5,6 +5,7 @@ import importlib
 import io
 import json
 import os
+import socket
 from contextlib import redirect_stdout
 import subprocess
 import sys
@@ -40,6 +41,7 @@ class InstallerTest(unittest.TestCase):
             "import json, os, pathlib, sys\n"
             "command=json.loads(sys.argv[1])\n"
             "with open(os.environ['RUNNER_LOG'], 'a', encoding='utf-8') as f: f.write(json.dumps(command, sort_keys=True)+'\\n')\n"
+            "if os.environ.get('PRINT_RUNNER_OUTPUT') == '1': print('runner progress')\n"
             "if os.environ.get('FAIL_STEP') == command['id']: raise SystemExit(9)\n"
             "if command['id'] == 'create_venv':\n"
             " p=pathlib.Path(command['argv'][-1]); (p/'bin').mkdir(parents=True, exist_ok=True); (p/'bin'/'python').write_text('fixture', encoding='utf-8')\n"
@@ -56,10 +58,24 @@ class InstallerTest(unittest.TestCase):
             **os.environ,
             "HOME": str(self.home),
             "CORTEX_HOME": str(self.cortex_home),
+            "PORT": self._free_loopback_port(),
             "PYTHON_BIN": sys.executable,
             "CORTEX_INSTALL_RUNNER": str(self.runner),
             "RUNNER_LOG": str(self.runner_log),
         }
+
+    @staticmethod
+    def _free_loopback_port() -> str:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.bind(("127.0.0.1", 0))
+            return str(probe.getsockname()[1])
+
+    def assert_script_ok(self, result: subprocess.CompletedProcess) -> None:
+        self.assertEqual(
+            result.returncode,
+            0,
+            f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}",
+        )
 
     def run_script(self, name: str, *args: str, env: dict[str, str] | None = None):
         return subprocess.run(
@@ -81,6 +97,18 @@ class InstallerTest(unittest.TestCase):
         result = self.run_script("install.sh", "--approve-plan", plan["plan_hash"], "--json")
         self.assertEqual(result.returncode, 0, result.stderr)
         return json.loads(result.stdout)
+
+    def test_json_install_output_keeps_command_logs_off_stdout(self):
+        plan = self.dry_plan()
+        environment = {**self.environment, "PRINT_RUNNER_OUTPUT": "1"}
+        result = self.run_script(
+            "install.sh", "--approve-plan", plan["plan_hash"], "--json", env=environment
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["status"], "installed")
+        self.assertIn("runner progress", result.stderr)
 
     def stage_interrupted_helper_transaction(
         self,
@@ -128,7 +156,7 @@ class InstallerTest(unittest.TestCase):
         after = sorted(str(path.relative_to(self.root)) for path in self.root.rglob("*"))
         self.assertEqual(after, before)
         self.assertEqual(plan["schema_version"], 1)
-        self.assertEqual(plan["version"], "0.5.3")
+        self.assertEqual(plan["version"], (ROOT / "VERSION").read_text().strip())
         self.assertEqual(len(plan["plan_hash"]), 64)
         self.assertTrue(plan["commands"])
         for command in plan["commands"]:
@@ -177,7 +205,7 @@ class InstallerTest(unittest.TestCase):
         applied = self.run_script(
             "uninstall.sh", "--approve-plan", plan["plan_hash"], "--json"
         )
-        self.assertEqual(applied.returncode, 0, applied.stderr)
+        self.assert_script_ok(applied)
         self.assertTrue((ROOT / "chrome-extension" / "manifest.json").is_file())
 
     def test_ui_rebuild_uses_the_repository_npm_wrapper(self):
@@ -572,6 +600,48 @@ class InstallerTest(unittest.TestCase):
             first_calls,
         )
 
+    def test_reinstall_repairs_an_older_owned_runtime_without_silent_overwrite(self):
+        self.approved_install()
+        manifest_path = self.cortex_home / "install" / "owned.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest.pop("requirements_sha256")
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        old_venv_inode = (self.cortex_home / "venv").stat().st_ino
+
+        plan = self.dry_plan()
+        self.assertTrue(plan["replaces_owned_venv"])
+        self.assertEqual(
+            [command["id"] for command in plan["commands"] if command["id"] in {"create_venv", "install_python"}],
+            ["create_venv", "install_python"],
+        )
+        result = self.run_script(
+            "install.sh", "--approve-plan", plan["plan_hash"], "--json"
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotEqual((self.cortex_home / "venv").stat().st_ino, old_venv_inode)
+        repaired = json.loads(manifest_path.read_text(encoding="utf-8"))
+        self.assertEqual(repaired["requirements_sha256"], hashlib.sha256(
+            (ROOT / "requirements.lock").read_bytes()
+        ).hexdigest())
+        self.assertFalse((self.cortex_home / ".install-staging").exists())
+
+    def test_runtime_repair_refuses_a_venv_missing_from_owned_resources(self):
+        self.approved_install()
+        manifest_path = self.cortex_home / "install" / "owned.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest.pop("requirements_sha256")
+        manifest["resources"].remove(str(self.cortex_home.resolve() / "venv"))
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        plan = self.dry_plan()
+
+        result = self.run_script(
+            "install.sh", "--approve-plan", plan["plan_hash"], "--json"
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("owned directory", result.stdout)
+        self.assertTrue((self.cortex_home / "venv").is_dir())
+        self.assertFalse(self.runner_log.read_text(encoding="utf-8").count("create_venv") > 1)
+
     def test_interruption_rolls_back_only_staging(self):
         self.cortex_home.mkdir(parents=True)
         foreign = self.cortex_home / "keep-me.txt"
@@ -591,7 +661,7 @@ class InstallerTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         payload = json.loads(result.stdout)
         self.assertEqual(payload["schema_version"], 1)
-        self.assertEqual(payload["version"], "0.5.3")
+        self.assertEqual(payload["version"], (ROOT / "VERSION").read_text().strip())
         self.assertIn("deterministic", payload["modes"])
         self.assertTrue(payload["modes"]["chrome_extension"])
         extension = next(check for check in payload["checks"] if check["id"] == "chrome_extension")
@@ -620,7 +690,7 @@ class InstallerTest(unittest.TestCase):
         installer = load_installer_module()
         output = io.StringIO()
         payload = {
-            "version": "0.5.3",
+            "version": "0.5.4",
             "ok": True,
             "local_url": "http://127.0.0.1:18423",
             "checks": [
@@ -654,7 +724,7 @@ class InstallerTest(unittest.TestCase):
             uninstall_plan["plan_hash"],
             "--json",
         )
-        self.assertEqual(removed.returncode, 0, removed.stderr)
+        self.assert_script_ok(removed)
 
         selected_python = self.root / "selected-python"
         selected_python.write_text(
@@ -856,7 +926,7 @@ class InstallerTest(unittest.TestCase):
         applied = self.run_script(
             "uninstall.sh", "--approve-plan", plan["plan_hash"], "--json"
         )
-        self.assertEqual(applied.returncode, 0, applied.stderr)
+        self.assert_script_ok(applied)
         self.assertTrue(foreign.is_file())
         self.assertTrue(foreign_tool.is_file())
         self.assertFalse((self.cortex_home / "bin" / "cortex-macos-ax-send").exists())

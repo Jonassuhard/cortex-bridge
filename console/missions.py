@@ -43,6 +43,11 @@ from executor.policy import (  # noqa: E402
 )
 from executor.tools import ToolExecutor  # noqa: E402
 from orchestration.loop import MissionLoop, MockReply  # noqa: E402
+from orchestration.context import (  # noqa: E402
+    ContextPacketError,
+    render_context_packet,
+    validate_context_packet as validate_context_packet_payload,
+)
 from orchestration.runner import (  # noqa: E402
     ModeARunner,
     OptInRequired,
@@ -127,12 +132,16 @@ class MissionRuntime:
     transport: ChatGPTWebTransport | None = None
     approval_event: asyncio.Event = field(default_factory=asyncio.Event)
     approval_scope: str | None = None
+    pending_approval_action_id: str | None = None
     stopped: bool = False
     conversation_key: str | None = None
     lease: object | None = None
     lease_release_ready: bool = True
     quiescence_task: asyncio.Task | None = None
     transport_closed: bool = False
+    # Ephemeral supervisor context. It is intentionally not persisted as raw
+    # transcript/file content; a process restart must receive a fresh packet.
+    context_packet: str | None = None
 
 
 _runtimes: dict[str, MissionRuntime] = {}
@@ -214,6 +223,8 @@ def _make_approval_callback(rt: MissionRuntime):
     async def callback(decision: dict, policy_decision) -> str | None:
         rt.approval_event.clear()
         rt.approval_scope = None
+        action_id = decision.get("actionId")
+        rt.pending_approval_action_id = action_id if isinstance(action_id, str) and action_id else None
         waiter = asyncio.create_task(rt.approval_event.wait())
         try:
             while not waiter.done():
@@ -221,20 +232,28 @@ def _make_approval_callback(rt: MissionRuntime):
                     waiter.cancel()
                     return None
                 await asyncio.sleep(0.2)
+            scope = rt.approval_scope
+            tool = (decision.get("action") or {}).get("tool")
+            # Returning SCOPE_ONCE authorizes the action currently waiting below;
+            # persisting it in PolicyEngine would incorrectly authorize the next
+            # action of the same tool as well. Only wider scopes survive this
+            # approval callback.
+            if scope and scope != SCOPE_ONCE and rt.policy is not None and tool:
+                try:
+                    rt.policy.approve(scope, tool=tool if scope != SCOPE_ALL_WRITES_FOR_MISSION else None)
+                except ValueError as exc:
+                    # A broader scope is durable authorization.  If it cannot
+                    # be persisted, fail closed instead of silently continuing
+                    # with an approval that the policy engine did not record.
+                    rt.approval_scope = None
+                    raise RuntimeError("approval scope could not be persisted") from exc
+            return scope
         except asyncio.CancelledError:
             return None
-        scope = rt.approval_scope
-        tool = (decision.get("action") or {}).get("tool")
-        # Returning SCOPE_ONCE authorizes the action currently waiting below;
-        # persisting it in PolicyEngine would incorrectly authorize the next
-        # action of the same tool as well. Only wider scopes survive this
-        # approval callback.
-        if scope and scope != SCOPE_ONCE and rt.policy is not None and tool:
-            try:
-                rt.policy.approve(scope, tool=tool if scope != SCOPE_ALL_WRITES_FOR_MISSION else None)
-            except ValueError:
-                pass
-        return scope
+        finally:
+            # The route checked the current ID before setting this event. Once
+            # the waiter leaves, this approval cannot be reused by a later action.
+            rt.pending_approval_action_id = None
 
     return callback
 
@@ -363,6 +382,17 @@ class MissionIn(BaseModel):
     executor_kind: str = "deterministic"
     attachment_tokens: list[str] = []
     mission_id: str = ""  # optional client-supplied UUID (idempotent submission)
+    context_packet: dict[str, object] | None = None
+
+    @field_validator("context_packet")
+    @classmethod
+    def validate_context_packet(cls, packet: dict[str, object] | None):
+        if packet is None:
+            return None
+        try:
+            return validate_context_packet_payload(packet)
+        except ContextPacketError as exc:
+            raise ValueError(str(exc)) from exc
 
     @field_validator("attachment_tokens")
     @classmethod
@@ -379,6 +409,7 @@ class MissionIn(BaseModel):
 class ApprovalIn(BaseModel):
     scope: str  # once | tool | all-writes
     approve: bool = True
+    expected_action_id: str
 
 
 class OptInIn(BaseModel):
@@ -469,11 +500,13 @@ async def _run_mission_task(rt: MissionRuntime, objective: str, body: MissionIn)
                 objective,
                 new_conversation_url=body.conversation_url,
                 mission_id=rt.mission_id,
+                context_packet=rt.context_packet,
             )
         return await runner.run_mission(
             objective,
             conversation_url=body.conversation_url,
             mission_id=rt.mission_id,
+            context_packet=rt.context_packet,
         )
 
     runner_task = asyncio.create_task(run())
@@ -629,6 +662,14 @@ def _pause_resumed_transport_error(
 async def _resume_mission_task(rt: MissionRuntime) -> None:
     store = get_store()
     client = TransportOrchestratorClient(rt.transport, store=store, mission_id=rt.mission_id)
+    # Reconcile uncertain sends before consuming a response or deciding to send.
+    # An absent receipt never authorizes a retry.
+    try:
+        await client.reconcile_pending()
+    except TransportError as exc:
+        _pause_resumed_transport_error(store, rt.mission_id, exc)
+        await _release_terminal_mission(rt)
+        return
     loop = MissionLoop(
         store=store,
         mission_id=rt.mission_id,
@@ -710,7 +751,10 @@ async def _resume_mission_task(rt: MissionRuntime) -> None:
         # Nothing provably sent (e.g. crash before the contract send).
         mission = store.get_mission(rt.mission_id)
         loop._pending = render_contract(
-            mission["objective"], rt.mission_id, str(rt._tools.workspace)  # type: ignore[attr-defined]
+            mission["objective"],
+            rt.mission_id,
+            str(rt._tools.workspace),  # type: ignore[attr-defined]
+            context_packet=rt.context_packet,
         )
     else:
         loop._pending = None  # contract+reports delivered → await ChatGPT
@@ -945,6 +989,11 @@ async def create_mission(body: MissionIn) -> dict:
             body.max_iterations, body.max_duration_minutes * 60, body.allow_processes,
             lease=lease,
         )
+        rt.context_packet = (
+            render_context_packet(body.context_packet)
+            if body.context_packet is not None
+            else None
+        )
     except Exception as exc:
         try:
             _fail_mission(store, mission_id, f"mission creation failed: {exc}")
@@ -1146,6 +1195,12 @@ async def get_mission(mission_id: str) -> dict:
         "timeline": timeline,
         "awaiting_approval": rt is not None and not rt.approval_event.is_set()
         and mission["state"] == "WAITING_FOR_APPROVAL",
+        "pending_approval_action_id": (
+            rt.pending_approval_action_id
+            if rt is not None and not rt.approval_event.is_set()
+            and mission["state"] == "WAITING_FOR_APPROVAL"
+            else None
+        ),
         "stopped": rt.stopped if rt else False,
     }
 
@@ -1346,6 +1401,8 @@ async def approve_mission(mission_id: str, body: ApprovalIn) -> dict:
     rt = _runtimes.get(mission_id)
     if rt is None or rt.approval_event.is_set():
         raise HTTPException(status_code=409, detail="no pending approval for this mission")
+    if body.expected_action_id != rt.pending_approval_action_id:
+        raise HTTPException(status_code=409, detail="pending approval action changed or is unavailable")
     if body.approve:
         scope = _APPROVAL_SCOPE_MAP.get(body.scope)
         if scope is None:

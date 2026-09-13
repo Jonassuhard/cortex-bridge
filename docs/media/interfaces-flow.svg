@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="390" viewBox="0 0 1000 390" role="img" aria-labelledby="title description">
+<title id="title">Choose your interface</title><desc id="description">Two interfaces. One existing backend. No second engine. GUI and terminal each connect to the backend, which uses existing services. GUI and terminal are alternatives; both connect directly to the shared backend.</desc>
+<style>svg{background:#07090b;font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}text{fill:#f7f9fa} .title{font-size:29px;font-weight:650}.subtitle{font-size:17px;fill:#a3afb9}.label{font-size:20px;font-weight:600}.detail{font-size:14px;fill:#a3afb9}.foot{font-size:15px;fill:#a3afb9}.node rect{fill:#101419;stroke:#5f6a70;stroke-width:1.5}.node.active rect{stroke:#4f8cff;stroke-width:3;fill:#14191e}.edges path{fill:none;stroke:#4f8cff;stroke-width:2;marker-end:url(#arrow)}</style>
+<defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0 0 L6 3 L0 6" fill="none" stroke="#4f8cff"/></marker></defs>
+<rect width="1000" height="390" fill="#07090b"/>
+<text x="38" y="55" class="title">Choose your interface</text><text x="38" y="91" class="subtitle">Two interfaces. One existing backend. No second engine.</text>
+<g class="edges"><path d="M143 262 V302 H623 V262 M488 206 H518 M728 206 H758" /></g>
+<g class="node" data-step="0"><rect x="38" y="150" width="210" height="112" rx="12"/><text x="56" y="187" class="label">Atelier GUI</text><text x="56" y="218" class="detail">Chrome window</text></g>
+<g class="node" data-step="1"><rect x="278" y="150" width="210" height="112" rx="12"/><text x="296" y="187" class="label">CORTEX terminal</text><text x="296" y="218" class="detail">Line-oriented prompt</text></g>
+<g class="node" data-step="2"><rect x="518" y="150" width="210" height="112" rx="12"/><text x="536" y="187" class="label">Shared backend</text><text x="536" y="218" class="detail">Conversations and settings</text></g>
+<g class="node" data-step="3"><rect x="758" y="150" width="210" height="112" rx="12"/><text x="776" y="187" class="label">Existing services</text><text x="776" y="218" class="detail">Transport and executor</text></g>
+<text x="38" y="351" class="foot">GUI and terminal are alternatives; both connect directly to the shared backend.</text>
+</svg>

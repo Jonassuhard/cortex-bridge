@@ -38,14 +38,23 @@ Reste 3 gestes : **Mode développeur** → **Charger l'extension non empaquetée
 
 ## 4. Lancer Cortex
 
-**Par double-clic** : `Cortex Bridge.command` dans le Finder — la console démarre et l'interface s'ouvre.
-
-Ou par commande :
+**Une seule commande** :
 
 ```bash
-scripts/cortex.sh start
-open http://127.0.0.1:8420
+scripts/cortex.sh go
 ```
+
+Elle démarre la console, ouvre Chrome sur l'onglet Cortex (dans le profil qui
+porte l'extension) et affiche les étapes à suivre dans le Terminal. L'extension
+se **couple automatiquement** à la console — aucun code à copier.
+
+**Par double-clic** : `Cortex Bridge.command` dans le Finder fait exactement la
+même chose.
+
+Dans Chrome, l'onglet Cortex et l'onglet ChatGPT (bouton **« Ouvrir ChatGPT »**)
+sont regroupés dans un même **groupe d'onglets « Cortex Bridge »**. Et à tout
+moment, le bouton **« Guide de démarrage »** (barre latérale) rappelle les
+3 étapes avec leur état d'avancement.
 
 Tu veux que Cortex démarre tout seul à chaque ouverture de session ?
 

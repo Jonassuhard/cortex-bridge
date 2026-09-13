@@ -12,8 +12,16 @@ import type {
   MissionDetail,
   PipelineStatus,
 } from "@/lib/types";
+import {
+  parseContextRequest,
+  stripContextRequestMarkup,
+  type ContextRequest,
+  type ContextRequestItem,
+} from "@/lib/contextRequest";
 import { formatDuration, shortTime } from "@/lib/api";
 import { executorDisplay } from "@/lib/runtimeTruth";
+import { TaskProgress } from "./TaskProgress";
+import { CortexProjectCard } from "./CortexProjectCard";
 import {
   ActivityIcon,
   BrowserIcon,
@@ -22,7 +30,9 @@ import {
   ClockIcon,
   CopyIcon,
   DoubleCheckIcon,
+  EyeIcon,
   FolderIcon,
+  GlobeIcon,
   MenuIcon,
   MoreIcon,
   PanelIcon,
@@ -45,6 +55,7 @@ export interface WorkspaceAvailability {
 }
 
 interface ChatWorkspaceProps {
+  notice?: string | null;
   conversationKey: ConversationKey | null;
   conversation: ConversationSummary | null;
   messages: ConversationMessage[];
@@ -74,6 +85,8 @@ interface ChatWorkspaceProps {
   onSendChat: (key: ConversationKey, text: string) => Promise<boolean>;
   onSendAttachment: (key: ConversationKey, text: string, file: File) => Promise<boolean>;
   onSendScreenshot: (key: ConversationKey, text: string) => Promise<boolean>;
+  onApproveContextItem?: (key: ConversationKey, request: ContextRequest, item: ContextRequestItem) => Promise<boolean>;
+  onRejectContextItem?: (key: ConversationKey, item: ContextRequestItem) => void;
   onStartMission: (key: ConversationKey, text: string, preflight: ExecutionPreflight) => Promise<boolean>;
   onCancelChat: (key: ConversationKey) => void;
   onRetryChatRecovery: (key: ConversationKey) => void;
@@ -86,7 +99,7 @@ interface ChatWorkspaceProps {
   onPauseMission: (key: ConversationKey) => void;
   onResumeMission: (key: ConversationKey) => void;
   onCancelMission: (key: ConversationKey) => void;
-  onApprove: (key: ConversationKey, scope: "once" | "tool" | "all-writes") => void;
+  onApprove: (key: ConversationKey, scope: "once" | "tool" | "all-writes", actionId: string) => void;
   onReject: (key: ConversationKey) => void;
 }
 
@@ -217,7 +230,7 @@ function MessageActions({ text }: { text: string }) {
           window.setTimeout(() => setCopied(false), 1200);
         }}
       >
-        {copied ? <CheckIcon size={14} /> : <CopyIcon size={14} />}
+        {copied ? <CheckIcon size={14} confirmed /> : <CopyIcon size={14} />}
       </button>
       <button title="Plus d'actions"><MoreIcon size={15} /></button>
     </div>
@@ -237,7 +250,7 @@ function CodeBlock({ language, text }: { language?: string; text: string }) {
             window.setTimeout(() => setCopied(false), 1200);
           }}
         >
-          {copied ? <CheckIcon size={13} /> : <CopyIcon size={13} />}
+          {copied ? <CheckIcon size={13} confirmed /> : <CopyIcon size={13} />}
           {copied ? "Copié" : "Copier"}
         </button>
       </div>
@@ -274,7 +287,10 @@ function UserMessage({ message }: { message: ConversationMessage }) {
 }
 
 function AssistantMessage({ message }: { message: ConversationMessage }) {
-  const text = cleanMessageText(message.text);
+  const text = stripContextRequestMarkup(cleanMessageText(message.text));
+  const visibleCodeBlocks = (message.code_blocks || []).filter(
+    (block) => block.lang?.trim().toLowerCase() !== "cortex-context-request",
+  );
   return (
     <article className="message-row message-assistant">
       <div className="assistant-avatar"><SparkIcon size={15} /></div>
@@ -288,7 +304,7 @@ function AssistantMessage({ message }: { message: ConversationMessage }) {
           <div className="thinking-line"><span className="thinking-spinner" /><span>ChatGPT analyse la demande…</span></div>
         )}
         {text && <div className={`assistant-text ${message.streaming ? "is-streaming" : ""}`}>{text}</div>}
-        {!!message.code_blocks?.length && message.code_blocks.map((block, index) => (
+        {!!visibleCodeBlocks.length && visibleCodeBlocks.map((block, index) => (
           <CodeBlock key={`${message.id}-code-${index}`} language={block.lang} text={block.text} />
         ))}
         {!!message.images?.length && (
@@ -302,6 +318,86 @@ function AssistantMessage({ message }: { message: ConversationMessage }) {
         {!message.streaming && <MessageActions text={text} />}
       </div>
     </article>
+  );
+}
+
+function contextItemLabel(item: ContextRequestItem): string {
+  if (item.kind === "file") return item.path || "Fichier du workspace";
+  if (item.kind === "screenshot") return item.target || "Capture de l’écran courant";
+  return item.url || "Lien HTTPS";
+}
+
+function contextItemKindLabel(item: ContextRequestItem): string {
+  if (item.kind === "file") return "Fichier";
+  if (item.kind === "screenshot") return "Capture";
+  return "Lien";
+}
+
+function ContextRequestCard({
+  conversationKey,
+  request,
+  onApprove,
+  onReject,
+}: {
+  conversationKey: ConversationKey;
+  request: ContextRequest;
+  onApprove?: (key: ConversationKey, request: ContextRequest, item: ContextRequestItem) => Promise<boolean>;
+  onReject?: (key: ConversationKey, item: ContextRequestItem) => void;
+}) {
+  const [states, setStates] = useState<Record<string, "pending" | "sending" | "sent" | "rejected" | "failed">>({});
+
+  async function approve(item: ContextRequestItem) {
+    if (!onApprove || states[item.id] === "sending" || states[item.id] === "sent") return;
+    setStates((current) => ({ ...current, [item.id]: "sending" }));
+    try {
+      const accepted = await onApprove(conversationKey, request, item);
+      setStates((current) => ({ ...current, [item.id]: accepted ? "sent" : "failed" }));
+    } catch {
+      setStates((current) => ({ ...current, [item.id]: "failed" }));
+    }
+  }
+
+  function reject(item: ContextRequestItem) {
+    if (states[item.id] === "sending" || states[item.id] === "sent") return;
+    onReject?.(conversationKey, item);
+    setStates((current) => ({ ...current, [item.id]: "rejected" }));
+  }
+
+  return (
+    <section className="context-request-card" aria-label="Contexte demandé par ChatGPT">
+      <header className="context-request-head">
+        <div>
+          <span className="context-request-kicker"><ShieldIcon size={13} /> Autorisation requise</span>
+          <h2>ChatGPT demande du contexte</h2>
+          <p>{request.summary}</p>
+        </div>
+        <span className="context-request-id">{request.requestId}</span>
+      </header>
+      <p className="context-request-safety">Rien n’est envoyé sans ton accord. Chaque élément est autorisé séparément.</p>
+      <div className="context-request-items">
+        {request.items.map((item) => {
+          const state = states[item.id] || "pending";
+          const actionDisabled = state === "sending" || state === "sent" || state === "rejected";
+          const approvalDisabled = !onApprove || actionDisabled;
+          const icon = item.kind === "file" ? <FolderIcon size={15} /> : item.kind === "screenshot" ? <EyeIcon size={15} /> : <GlobeIcon size={15} />;
+          const status = state === "sent" ? "Envoyé" : state === "rejected" ? "Refusé" : state === "sending" ? "Envoi en cours…" : state === "failed" ? "Échec — réessayer" : "En attente";
+          return (
+            <article key={item.id} className={`context-request-item is-${state}`}>
+              <div className="context-request-item-icon">{icon}</div>
+              <div className="context-request-item-main">
+                <div className="context-request-item-title"><strong>{contextItemKindLabel(item)}</strong><code>{contextItemLabel(item)}</code></div>
+                <p>{item.reason}</p>
+                <small>{status}</small>
+              </div>
+              <div className="context-request-item-actions">
+                <button type="button" disabled={approvalDisabled} onClick={() => void approve(item)}>{state === "failed" ? "Réessayer" : "Autoriser"}</button>
+                <button type="button" className="context-request-reject" disabled={actionDisabled} onClick={() => reject(item)}>Refuser</button>
+              </div>
+            </article>
+          );
+        })}
+      </div>
+    </section>
   );
 }
 
@@ -330,6 +426,7 @@ function EmptyConversation({ onExample }: { onExample: (text: string) => void })
 }
 
 export function ChatWorkspace({
+  notice,
   conversationKey,
   conversation,
   messages,
@@ -359,6 +456,8 @@ export function ChatWorkspace({
   onSendChat,
   onSendAttachment,
   onSendScreenshot,
+  onApproveContextItem,
+  onRejectContextItem,
   onStartMission,
   onCancelChat,
   onRetryChatRecovery,
@@ -424,7 +523,7 @@ export function ChatWorkspace({
           text: chatRun.response_text || "",
           created_at: chatRun.first_response_at || chatRun.created_at,
           latency_ms: chatRun.latency?.first_response_ms || undefined,
-          streaming: chatRun.state !== "COMPLETED",
+          streaming: ["WAITING_FOR_CHATGPT", "CHATGPT_STREAMING"].includes(chatRun.state),
         });
       }
     }
@@ -439,6 +538,18 @@ export function ChatWorkspace({
       else visible.push(message);
     }
     return { protocolMessages: protocol, visibleMessages: visible };
+  }, [mergedMessages]);
+
+  const contextRequests = useMemo(() => {
+    const seen = new Set<string>();
+    const requests: ContextRequest[] = [];
+    for (const message of mergedMessages) {
+      const request = parseContextRequest(message);
+      if (!request || seen.has(request.requestId)) continue;
+      seen.add(request.requestId);
+      requests.push(request);
+    }
+    return requests;
   }, [mergedMessages]);
 
   useEffect(() => {
@@ -509,7 +620,16 @@ export function ChatWorkspace({
         </div>
         <StatusRail transport={chatActive ? "running" : availability.chatState} executor={availability.agentState} latencyMs={availability.transportLatencyMs} onOpenChatGPTProfile={onOpenChatGPTProfile} connecting={chatGPTConnecting} />
         <div className="toolbar-right">
-          <button className={`toolbar-icon-button ${inspectorOpen ? "is-active" : ""}`} onClick={onToggleInspector} title="Détails du bridge (pipeline, logs, transport)"><PanelIcon /></button>
+          <button
+            className={`toolbar-detail-button ${inspectorOpen ? "is-active" : ""}`}
+            onClick={onToggleInspector}
+            title="Afficher ou masquer les détails techniques du bridge"
+            aria-label={inspectorOpen ? "Masquer les détails techniques" : "Afficher les détails techniques"}
+            aria-expanded={inspectorOpen}
+          >
+            <PanelIcon size={15} />
+            <span>Détails techniques</span>
+          </button>
         </div>
       </div>
 
@@ -524,8 +644,9 @@ export function ChatWorkspace({
         <div className="chat-background-grid" aria-hidden="true" />
         <div className="chat-blue-signal" aria-hidden="true" />
         <div className="message-column">
+          <CortexProjectCard key={conversationKey || "standby"} active={!!conversationKey} chatState={chatRun?.state} missionState={activeMissionState} sending={sending} recoveryPending={recoveryPending} cancelPending={cancelPending} />
           {loadingMessages && visibleMessages.length === 0 && protocolMessages.length === 0 && (
-            <div className="message-loading-state"><span className="thinking-spinner" /><p>Synchronisation de « {title} »…</p></div>
+            <div className="message-loading-state" aria-busy="true"><span className="thinking-spinner" aria-hidden="true" /><output>Synchronisation de « {title} »…</output><div className="message-skeleton" aria-hidden="true"><i /><i /><i /></div></div>
           )}
           {!loadingMessages && visibleMessages.length === 0 && protocolMessages.length === 0 && (
             <EmptyConversation
@@ -539,6 +660,16 @@ export function ChatWorkspace({
             if (message.role === "assistant") return <AssistantMessage key={message.id} message={message} />;
             return null;
           })}
+
+          {contextRequests.map((request) => conversationKey && (
+            <ContextRequestCard
+              key={`${conversationKey}-${request.requestId}`}
+              conversationKey={conversationKey}
+              request={request}
+              onApprove={onApproveContextItem}
+              onReject={onRejectContextItem}
+            />
+          ))}
 
           {protocolMessages.length > 0 && (
             <MissionProtocolDisclosure
@@ -559,7 +690,9 @@ export function ChatWorkspace({
                   expanded={executionExpanded}
                   onToggle={() => setExecutionExpanded((value) => !value)}
                   onApprove={(scope) => {
-                    if (conversationKey) onApprove(conversationKey, scope);
+                    if (conversationKey && mission.pending_approval_action_id) {
+                      onApprove(conversationKey, scope, mission.pending_approval_action_id);
+                    }
                   }}
                   onReject={() => {
                     if (conversationKey) onReject(conversationKey);
@@ -628,6 +761,13 @@ export function ChatWorkspace({
       </div>
 
       <div className="composer-shell">
+        {notice && <output className="app-toast">{notice}</output>}
+        {(chatRun || sending || recoveryPending || cancelPending) && <TaskProgress
+          key={`${conversationKey}-${chatRun?.id || "pending"}`}
+          kind="chat"
+          state={cancelPending ? "CANCELLING" : recoveryPending ? "RECOVERING" : sending && !chatActive ? "PREPARING" : chatRun?.state || "PREPARING"}
+          startedAt={chatRun?.created_at}
+        />}
         <Composer
           key={conversationKey || "no-conversation"}
           value={draft}

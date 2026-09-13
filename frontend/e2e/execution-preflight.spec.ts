@@ -6,7 +6,7 @@ test("execution remains preflight-only until confirmation", async ({ appPage }) 
   const missionRequests: string[] = [];
   appPage.on("request", (request) => { if (new URL(request.url()).pathname === "/api/missions" && request.method() === "POST") missionRequests.push(request.postData() || ""); });
   await appPage.getByRole("textbox", { name: "Message à envoyer" }).fill("Inspecter le workspace");
-  await appPage.getByRole("button", { name: "Exécuter…" }).click();
+  await appPage.getByRole("button", { name: "Exécuter sur ce Mac…" }).click();
   const dialog = appPage.getByRole("dialog", { name: "Vérifier l’exécution locale" });
   await expect(dialog).toBeVisible();
   const box = await dialog.boundingBox();

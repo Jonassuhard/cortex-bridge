@@ -1,0 +1,178 @@
+{
+  "schemaVersion": 1,
+  "release": "0.6.1",
+  "commit": "e4b4c6b771c5daf5f7b39e7d7a73f242fef84420",
+  "generatedAt": "2026-09-10T18:07:07Z",
+  "environment": {
+    "os": "macOS 26.5.1 build 25F80, Apple silicon",
+    "python": "3.13.12 (.venv)",
+    "node": "25.8.2",
+    "browserDriver": "Cortex Chrome extension protocol 2; Playwright 1.62.0 synthetic fixtures",
+    "executorKind": "deterministic local executor for offline fixtures; no provider mission claimed",
+    "simulation": true
+  },
+  "suites": {
+    "backend": {
+      "passed": 725,
+      "failed": 0,
+      "skipped": 0
+    },
+    "frontendUnit": {
+      "passed": 207,
+      "failed": 0,
+      "skipped": 0
+    },
+    "e2e": {
+      "passed": 26,
+      "failed": 0,
+      "skipped": 1
+    },
+    "a11y": {
+      "passed": 4,
+      "failed": 0,
+      "skipped": 0
+    },
+    "extension": {
+      "passed": 138,
+      "failed": 0,
+      "skipped": 0
+    }
+  },
+  "performance": {
+    "cachedUsabilityMs": 327.4,
+    "switchP95Ms": 113.9,
+    "switchMaxMs": 113.9
+  },
+  "dualConversations": {
+    "runs": 10,
+    "crossovers": 0,
+    "thirdWriterDraftPreserved": true
+  },
+  "acceptance": {
+    "fixtureMissions": {
+      "runs": 20,
+      "passed": 20
+    },
+    "coldDualRuns": {
+      "runs": 10,
+      "passed": 10
+    },
+    "crashPoints": {
+      "runs": 6,
+      "passed": 6,
+      "sourceCommit": "e4b4c6b771c5daf5f7b39e7d7a73f242fef84420",
+      "command": ".venv/bin/python -m unittest -v tests.test_loop_mock.LoopTestCase.test_08_restart_recovery_requires_explicit_resume tests.test_missions_api.MissionsApiTestCase.test_08_restart_recovery_surfaced tests.test_playwright_driver.PlaywrightDriverTest.test_startup_failure_is_evicted_and_factory_recovers tests.test_transport_session_isolation.MissionPersistenceFailureTest.test_sqlite_update_failure_fails_mission_and_releases_exact_lease tests.test_transport_session_isolation.MissionRouteSessionIsolationTest.test_runtime_construction_failure_fails_creation_and_releases_lease tests.test_transport_session_isolation.MissionStopQuiescenceTest.test_cancel_keeps_slot_until_browser_and_background_task_quiesce",
+      "evidenceArtifact": "docs/verification/v0.6.1-crash-points.txt",
+      "points": [
+        {
+          "id": "crash-1",
+          "test": "tests.test_loop_mock.LoopTestCase.test_08_restart_recovery_requires_explicit_resume",
+          "transport": "deterministic_fixture",
+          "injectionBoundary": "store restart while WAITING_FOR_CHATGPT",
+          "status": "PASS"
+        },
+        {
+          "id": "crash-2",
+          "test": "tests.test_missions_api.MissionsApiTestCase.test_08_restart_recovery_surfaced",
+          "transport": "api_store",
+          "injectionBoundary": "API reads a reopened non-terminal mission store",
+          "status": "PASS"
+        },
+        {
+          "id": "crash-3",
+          "test": "tests.test_playwright_driver.PlaywrightDriverTest.test_startup_failure_is_evicted_and_factory_recovers",
+          "transport": "playwright_development_fixture",
+          "injectionBoundary": "browser driver startup fails before use",
+          "status": "PASS"
+        },
+        {
+          "id": "crash-4",
+          "test": "tests.test_transport_session_isolation.MissionPersistenceFailureTest.test_sqlite_update_failure_fails_mission_and_releases_exact_lease",
+          "transport": "mission_runtime_sqlite",
+          "injectionBoundary": "binding persistence update fails after lease acquisition",
+          "status": "PASS"
+        },
+        {
+          "id": "crash-5",
+          "test": "tests.test_transport_session_isolation.MissionRouteSessionIsolationTest.test_runtime_construction_failure_fails_creation_and_releases_lease",
+          "transport": "mission_runtime",
+          "injectionBoundary": "runtime construction fails after lease acquisition",
+          "status": "PASS"
+        },
+        {
+          "id": "crash-6",
+          "test": "tests.test_transport_session_isolation.MissionStopQuiescenceTest.test_cancel_keeps_slot_until_browser_and_background_task_quiesce",
+          "transport": "mission_runtime",
+          "injectionBoundary": "cancellation while browser and background work quiesce",
+          "status": "PASS"
+        }
+      ]
+    },
+    "liveChatGPT": {
+      "status": "BLOCKED_BY_PROVIDER_TERMS",
+      "singleConversation": {
+        "runs": 0,
+        "passed": 0
+      },
+      "dualConversations": {
+        "runs": 0,
+        "passed": 0,
+        "crossovers": null
+      },
+      "thirdWriterRefused": false,
+      "fileUpload": false,
+      "screenshotUpload": false,
+      "personalDataRecorded": false,
+      "notes": "The consumer-site adapter is not treated as an authorized release transport. Existing owner-authorized observations remain historical and are not resealed as current acceptance evidence."
+    },
+    "cleanMacosLifecycle": {
+      "status": "NOT_RUN",
+      "realCommands": false,
+      "install": false,
+      "browserLaunch": false,
+      "serviceLifecycle": false,
+      "doctor": false,
+      "reinstall": false,
+      "uninstall": false,
+      "foreignSentinelPreserved": false,
+      "attempts": 0,
+      "failedAttempts": 0,
+      "failedAttemptsRetained": false,
+      "planHashes": {
+        "install": null,
+        "reinstall": null,
+        "uninstall": null
+      },
+      "notes": "No genuinely clean macOS account or VM was used for this candidate."
+    },
+    "miniSites": {
+      "runs": 0,
+      "passed": 0,
+      "status": "BLOCKED_BY_PROVIDER_TERMS"
+    }
+  },
+  "gates": {
+    "privacy": "PASS",
+    "links": "PASS",
+    "secrets": "PASS",
+    "dependencies": "PASS",
+    "install": "PASS",
+    "doctor": "PASS",
+    "uninstall": "PASS",
+    "build": "PASS",
+    "e2e": "PASS",
+    "a11y": "PASS",
+    "consoleErrors": 0
+  },
+  "artifacts": {
+    "VERSION": "87b241b275c591694846560e9879f50c9da3150f854efdabd782c539772f3033",
+    "frontend/out/index.html": "c252163df6a4be08e21ecbdd40e3877e2c867c4545928dec40d0c63ec1cdfb3b",
+    "chrome-extension/manifest.json": "d7e428168372b2f274036cd6f18bded2238461dabf53c9a2698f0e99f4f40f82",
+    "transport/macos_ax_send.swift": "120ba003063f9a0b806166d21d38610e1c0c6a05944a56dc03d4d947ba2c198e",
+    "scripts/verify-release-evidence.py": "60a162ab508fe6ef8b411b78524638857ffd5410ff1c2fbc5ac215a1ca1b9591",
+    "tests/test_release_manifest.py": "fd9080e93bc9aa527ec17fc4554a7be20ad1fec2a7510bd92f74546b2aded004",
+    "tests/test_chrome_extension_driver.py": "d0d3f3ea01585e117ff8e2eab5d1e67680ef0e6bd6f6da7109f2bfdca44fd5ef",
+    "docs/verification/v0.6.1-crash-points.txt": "751ed3b326d1e3a8f028ef8bf9a1f54a67503d9d098351630e45ec87e03c5295"
+  },
+  "verdict": "RELEASE_BLOCKED_BY_PROVIDER_TERMS"
+}

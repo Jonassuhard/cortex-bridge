@@ -986,11 +986,72 @@ class ChatGPTWebTransport:
             await self._capture_new_lock(after.get("url", ""))
         return {"sent": True, "attachment": chip.get("label")}
 
+    @staticmethod
+    def _checkpoint(state: dict) -> dict:
+        messages = state.get("messages", [])
+        return {"conversation_id": state.get("conversation_id"),
+                "message_count": len(messages),
+                "last_message_id": messages[-1].get("id") if messages else None}
+
+    async def outbound_checkpoint(self) -> dict:
+        """Observe the head before persisting a mission send reservation."""
+        if self.delivery_uncertain or self.paused:
+            raise TransportError(DELIVERY_UNCERTAIN, "transport must be reconciled first")
+        return self._checkpoint(await self.snapshot())
+
+    @staticmethod
+    def _outbound_marker(send_id: str) -> str:
+        from uuid import UUID
+        try:
+            if str(UUID(send_id)) != send_id:
+                raise ValueError("noncanonical attempt ID")
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise TransportError(DELIVERY_UNCERTAIN, "invalid attempt identity") from exc
+        return f"[cortex-transport send_id={send_id}]"
+
+    async def reconcile_outbound(self, checkpoint: dict, send_id: str) -> dict:
+        """Read only: require one stable receipt after a known conversation head.
+
+        Missing/truncated history never proves that a send did not happen.
+        The marker correlates an attempt; it is not a provenance signature.
+        """
+        marker = self._outbound_marker(send_id)
+
+        def receipt(state: dict) -> dict:
+            def reject():
+                raise TransportError(DELIVERY_UNCERTAIN, "outbound receipt cannot be proven")
+
+            identity = checkpoint.get("conversation_id")
+            anchor = checkpoint.get("last_message_id")
+            if not identity or state.get("conversation_id") != identity or not anchor:
+                reject()
+            messages = state.get("messages", [])
+            positions = [i for i, m in enumerate(messages) if m.get("id") == anchor]
+            if len(positions) != 1 or str(anchor).startswith("idx-"):
+                reject()
+            candidates = [m for m in messages[positions[0] + 1:]
+                          if m.get("role") == "user" and marker in str(m.get("text", ""))]
+            if len(candidates) != 1:
+                reject()
+            candidate = candidates[0]
+            if not candidate.get("id") or str(candidate["id"]).startswith("idx-"):
+                reject()
+            return candidate
+
+        first = receipt(await self.snapshot())
+        await asyncio.sleep(min(self.stability_interval, 1.0))
+        second = receipt(await self.snapshot())
+        if first != second:
+            raise TransportError(DELIVERY_UNCERTAIN, "outbound receipt changed during verification")
+        return second
+
     async def send_message(
         self,
         text: str,
         *,
         attachment_label: str | None = None,
+        send_id: str | None = None,
+        expected_checkpoint: dict | None = None,
     ) -> dict:
         """Send one user message into the locked conversation.
 
@@ -1016,6 +1077,12 @@ class ChatGPTWebTransport:
             state = await self._state()
         if state.get("streaming"):
             raise TransportError(STREAM_TIMEOUT, "still streaming before send")
+        if expected_checkpoint is not None and self._checkpoint(state) != expected_checkpoint:
+            raise TransportError("PRE_DELIVERY_CONTINUITY_CHANGED", "conversation changed before send",
+                                 details={"delivery": "not_attempted"})
+        attempt_marker = self._outbound_marker(send_id) if send_id is not None else None
+        if attempt_marker:
+            text = f"{text}\n\n{attempt_marker}"
         self._baseline = {m["id"] for m in state.get("messages", []) if m["role"] == "assistant"}
         user_ids_before = {m["id"] for m in state.get("messages", []) if m["role"] == "user"}
         try:
@@ -1092,7 +1159,7 @@ class ChatGPTWebTransport:
                             in " ".join(str(message.get("text") or "").split()).casefold()
                         )
                     )
-                if confirmed:
+                if confirmed and (attempt_marker is None or attempt_marker in normalized_visible_text):
                     sent.append(message)
             if sent:
                 break

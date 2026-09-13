@@ -63,3 +63,24 @@ class ApprovalScopeRegressionTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(granted, SCOPE_TOOL_FOR_MISSION)
         self.assertFalse(next_write.requires_approval)
+
+    async def test_scope_persistence_failure_fails_closed(self) -> None:
+        policy = PolicyEngine(self.workspace, mode=WRITE_WITH_APPROVALS)
+        runtime = MissionRuntime("approval-persistence-failure")
+        runtime.policy = policy
+
+        def fail_persist(*_args, **_kwargs):
+            raise ValueError("simulated persistence failure")
+
+        policy.approve = fail_persist  # type: ignore[method-assign]
+        callback = _make_approval_callback(runtime)
+        waiter = asyncio.create_task(
+            callback({"action": {"tool": "write_file"}}, None)
+        )
+        await asyncio.sleep(0)
+        runtime.approval_scope = SCOPE_TOOL_FOR_MISSION
+        runtime.approval_event.set()
+
+        with self.assertRaisesRegex(RuntimeError, "could not be persisted"):
+            await waiter
+        self.assertIsNone(runtime.approval_scope)

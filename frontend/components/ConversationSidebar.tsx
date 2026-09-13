@@ -7,6 +7,8 @@ import {
   ArchiveIcon,
   ChevronDownIcon,
   ClockIcon,
+  CollapseIcon,
+  InfoIcon,
   MenuIcon,
   MessageIcon,
   GlobeIcon,
@@ -29,6 +31,7 @@ interface ConversationSidebarProps {
   onNewConversation: () => void;
   onOpenSettings: () => void;
   onOpenHistory?: () => void;
+  onOpenGuide?: () => void;
 }
 
 function formatTimestamp(value?: string): string {
@@ -45,6 +48,12 @@ function formatTimestamp(value?: string): string {
   return new Intl.DateTimeFormat("fr-FR", { day: "2-digit", month: "short" })
     .format(parsed)
     .replace(/\.$/u, "");
+}
+
+function conversationCategory(conversation: ConversationSummary): string {
+  if (conversation.pinned) return "Épinglée";
+  if (conversation.project_id && conversation.project_title) return `Projet · ${conversation.project_title}`;
+  return "Récente";
 }
 
 function ConversationRow({ conversation, selectedKey, onSelect }: {
@@ -64,6 +73,7 @@ function ConversationRow({ conversation, selectedKey, onSelect }: {
         <span className="conversation-title-line"><strong>{conversation.title || "Conversation sans titre"}</strong><time dateTime={conversation.timestamp}>{formatTimestamp(conversation.timestamp)}</time></span>
         <span className="conversation-preview">{conversation.preview || "Ouvrir la conversation"}</span>
         <span className="conversation-subline">
+          <span className="conv-type">{conversationCategory(conversation)}</span>
           {conversation.sync_state === "stale" && <span className="conv-sync-state" title={conversation.sync_error || "Synchronisation en échec"}>Cache obsolète</span>}
           {typeof conversation.message_count === "number" && <span className="conv-count">{conversation.message_count} message{conversation.message_count > 1 ? "s" : ""}</span>}
         </span>
@@ -73,7 +83,7 @@ function ConversationRow({ conversation, selectedKey, onSelect }: {
   );
 }
 
-export function ConversationSidebar({ conversations, selectedKey, loading, collapsed, onCollapse, onSelect, onRefresh, onNewConversation, onOpenSettings, onOpenHistory }: ConversationSidebarProps) {
+export function ConversationSidebar({ conversations, selectedKey, loading, collapsed, onCollapse, onSelect, onRefresh, onNewConversation, onOpenSettings, onOpenHistory, onOpenGuide }: ConversationSidebarProps) {
   const [query, setQuery] = useState("");
   const filtered = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -94,6 +104,7 @@ export function ConversationSidebar({ conversations, selectedKey, loading, colla
           ))}
         </nav>
         <div className="collapsed-spacer" />
+        {onOpenGuide && <button className="sidebar-icon-button" onClick={onOpenGuide} title="Guide de démarrage" aria-label="Guide de démarrage"><InfoIcon /></button>}
         {onOpenHistory && <button className="sidebar-icon-button" onClick={onOpenHistory} title="Historique des missions" aria-label="Historique des missions"><ClockIcon /></button>}
         <button className="sidebar-icon-button" onClick={onOpenSettings} title="Paramètres" aria-label="Paramètres"><SettingsIcon /></button>
       </aside>
@@ -112,8 +123,8 @@ export function ConversationSidebar({ conversations, selectedKey, loading, colla
       <div className="sidebar-brand-row">
         <CortexLogo />
         <div className="sidebar-brand-actions">
-          <button className="icon-button" onClick={onRefresh} title="Actualiser les conversations" aria-label="Actualiser les conversations"><RefreshIcon className={loading ? "spin-slow" : ""} /></button>
-          <button className="icon-button" onClick={onCollapse} title="Réduire la barre latérale" aria-label="Réduire la barre latérale"><span className="collapse-glyph">—</span></button>
+          <button className="icon-button" onClick={onRefresh} title="Actualiser les conversations" aria-label="Actualiser les conversations" aria-busy={loading}><RefreshIcon busy={loading} /></button>
+          <button className="icon-button" onClick={onCollapse} title="Réduire la barre latérale" aria-label="Réduire la barre latérale"><CollapseIcon /></button>
         </div>
       </div>
       <div className="sidebar-primary-actions">
@@ -133,6 +144,7 @@ export function ConversationSidebar({ conversations, selectedKey, loading, colla
       </nav>
       <button className="archived-button"><ArchiveIcon size={16} /><span>Conversations archivées</span></button>
       <div className="sidebar-bottom">
+        {onOpenGuide && <button className="settings-entry" onClick={onOpenGuide}><span className="settings-entry-icon"><InfoIcon /></span><span className="settings-entry-copy"><strong>Guide de démarrage</strong><small>Couplage, ChatGPT, première tâche</small></span><ChevronDownIcon size={15} /></button>}
         {onOpenHistory && <button className="history-entry" onClick={onOpenHistory}><span className="history-entry-icon"><ClockIcon /></span><span className="history-entry-copy"><strong>Historique</strong><small>Missions et exécutions passées</small></span><ChevronDownIcon size={15} /></button>}
         <button className="settings-entry" onClick={onOpenSettings}><span className="settings-entry-icon"><SettingsIcon /></span><span className="settings-entry-copy"><strong>Paramètres</strong><small>Modèles, permissions, transport</small></span><ChevronDownIcon size={15} /></button>
         <div className="account-row"><span className="account-avatar">CL</span><span><strong>Compte local</strong><small>Session locale</small></span></div>

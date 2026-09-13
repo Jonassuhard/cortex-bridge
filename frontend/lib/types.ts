@@ -180,6 +180,8 @@ export interface RuntimeStatus extends RuntimeTruth {
   storage_status: string;
   primary: RuntimeModel;
   executor_available: boolean;
+  /** Candidate availability is not proof that an executor has run. */
+  executor_verified?: boolean;
 }
 
 export interface TransportStatus {
@@ -341,6 +343,7 @@ export interface MissionDetail {
   mission: MissionSummary;
   timeline: Record<string, TimelineRow[]>;
   awaiting_approval: boolean;
+  pending_approval_action_id: string | null;
   stopped: boolean;
 }
 

@@ -94,6 +94,10 @@ does not approve a changed plan.
 ./scripts/install.sh --approve-plan PLAN_HASH --json
 ```
 
+The `--json` contract is machine-readable: stdout is one JSON object and
+installer/dependency progress is kept on stderr. Agents must parse stdout only,
+check the exit code, and never infer success from a partial log line.
+
 If the plan changes, stop and request approval for the new hash.
 
 ## Human Chrome pause

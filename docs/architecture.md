@@ -1,5 +1,23 @@
 # Architecture
 
+## Optional terminal (0.6.1 candidate)
+
+`scripts/cortex` starts the Textual full-screen terminal; `scripts/cortex --plain`
+selects the line-oriented compatibility client; `scripts/cortex ui` opens the
+Atelier GUI. All three talk to the same FastAPI backend. Terminal modules live
+in `console/terminal_*.py` and `console/tui/`; no second database or executor is
+introduced.
+The source wrapper does not install a global command.
+
+Chat sends preserve unconfirmed submissions in memory. Following a run reads
+the backend's response and error; only `delivered_at` confirms delivery.
+Changing conversation clears the active cancellation target. Mission approvals
+carry `expected_action_id`, atomically checked against the pending backend
+action. Older backends without that identity are refused, not silently trusted.
+
+[Animated use cases](use-cases.html) distinguish chat, mission and interface
+selection. They explain routes, not observed live execution or model quality.
+
 ## Runtime flow
 
 ```text

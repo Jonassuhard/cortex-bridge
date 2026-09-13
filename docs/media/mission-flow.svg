@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="390" viewBox="0 0 1000 390" role="img" aria-labelledby="title description">
+<title id="title">A reviewed local mission</title><desc id="description">Reasoning and execution have separate responsibilities. Preflight to ChatGPT decision to Policy + approval to Local workspace. Results return to the mission history. A diagram is not proof of a live run.</desc>
+<style>svg{background:#07090b;font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}text{fill:#f7f9fa} .title{font-size:29px;font-weight:650}.subtitle{font-size:17px;fill:#a3afb9}.label{font-size:20px;font-weight:600}.detail{font-size:14px;fill:#a3afb9}.foot{font-size:15px;fill:#a3afb9}.node rect{fill:#101419;stroke:#5f6a70;stroke-width:1.5}.node.active rect{stroke:#4f8cff;stroke-width:3;fill:#14191e}.edges path{fill:none;stroke:#4f8cff;stroke-width:2;marker-end:url(#arrow)}</style>
+<defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0 0 L6 3 L0 6" fill="none" stroke="#4f8cff"/></marker></defs>
+<rect width="1000" height="390" fill="#07090b"/>
+<text x="38" y="55" class="title">A reviewed local mission</text><text x="38" y="91" class="subtitle">Reasoning and execution have separate responsibilities.</text>
+<g class="edges"><path d="M248 206 H278 M488 206 H518 M728 206 H758" /></g>
+<g class="node" data-step="0"><rect x="38" y="150" width="210" height="112" rx="12"/><text x="56" y="187" class="label">Preflight</text><text x="56" y="218" class="detail">Workspace and limits</text></g>
+<g class="node" data-step="1"><rect x="278" y="150" width="210" height="112" rx="12"/><text x="296" y="187" class="label">ChatGPT decision</text><text x="296" y="218" class="detail">Structured mission action</text></g>
+<g class="node" data-step="2"><rect x="518" y="150" width="210" height="112" rx="12"/><text x="536" y="187" class="label">Policy + approval</text><text x="536" y="218" class="detail">Current action, once scope</text></g>
+<g class="node" data-step="3"><rect x="758" y="150" width="210" height="112" rx="12"/><text x="776" y="187" class="label">Local tools</text><text x="776" y="218" class="detail">Deterministic, not an LLM</text></g>
+<g class="edges"><path d="M863 262 V294 H383 V262"/></g>
+<text x="445" y="319" class="detail">Recorded result or error returns to the planner</text>
+<text x="38" y="361" class="foot">Planner model selection does not change the local tools. Diagram, not live-run evidence.</text>
+</svg>

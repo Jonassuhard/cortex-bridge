@@ -612,6 +612,23 @@ class ToolExecutor:
         try:
             out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
             timed_out = False
+        except asyncio.CancelledError:
+            # Cancellation must not leave an executor or inherited-pipe child
+            # writing after the owning task has stopped. Only signal this
+            # freshly created process group, never a recovered bare PID.
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            cleanup = asyncio.create_task(proc.communicate())
+            while not cleanup.done():
+                try:
+                    await asyncio.shield(cleanup)
+                except asyncio.CancelledError:
+                    # A repeated cancellation does not abandon reaping.
+                    continue
+            cleanup.result()
+            raise
         except asyncio.TimeoutError:
             try:
                 os.killpg(proc.pid, signal.SIGTERM)
@@ -620,6 +637,11 @@ class ToolExecutor:
             try:
                 await asyncio.wait_for(proc.wait(), timeout=2)
             except asyncio.TimeoutError:
+                pass
+            finally:
+                # A completed leader does not imply its descendants closed
+                # inherited stdout/stderr. Finish the owned group before
+                # draining pipes, including cancellation during the grace wait.
                 try:
                     os.killpg(proc.pid, signal.SIGKILL)
                 except ProcessLookupError:

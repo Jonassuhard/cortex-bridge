@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="fr"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Cortex Bridge 0.6.1 — Aperçu local</title>
+<style>
+:root{color-scheme:dark;font-family:Inter,system-ui,sans-serif;background:#07090b;color:#edf2f5}body{max-width:1400px;margin:auto;padding:32px}h1{font-size:28px}p{color:#a3afb9;line-height:1.6}nav{display:flex;gap:12px;flex-wrap:wrap;margin:24px 0}button,a{color:#9ebfff}button{background:#101419;border:1px solid #4f8cff;border-radius:8px;padding:12px;cursor:pointer}button[aria-pressed=true]{background:#4f8cff;color:#07090b}main{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,440px),1fr));gap:24px}figure{margin:0;padding:16px;background:#101419;border:1px solid #1a2027;border-radius:12px}figcaption{margin-bottom:12px;font-size:15px}img{width:100%;height:auto;display:block}footer{margin-top:32px;font-size:13px}
+</style>
+<h1>Cortex Bridge <span style="color:#4f8cff">0.6.1</span></h1>
+<p>Révision du 10 septembre 2026 · Espacements corrigés et nouveaux pictogrammes Lucide.<br><a href="./icons.html">Tester les pictogrammes animés</a></p>
+<p>Atelier · Copie locale du vrai projet. Captures du build, pas des images générées.<br>Données de test synthétiques : aucun compte ChatGPT connecté, aucune action réelle. Cet aperçu est une galerie, pas la console active.</p>
+<nav aria-label="Taille d’écran"><button data-width="1440" aria-pressed="true">Desktop · 1440</button><button data-width="768" aria-pressed="false">Tablette · 768</button><button data-width="375" aria-pressed="false">Mobile · 375</button></nav>
+<main id="gallery"></main>
+<footer><p>La mise à jour n’est pas installée. Branche locale : codex/v061-atelier. Les approbations et le préflight existants sont conservés.</p></footer>
+<script>
+const states=[['02-navigation','Conversation et navigation'],['01-onboarding','Accueil et prérequis'],['01b-connexion-chrome','Connexion ChatGPT'],['04-preflight','Vérification avant exécution'],['12-approval','Approbation humaine'],['12-mission-review','Fichiers et diff enregistrés'],['11-arret-diagnostic','Activité et arrêt général'],['10-info-diagramme','Paramètres'],['08-timeout','Récupération après erreur'],['07-piece-jointe','Pièce jointe']];
+function show(width){document.getElementById('gallery').replaceChildren(...states.map(([file,label])=>{const figure=document.createElement('figure'),caption=document.createElement('figcaption'),link=document.createElement('a'),img=document.createElement('img');caption.textContent=label;img.src=`${width}/${file}.png`;img.alt=`${label} — ${width}px, données synthétiques`;img.loading='lazy';link.href=img.src;link.append(img);figure.append(caption,link);return figure}));document.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.width===width)))}
+document.querySelectorAll('button').forEach(b=>b.addEventListener('click',()=>show(b.dataset.width)));show('1440');
+</script></html>

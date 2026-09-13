@@ -14,12 +14,12 @@ sys.path.insert(0, str(ROOT / "console"))
 
 
 class VersionConsistencyTest(unittest.TestCase):
-    def test_python_package_and_canonical_file_are_053(self):
+    def test_python_package_and_canonical_file_are_065(self):
         from version import current_version
 
         canonical = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
         metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-        self.assertEqual(canonical, "0.5.3")
+        self.assertEqual(canonical, "0.6.5")
         self.assertEqual(metadata["project"]["version"], canonical)
         self.assertEqual(current_version(), canonical)
 
@@ -100,7 +100,7 @@ class VersionConsistencyTest(unittest.TestCase):
                     (
                         "import asyncio,server; "
                         "assert callable(server.main); "
-                        "assert asyncio.run(server.status())['version'] == '0.5.3'"
+                        "assert asyncio.run(server.status())['version'] == '0.6.5'"
                     ),
                 ],
                 cwd=ROOT,

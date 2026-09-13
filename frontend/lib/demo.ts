@@ -9,6 +9,13 @@ import type {
   TransportStatus,
 } from "./types";
 
+// Development fixtures are rendered by Next on the server and hydrated in the
+// browser. Keep their timestamps deterministic so the fixture never creates a
+// false hydration error merely because a second elapsed between both renders.
+const DEMO_NOW_MS = Date.parse("2026-09-10T12:00:00.000Z");
+const demoIso = (offsetMs: number) => new Date(DEMO_NOW_MS - offsetMs).toISOString();
+const demoUnix = (offsetSeconds: number) => DEMO_NOW_MS / 1000 - offsetSeconds;
+
 export const demoConversations: ConversationSummary[] = [
   {
     url: "https://chatgpt.com/c/demo-release-checklist",
@@ -57,7 +64,7 @@ export const demoMessages: ConversationMessage[] = [
     id: "demo-u1",
     role: "user",
     text: "Inspecte le checkout, lance les tests, vérifie les commits récents et utilise le navigateur pour valider le parcours de bout en bout.",
-    created_at: new Date(Date.now() - 85_000).toISOString(),
+    created_at: demoIso(85_000),
     delivery: "received",
     latency_ms: 128,
   },
@@ -65,14 +72,14 @@ export const demoMessages: ConversationMessage[] = [
     id: "demo-a1",
     role: "assistant",
     text: "Je vais analyser le dépôt, exécuter la suite de tests, examiner les changements récents puis valider le comportement dans Chrome. La mission continuera automatiquement et chaque résultat sera vérifié avant la prochaine étape.",
-    created_at: new Date(Date.now() - 72_000).toISOString(),
+    created_at: demoIso(72_000),
     latency_ms: 2130,
   },
   {
     id: "demo-c1",
     role: "cortex",
     text: "Exécution locale en cours",
-    created_at: new Date(Date.now() - 62_000).toISOString(),
+    created_at: demoIso(62_000),
     streaming: true,
   },
 ];
@@ -106,7 +113,7 @@ export const demoPipeline: PipelineStatus = {
     mission_id: "demo-mission",
   },
   overall: "running",
-  updated_at: new Date().toISOString(),
+  updated_at: demoIso(0),
   active_mission_id: "demo-mission",
   active_mission_state: "EXECUTING_LOCAL_ACTION",
   queue_pending: 0,
@@ -118,7 +125,7 @@ export const demoPipeline: PipelineStatus = {
     release_eligible: false,
     state: "EXECUTING_LOCAL_ACTION",
     active: true,
-    observed_at: new Date().toISOString(),
+    observed_at: demoIso(0),
   },
   latency: { transport_ms: 128, local_model_ms: 3700, total_iteration_ms: 12800 },
   components: [
@@ -135,10 +142,10 @@ export const demoPipeline: PipelineStatus = {
     { id: "database", label: "Persistance", state: "healthy", detail: "SQLite synchronisé" },
   ],
   events: [
-    { id: "e1", ts: new Date(Date.now() - 2_000).toISOString(), label: "Suite de tests lancée", detail: "vitest", duration_ms: 12_000, state: "running" },
-    { id: "e2", ts: new Date(Date.now() - 4_000).toISOString(), label: "Dépôt inspecté", duration_ms: 1_200, state: "healthy" },
-    { id: "e3", ts: new Date(Date.now() - 5_000).toISOString(), label: "Décision reçue de ChatGPT", duration_ms: 600, state: "healthy" },
-    { id: "e4", ts: new Date(Date.now() - 6_000).toISOString(), label: "Conversation verrouillée", duration_ms: 400, state: "connected" },
+    { id: "e1", ts: demoIso(2_000), label: "Suite de tests lancée", detail: "vitest", duration_ms: 12_000, state: "running" },
+    { id: "e2", ts: demoIso(4_000), label: "Dépôt inspecté", duration_ms: 1_200, state: "healthy" },
+    { id: "e3", ts: demoIso(5_000), label: "Décision reçue de ChatGPT", duration_ms: 600, state: "healthy" },
+    { id: "e4", ts: demoIso(6_000), label: "Conversation verrouillée", duration_ms: 400, state: "connected" },
   ],
 };
 
@@ -148,7 +155,7 @@ export const demoMissions: MissionSummary[] = [
     objective: "Auditer le checkout et valider le parcours de bout en bout",
     workspace: "/tmp/cortex-demo-workspace",
     state: "EXECUTING_LOCAL_ACTION",
-    created_at: Date.now() / 1000 - 140,
+    created_at: demoUnix(140),
     max_iterations: 25,
     executor_kind: "deterministic",
     executor_model_used: null,
@@ -160,12 +167,13 @@ export const demoMissions: MissionSummary[] = [
 export const demoMissionDetail: MissionDetail = {
   mission: demoMissions[0],
   awaiting_approval: false,
+  pending_approval_action_id: null,
   stopped: false,
   timeline: {
-    conversation_bindings: [{ rowid: 1, selected_at: Date.now() / 1000 - 140, conversation_title: "Audit checkout" }],
-    orchestrator_decisions: [{ rowid: 2, created_at: Date.now() / 1000 - 80, valid: 1, decision_json: JSON.stringify({ state: "EXECUTE", summary: "Run the repository test suite", action: { tool: "run_tests", arguments: { command: "npm test" } } }) }],
-    policy_decisions: [{ rowid: 3, created_at: Date.now() / 1000 - 78, tool: "run_tests", allowed: 1, requires_approval: 0, reason: "Configured project test command" }],
-    tool_executions: [{ rowid: 4, started_at: Date.now() / 1000 - 60, tool: "run_tests", arguments_json: JSON.stringify({ argv: ["npm", "test"] }), exit_code: null }],
+    conversation_bindings: [{ rowid: 1, selected_at: demoUnix(140), conversation_title: "Audit checkout" }],
+    orchestrator_decisions: [{ rowid: 2, created_at: demoUnix(80), valid: 1, decision_json: JSON.stringify({ state: "EXECUTE", summary: "Run the repository test suite", action: { tool: "run_tests", arguments: { command: "npm test" } } }) }],
+    policy_decisions: [{ rowid: 3, created_at: demoUnix(78), tool: "run_tests", allowed: 1, requires_approval: 0, reason: "Configured project test command" }],
+    tool_executions: [{ rowid: 4, started_at: demoUnix(60), tool: "run_tests", arguments_json: JSON.stringify({ argv: ["npm", "test"] }), exit_code: null }],
     validation_results: [],
     transport_events: [],
     iterations: [],

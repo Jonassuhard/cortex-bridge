@@ -76,6 +76,56 @@ class ModeARunnerTestCase(unittest.IsolatedAsyncioTestCase):
         params.update(kwargs)
         return ModeARunner(**params)
 
+    async def test_changed_head_refuses_send_before_driver_effect(self):
+        await self.transport.select_conversation(self.conv_url)
+        self.assertTrue(callable(getattr(self.transport, "outbound_checkpoint", None)))
+        checkpoint = await self.transport.outbound_checkpoint()
+        await self.driver.send_message("concurrent message")
+        with self.assertRaises(TransportError) as caught:
+            await self.transport.send_message("must not send", send_id=str(uuid.uuid4()), expected_checkpoint=checkpoint)
+        self.assertEqual(caught.exception.details.get("delivery"), "not_attempted")
+        self.assertEqual([m["text"] for m in self.server.conversation("conv-1").messages if m["role"] == "user"], ["concurrent message"])
+
+    async def test_reconcile_finds_new_marker_not_old_identical_message(self):
+        await self.transport.select_conversation(self.conv_url)
+        await self.driver.send_message("same payload")
+        self.assertTrue(callable(getattr(self.transport, "outbound_checkpoint", None)))
+        checkpoint = await self.transport.outbound_checkpoint()
+        send_id = str(uuid.uuid4())
+        sent = await self.transport.send_message("same payload", send_id=send_id, expected_checkpoint=checkpoint)
+        recovered = await self.transport.reconcile_outbound(checkpoint, send_id)
+        self.assertEqual(recovered["id"], sent["id"])
+        self.assertEqual(len([m for m in self.server.conversation("conv-1").messages if m["role"] == "user"]), 2)
+
+    async def test_reconcile_rejects_unprovable_history(self):
+        from copy import deepcopy
+        from unittest.mock import AsyncMock, patch
+        await self.transport.select_conversation(self.conv_url)
+        await self.driver.send_message("anchor")
+        self.assertTrue(callable(getattr(self.transport, "outbound_checkpoint", None)))
+        checkpoint = await self.transport.outbound_checkpoint()
+        send_id = str(uuid.uuid4())
+        sent = await self.transport.send_message("payload", send_id=send_id, expected_checkpoint=checkpoint)
+        state = await self.transport.snapshot()
+        cases = []
+        bad = deepcopy(state); bad["conversation_id"] = "wrong"; cases.append(bad)
+        bad = deepcopy(state); bad["messages"] = []; cases.append(bad)
+        bad = deepcopy(state); bad["messages"] = [m for m in bad["messages"] if m["id"] != checkpoint["last_message_id"]]; cases.append(bad)
+        for field, value in [("id", "idx-99"), ("text", "payload without marker")]:
+            bad = deepcopy(state)
+            for m in bad["messages"]:
+                if m["id"] == sent["id"]: m[field] = value
+            cases.append(bad)
+        bad = deepcopy(state); bad["messages"].append(dict(sent, id="duplicate")); cases.append(bad)
+        for index, bad in enumerate(cases):
+            with self.subTest(case=index), patch.object(self.transport, "snapshot", AsyncMock(return_value=bad)):
+                with self.assertRaises(TransportError):
+                    await self.transport.reconcile_outbound(checkpoint, send_id)
+        changed = deepcopy(state); changed["messages"] = []
+        with patch.object(self.transport, "snapshot", AsyncMock(side_effect=[state, changed])):
+            with self.assertRaises(TransportError):
+                await self.transport.reconcile_outbound(checkpoint, send_id)
+
     # §6 gate: opt-in off → refuses before any send, no mission created
     async def test_opt_in_off_refuses_to_send(self):
         runner = self.make_runner(accepted=False)
@@ -145,7 +195,7 @@ class ModeARunnerTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.store.count("chatgpt_messages", mission_id), 2)
 
     async def test_transport_pause_records_the_safe_error_detail(self):
-        async def rejected_send(_text):
+        async def rejected_send(_text, **_options):
             raise TransportError(
                 DELIVERY_UNCERTAIN,
                 "synthetic new-chat submitter became detached",
@@ -227,7 +277,8 @@ class ModeARunnerTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertIn("```cortex-report", contract)
         self.assertIn(mission_id, contract)
         self.assertIn("objective text", contract)
-        self.assertIn("/some/workspace", contract)
+        self.assertIn("Workspace: <authorized-workspace>", contract)
+        self.assertNotIn("/some/workspace", contract)
         self.assertIn("run_process", contract)  # allowed tools enumerated
         self.assertIn("Recorded local execution evidence", contract)
 

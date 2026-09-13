@@ -937,8 +937,8 @@ class ChromeExtensionBrowserDriver:
                 if (
                     probe.get("ok") is True
                     and probe.get("composer_present") is True
-                ) or blocker in {"login", "captcha", "rate_limit"} or failures.intersection(
-                    {"login", "captcha", "rate_limit"}
+                ) or blocker in {"login", "captcha", "rate_limit", "ui_blocker"} or failures.intersection(
+                    {"login", "captcha", "rate_limit", "ui_blocker"}
                 ):
                     return connection_payload(probe)
             except DriverError as exc:

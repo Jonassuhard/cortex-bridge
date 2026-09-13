@@ -32,6 +32,7 @@ import type {
   TransportProbeStatus,
   TransportCapabilities,
 } from "@/lib/types";
+import type { ContextRequest, ContextRequestItem } from "@/lib/contextRequest";
 import {
   attachmentSizeError,
   normalizeTransportCapabilities,
@@ -344,6 +345,7 @@ export function CortexApp() {
   const [ollamaModels, setOllamaModels] = useState<OllamaModelInfo[]>([]);
   const [chatgptModels, setChatGPTModels] = useState<ChatGPTModelInfo[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [guideOpen, setGuideOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTabId>("general");
   const [historyOpen, setHistoryOpen] = useState(false);
   const [capabilities, setCapabilities] = useState<TransportCapabilities>(() => normalizeTransportCapabilities({}));
@@ -390,10 +392,16 @@ export function CortexApp() {
               ? "waiting"
               : "disconnected"
         : pipelineState === "unknown" ? transportHealth : pipelineState,
-      agentState: runtime.executor_available ? "available" : "unavailable",
+      // A detected Ollama/model pair is only a candidate. Keep the rail
+      // honest until the backend has observed a real executor run.
+      agentState: runtime.executor_verified || ["deterministic", "ollama"].includes(runtime.executor_kind)
+        ? "available"
+        : runtime.executor_available
+          ? "degraded"
+          : "unavailable",
       transportLatencyMs: transportComponent?.latency_ms ?? null,
     };
-  }, [chatGPTConnection, pipeline, runtime.executor_available, transportHealth]);
+  }, [chatGPTConnection, pipeline, runtime.executor_available, runtime.executor_kind, runtime.executor_verified, transportHealth]);
 
   const notify = useCallback((message: string) => {
     setToast(message);
@@ -563,6 +571,51 @@ export function CortexApp() {
     window.sessionStorage.removeItem(PAIR_AFTER_EXTENSION_RELOAD_KEY);
     void openChatGPTProfile();
   }, [openChatGPTProfile]);
+
+  // Couplage automatique : si l'extension est détectée mais non appairée au
+  // chargement de la console, on enchaîne le handshake sans clic. Le bouton
+  // manuel reste disponible en secours.
+  const autoPairAttemptedRef = useRef(false);
+  useEffect(() => {
+    if (autoPairAttemptedRef.current) return;
+    autoPairAttemptedRef.current = true;
+    let cancelled = false;
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const status = await api<ChromeExtensionStatus>(
+          "/api/chrome-extension/status",
+          { signal: controller.signal },
+        );
+        if (cancelled || status.paired || status.state !== "extension_detected") return;
+        const pairing = await postJson<ChromeExtensionPairing>(
+          "/api/chrome-extension/pairing",
+          {},
+          { signal: controller.signal },
+        );
+        if (cancelled) return;
+        window.postMessage(
+          {
+            source: "cortex-bridge-ui",
+            type: "CORTEX_PAIR_EXTENSION",
+            token: pairing.token,
+          },
+          window.location.origin,
+        );
+        const paired = await waitForExtensionPairing(
+          Date.now() + EXTENSION_PAIRING_DEADLINE_MS,
+          controller.signal,
+        );
+        if (paired && !cancelled) void refreshRuntime();
+      } catch {
+        // silencieux : la connexion manuelle reste possible
+      }
+    })();
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [refreshRuntime, waitForExtensionPairing]);
 
   const refreshPipeline = useCallback(async () => {
     const key = conversationStateRef.current.selectedKey;
@@ -928,6 +981,41 @@ export function CortexApp() {
     }
   }
 
+  async function approveContextItem(key: ConversationKey, request: ContextRequest, item: ContextRequestItem): Promise<boolean> {
+    const conversation = conversationForKey(key);
+    if (!conversation) return false;
+    if (!transport.opt_in_accepted && !demoMode) {
+      notify("Active d'abord le transport expérimental dans les paramètres.");
+      openSettings("transport");
+      return false;
+    }
+    if (!beginExecution(key)) return false;
+    try {
+      const run = await runInitialRequest(key, (signal) => postJson<ChatRun>("/api/chat/approve-context", {
+        conversation_url: conversation.url,
+        workspace: settings.default_workspace,
+        request_id: request.requestId,
+        item_id: item.id,
+        item: {
+          id: item.id,
+          kind: item.kind,
+          reason: item.reason,
+          path: item.path,
+          target: item.target,
+          url: item.url,
+        },
+        new_conversation: isProvisional(key, conversation),
+      }, { signal }));
+      chatStreams.subscribe(key, run, { submittedDraft: run.text, submittedAttachment: null });
+      notify(`Contexte autorisé : ${item.kind}. Confirmation ChatGPT en cours.`);
+      return true;
+    } catch (error) {
+      if (error instanceof InitialRequestInterruptedError) return false;
+      requestFailed(key, error, "Impossible d'envoyer le contexte autorisé.");
+      return false;
+    }
+  }
+
   async function startMission(
     key: ConversationKey,
     text: string,
@@ -1036,11 +1124,20 @@ export function CortexApp() {
     }
   }
 
-  async function approve(key: ConversationKey, scope: "once" | "tool" | "all-writes") {
+  async function approve(key: ConversationKey, scope: "once" | "tool" | "all-writes", actionId: string) {
     const missionId = conversationState.entries[key]?.missionId;
+    const pendingActionId = conversationState.entries[key]?.mission?.pending_approval_action_id;
     if (!missionId) return;
+    if (!pendingActionId || pendingActionId !== actionId) {
+      notify("Approbation impossible : l'action en attente n'est plus disponible.");
+      return;
+    }
     try {
-      await postJson(`/api/missions/${missionId}/approve`, { scope, approve: true });
+      await postJson(`/api/missions/${missionId}/approve`, {
+        scope,
+        approve: true,
+        expected_action_id: actionId,
+      });
       notify("Action approuvée.");
       await refreshMissionFor(key, missionId);
     } catch (error) {
@@ -1050,9 +1147,18 @@ export function CortexApp() {
 
   async function reject(key: ConversationKey) {
     const missionId = conversationState.entries[key]?.missionId;
+    const pendingActionId = conversationState.entries[key]?.mission?.pending_approval_action_id;
     if (!missionId) return;
+    if (!pendingActionId) {
+      notify("Refus impossible : l'action en attente n'est plus disponible.");
+      return;
+    }
     try {
-      await postJson(`/api/missions/${missionId}/approve`, { scope: "once", approve: false });
+      await postJson(`/api/missions/${missionId}/approve`, {
+        scope: "once",
+        approve: false,
+        expected_action_id: pendingActionId,
+      });
       notify("Action refusée et rapportée à ChatGPT.");
       await refreshMissionFor(key, missionId);
     } catch (error) {
@@ -1136,9 +1242,11 @@ export function CortexApp() {
         onNewConversation={() => newConversation()}
         onOpenSettings={() => openSettings()}
         onOpenHistory={() => setHistoryOpen(true)}
+        onOpenGuide={() => setGuideOpen(true)}
       />
 
       <ChatWorkspace
+        notice={toast}
         conversationKey={conversationState.selectedKey}
         conversation={selectedConversation}
         messages={messages}
@@ -1172,6 +1280,8 @@ export function CortexApp() {
         onSendChat={sendChat}
         onSendAttachment={sendAttachment}
         onSendScreenshot={sendScreenshot}
+        onApproveContextItem={approveContextItem}
+        onRejectContextItem={(key, item) => notify(`Contexte refusé : ${item.kind}.`)}
         onStartMission={startMission}
         onCancelChat={(key) => void cancelChat(key)}
         onRetryChatRecovery={(key) => void retryChatRecovery(key)}
@@ -1180,7 +1290,7 @@ export function CortexApp() {
         onPauseMission={(key) => void missionAction(key, "pause")}
         onResumeMission={(key) => void missionAction(key, "resume")}
         onCancelMission={(key) => void missionAction(key, "cancel")}
-        onApprove={(key, scope) => void approve(key, scope)}
+        onApprove={(key, scope, actionId) => void approve(key, scope, actionId)}
         onReject={(key) => void reject(key)}
       />
 
@@ -1224,6 +1334,8 @@ export function CortexApp() {
         <OnboardingPanel
           onOpenSettings={() => openSettings()}
           onOpenChatGPTProfile={openChatGPTProfile}
+          forceOpen={guideOpen}
+          onCloseGuide={() => setGuideOpen(false)}
         />
       )}
 
@@ -1238,7 +1350,6 @@ export function CortexApp() {
       )}
 
       {demoMode && <div className="demo-mode-badge">development_fixture · aucune preuve de release</div>}
-      {toast && <output className="app-toast">{toast}</output>}
     </main>
   );
 }

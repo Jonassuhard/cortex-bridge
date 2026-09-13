@@ -7,8 +7,11 @@ import { runInNewContext } from "node:vm";
 
 import {
   ALLOWED_COMMANDS,
+  CORTEX_GROUP_COLOR,
+  CORTEX_GROUP_TITLE,
   HEARTBEAT_INTERVAL_MS,
   captureTabViaDebuggerExactly,
+  ensureCortexTabGroup,
   findOrOpenChatGPTTab,
   restoreQuarantinedWriterTabs,
   routeCommand,
@@ -4210,25 +4213,63 @@ test("a debugger attach failure is reported as a capture failure", async () => {
   );
 });
 
-async function runSurfaceGuardAction({ pathname, links = [], radios = [], action = "prepare_text", bodyText = "" }) {
+async function runSurfaceGuardAction({
+  pathname,
+  search = "",
+  hash = "",
+  links = [],
+  radios = [],
+  action = "prepare_text",
+  bodyText = "",
+  composerPresent = false,
+  modal = null,
+  settingsPanel = null,
+  activeUiText = [],
+}) {
   const source = await readFile(join(EXTENSION_ROOT, "chatgpt-content.js"), "utf8");
   let listener = null;
   class FakeElement {
-    constructor({ href = null, ariaLabel = null, name = "", checked = "false" } = {}) {
+    constructor({
+      href = null,
+      ariaLabel = null,
+      name = "",
+      checked = "false",
+      role = null,
+      ariaModal = null,
+      className = null,
+      testId = null,
+      excludedRegion = null,
+    } = {}) {
       this.href = href;
       this.ariaLabel = ariaLabel;
       this.innerText = name;
       this.textContent = name;
       this.checked = checked;
+      this.role = role;
+      this.ariaModal = ariaModal;
+      this.className = className;
+      this.testId = testId;
+      this.excludedRegion = excludedRegion;
       this.dataset = {};
+      this.style = {};
     }
 
     getAttribute(name) {
       if (name === "href") return this.href;
       if (name === "aria-label") return this.ariaLabel;
       if (name === "aria-checked") return this.checked;
+      if (name === "role") return this.role;
+      if (name === "aria-modal") return this.ariaModal;
+      if (name === "class") return this.className;
+      if (name === "data-testid") return this.testId;
       return null;
     }
+
+    getBoundingClientRect() {
+      return { left: 0, top: 0, right: 1, bottom: 1, width: 1, height: 1 };
+    }
+
+    closest() { return this.excludedRegion ? {} : null; }
 
     click() {
       this.checked = "true";
@@ -4236,15 +4277,60 @@ async function runSurfaceGuardAction({ pathname, links = [], radios = [], action
   }
   const sidebarLinks = links.map((link) => new FakeElement(link));
   const radioNodes = radios.map((radio) => new FakeElement(radio));
+  const composer = composerPresent ? new FakeElement() : null;
+  const modalNodes = modal ? [new FakeElement({
+    name: modal.text || "Settings",
+    role: modal.role || "dialog",
+    ariaLabel: modal.ariaLabel || "Settings",
+    ariaModal: modal.ariaModal || "true",
+    className: modal.className || "settings-modal",
+    testId: modal.testId || "settings-modal",
+  })] : [];
+  const settingsPanelNodes = settingsPanel ? [new FakeElement({
+    name: settingsPanel.text || "Settings",
+    className: settingsPanel.className || "settings-panel",
+    testId: settingsPanel.testId || "settings-panel",
+  })] : [];
+  const activeUiNodes = activeUiText.map((entry) => (
+    new FakeElement(typeof entry === "string" ? { name: entry } : entry)
+  ));
   const document = {
     body: { innerText: bodyText },
     title: "Surface Guard - ChatGPT",
-    querySelector() {
+    querySelector(selector) {
+      if (
+        composer
+        && (
+          selector === "#prompt-textarea"
+          || selector === "textarea[data-testid=prompt-textarea]"
+          || selector === "div[contenteditable=true][data-testid=prompt-textarea]"
+          || selector === "form div[contenteditable=true]"
+        )
+      ) return composer;
       return null;
     },
     querySelectorAll(selector) {
       if (selector === "nav a[href^='/c/'], aside a[href^='/c/']") return sidebarLinks;
       if (selector === "[role=radiogroup] [role=radio]") return radioNodes;
+      if (
+        selector.includes("[role='dialog']")
+        || selector.includes("[aria-modal='true']")
+        || selector.includes("[data-testid*='modal']")
+      ) return modalNodes;
+      if (
+        selector.includes("settings-panel")
+        || selector.includes("settings-modal")
+      ) return settingsPanelNodes;
+      if (
+        selector.includes("[role='alert']")
+        || selector.includes("[aria-live")
+        || selector.includes("toast")
+        || selector.includes("banner")
+        || selector.includes("error")
+        || selector.includes("limit")
+        || selector.includes("usage")
+        || selector.includes("notice")
+      ) return activeUiNodes;
       return [];
     },
   };
@@ -4261,15 +4347,18 @@ async function runSurfaceGuardAction({ pathname, links = [], radios = [], action
     chrome,
     document,
     location: {
-      href: `https://chatgpt.com${pathname}`,
+      href: `https://chatgpt.com${pathname}${search}${hash}`,
       origin: "https://chatgpt.com",
       pathname,
+      search,
+      hash,
     },
     Element: FakeElement,
     HTMLInputElement: class {},
     URL,
     Map,
     Promise,
+    getComputedStyle: () => ({ display: "block", visibility: "visible" }),
     setTimeout,
     clearTimeout,
   });
@@ -4337,13 +4426,156 @@ test("usage-limit banners are classified as a rate_limit blocker", async () => {
       pathname: "/c/classic-conversation",
       links: [{ href: "/c/classic-conversation", ariaLabel: "Weekend plans" }],
       action: "probe",
-      bodyText,
+      activeUiText: [bodyText],
     });
 
     assert.equal(response.ok, true);
     assert.equal(response.result.blocker, "rate_limit");
     assert.ok(response.result.failures.includes("rate_limit"));
   }
+});
+
+test("settings and historical limit copy do not become a rate_limit blocker", async () => {
+  for (const bodyText of [
+    "Cela consommera votre limite d’utilisation beaucoup plus vite.",
+    "Historique : vous avez atteint votre limite d'utilisation lors d'une session précédente.",
+  ]) {
+    const response = await runSurfaceGuardAction({
+      pathname: "/c/classic-conversation",
+      links: [{ href: "/c/classic-conversation", ariaLabel: "Weekend plans" }],
+      action: "probe",
+      bodyText,
+      composerPresent: true,
+    });
+
+    assert.equal(response.ok, true);
+    assert.equal(response.result.blocker, null);
+    assert.equal(response.result.failures.length, 0);
+  }
+});
+
+test("a visible settings modal is an explicit ui_blocker, never ready", async () => {
+  const response = await runSurfaceGuardAction({
+    pathname: "/c/classic-conversation",
+    links: [{ href: "/c/classic-conversation", ariaLabel: "Weekend plans" }],
+    action: "probe",
+    bodyText: "Settings Cela consommera votre limite d’utilisation beaucoup plus vite.",
+    composerPresent: true,
+    modal: {
+      ariaLabel: "Settings",
+      text: "Settings\nCela consommera votre limite d’utilisation beaucoup plus vite.",
+    },
+  });
+
+  assert.equal(response.result.ok, false);
+  assert.equal(response.result.blocker, "ui_blocker");
+  assert.ok(response.result.failures.includes("ui_blocker"));
+  assert.equal(response.result.composer_present, true);
+});
+
+test("a non-ARIA composer error remains a rate_limit blocker", async () => {
+  const response = await runSurfaceGuardAction({
+    pathname: "/c/classic-conversation",
+    links: [{ href: "/c/classic-conversation", ariaLabel: "Weekend plans" }],
+    action: "probe",
+    composerPresent: true,
+    activeUiText: [{ name: "Too many requests", className: "composer-error" }],
+  });
+
+  assert.equal(response.result.ok, false);
+  assert.equal(response.result.blocker, "rate_limit");
+  assert.ok(response.result.failures.includes("rate_limit"));
+});
+
+test("historical message alerts are ignored while an active alert still blocks", async () => {
+  const historical = await runSurfaceGuardAction({
+    pathname: "/c/classic-conversation",
+    links: [{ href: "/c/classic-conversation", ariaLabel: "Weekend plans" }],
+    action: "probe",
+    composerPresent: true,
+    activeUiText: [{
+      name: "You've hit your usage limit in an earlier conversation.",
+      excludedRegion: "message",
+    }],
+  });
+  assert.equal(historical.result.blocker, null);
+  assert.equal(historical.result.failures.length, 0);
+
+  const active = await runSurfaceGuardAction({
+    pathname: "/c/classic-conversation",
+    links: [{ href: "/c/classic-conversation", ariaLabel: "Weekend plans" }],
+    action: "probe",
+    composerPresent: true,
+    activeUiText: ["You've hit your usage limit. Try again later."],
+  });
+  assert.equal(active.result.blocker, "rate_limit");
+  assert.ok(active.result.failures.includes("rate_limit"));
+});
+
+test("a visible settings panel without a composer remains an explicit ui_blocker", async () => {
+  const response = await runSurfaceGuardAction({
+    pathname: "/c/classic-conversation",
+    links: [{ href: "/c/classic-conversation", ariaLabel: "Weekend plans" }],
+    action: "probe",
+    bodyText: "Cela consommera votre limite d’utilisation beaucoup plus vite.",
+    settingsPanel: {
+      text: "Settings\nCela consommera votre limite d’utilisation beaucoup plus vite.",
+    },
+  });
+
+  assert.equal(response.result.ok, false);
+  assert.equal(response.result.blocker, "ui_blocker");
+  assert.ok(response.result.failures.includes("ui_blocker"));
+});
+
+test("probe rejects settings and non-conversation routes even when a composer is present", async () => {
+  for (const route of [
+    { pathname: "/", hash: "#settings" },
+    { pathname: "/work", hash: "" },
+    { pathname: "/", search: "?surface=work", hash: "" },
+  ]) {
+    const response = await runSurfaceGuardAction({
+      ...route,
+      action: "probe",
+      composerPresent: true,
+    });
+
+    assert.equal(response.result.ok, false);
+    assert.equal(response.result.blocker, "ui_blocker");
+    assert.ok(response.result.failures.includes("ui_blocker"));
+  }
+});
+
+test("probe rejects a Work conversation with a composer before delivery", async () => {
+  const response = await runSurfaceGuardAction({
+    pathname: "/c/work-conversation",
+    links: [{ href: "/c/work-conversation", ariaLabel: "Quarterly report, Work" }],
+    action: "probe",
+    composerPresent: true,
+  });
+
+  assert.equal(response.result.ok, false);
+  assert.equal(response.result.blocker, "ui_blocker");
+  assert.ok(response.result.failures.includes("ui_blocker"));
+});
+
+test("probe keeps a classic home and /c conversation ready when a composer is present", async () => {
+  const home = await runSurfaceGuardAction({
+    pathname: "/",
+    action: "probe",
+    composerPresent: true,
+  });
+  assert.equal(home.result.ok, true);
+  assert.equal(home.result.blocker, null);
+
+  const conversation = await runSurfaceGuardAction({
+    pathname: "/c/classic-conversation",
+    links: [{ href: "/c/classic-conversation", ariaLabel: "Weekend plans" }],
+    action: "probe",
+    composerPresent: true,
+  });
+  assert.equal(conversation.result.ok, true);
+  assert.equal(conversation.result.blocker, null);
 });
 
 test("the surface guard is wired into every delivery-sensitive action", async () => {
@@ -4377,7 +4609,7 @@ test("manifest limits hosts and requires Chrome 116", async () => {
     "http://127.0.0.1:8420/*",
     "https://chatgpt.com/*",
   ]);
-  assert.deepEqual(manifest.permissions, ["activeTab", "debugger", "scripting", "storage"]);
+  assert.deepEqual(manifest.permissions, ["activeTab", "alarms", "debugger", "scripting", "storage", "tabGroups"]);
   assert.equal(JSON.stringify(manifest).includes("<all_urls>"), false);
   assert.equal(JSON.stringify(manifest).includes("cookies"), false);
   assert.equal(JSON.stringify(manifest).includes("history"), false);
@@ -5135,4 +5367,95 @@ test("select_model confirms immediately when the requested model is already acti
 
   assert.equal(response.ok, true);
   assert.equal(response.result.selected, "Pro");
+});
+
+function fakeChromeWithTabs(tabs) {
+  const calls = { group: [], groupUpdate: [], groupQuery: [] };
+  const chrome = {
+    tabs: {
+      async get(id) {
+        const tab = tabs.find((candidate) => candidate.id === id);
+        if (!tab) throw new Error("No tab with id: " + id);
+        return tab;
+      },
+      async group(options) {
+        calls.group.push(options);
+        const groupId = options.groupId ?? 501;
+        for (const id of [options.tabIds].flat()) {
+          const tab = tabs.find((candidate) => candidate.id === id);
+          if (tab) tab.groupId = groupId;
+        }
+        return groupId;
+      },
+    },
+    tabGroups: {
+      async query(info) {
+        calls.groupQuery.push(info);
+        return [];
+      },
+      async update(groupId, props) {
+        calls.groupUpdate.push({ groupId, props });
+      },
+    },
+  };
+  return { chrome, calls };
+}
+
+test("ensureCortexTabGroup groups the console and ChatGPT tabs under one named group", async () => {
+  const tabs = [
+    { id: 10, windowId: 1, groupId: -1 },
+    { id: 11, windowId: 1, groupId: -1 },
+  ];
+  const { chrome, calls } = fakeChromeWithTabs(tabs);
+
+  const groupId = await ensureCortexTabGroup(chrome, { id: 10, windowId: 1 }, [11]);
+
+  assert.equal(groupId, 501);
+  assert.equal(calls.group.length, 1);
+  assert.deepEqual([calls.group[0].tabIds].flat().sort(), [10, 11]);
+  assert.equal(calls.groupUpdate.length, 1);
+  assert.equal(calls.groupUpdate[0].props.title, CORTEX_GROUP_TITLE);
+  assert.equal(calls.groupUpdate[0].props.color, CORTEX_GROUP_COLOR);
+  assert.equal(calls.groupUpdate[0].props.collapsed, false);
+});
+
+test("ensureCortexTabGroup reuses the group of an already grouped tab", async () => {
+  const tabs = [
+    { id: 10, windowId: 1, groupId: 77 },
+    { id: 12, windowId: 1, groupId: -1 },
+  ];
+  const { chrome, calls } = fakeChromeWithTabs(tabs);
+
+  const groupId = await ensureCortexTabGroup(chrome, { id: 10, windowId: 1 }, [12]);
+
+  assert.equal(groupId, 77);
+  assert.equal(calls.group[0].groupId, 77);
+  assert.equal(calls.groupQuery.length, 0);
+});
+
+test("ensureCortexTabGroup never breaks a command when tabs vanish or APIs are missing", async () => {
+  const tabs = [{ id: 10, windowId: 1, groupId: -1 }];
+  const { chrome } = fakeChromeWithTabs(tabs);
+
+  // onglet ChatGPT fermé entre-temps : seul l'onglet console est groupé
+  const groupId = await ensureCortexTabGroup(chrome, { id: 10, windowId: 1 }, [999]);
+  assert.equal(groupId, 501);
+
+  // API tabGroups absente : no-op silencieux
+  const partial = { tabs: chrome.tabs };
+  assert.equal(await ensureCortexTabGroup(partial, { id: 10, windowId: 1 }, []), null);
+
+  // sans onglet console valide ni onglet cible : no-op
+  assert.equal(await ensureCortexTabGroup(chrome, null, []), null);
+});
+
+test("service worker self-heals the console connection through a reconnect alarm", async () => {
+  const source = await readFile(join(EXTENSION_ROOT, "service-worker.js"), "utf8");
+
+  // L'alarme réveille le service worker même idle-killé et reconnecte :
+  // sans elle, un redémarrage de la console laissait l'extension morte.
+  assert.match(source, /const RECONNECT_ALARM = "cortex-bridge-reconnect";/);
+  assert.match(source, /chrome\.alarms\.create\(RECONNECT_ALARM, \{ periodInMinutes: 0\.5 \}\);/);
+  assert.match(source, /chrome\.alarms\.onAlarm\.addListener/);
+  assert.match(source, /if \(alarm\?\.name === RECONNECT_ALARM\) connect\(\);/);
 });

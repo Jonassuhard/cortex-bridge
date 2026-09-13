@@ -131,6 +131,9 @@ def runtime_status() -> dict:
         "storage_status": storage_status(),
         "primary": {"name": PRIMARY_EXECUTOR, "state": model_state(PRIMARY_EXECUTOR)},
         "executor_available": executor_available,
+        # A healthy Ollama/model pair is only a candidate.  A model becomes
+        # verified after a real run records executor_kind/model_used.
+        "executor_verified": False,
         "executor_kind": "unavailable",
         "executor_model_used": None,
         "runtime_mode": "live",

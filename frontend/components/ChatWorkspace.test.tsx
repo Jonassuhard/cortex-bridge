@@ -11,6 +11,7 @@ import {
   type ConversationState,
 } from "@/lib/conversation-state";
 import type { ChatRun, ConversationSummary, CortexSettings, ExecutionPreflight } from "@/lib/types";
+import type { ContextRequest, ContextRequestItem } from "@/lib/contextRequest";
 import { ChatWorkspace } from "./ChatWorkspace";
 
 const summary = (key: string): ConversationSummary => ({
@@ -35,6 +36,8 @@ function ControlledWorkspace({
   onReloadConversation = () => undefined,
   onChatSend = () => undefined,
   onMissionStart = () => undefined,
+  onContextApprove = async () => true,
+  onContextReject = () => undefined,
   settings = demoSettings,
   transportLatencyMs = 128,
 }: {
@@ -45,6 +48,8 @@ function ControlledWorkspace({
   onReloadConversation?: (key: string) => void;
   onChatSend?: (key: string, text: string) => void;
   onMissionStart?: (key: string, text: string, preflight: ExecutionPreflight) => void;
+  onContextApprove?: (key: string, request: ContextRequest, item: ContextRequestItem) => Promise<boolean>;
+  onContextReject?: (key: string, item: ContextRequestItem) => void;
   settings?: CortexSettings;
   transportLatencyMs?: number | null;
 }) {
@@ -122,6 +127,8 @@ function ControlledWorkspace({
         }}
         onSendAttachment={(key) => send(key)}
         onSendScreenshot={(key) => send(key, false)}
+        onApproveContextItem={onContextApprove}
+        onRejectContextItem={onContextReject}
         onStartMission={(key, text, preflight) => {
           onMissionStart(key, text, preflight);
           return send(key);
@@ -199,7 +206,46 @@ function stateWithMissionProtocol(includeMission = true): ConversationState {
   });
 }
 
+function stateWithContextRequest(): ConversationState {
+  let state = createConversationState([summary("a")], "a");
+  state = conversationReducer(state, { type: "SWITCH_STARTED", key: "a", epoch: 1 });
+  return conversationReducer(state, {
+    type: "SNAPSHOT_RECEIVED",
+    key: "a",
+    epoch: 1,
+    snapshot: {
+      url: "https://chatgpt.com/c/a",
+      conversation_id: "a",
+      title: "Demande de contexte",
+      blocker: null,
+      composer_present: true,
+      send_button_present: true,
+      stop_button_present: false,
+      streaming: false,
+      messages: [{
+        id: "context-request",
+        role: "assistant",
+        text: `Je peux continuer dès que tu valides.\n\n\`\`\`cortex-context-request\n${JSON.stringify({
+          protocol: "cortex-context-request.v1",
+          requestId: "ctx-card-1",
+          summary: "Lire un fichier pour vérifier la correction",
+          items: [{ id: "file-1", kind: "file", reason: "Comparer le résultat", path: "reports/result.txt" }],
+        })}\n\`\`\``,
+      }],
+    },
+  });
+}
+
 describe("ChatWorkspace controlled composer", () => {
+  it("stops presenting a partial response as streaming after cancellation", () => {
+    const initial = conversationReducer(createConversationState([summary("a")], "a"), {
+      type: "RUN_EVENT", key: "a", runId: "run-a", streamEpoch: 1, accepted: true,
+      run: { ...acceptedRun("a"), state: "CANCELLED", response_text: "Réponse partielle conservée" },
+    });
+    render(<ControlledWorkspace initialState={initial} />);
+    expect(screen.getByText("Réponse partielle conservée")).not.toHaveClass("is-streaming");
+    expect(screen.queryByText("Réponse en cours")).not.toBeInTheDocument();
+  });
   it("renders one completed turn after the ChatGPT snapshot replaces the local overlay", () => {
     const userText = "Question synthétique unique";
     const assistantText = "Réponse synthétique unique";
@@ -375,6 +421,27 @@ describe("ChatWorkspace controlled composer", () => {
     expect(screen.queryByText(/cortex-decision/)).not.toBeInTheDocument();
   });
 
+  it("shows an explicit per-item context approval and confirms the local action", async () => {
+    const approve = vi.fn<(key: string, request: ContextRequest, item: ContextRequestItem) => Promise<boolean>>().mockResolvedValue(true);
+    const user = userEvent.setup();
+    render(<ControlledWorkspace initialState={stateWithContextRequest()} onContextApprove={approve} />);
+
+    expect(screen.getByRole("heading", { name: "ChatGPT demande du contexte" })).toBeInTheDocument();
+    expect(screen.getByText("reports/result.txt")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Autoriser" }));
+    await waitFor(() => expect(approve).toHaveBeenCalledWith(
+      "a",
+      expect.objectContaining({ requestId: "ctx-card-1" }),
+      expect.objectContaining({ kind: "file", path: "reports/result.txt" }),
+    ));
+    expect(screen.getByText("Envoyé")).toBeInTheDocument();
+  });
+
+  it("labels the technical inspector control instead of hiding it behind an icon", () => {
+    render(<ControlledWorkspace />);
+    expect(screen.getByRole("button", { name: "Afficher les détails techniques" })).toHaveAttribute("aria-expanded", "false");
+  });
+
   it("keeps mission protocol out of the conversation until the user asks for it", () => {
     render(<ControlledWorkspace initialState={stateWithMissionProtocol()} />);
 
@@ -401,7 +468,7 @@ describe("ChatWorkspace controlled composer", () => {
     render(<ControlledWorkspace initialState={createConversationState([summary("a")])} />);
 
     expect(screen.getByRole("textbox", { name: "Message à envoyer" })).toBeDisabled();
-    expect(screen.getByTitle("Envoyer")).toBeDisabled();
+    expect(screen.getByTitle("Envoyer à ChatGPT")).toBeDisabled();
   });
 
   it("offers one explicit reload after a conversation deadline", async () => {
@@ -431,7 +498,7 @@ describe("ChatWorkspace controlled composer", () => {
     const user = userEvent.setup();
     render(<ControlledWorkspace />);
     await user.type(screen.getByRole("textbox", { name: "Message à envoyer" }), "Inspecter");
-    const trigger = screen.getByRole("button", { name: "Exécuter…" });
+    const trigger = screen.getByRole("button", { name: "Exécuter sur ce Mac…" });
     await user.click(trigger);
     expect(screen.getByRole("dialog", { name: "Vérifier l’exécution locale" })).toBeInTheDocument();
     await user.keyboard("{Escape}");
@@ -446,7 +513,7 @@ describe("ChatWorkspace controlled composer", () => {
     render(<ControlledWorkspace settings={ollamaSettings} onMissionStart={onMissionStart} />);
 
     await user.type(screen.getByRole("textbox", { name: "Message à envoyer" }), "Mission locale");
-    await user.click(screen.getByRole("button", { name: "Exécuter…" }));
+    await user.click(screen.getByRole("button", { name: "Exécuter sur ce Mac…" }));
     await user.click(screen.getByRole("checkbox", { name: /Réseau/ }));
     await user.click(screen.getByRole("button", { name: /^Démarrer/ }));
 
@@ -476,12 +543,12 @@ describe("ChatWorkspace controlled composer", () => {
     const user = userEvent.setup();
     render(<ControlledWorkspace pendingKeys={new Map([["a", pendingA]])} />);
     await user.type(screen.getByRole("textbox"), "A en attente");
-    await user.click(screen.getByTitle("Envoyer"));
+    await user.click(screen.getByTitle("Envoyer à ChatGPT"));
 
     await user.click(screen.getByRole("button", { name: "Sélectionner B" }));
     expect(screen.getByRole("textbox")).not.toBeDisabled();
     await user.type(screen.getByRole("textbox"), "B concurrente");
-    await user.click(screen.getByTitle("Envoyer"));
+    await user.click(screen.getByTitle("Envoyer à ChatGPT"));
     await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue(""));
 
     resolveA();
@@ -522,8 +589,8 @@ describe("ChatWorkspace controlled composer", () => {
     await user.type(screen.getByRole("textbox"), "message à conserver");
     await user.upload(fileInput(container), attachment);
 
-    await user.click(screen.getByTitle("Envoyer"));
-    await waitFor(() => expect(screen.getByTitle("Envoyer")).not.toBeDisabled());
+    await user.click(screen.getByTitle("Envoyer à ChatGPT"));
+    await waitFor(() => expect(screen.getByTitle("Envoyer à ChatGPT")).not.toBeDisabled());
 
     expect(screen.getByRole("textbox")).toHaveValue("message à conserver");
     expect(screen.getByText("preuve.txt")).toBeInTheDocument();
@@ -541,7 +608,7 @@ describe("ChatWorkspace controlled composer", () => {
     ].reduce((state, event) => conversationReducer(state, event as ConversationEvent), initial);
     const user = userEvent.setup();
     render(<ControlledWorkspace initialState={initial} />);
-    await user.click(screen.getByTitle("Envoyer"));
+    await user.click(screen.getByTitle("Envoyer à ChatGPT"));
     await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue(""));
     expect(screen.queryByText("a.txt")).not.toBeInTheDocument();
 
@@ -576,7 +643,7 @@ describe("ChatWorkspace controlled composer", () => {
       <ControlledWorkspace initialState={initial} pendingKeys={new Map([["a", pendingA]])} />,
     );
 
-    await user.click(screen.getByTitle("Envoyer"));
+    await user.click(screen.getByTitle("Envoyer à ChatGPT"));
 
     expect(fileInput(container)).toBeDisabled();
     expect(screen.getByRole("button", { name: "Retirer la pièce jointe" })).toBeDisabled();
@@ -644,7 +711,7 @@ describe("ChatWorkspace controlled composer", () => {
 
     expect(screen.getByText("Identité de conversation ambiguë")).toBeInTheDocument();
     expect(screen.getByRole("textbox")).toBeDisabled();
-    expect(screen.getByTitle("Envoyer")).toBeDisabled();
+    expect(screen.getByTitle("Envoyer à ChatGPT")).toBeDisabled();
     expect(screen.getByRole("button", { name: "Conserver le brouillon provisoire" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Conserver le brouillon canonique" })).toBeEnabled();
     await user.click(screen.getByRole("button", { name: "Conserver le brouillon provisoire" }));
