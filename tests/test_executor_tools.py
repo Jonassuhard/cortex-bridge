@@ -27,6 +27,89 @@ GIT = shutil.which("git")
 
 
 class ToolTestCase(unittest.IsolatedAsyncioTestCase):
+    async def test_timeout_stops_child_when_leader_already_exited(self):
+        import asyncio
+        import os
+        import signal
+        import time
+        if os.name != 'posix':
+            self.skipTest('POSIX process groups')
+        child_code = ("import signal,time; from pathlib import Path; "
+                      "signal.signal(signal.SIGTERM,signal.SIG_IGN); "
+                      "Path('ready').write_text('child ready'); time.sleep(60)")
+        (self.ws / 'orphan.py').write_text(
+            "import os,subprocess,sys,time\nfrom pathlib import Path\n"
+            "Path('group.pid').write_text(str(os.getpid()))\n"
+            f"subprocess.Popen([sys.executable,'-c',{child_code!r}])\n"
+            "while not Path('ready').exists(): time.sleep(.01)\n")
+        task = asyncio.create_task(self.tools.run_process(['python3', 'orphan.py'], timeoutSeconds=1))
+        try:
+            done, _ = await asyncio.wait({task}, timeout=4)
+            self.assertTrue(done, 'timeout hangs on pipes retained by orphan child')
+            result = task.result()
+            self.assertTrue(result['timedOut'])
+            self.assertEqual(result['exitCode'], -1)
+        finally:
+            pid_file = self.ws / 'group.pid'
+            if pid_file.exists():
+                try:
+                    os.killpg(int(pid_file.read_text()), signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            if not task.done():
+                await asyncio.wait_for(task, timeout=2)
+
+    async def test_cancel_stops_owned_process_group_including_stubborn_child(self):
+        import asyncio
+        import os
+        import signal
+        import time
+        if os.name != 'posix':
+            self.skipTest('POSIX process groups')
+        child_code = ("import os,signal,time; from pathlib import Path; "
+                      "signal.signal(signal.SIGTERM,signal.SIG_IGN); "
+                      "Path('child.pid').write_text(str(os.getpid())); time.sleep(60)")
+        (self.ws / 'parent.py').write_text(
+            "import os,subprocess,sys,time\nfrom pathlib import Path\n"
+            "Path('parent.pid').write_text(str(os.getpid()))\n"
+            f"subprocess.Popen([sys.executable,'-c',{child_code!r}])\n"
+            "time.sleep(60)\n")
+        task = asyncio.create_task(self.tools.run_process(['python3', 'parent.py'], timeoutSeconds=30))
+        pid = None
+        try:
+            end = time.monotonic() + 5
+            while not (self.ws / 'child.pid').exists() and time.monotonic() < end:
+                await asyncio.sleep(.02)
+            self.assertTrue((self.ws / 'child.pid').exists(), 'fixture failed to start')
+            pid = int((self.ws / 'parent.pid').read_text())
+            child_pid = int((self.ws / 'child.pid').read_text())
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+            def alive(process_id):
+                try:
+                    os.kill(process_id, 0)
+                    return True
+                except ProcessLookupError:
+                    return False
+            end = time.monotonic() + 2
+            while (alive(pid) or alive(child_pid)) and time.monotonic() < end:
+                await asyncio.sleep(.02)
+            self.assertFalse(alive(pid), 'cancelled parent still running')
+            self.assertFalse(alive(child_pid), 'cancelled descendant still running')
+        finally:
+            if pid is not None:
+                try:
+                    os.killpg(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            if not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)

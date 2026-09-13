@@ -2,6 +2,19 @@
 
 All notable changes are recorded here.
 
+## 0.6.5 — unfinished technical preview, 2026-09-13
+
+- Published on explicit user request before full acceptance; not a stable release.
+- Added bounded context/artifact inventory and native supervision journaling.
+- Persisted send reservations, exact receipts, action identity, host references,
+  acceptance evidence, scoped stop and recovery checks.
+- Added an installable supervisor harness and disposable lifecycle checks.
+- Fixed executor cancellation/timeout cleanup and added resource regressions.
+- Corrected one frontend theme token and stale approval test fixtures.
+- Recorded real file/image/ZIP, worker-relay and two-chat isolation pilots
+  separately from automated tests; no equivalence or paired benchmark claim.
+- Remaining work and evidence limits are listed in PREVIEW_V065.md.
+
 ## 0.6.1 — development candidate, 2026-09-10
 
 - Atelier C/link logo, calm dark surfaces and larger interface text.

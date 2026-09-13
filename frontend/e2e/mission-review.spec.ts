@@ -12,7 +12,7 @@ for (const width of [375, 768, 1440]) {
     });
     await appPage.route("**/api/missions/fixture-mission", (route) => route.fulfill({ json: {
       mission: { id: "fixture-mission", objective: "Démo isolée · Mettre à jour le titre", workspace: "/tmp/cortex-demo-workspace", state: "WAITING_FOR_APPROVAL", created_at: 1 },
-      awaiting_approval: true, stopped: false,
+      awaiting_approval: true, pending_approval_action_id: "a1", stopped: false,
       timeline: {
         policy_decisions: [{ action_id: "a1", tool: "write_file", requires_approval: 1 }],
         orchestrator_decisions: [{ action_id: "a1", valid: 1, decision_json: JSON.stringify({ action: { tool: "write_file", arguments: { path: "title.txt", content: "Cortex Atelier" } } }) }],
@@ -45,6 +45,6 @@ for (const width of [375, 768, 1440]) {
     }
     await appPage.getByRole("button", { name: "Refuser", exact: true }).click();
     await expect.poll(() => decisions.length).toBe(1);
-    expect(decisions[0]).toMatchObject({ approve: false });
+    expect(decisions[0]).toMatchObject({ approve: false, expected_action_id: "a1" });
   });
 }

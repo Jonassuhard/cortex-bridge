@@ -361,7 +361,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .toolbar-icon-button { width: 37px; height: 37px; color: var(--muted); }
 .toolbar-icon-button.is-active { color: var(--blue-light); background: var(--blue-soft); border-color: rgba(96,165,250,.2); }
 .toolbar-detail-button { display: inline-flex; align-items: center; gap: 7px; min-height: 34px; padding: 0 10px; color: var(--muted); border: 1px solid var(--line); border-radius: 9px; background: rgba(15,20,25,.72); cursor: pointer; font: inherit; font-size: 12px; transition: color .18s ease, border-color .18s ease, background .18s ease; }
-.toolbar-detail-button:hover, .toolbar-detail-button:focus-visible, .toolbar-detail-button.is-active { color: var(--text); border-color: var(--blue); background: rgba(31,58,103,.34); outline: none; }
+.toolbar-detail-button:hover, .toolbar-detail-button:focus-visible, .toolbar-detail-button.is-active { color: var(--ink); border-color: var(--blue); background: rgba(31,58,103,.34); outline: none; }
 .conversation-title-block { min-width: 0; }
 .conversation-title-block > div { display: flex; align-items: center; gap: 5px; min-width: 0; }
 .conversation-title-block h1 { margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #fff; font-size: 15px; letter-spacing: -.015em; font-weight: 620; }

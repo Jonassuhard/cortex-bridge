@@ -662,6 +662,14 @@ def _pause_resumed_transport_error(
 async def _resume_mission_task(rt: MissionRuntime) -> None:
     store = get_store()
     client = TransportOrchestratorClient(rt.transport, store=store, mission_id=rt.mission_id)
+    # Reconcile uncertain sends before consuming a response or deciding to send.
+    # An absent receipt never authorizes a retry.
+    try:
+        await client.reconcile_pending()
+    except TransportError as exc:
+        _pause_resumed_transport_error(store, rt.mission_id, exc)
+        await _release_terminal_mission(rt)
+        return
     loop = MissionLoop(
         store=store,
         mission_id=rt.mission_id,

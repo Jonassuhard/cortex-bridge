@@ -9,7 +9,7 @@ const nextConfig: NextConfig = {
   trailingSlash: true,
   images: { unoptimized: true },
   turbopack: { root },
-  generateBuildId: async () => "cortex-bridge-v0.6.1",
+  generateBuildId: async () => "cortex-bridge-v0.6.5",
 };
 
 export default nextConfig;

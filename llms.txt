@@ -6,11 +6,12 @@
 
 ## Status
 
-- Source candidate: 0.6.1 technical preview; not a provider-authorized or
-  verified live/clean-install release. The machine-readable evidence manifest
-  records the provider-terms boundary and unrun clean-install lifecycle.
-- The source is prepared for the `v0.6.1` technical-preview tag; this label does
-  not waive the provider-terms or clean-install gates.
+- Source snapshot: 0.6.5 unfinished preview, not stable, provider-authorized or
+  clean-install validated. PREVIEW_V065.md is the current status entry point.
+- The v0.6.5-preview.1 tag identifies incomplete source, not passed release gates.
+- Codex may operate a bound ChatGPT conversation through the supervisor harness.
+  Native automatic attachments are not available; authorized Chrome delivery
+  is a separate channel. File metadata is not delivery proof.
 - Consult the current evidence report before asserting readiness.
 - Automated fixtures are not authenticated ChatGPT observations.
 - Mission execution is deterministic: ChatGPT model selection changes the planner,

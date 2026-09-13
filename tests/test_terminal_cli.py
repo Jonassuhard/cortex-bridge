@@ -219,7 +219,7 @@ def _pty_wait_for(master: int, process: subprocess.Popen[bytes], prefix: str, ma
 
 class TerminalCliUnitTests(unittest.TestCase):
     def test_help_and_version_are_offline(self):
-        for argument, expected in (("--help", "usage:"), ("--version", "0.6.1")):
+        for argument, expected in (("--help", "usage:"), ("--version", "0.6.5")):
             with self.subTest(argument=argument):
                 result = subprocess.run(
                     [str(ROOT / "scripts" / "cortex"), argument],

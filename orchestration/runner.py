@@ -18,6 +18,7 @@ only after the user accepts EXPERIMENTAL_TRANSPORT_WARNING). Default off.
 from __future__ import annotations
 
 import uuid
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -33,6 +34,8 @@ from transport.chatgpt_web.adapter import (
     EXPERIMENTAL_TRANSPORT_WARNING,
     BlockerDetected,
     ChatGPTWebTransport,
+    DELIVERY_UNCERTAIN,
+    DEFINITIVE_PRE_DELIVERY_CODES,
     TransportError,
 )
 from .context import render_supervisor_prompt
@@ -167,9 +170,49 @@ class TransportOrchestratorClient:
         lock = self.transport.lock
         return lock.identity if lock else "unknown-conversation"
 
+    async def reconcile_pending(self) -> None:
+        """Settle a persisted uncertain attempt only from a proven live receipt."""
+        if self.store is None or self.mission_id is None:
+            return
+        try:
+            pending = self.store.unresolved_outbound(self.mission_id)
+        except StoreError as exc:
+            raise TransportError(DELIVERY_UNCERTAIN, "outbound history is ambiguous") from exc
+        if pending is None:
+            return
+        detail = json.loads(pending["detail_json"])
+        checkpoint = detail.get("checkpoint")
+        if not isinstance(checkpoint, dict):
+            raise TransportError(DELIVERY_UNCERTAIN, "outbound checkpoint is unavailable")
+        receipt = await self.transport.reconcile_outbound(checkpoint, pending["id"])
+        self.store.record_transport_event(
+            str(uuid.uuid4()), self.mission_id, "MESSAGE_DELIVERED",
+            {"send_id": pending["id"], "sha256": detail["sha256"],
+             "message_id": receipt["id"], "reconciled": True},
+        )
+
     async def next_decision(self, message: str | None) -> MockReply:
         if message is not None:
-            await self.transport.send_message(message)  # verifies lock first
+            send_id = str(uuid.uuid4())
+            digest = None
+            checkpoint = None
+            if self.store is not None and self.mission_id is not None:
+                checkpoint = await self.transport.outbound_checkpoint()
+                try:
+                    digest = self.store.reserve_outbound(send_id, self.mission_id, message, checkpoint=checkpoint)
+                except StoreError as exc:
+                    raise TransportError(DELIVERY_UNCERTAIN, "outbound requires reconciliation before retry") from exc
+            try:
+                options = {"send_id": send_id, "expected_checkpoint": checkpoint} if checkpoint is not None else {}
+                sent = await self.transport.send_message(message, **options)
+            except TransportError as exc:
+                if ((exc.code in DEFINITIVE_PRE_DELIVERY_CODES or exc.details.get("delivery") == "not_attempted")
+                        and self.store is not None and self.mission_id is not None):
+                    self.store.record_transport_event(
+                        str(uuid.uuid4()), self.mission_id, "MESSAGE_SEND_ABORTED",
+                        {"send_id": send_id, "sha256": digest, "code": exc.code},
+                    )
+                raise
             if self.store is not None and self.mission_id is not None:
                 # Persist proven delivery (vs REPORT_SENT which is recorded at
                 # finalize time, before the browser send). Resume logic relies
@@ -177,7 +220,9 @@ class TransportOrchestratorClient:
                 self.store.record_transport_event(
                     str(uuid.uuid4()), self.mission_id, "MESSAGE_DELIVERED",
                     {"kind": "report" if message.lstrip().startswith("```cortex-report") else "contract",
-                     "bytes": len(message)},
+                     "bytes": len(message.encode("utf-8")), "send_id": send_id,
+                     "sha256": digest,
+                     "message_id": sent.get("id") if isinstance(sent, dict) else None},
                 )
                 # New-chat case: the lock is only captured after the first
                 # send — persist it so resume can re-attach by identity.

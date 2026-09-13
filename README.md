@@ -1,19 +1,21 @@
 # Cortex Bridge
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Candidate](https://img.shields.io/badge/candidate-0.6.1-blue.svg)](CHANGELOG.md)
+[Version 0.6.5 — unfinished preview](PREVIEW_V065.md)
 
 Use a ChatGPT web conversation as the reasoning side of a local, reviewed
 execution workflow. Choose the Atelier graphical interface or the optional
 CORTEX terminal. Both use the same local backend; neither adds a second engine.
 
-**Status: 0.6.1 technical-preview candidate with the 0.6.2 simple-harness
-workstream, not a provider-authorized or verified live release.** The current
-local run passes 739 backend tests and 214 frontend unit tests, plus TypeScript,
-lint and a production build. Historical browser and runtime gates remain
-documented separately; see [current evidence](docs/verification-v061.md) and
-the [simple-harness verification](docs/verification/v0.6.2-simple-harness.md).
-Earlier release evidence does not validate this candidate.
+**Status: 0.6.5 unfinished technical preview, published for inspection and testing,
+not a stable or provider-authorized release.** The version number identifies the
+source snapshot; it does not mean every acceptance gate passed.
+The new direction uses Codex as the operator and ChatGPT as the planning brain,
+with a bounded context and evidence journal rather than another mandatory UI.
+See the [preview status](PREVIEW_V065.md), [supervisor installation](SUPERVISOR_INSTALL.md)
+and [harness contract](HARNESS_V065.md). The Atelier and terminal paths remain
+available; their historical diagrams below do not describe automatic native
+attachments or an integrated Freebuff executor.
 
 Created by [Jonas Suhard](https://github.com/Jonassuhard).
 MIT-licensed, independent and not affiliated with OpenAI.
