@@ -17,6 +17,20 @@ and [harness contract](HARNESS_V065.md). The Atelier and terminal paths remain
 available; their historical diagrams below do not describe automatic native
 attachments or an integrated Freebuff executor.
 
+### ChatGPT Web versus the ChatGPT desktop application
+
+The supported 0.6.5 transport is the **ChatGPT Web conversation in Chrome**
+paired with the Cortex extension. Cortex can prepare bounded files, screenshots
+and links, ask for approval, transmit them through that browser channel and
+report the observed result.
+
+Cortex does **not** connect directly to an arbitrary conversation already open
+in the ChatGPT desktop application. The desktop app does not expose the
+conversation identifier, history or a native attachment channel to this
+project. The supervisor must therefore never claim that a desktop file, image
+or link was sent. A future desktop adapter would be a separate capability with
+its own permission, transport and acceptance tests.
+
 Created by [Jonas Suhard](https://github.com/Jonassuhard).
 MIT-licensed, independent and not affiliated with OpenAI.
 

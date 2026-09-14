@@ -2,6 +2,16 @@
 
 All notable changes are recorded here.
 
+## 0.6.5 — documentation correction — 2026-09-14
+
+- Documented the actual transport boundary: Cortex 0.6.5 supports ChatGPT Web
+  in Chrome through the paired extension, not arbitrary ChatGPT desktop
+  conversations.
+- Clarified that desktop conversation history, identifiers and native
+  attachment delivery are not exposed to the current supervisor.
+- Updated the supervisor protocol status from 0.6.1 to 0.6.5 and separated the
+  future desktop adapter from the currently validated Chrome path.
+
 ## 0.6.5 — unfinished technical preview, 2026-09-13
 
 - Published on explicit user request before full acceptance; not a stable release.

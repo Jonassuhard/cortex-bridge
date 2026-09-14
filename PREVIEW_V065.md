@@ -12,6 +12,8 @@ that all tests, installation paths or provider requirements have passed.
 - Conversation-bound action records, process/host receipts and scoped stop.
 - Acceptance evidence linked to actual recorded results, not model declarations.
 - Existing optional Atelier and terminal clients remain available.
+- The supported attachment path is ChatGPT Web in Chrome with the paired
+  extension; the ChatGPT desktop application is not a supported transport.
 
 ## Evidence recorded before this publication
 
@@ -42,6 +44,8 @@ synthetic redaction fixture described below; no claim of all-green gates.
 - Paired Freebuff/ChatGPT trials and complete comparative accounting.
 - Full project/action isolation, desktop restart/session loss and watchdog coverage.
 - Large-context batching and integrated requested-attachment workflow.
+- Native connection to an arbitrary ChatGPT desktop conversation, including
+  desktop history discovery and desktop-native attachment delivery.
 - Fresh macOS-user onboarding and complete installed-agent positive workflow.
 - Windows acceptance (deferred).
 - Dependency/toolchain installation parity: local npm differs from the required version.

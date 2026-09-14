@@ -133,10 +133,13 @@ preuves suffisantes, et `BLOCKED` si aucune voie sûre ne reste possible.
 
 Le protocole `cortex.v1` déjà présent dans le dépôt porte les décisions et les
 rapports. `REQUEST_CONTEXT` est actuellement limité aux outils de lecture
-seule. La transmission réelle de fichiers, de captures et de liens vers une
-conversation ChatGPT de l'application desktop nécessite une capacité de
-pièce jointe exposée par cette application ; elle ne doit pas être simulée par
-un simple texte disant que le fichier a été envoyé.
+seule. En 0.6.5, le transport réellement supporté pour transmettre des
+fichiers, captures et liens est la conversation ChatGPT Web ouverte dans
+Chrome et appairée avec l'extension Cortex. La conversation ouverte dans
+l'application desktop ChatGPT n'est pas directement contrôlable par ce projet :
+son identifiant, son historique et son canal de pièce jointe ne sont pas
+exposés au superviseur. Il ne faut donc jamais simuler un envoi desktop par un
+simple texte disant que le fichier a été envoyé.
 
 ### 4.1 Demande de contexte dans une conversation
 
@@ -186,7 +189,7 @@ Chaque rapport doit distinguer :
 Un rapport ne doit jamais contenir de secret, de token, de mot de passe, de
 contenu privé sans nécessité ou de chemin personnel absolu.
 
-## 7. État d'implémentation dans Cortex Bridge 0.6.1
+## 7. État d'implémentation dans Cortex Bridge 0.6.5
 
 Déjà disponible :
 
@@ -197,7 +200,8 @@ Déjà disponible :
 - constructeur `desktop-supervisor.v1` avec redaction, bornes, déduplication
   et validation des éléments ;
 - formatters purs `render_supervisor_prompt` et `render_supervisor_report` :
-  le premier rappelle la limite de pièce jointe desktop, le second sépare
+  le premier rappelle la limite de pièce jointe desktop et le canal Chrome
+  supporté, le second sépare
   actions exécutées, preuves, inconnues et prochaine action sûre ;
 - injection optionnelle du paquet validé dans le contrat d'une mission, sans
   persistance du transcript brut.
@@ -205,11 +209,11 @@ Déjà disponible :
 - endpoint d'approbation reconfinant les fichiers au workspace et bornant les
   liens/captures avant d'appeler le transport ChatGPT existant.
 
-À implémenter pour le mode desktop complet :
+À implémenter pour un éventuel mode desktop complet :
 
 - sélection et persistance d'un identifiant de conversation ChatGPT de
-  l'application Codex ;
-- capture contrôlée du paquet de contexte depuis la conversation Codex ;
+  l'application desktop ;
+- capture contrôlée du paquet de contexte depuis cette conversation ;
 - canal de pièce jointe réellement supporté par l'application desktop ;
 - reprise après réponse périmée, conversation fermée ou transport indisponible ;
 - tests de confidentialité prouvant qu'aucun fichier hors périmètre n'est

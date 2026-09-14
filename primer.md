@@ -34,24 +34,21 @@
   that an executor has run.
 
 ## Current publication work
-- All changes stay in the independent candidate; the original local checkout
-  and installed runtime must not be modified.
-- Dependency upgrades/installations are applied and the complete local gate is green.
-- The candidate commit `cf1dac81d018a3b8a3b2acf1dd3d9e726bbb17ec` is now pushed
-  to the public `codex/v061-atelier` branch. `main` remains unchanged.
-- Primary-branch integration remains blocked while provider and clean-install
-  gates are unavailable.
+- `main` now contains the published 0.6.5 preview at commit `b7e26c8`.
+- The public tag `v0.6.5-preview.1` identifies the same unfinished snapshot.
+- The original local checkout and installed runtime remain separate from this
+  candidate checkout.
+- Provider-backed acceptance, clean-install parity and desktop-app transport
+  remain open gates; the Chrome transport is the supported path.
 - Public reports must not include personal paths, account details or private records.
 - Local session details, if present, are retained in ignored docs/LOCAL_SESSION_V061.md.
 
 ## Current verification state
-The sealed commit `cf1dac81d018a3b8a3b2acf1dd3d9e726bbb17ec` is pushed on
-`codex/v061-atelier`; that baseline was clean. Current 0.6.5 work is uncommitted.
-ChatGPT Pro reviewed the
-sanitized production archive plus `orchestration/runner.py` and returned READY
-on the listed invariants, based on static inspection only.
-The candidate remains a technical preview; `main` is intentionally not
-integrated while provider-backed and clean-install gates remain unresolved.
+The public `main` and `codex/v061-atelier` branches both point to `b7e26c8`.
+The candidate remains a technical preview. The complete test suite is not
+green in the current environment because runtime dependencies such as
+`fastapi`, `uvicorn` and `textual` are not installed, and the desktop ChatGPT
+transport has not been validated or claimed.
 
 ## Current verification
 The synthetic `cortex-context-request.v1` flow was inspected in the local UI:
