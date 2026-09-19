@@ -10,6 +10,8 @@ CORTEX terminal. Both use the same local backend; neither adds a second engine.
 **Status: 0.6.5 unfinished technical preview, published for inspection and testing,
 not a stable or provider-authorized release.** The version number identifies the
 source snapshot; it does not mean every acceptance gate passed.
+The [19 September evidence correction](docs/verification/evidence-correction-2026-09-19.md)
+retracts the earlier release-validation claim. Current release evidence is incomplete.
 The new direction uses Codex as the operator and ChatGPT as the planning brain,
 with a bounded context and evidence journal rather than another mandatory UI.
 See the [preview status](PREVIEW_V065.md), [supervisor installation](SUPERVISOR_INSTALL.md)

@@ -100,6 +100,24 @@ class LoopTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Workspace: <authorized-workspace>", contract)
         self.assertNotIn("/workspace/synthetic-project", contract)
 
+    def test_structured_tool_result_is_not_silently_truncated(self):
+        result = MissionLoop._tool_result_view(
+            "read_file",
+            {"path": "large.txt", "content": "x" * 6_023, "truncated": False},
+        )
+
+        self.assertFalse(result["truncated"])
+        self.assertIn("x" * 6_023, result["stdout"])
+
+    def test_structured_tool_result_marks_report_truncation(self):
+        result = MissionLoop._tool_result_view(
+            "read_file",
+            {"path": "huge.txt", "content": "x" * 40_000, "truncated": False},
+        )
+
+        self.assertTrue(result["truncated"])
+        self.assertIn("truncated", result["stdout"])
+
     async def test_process_exit_nonzero_is_failed(self):
         (self.ws / "fail.py").write_text(
             "import sys\nsys.exit(3)\n", encoding="utf-8"

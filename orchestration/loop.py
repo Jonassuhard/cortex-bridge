@@ -36,7 +36,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from executor.policy import PolicyDecision, PolicyEngine
-from executor.tools import ToolDenied, ToolError, ToolExecutor
+from executor.tools import MAX_OUTPUT_CHARS, ToolDenied, ToolError, ToolExecutor
 
 from . import protocol
 from .protocol import DecisionError
@@ -765,10 +765,16 @@ class MissionLoop:
                 "timedOut": result.get("timedOut", False),
                 "truncated": result.get("truncated", False),
             }
+        serialized = json.dumps(result, sort_keys=True)
+        truncated = result.get("truncated") is True
+        if len(serialized) > MAX_OUTPUT_CHARS:
+            serialized = serialized[:MAX_OUTPUT_CHARS] + f"\n…[truncated at {MAX_OUTPUT_CHARS} chars]"
+            truncated = True
         return {
             "exitCode": 0,
-            "stdout": json.dumps(result, sort_keys=True)[:4000],
+            "stdout": serialized,
             "stderr": "",
+            "truncated": truncated,
         }
 
     @staticmethod

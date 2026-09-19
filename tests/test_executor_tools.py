@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from executor.tools import (  # noqa: E402
     CheckpointManager,
+    MAX_READ_BYTES,
     ToolDenied,
     ToolError,
     ToolExecutor,
@@ -142,6 +143,16 @@ class ToolTestCase(unittest.IsolatedAsyncioTestCase):
         result = await self.tools.read_file("hello.txt")
         self.assertEqual(result["content"], "hello cortex")
         self.assertEqual(result["size"], 12)
+
+    async def test_02b_read_file_reports_effective_cap_as_truncated(self):
+        content = "x" * (MAX_READ_BYTES + 100)
+        (self.ws / "large.txt").write_text(content, encoding="utf-8")
+
+        result = await self.tools.read_file("large.txt", maxBytes=MAX_READ_BYTES * 4)
+
+        self.assertEqual(result["size"], len(content))
+        self.assertEqual(len(result["content"].encode("utf-8")), MAX_READ_BYTES)
+        self.assertTrue(result["truncated"])
 
     # 3. reject /etc/passwd
     async def test_03_reject_etc_passwd(self):

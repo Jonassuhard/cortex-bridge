@@ -360,13 +360,14 @@ class ToolExecutor:
         target = self._resolve(path, must_exist=True)
         if not target.is_file():
             raise ToolError("NOT_A_FILE", f"not a file: {path}")
+        effective_limit = min(maxBytes, MAX_READ_BYTES)
         size = target.stat().st_size
         with open(target, "rb") as fh:
-            raw = fh.read(min(maxBytes, MAX_READ_BYTES) + 1)
+            raw = fh.read(effective_limit + 1)
         if b"\x00" in raw[:8192]:
             raise ToolDenied("BINARY_FILE", f"binary files are rejected by default: {path}")
-        truncated = len(raw) > maxBytes
-        raw = raw[:maxBytes]
+        truncated = len(raw) > effective_limit or size > effective_limit
+        raw = raw[:effective_limit]
         content = raw.decode("utf-8", errors="replace")
         return {
             "path": path,

@@ -219,5 +219,21 @@ Déjà disponible :
 - tests de confidentialité prouvant qu'aucun fichier hors périmètre n'est
   transmis.
 
+## 7. Invariants de complétude du contexte
+
+Une lecture ou un rapport ne doit jamais être déclaré complet après une coupe
+silencieuse. Toute sortie bornée expose `truncated: true`, ainsi que la taille
+réellement lue lorsque le transport le permet. Les résultats structurés restent
+JSON jusqu'à la limite de transport ; au-delà, Cortex ajoute un marqueur de
+troncature et le superviseur doit demander la page ou la plage suivante.
+
+Les pièces jointes préparées doivent être acceptées par le canal choisi avant
+la transmission. Les sources de code UTF-8 courantes (`.py`, `.ts`, `.tsx`,
+`.js`, `.jsx`, `.css`, `.html`, `.yml`, `.yaml`, `.toml`, `.xml`, `.sh`) et les
+archives `.zip` sûres sont classifiées explicitement. Une archive contenant un
+chemin absolu, `..`, un lien symbolique, un doublon ou une entrée chiffrée est
+refusée. La réception réelle reste à confirmer par le transport ; la simple
+préparation locale ne vaut pas preuve d'envoi.
+
 Ce fichier est une spécification opératoire. Il ne transforme pas à lui seul
 une capacité non exposée par l'application desktop en capacité disponible.

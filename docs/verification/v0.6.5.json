@@ -1,0 +1,133 @@
+{
+  "schemaVersion": 1,
+  "release": "0.6.5",
+  "commit": "34d6e82e7f05ebe9f3997a8e7905cfbb005115b6",
+  "generatedAt": null,
+  "evidenceStatus": "INVALIDATED",
+  "correctionDate": "2026-09-19",
+  "correctionReport": "docs/verification/evidence-correction-2026-09-19.md",
+  "environment": null,
+  "suites": null,
+  "performance": {
+    "cachedUsabilityMs": null,
+    "switchP95Ms": null,
+    "switchMaxMs": null
+  },
+  "dualConversations": {
+    "runs": 0,
+    "crossovers": null,
+    "thirdWriterDraftPreserved": null
+  },
+  "acceptance": {
+    "fixtureMissions": {
+      "runs": 0,
+      "passed": 0,
+      "status": "UNCLEAR"
+    },
+    "coldDualRuns": {
+      "runs": 0,
+      "passed": 0,
+      "status": "UNCLEAR"
+    },
+    "crashPoints": {
+      "runs": 0,
+      "passed": 0,
+      "sourceCommit": null,
+      "command": null,
+      "evidenceArtifact": null,
+      "points": [],
+      "status": "UNCLEAR"
+    },
+    "liveChatGPT": {
+      "status": "NOT_RUN",
+      "singleConversation": {
+        "runs": 0,
+        "passed": 0
+      },
+      "dualConversations": {
+        "runs": 0,
+        "passed": 0,
+        "crossovers": null
+      },
+      "thirdWriterRefused": false,
+      "fileUpload": false,
+      "screenshotUpload": false,
+      "personalDataRecorded": false,
+      "notes": "No current-candidate live acceptance evidence established by this manifest."
+    },
+    "cleanMacosLifecycle": {
+      "status": "NOT_RUN",
+      "realCommands": false,
+      "install": false,
+      "browserLaunch": false,
+      "serviceLifecycle": false,
+      "doctor": false,
+      "reinstall": false,
+      "uninstall": false,
+      "foreignSentinelPreserved": false,
+      "attempts": 0,
+      "failedAttempts": 0,
+      "failedAttemptsRetained": false,
+      "planHashes": {
+        "install": null,
+        "reinstall": null,
+        "uninstall": null
+      },
+      "notes": "No genuinely clean macOS account or VM was used for this candidate."
+    },
+    "miniSites": {
+      "runs": 0,
+      "passed": 0,
+      "status": "NOT_RUN"
+    }
+  },
+  "gates": {
+    "privacy": "UNCLEAR",
+    "links": "UNCLEAR",
+    "secrets": "UNCLEAR",
+    "dependencies": "UNCLEAR",
+    "install": "UNCLEAR",
+    "doctor": "UNCLEAR",
+    "uninstall": "UNCLEAR",
+    "build": "UNCLEAR",
+    "e2e": "UNCLEAR",
+    "a11y": "UNCLEAR",
+    "consoleErrors": null
+  },
+  "artifacts": {},
+  "verdict": "EVIDENCE_INVALIDATED",
+  "historicalReports": {
+    "reportedDate": "2026-09-14",
+    "scope": "Reported test counts retained for history only; not current release acceptance.",
+    "suites": {
+      "backend": {
+        "passed": 854,
+        "failed": 0,
+        "skipped": 0
+      },
+      "frontendUnit": {
+        "passed": 214,
+        "failed": 0,
+        "skipped": 0
+      },
+      "e2e": {
+        "passed": 27,
+        "failed": 0,
+        "skipped": 0
+      },
+      "a11y": {
+        "passed": 4,
+        "failed": 0,
+        "skipped": 0
+      },
+      "extension": {
+        "passed": 138,
+        "failed": 0,
+        "skipped": 0
+      }
+    },
+    "formerManifestCommit": "34d6e82e7f05ebe9f3997a8e7905cfbb005115b6",
+    "crashEvidenceSourceCommit": "f36a2d796adecd1fa3a767b7d340a4a9f7718b82",
+    "crashEvidenceArtifact": "docs/verification/v0.6.1-crash-points.txt"
+  }
+}

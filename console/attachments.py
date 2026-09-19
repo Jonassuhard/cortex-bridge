@@ -12,7 +12,7 @@ import stat
 import time
 import uuid
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from transport.chatgpt_web.adapter import MAX_FILE_BYTES, MAX_IMAGE_BYTES
 from cortex_paths import build_paths
@@ -48,6 +48,24 @@ _MIME_BY_EXTENSION = {
         "application/vnd.openxmlformats-officedocument.presentationml.presentation",
         "file",
     ),
+    ".zip": ("application/zip", "file"),
+    ".py": ("text/x-python", "file"),
+    ".ts": ("text/typescript", "file"),
+    ".tsx": ("text/tsx", "file"),
+    ".js": ("text/javascript", "file"),
+    ".jsx": ("text/jsx", "file"),
+    ".css": ("text/css", "file"),
+    ".html": ("text/html", "file"),
+    ".yml": ("text/yaml", "file"),
+    ".yaml": ("text/yaml", "file"),
+    ".toml": ("text/plain", "file"),
+    ".xml": ("application/xml", "file"),
+    ".sh": ("text/x-shellscript", "file"),
+}
+
+_TEXT_EXTENSIONS = {
+    ".txt", ".json", ".csv", ".md", ".py", ".ts", ".tsx", ".js", ".jsx",
+    ".css", ".html", ".yml", ".yaml", ".toml", ".xml", ".sh",
 }
 
 _OFFICE_MEMBER = {
@@ -98,7 +116,22 @@ def _zip_members(source: bytes | Path) -> set[str]:
     try:
         target = io.BytesIO(source) if isinstance(source, bytes) else source
         with zipfile.ZipFile(target) as archive:
-            return set(archive.namelist())
+            names = set()
+            for member in archive.infolist():
+                normalized = member.filename.replace("\\", "/")
+                parts = PurePosixPath(normalized).parts
+                if (
+                    normalized.startswith("/")
+                    or ".." in parts
+                    or member.filename != normalized
+                    or member.flag_bits & 1
+                    or stat.S_ISLNK(member.external_attr >> 16)
+                ):
+                    raise ValueError("L'archive contient un membre non sûr.")
+                if member.filename in names:
+                    raise ValueError("L'archive contient un membre dupliqué.")
+                names.add(member.filename)
+            return names
     except (OSError, zipfile.BadZipFile) as exc:
         raise ValueError("Le fichier Office n'est pas une archive ZIP valide.") from exc
 
@@ -121,12 +154,15 @@ def _classify(name: str, sample: bytes, *, office_source: bytes | Path | None = 
     if extension in signatures and not signatures[extension]:
         raise ValueError(f"Le contenu de « {name} » ne correspond pas à son extension.")
 
-    if extension in {".txt", ".json", ".csv", ".md"}:
+    if extension in _TEXT_EXTENSIONS:
         if not _looks_like_utf8(sample):
             raise ValueError(f"« {name} » n'est pas un fichier texte UTF-8 valide.")
         stripped = sample.lstrip()
         if extension == ".json" and stripped[:1] not in {b"{", b"["}:
             raise ValueError(f"« {name} » n'est pas un document JSON valide.")
+
+    if extension == ".zip":
+        _zip_members(office_source if office_source is not None else sample)
 
     required_member = _OFFICE_MEMBER.get(extension)
     if required_member:
@@ -220,7 +256,7 @@ def restore_descriptor(descriptor: dict) -> str:
         raise ValueError("La pièce jointe persistée a changé sur disque.")
     with path.open("rb") as handle:
         sample = handle.read(65536)
-    office_source = path if path.suffix.lower() in _OFFICE_MEMBER else None
+    office_source = path if path.suffix.lower() in {*_OFFICE_MEMBER, ".zip"} else None
     mime, kind = _classify(str(descriptor["name"]), sample, office_source=office_source)
     if mime != descriptor["mime"] or kind != descriptor["kind"]:
         raise ValueError("Le type de la pièce jointe persistée a changé.")
@@ -275,7 +311,7 @@ def _inspect_path(path: str) -> tuple[Path, str, int, str, str]:
     with target.open("rb") as handle:
         sample = handle.read(65536)
     extension = target.suffix.lower()
-    office_source = target if extension in _OFFICE_MEMBER else None
+    office_source = target if extension in {*_OFFICE_MEMBER, ".zip"} else None
     mime, kind = _classify(safe_name, sample, office_source=office_source)
     _validate_size(kind, metadata.st_size)
     return target.resolve(), safe_name, metadata.st_size, mime, kind

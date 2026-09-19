@@ -34,8 +34,12 @@
   that an executor has run.
 
 ## Current publication work
-- `main` now contains the published 0.6.5 preview at commit `b7e26c8`.
-- The public tag `v0.6.5-preview.1` identifies the same unfinished snapshot.
+- Original local main is retained at `a20e3bd`, including its unpublished history.
+- Publication candidate: `codex/v065-publication-clean`, a single corrected
+  snapshot on GitHub main. Check its parent and privacy results before publishing.
+- The 0.6.5 manifest is INVALIDATED. See
+  `docs/verification/evidence-correction-2026-09-19.md`.
+- Publish only the clean candidate reference; never push the original local main.
 - The original local checkout and installed runtime remain separate from this
   candidate checkout.
 - Provider-backed acceptance, clean-install parity and desktop-app transport
@@ -44,11 +48,10 @@
 - Local session details, if present, are retained in ignored docs/LOCAL_SESSION_V061.md.
 
 ## Current verification state
-The public `main` and `codex/v061-atelier` branches both point to `b7e26c8`.
-The candidate remains a technical preview. The complete test suite is not
-green in the current environment because runtime dependencies such as
-`fastapi`, `uvicorn` and `textual` are not installed, and the desktop ChatGPT
-transport has not been validated or claimed.
+The candidate remains incomplete. Completion retracted; corrected privacy scan PASS (454 files, 92 images).
+The mini-site reports used preset browser data; the API mission used scripted
+responses. Copied 0.6.1 evidence cannot validate 0.6.5. The release validator
+must fail until fresh evidence is collected; missing tests imply no legal verdict.
 
 ## Current verification
 The synthetic `cortex-context-request.v1` flow was inspected in the local UI:
@@ -57,12 +60,10 @@ state transitions are visible. A deterministic demo-clock fix removed the
 hydration mismatch found during that inspection. Do not send a real file,
 screenshot or link through an unsupported desktop capability. The user later
 authorized a separate Chrome attachment channel for 0.6.5 (see below).
-The latest local run passes 746 Python tests, 214 Vitest tests and 33 runtime
-tests, alongside TypeScript typecheck, Oxlint, the lint-contract fixtures and
-a production Next build. The fresh Playwright export
-passes 26 browser tests with one optional guide test skipped, the responsive
-collision suite passes at 375/768/1024/1440, offline links pass 133 checks,
-and public privacy passes on 428 files and 92 images. The supervisor
+The 14 September historical run reported 854 Python tests, 214 frontend unit tests, 138
+extension tests, 27 browser tests and 4 accessibility tests, alongside
+TypeScript typecheck, the lint contract, production build, static-output
+validation. Its privacy claim was invalidated on 19 September. The supervisor
 prompt/report formatters are pure and explicitly surface the desktop
 attachment boundary.
 Historical
@@ -190,8 +191,9 @@ Context approvals now also reject unknown item fields with Pydantic
   Live bound normalizer4/4PASS; final review reconciled. Prior full829PASS,173.455s.
   Installed skill aligned; isolated bound workflow and81 targetedPASS,5.059s; validatorPASS.
   Eight chats authorized; two-chat recall/scoped-stop PASS, no pending sends;39 regressionPASS. Evidence .qa-live-v061/LIVE_ISOLATION.md. Next: six benchmark chats; privacy/generated-string finding retained.
-- Run the remaining live/provider-backed acceptance gates in a fresh macOS
-  environment; do not merge into `main` until those gates have evidence.
+- Next: gather fresh acceptance evidence; the release remains invalidated.
+  Storage correction: fc8b413c3488467ba4db6c25acf5331f, 24317beb1e75490b976801bd8cc2afd0,
+  13172b77001a44af867b2b38571883f5; publication: e621a01b95064aae882a74c997b1c1a2.
 - npm scripts remain blocked by the local npm `11.11.1` versus repository
   requirement `11.18.0`; direct installed binaries were used for frontend
   verification without changing dependencies.

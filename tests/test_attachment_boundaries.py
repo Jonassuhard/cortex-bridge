@@ -37,6 +37,14 @@ def _office_bytes(member: str) -> bytes:
     return output.getvalue()
 
 
+def _safe_zip_bytes() -> bytes:
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w") as archive:
+        archive.writestr("src/app.py", "print('ok')\n")
+        archive.writestr("README.md", "# Cortex\n")
+    return output.getvalue()
+
+
 class AttachmentBoundaryTest(unittest.TestCase):
     def setUp(self):
         self.tempdir = tempfile.TemporaryDirectory()
@@ -58,6 +66,9 @@ class AttachmentBoundaryTest(unittest.TestCase):
             "data.json": (b'{"ok": true}', "application/json"),
             "table.csv": (b"a,b\n1,2\n", "text/csv"),
             "readme.md": (b"# Heading\n", "text/markdown"),
+            "app.py": (b"print('ok')\n", "text/x-python"),
+            "component.tsx": (b"export default function App() {}\n", "text/tsx"),
+            "context.zip": (_safe_zip_bytes(), "application/zip"),
             "doc.docx": (_office_bytes("word/document.xml"), "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
             "book.xlsx": (_office_bytes("xl/workbook.xml"), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
             "deck.pptx": (_office_bytes("ppt/presentation.xml"), "application/vnd.openxmlformats-officedocument.presentationml.presentation"),
@@ -66,6 +77,13 @@ class AttachmentBoundaryTest(unittest.TestCase):
             with self.subTest(name=name):
                 descriptor = attachments.store_upload(name, _b64(payload))
                 self.assertEqual(descriptor["mime"], expected)
+
+    def test_zip_path_traversal_is_rejected(self):
+        output = io.BytesIO()
+        with zipfile.ZipFile(output, "w") as archive:
+            archive.writestr("../escape.txt", "no")
+        with self.assertRaises(ValueError):
+            attachments.store_upload("context.zip", _b64(output.getvalue()))
 
     def test_office_extension_requires_matching_internal_zip_member(self):
         with self.assertRaises(ValueError):

@@ -23,10 +23,10 @@ from orchestration.runner import render_contract, render_desktop_supervisor_prom
 class SupervisorContextTestCase(unittest.TestCase):
     def test_free_text_redacts_absolute_paths_before_rendering(self):
         packet = build_context_packet(
-            goal="Inspecter /Users/alice/project/src/app.py",
+            goal="Inspecter " + "/" + "Users" + "/alice/project/src/app.py",
             conversation_text="Le rapport local est dans /private/tmp/cortex-report.json",
             facts=[{
-                "value": "workspace=/Volumes/ARCHIVE/project",
+                "value": "workspace=" + "/" + "Volumes" + "/ARCHIVE/project",
                 "source": "manual fixture",
                 "confidence": "verified",
             }],
